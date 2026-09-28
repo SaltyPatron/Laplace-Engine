@@ -103,22 +103,20 @@ int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int limit){
             uint8_t *pb = malloc(20 + 20 * (size_t)k); size_t pl = uuid_param(pb, front + i0, (uint32_t)k);
             char tt[16]; snprintf(tt, sizeof tt, "%d", ftier);                    /* a container sits above its constituents */
             const char *v[2] = { (const char *)pb, tt }; int l[2] = { (int)pl, 0 }, f[2] = { 1, 0 };
-            PGresult *q = PQexecParams(pg, "SELECT entity, path, tier FROM physicality WHERE tier > $2::smallint AND path && $1::uuid[]", 2, NULL, v, l, f, 1);
+            PGresult *q = PQexecParams(pg, "SELECT p.entity, t.id, t.times, p.tier FROM physicality p, laplace_path_times(p.path, $1::uuid[]) t WHERE p.tier > $2::smallint AND p.path && $1::uuid[]", 2, NULL, v, l, f, 1);
             if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "parents: %s", PQerrorMessage(pg)); return 1; }
             fetched += (uint64_t)PQntuples(q);
             for (int j = 0; j < PQntuples(q); j++) {
                 lp_id pid; memcpy(pid.b, PQgetvalue(q, j, 0), 16);
                 int known = map_get(&map, &pid, 0, &d, &nn, &cn) >= 0, pidx = map_get(&map, &pid, 1, &d, &nn, &cn);
                 if (!known) { if (nx == cx) { cx *= 2; next = xrealloc(next, sizeof(lp_id) * cx); } next[nx++] = pid;
-                              uint16_t tb; memcpy(&tb, PQgetvalue(q, j, 2), 2); int tr = ntohs(tb); if (tr < ntier) ntier = tr; }
-                const uint8_t *vx; size_t nv = vertices((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1), &vx);
-                for (size_t z = 0; z < nv; z++) {                                   /* the frontier nodes it holds */
-                    double xyzm[4]; memcpy(xyzm, vx + 32 * z, 32); lp_id cid; lp_xyz_to_id(xyzm, &cid);
-                    int ci = map_get(&map, &cid, 0, &d, &nn, &cn); if (ci < 0 || ci == pidx) continue;
-                    uint32_t times = xyzm[3] < 1 ? 1 : (uint32_t)xyzm[3]; DNode *c = &d[ci]; int merged = 0;
-                    for (int u = 0; u < c->nup; u++) if (c->up[u].parent == pidx) { c->up[u].times += times; merged = 1; break; }
-                    if (!merged) { if (c->nup == c->cup) { c->cup = c->cup ? c->cup * 2 : 4; c->up = xrealloc(c->up, sizeof(Up) * c->cup); } c->up[c->nup++] = (Up){ pidx, times }; }
-                }
+                              uint16_t tb; memcpy(&tb, PQgetvalue(q, j, 3), 2); int tr = ntohs(tb); if (tr < ntier) ntier = tr; }
+                lp_id cid; memcpy(cid.b, PQgetvalue(q, j, 1), 16);                /* the child it holds, and how often */
+                uint64_t tbe; memcpy(&tbe, PQgetvalue(q, j, 2), 8); uint32_t times = (uint32_t)__builtin_bswap64(tbe);
+                int ci = map_get(&map, &cid, 0, &d, &nn, &cn); if (ci < 0 || ci == pidx) continue;
+                DNode *c = &d[ci]; int merged = 0;
+                for (int u = 0; u < c->nup; u++) if (c->up[u].parent == pidx) { c->up[u].times += times; merged = 1; break; }
+                if (!merged) { if (c->nup == c->cup) { c->cup = c->cup ? c->cup * 2 : 4; c->up = xrealloc(c->up, sizeof(Up) * c->cup); } c->up[c->nup++] = (Up){ pidx, times }; }
             }
             PQclear(q); free(pb);
         }
