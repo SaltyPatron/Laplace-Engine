@@ -1,0 +1,25 @@
+cmake_minimum_required(VERSION 3.24)
+project(LaplaceEngine VERSION 0.1.0 LANGUAGES C)
+
+# Laplace-Engine: one pipeline for every source, on Laplace-Native. Recipes load tree-sitter grammars at run time.
+set(CMAKE_C_STANDARD 17)
+set(LAPLACE_NATIVE "/repos/src/Laplace-Native" CACHE PATH "Laplace-Native sources")
+set(LAPLACE_NATIVE_BUILD "/repos/build/Laplace-Native/icx-release" CACHE PATH "Laplace-Native build")
+set(LAPLACE_BLAKE3_DIR "/repos/src/blake3/c" CACHE PATH "BLAKE3 C sources")
+set(LAPLACE_TREESITTER "/repos/src/tree-sitter" CACHE PATH "tree-sitter runtime")
+set(LAPLACE_ICU_DIR "/repos/src/Laplace-Prototype/lib/icu78" CACHE PATH "ICU (Unicode 17)")
+set(LAPLACE_PG_DIR "/usr/local/pgsql" CACHE PATH "PostgreSQL with libpq")
+include(${LAPLACE_NATIVE}/cmake/LaplaceFlags.cmake)
+find_package(OpenMP REQUIRED)
+
+add_library(ts_runtime STATIC ${LAPLACE_TREESITTER}/lib/src/lib.c)
+target_include_directories(ts_runtime PUBLIC ${LAPLACE_TREESITTER}/lib/include PRIVATE ${LAPLACE_TREESITTER}/lib/src ${LAPLACE_TREESITTER}/lib/src/wasm)
+target_compile_options(ts_runtime PRIVATE -w -O3 -fPIC)
+
+add_executable(laplace src/main.c src/table.c src/text.c src/recipe.c src/db.c src/fills.c)
+target_include_directories(laplace PRIVATE src ${LAPLACE_NATIVE}/include ${LAPLACE_BLAKE3_DIR} ${LAPLACE_ICU_DIR}/include ${LAPLACE_PG_DIR}/include)
+target_link_directories(laplace PRIVATE ${LAPLACE_NATIVE_BUILD} ${LAPLACE_NATIVE_BUILD}/blake3 ${LAPLACE_ICU_DIR}/lib ${LAPLACE_PG_DIR}/lib)
+target_compile_options(laplace PRIVATE ${LP_C_FLAGS})
+target_link_libraries(laplace PRIVATE ${LAPLACE_NATIVE_BUILD}/liblaplace.a ${LAPLACE_NATIVE_BUILD}/blake3/libblake3.a ts_runtime icui18n icuuc icudata pq OpenMP::OpenMP_C dl m pthread)
+set_target_properties(laplace PROPERTIES BUILD_RPATH "${LAPLACE_NATIVE_BUILD};${LAPLACE_ICU_DIR}/lib;${LAPLACE_PG_DIR}/lib")
+target_link_options(laplace PRIVATE -rdynamic)

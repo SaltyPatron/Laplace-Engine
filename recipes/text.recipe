@@ -1,0 +1,4 @@
+name text
+# Plain text: UAX #29 codepoint, grapheme, word segment, sentence, paragraph, file.
+match *.txt *.md
+grammar text

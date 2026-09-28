@@ -1,0 +1,4 @@
+name json
+# JSON as its syntax tree; leaves are text.
+match *.json
+grammar json

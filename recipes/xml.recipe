@@ -1,0 +1,4 @@
+name xml
+# XML as its syntax tree; leaves are text.
+match *.xml
+grammar xml
