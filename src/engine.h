@@ -48,6 +48,7 @@ typedef struct {
     char grammar[64];                                 /* "text", or a tree-sitter grammar name */
     const TSLanguage *lang;
     double trust;                                    /* the witness's trust, -1 .. 1 */
+    int records;                                      /* the file is a sequence of line records: parse chunks in parallel */
     char subject_attr[3][48];                         /* subject from a sibling attribute: codepoint, first, last */
     char *query_src; TSQuery *query;                  /* captures: subject, predicate, object; suffix .cp .text .xml .node */
 } Recipe;

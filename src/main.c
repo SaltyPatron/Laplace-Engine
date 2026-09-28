@@ -133,6 +133,7 @@ int main(int argc, char **argv){
         size_t got = fread(src, 1, files[i].bytes, f); fclose(f);
         Buf o = { 0 }; int ok = expand(&files[i].trunk.id, &o) && got == files[i].bytes && o.n == got && !memcmp(o.b, src, got);
         if (ok) exact++; else { mism++; fprintf(stderr, "  %s: does not recompose\n", files[i].path); }
+        if (getenv("LAPLACE_TRUNKS")) { const uint8_t *b = files[i].trunk.id.b; fprintf(stderr, "  trunk %02x%02x%02x%02x%02x%02x%02x%02x  %s\n", b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7], files[i].path); }
         free(o.b); free(src);
     }
     for (int i = 0; i < nfiles; i++) nev += files[i].ev.n;

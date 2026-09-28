@@ -1,0 +1,6 @@
+name tatoeba-sentences
+# Tatoeba's sentences: one row per sentence — its Tatoeba number, its language (ISO 639-3), its text — as the file's
+# syntax tree, so it recomposes byte for byte. Each row attests its sentence's language: [sentence, lang, code].
+match sentences.csv
+grammar tsv
+records
