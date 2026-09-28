@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /* laplace: ingest files through their recipes.
  *   laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes/] [-j threads] [--no-load] file...
  * Files already recorded byte for byte are skipped by one query over their BLAKE3-256 hashes. The rest decompose on
@@ -8,6 +9,8 @@
 #include <libpq-fe.h>
 #include <arpa/inet.h>
 #include <locale.h>
+#include <ftw.h>
+#include <sys/stat.h>
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +43,16 @@ static int expand(const lp_id *id, Buf *o){
     return 1;
 }
 
+/* Directories are walked for every file under them. */
+static char **paths; static int npaths, cpaths;
+static void add_path(const char *p){ if (npaths == cpaths) { cpaths = cpaths ? cpaths * 2 : 1024; paths = xrealloc(paths, sizeof(char *) * cpaths); } paths[npaths++] = strdup(p); }
+static int walk_cb(const char *p, const struct stat *st, int type, struct FTW *fw){
+    const char *b = p + fw->base;
+    if (type == FTW_D && b[0] == '.' && fw->level > 0) return FTW_SKIP_SUBTREE;          /* hidden directories */
+    if (type == FTW_F && b[0] != '.' && st->st_size > 0) add_path(p);
+    return FTW_CONTINUE;
+}
+
 int main(int argc, char **argv){
     const char *conninfo = "host=/tmp port=5432 user=laplace dbname=laplace_engine", *t0p = "/repos/work/tier0/tier0.bin",
                *rdir = "/repos/src/Laplace-Engine/recipes";
@@ -63,9 +76,11 @@ int main(int argc, char **argv){
         else if (!strcmp(argv[a], "-r") && a + 1 < argc) rdir = argv[++a];
         else if (!strcmp(argv[a], "-j") && a + 1 < argc) threads = atoi(argv[++a]);
         else if (!strcmp(argv[a], "--no-load")) do_load = 0;
+        else if (!strcmp(argv[a], "--plan")) do_load = -1;
         else { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] file...\n"); return 2; }
     }
-    int nfiles = argc - a; if (nfiles <= 0) { fprintf(stderr, "no files\n"); return 2; }
+    for (int i = a; i < argc; i++) { struct stat st; if (!stat(argv[i], &st) && S_ISDIR(st.st_mode)) nftw(argv[i], walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL); else add_path(argv[i]); }
+    int nfiles = npaths; if (nfiles <= 0) { fprintf(stderr, "no files\n"); return 2; }
     if (threads <= 0) threads = omp_get_num_procs();
     omp_set_num_threads(threads); omp_set_max_active_levels(1);
     setlocale(LC_NUMERIC, "en_US.UTF-8");
@@ -79,7 +94,23 @@ int main(int argc, char **argv){
     printf("laplace ingest   %d threads   cpu: %s   dispatch: %s   %d recipes\n", threads, lp_cpu_describe(lp_cpu_features()), lp_cpu_describe(lp_cpu_active()), nrec);
 
     File *files = calloc(nfiles, sizeof(File));
-    for (int i = 0; i < nfiles; i++) { files[i].path = argv[a + i]; files[i].recipe = recipe_for(rec, nrec, files[i].path); }
+    int uncovered = 0;
+    for (int i = 0; i < nfiles; i++) { files[i].path = paths[i]; files[i].recipe = recipe_for(rec, nrec, files[i].path); if (!files[i].recipe) { files[i].skipped = 1; uncovered++; } }
+    if (uncovered) {                                                                  /* what no recipe covers yet, by extension */
+        typedef struct { char ext[16]; int n; } Ext; Ext ex[512]; int ne = 0;
+        for (int i = 0; i < nfiles; i++) if (!files[i].recipe) {
+            const char *d = strrchr(files[i].path, '.'), *sl = strrchr(files[i].path, '/'); char e[16] = "(none)";
+            if (d && (!sl || d > sl) && strlen(d) < sizeof e) snprintf(e, sizeof e, "%s", d);
+            int k = 0; while (k < ne && strcmp(ex[k].ext, e)) k++; if (k == ne && ne < 512) { snprintf(ex[ne].ext, 16, "%s", e); ex[ne++].n = 0; } if (k < ne) ex[k].n++;
+        }
+        for (int x = 0; x < ne; x++) for (int y = x + 1; y < ne; y++) if (ex[y].n > ex[x].n) { Ext tmp = ex[x]; ex[x] = ex[y]; ex[y] = tmp; }
+        printf("files no recipe covers yet: %d of %d:", uncovered, nfiles);
+        for (int k = 0; k < ne && k < 40; k++) printf(" %s %d", ex[k].ext, ex[k].n); printf("\n");
+    }
+    if (do_load < 0) {                                                                /* the plan: which recipe takes what */
+        for (int k = 0; k < nrec; k++) { int n = 0; for (int i = 0; i < nfiles; i++) n += files[i].recipe == &rec[k]; if (n) printf("  %-24s %d files\n", rec[k].name, n); }
+        return 0;
+    }
 
     /* ---- files already recorded, by their bytes */
     t = now();
@@ -129,6 +160,7 @@ int main(int argc, char **argv){
     #pragma omp parallel for schedule(dynamic) reduction(+:exact, mism)
     for (int i = 0; i < nfiles; i++) {
         if (files[i].known || files[i].skipped) continue;
+        if (files[i].recipe && files[i].recipe->query) { exact++; continue; }      /* a curated source is not kept as a file */
         FILE *f = fopen(files[i].path, "rb"); uint8_t *src = malloc(files[i].bytes + 1);
         size_t got = fread(src, 1, files[i].bytes, f); fclose(f);
         Buf o = { 0 }; int ok = expand(&files[i].trunk.id, &o) && got == files[i].bytes && o.n == got && !memcmp(o.b, src, got);
@@ -139,7 +171,7 @@ int main(int argc, char **argv){
     for (int i = 0; i < nfiles; i++) nev += files[i].ev.n;
     double t_rec = now() - t;
     uint64_t hits = 0; for (int s = 0; s < NSHARD; s++) hits += shard[s].hits;
-    printf("\n== decomposition: %d files, %.1f MB, recomposed byte for byte %d, mismatched %d\n", nfiles - nknown, bytes / 1e6, exact, mism);
+    printf("\n== decomposition: %d files, %.1f MB, content recomposed byte for byte or curated %d, mismatched %d\n", nfiles - nknown, bytes / 1e6, exact, mism);
     printf("   %'llu distinct compositions, %'llu reused; %'llu attestations\n", (unsigned long long)table_count(), (unsigned long long)hits, (unsigned long long)nev);
     printf("\n== phases\n");
     printf("  %-44s %8.2f s   %8.1f MB/s\n", "decompose (all threads)", t_dec, bytes / 1e6 / t_dec);

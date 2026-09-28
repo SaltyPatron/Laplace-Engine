@@ -48,7 +48,9 @@ typedef struct {
     char grammar[64];                                 /* "text", or a tree-sitter grammar name */
     const TSLanguage *lang;
     double trust;                                    /* the witness's trust, -1 .. 1 */
-    int records;                                      /* the file is a sequence of line records: parse chunks in parallel */
+    int records;
+    char predicate[64];
+    char witness[128];                                /* the witness's name, recorded as content */                               /* a constant predicate, for sources that state it by position */                                      /* the file is a sequence of line records: parse chunks in parallel */
     char subject_attr[3][48];                         /* subject from a sibling attribute: codepoint, first, last */
     char *query_src; TSQuery *query;                  /* captures: subject, predicate, object; suffix .cp .text .xml .node */
 } Recipe;
@@ -60,7 +62,7 @@ typedef struct { lp_id claim; float score; } Event;
 typedef struct { Event *e; uint64_t n, cap; } Events;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */
-typedef struct { const char *path; Recipe *recipe; Ref trunk; uint64_t bytes; uint8_t sha[32]; int exact, skipped, known; Events ev; } File;
+typedef struct { const char *path; Recipe *recipe; Ref trunk, witness; uint64_t bytes; uint8_t sha[32]; int exact, skipped, known; Events ev; } File;
 void decompose_file(Ctx *, File *);
 
 typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, led, std_new, std_upd; double t_dedup, t_copy, t_sem; } LoadStats;

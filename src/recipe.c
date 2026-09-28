@@ -12,6 +12,10 @@
  *                                   .xml  the node's text with XML references resolved (quotes stripped)
  *                                   .node the node itself, as recorded
  *                                 predicates: #eq? #not-eq? #any-of? #not-any-of?
+ *   witness NAME...               the source as witness, named as content. A recipe with a query is a curated source:
+ *                                 what is recorded is what it attests — the claims and the entities they relate — never
+ *                                 the file's own syntax (rows, tags, delimiters)
+ *   predicate TEXT                the claims' predicate, when the source states it by position rather than by name
  *   records                       the file is a flat sequence of line-terminated records: large files are split at
  *                                 line boundaries and the pieces parsed on every core, then joined under one root
  *   subject-attribute A [F L]     for @subject.attr: the subject is the codepoint in sibling attribute A of the captured
@@ -56,6 +60,8 @@ static int recipe_parse(const char *path, Recipe *r){
         else if (!strcmp(tok, "trust")) { tok = strtok(NULL, " \t\r\n"); if (tok) r->trust = atof(tok); }
         else if (!strcmp(tok, "query")) inq = 1;
         else if (!strcmp(tok, "records")) r->records = 1;
+        else if (!strcmp(tok, "witness")) { char *rest = strtok(NULL, "\r\n"); if (rest) { while (*rest == ' ' || *rest == '\t') rest++; snprintf(r->witness, sizeof r->witness, "%s", rest); } }
+        else if (!strcmp(tok, "predicate")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->predicate, sizeof r->predicate, "%s", tok); }
         else if (!strcmp(tok, "subject-attribute")) for (int k = 0; k < 3 && (tok = strtok(NULL, " \t\r\n")); k++) snprintf(r->subject_attr[k], 48, "%s", tok);
     }
     fclose(f);
@@ -244,6 +250,7 @@ static void attest_tree(const Recipe *r, TSNode root, const uint8_t *src, size_t
             }
             have[role] = resolve(suf, m.captures[c].node, src, buf, &part[role]);
         }
+        if (!have[1] && r->predicate[0]) { part[1] = string_ref((const uint8_t *)r->predicate, strlen(r->predicate)); have[1] = 1; }
         if (!have[0] || !have[1] || !have[2]) continue;
         uint8_t t = 0; for (int i = 0; i < 3; i++) if (part[i].tier > t) t = part[i].tier;
         Ref claim = compose(part, 3, (uint8_t)(t + 1));
@@ -259,15 +266,18 @@ void decompose_file(Ctx *c, File *f){
     uint8_t *src = malloc(n + 1); if (fread(src, 1, n, fp) != n) { fclose(fp); free(src); f->skipped = 1; return; }
     fclose(fp); f->bytes = n;
     const Recipe *r = f->recipe;
+    if (r && r->query) {                                                        /* the witness, named as content */
+        const char *w = r->witness[0] ? r->witness : r->name; f->witness = text_ref(c, (const uint8_t *)w, strlen(w)); f->trunk = f->witness;
+    }
     if (!r || !r->lang) f->trunk = text_ref(c, src, n);
-    else if (r->records && n > (64u << 20) && !r->query && !getenv("LAPLACE_ONE_PARSE")) {
+    else if (r->records && n > (64u << 20) && !getenv("LAPLACE_ONE_PARSE")) {
         /* line records: split after a line break, parse the pieces on every core, and join their top-level children
          * (with the bytes between them) under one root, exactly as one parse of the whole file would give */
         int np = omp_get_num_threads() * 4; if (np < 1) np = 1;
         size_t *cut = malloc(sizeof(size_t) * (np + 1)); cut[0] = 0; int k = 1;
         for (int i = 1; i < np; i++) { size_t c = n / np * i; while (c < n && src[c - 1] != '\n') c++; if (c > cut[k - 1] && c < n) cut[k++] = c; }
         cut[k] = n;
-        typedef struct { Ref *v; size_t n; uint8_t t; } Part; Part *part = calloc(k, sizeof(Part));
+        typedef struct { Ref *v; size_t n; uint8_t t; Events ev; } Part; Part *part = calloc(k, sizeof(Part));
         #pragma omp taskloop grainsize(1)
         for (int i = 0; i < k; i++) {
             TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang);
@@ -276,30 +286,35 @@ void decompose_file(Ctx *c, File *f){
             Ref *v = malloc(sizeof(Ref) * (2 * (size_t)nc + 2)); size_t m = 0; uint32_t at = 0; uint8_t tm = 0;
             const uint8_t *base = src + cut[i]; uint32_t len = (uint32_t)(cut[i + 1] - cut[i]);
             TSTreeCursor cur = ts_tree_cursor_new(root);
-            if (ts_tree_cursor_goto_first_child(&cur)) do {
+            if (!r->query && ts_tree_cursor_goto_first_child(&cur)) do {
                 TSNode c = ts_tree_cursor_current_node(&cur); uint32_t a = ts_node_start_byte(c), b = ts_node_end_byte(c);
                 if (a > at) v[m++] = string_ref(base + at, a - at);
                 if (b > a) v[m++] = ast_node(c, base, a, b, 1);
                 if (b > at) at = b;
             } while (ts_tree_cursor_goto_next_sibling(&cur));
             ts_tree_cursor_delete(&cur);
-            if (len > at) v[m++] = string_ref(base + at, len - at);
+            if (!r->query && len > at) v[m++] = string_ref(base + at, len - at);
             for (size_t j = 0; j < m; j++) if (v[j].tier > tm) tm = v[j].tier;
-            part[i] = (Part){ v, m, tm };
+            part[i].v = v; part[i].n = m; part[i].t = tm;
+            if (r->query) attest_tree(r, root, base, len, &part[i].ev);         /* this piece's attestations, in order */
             ts_tree_delete(t); ts_parser_delete(ps);
         }
         size_t tot = 0; uint8_t tm = 0; for (int i = 0; i < k; i++) { tot += part[i].n; if (part[i].t > tm) tm = part[i].t; }
         Ref *all = malloc(sizeof(Ref) * (tot + 1)); size_t m = 0;
-        for (int i = 0; i < k; i++) { memcpy(all + m, part[i].v, sizeof(Ref) * part[i].n); m += part[i].n; free(part[i].v); }
-        f->trunk = compose(all, (uint32_t)m, (uint8_t)(tm + 1));
+        for (int i = 0; i < k; i++) {
+            memcpy(all + m, part[i].v, sizeof(Ref) * part[i].n); m += part[i].n; free(part[i].v);
+            for (uint64_t j = 0; j < part[i].ev.n; j++) ev_push(&f->ev, part[i].ev.e[j].claim, part[i].ev.e[j].score);   /* reading order */
+            free(part[i].ev.e);
+        }
+        if (!r->query) f->trunk = compose(all, (uint32_t)m, (uint8_t)(tm + 1));
         free(all); free(part); free(cut);
     }
     else {
         TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang);
         TSTree *t = ts_parser_parse_string(ps, NULL, (const char *)src, (uint32_t)n);
         TSNode root = ts_tree_root_node(t);
-        f->trunk = ast_node(root, src, 0, (uint32_t)n, 0);
-        if (r->query) attest_tree(r, root, src, n, &f->ev);
+        if (!r->query) f->trunk = ast_node(root, src, 0, (uint32_t)n, 0);   /* content: the file as itself */
+        else attest_tree(r, root, src, n, &f->ev);                       /* a curated source: what it attests */
         ts_tree_delete(t); ts_parser_delete(ps);
     }
     free(src);

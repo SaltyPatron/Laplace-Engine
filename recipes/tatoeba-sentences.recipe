@@ -1,6 +1,14 @@
 name tatoeba-sentences
-# Tatoeba's sentences: one row per sentence — its Tatoeba number, its language (ISO 639-3), its text — as the file's
-# syntax tree, so it recomposes byte for byte. Each row attests its sentence's language: [sentence, lang, code].
+witness Tatoeba
+# Tatoeba's sentences: each row gives a sentence's Tatoeba number, its language (ISO 639-3) and its text. A curated
+# source: what is recorded is each sentence, as content, and the claim [sentence, lang, code] it attests.
 match sentences.csv
 grammar tsv
 records
+# A witness entering unrated plays at Glicko-2's stock deviation (350, trust 0.67); its trust is then earned by its
+# agreement with higher-tier witnesses (Research: Trust).
+trust 0.67
+predicate lang
+query
+(row . (field) . (field) @object.text . (field) @subject.text)
+end

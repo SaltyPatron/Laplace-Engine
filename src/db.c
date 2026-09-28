@@ -55,17 +55,17 @@ static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, uint64_t n){
     return hit;
 }
 
-/* ---- partitions: tiers 0, 2 and 3 split 16 ways by the ID's first hex digit; tiers 1, 4, 5 whole; deeper tiers in the default */
-static int part_of(const lp_id *id, uint8_t tier){ return tier == 0 || tier == 2 || tier == 3 ? tier * 16 + (id->b[0] >> 4) : tier <= 5 ? tier * 16 : 6 * 16; }
+/* ---- partitions: every tier up to 15 split 16 ways by the ID's first hex digit; deeper tiers in the default, split alike */
+static int part_of(const lp_id *id, uint8_t tier){ return (tier < 16 ? tier : 16) * 16 + (id->b[0] >> 4); }
 static void part_name(int p, const char *table, char *out, size_t cap){
     int t = p / 16, k = p % 16;
-    if (t == 6) snprintf(out, cap, "%s_tx", table);
-    else if (t == 0 || t == 2 || t == 3) snprintf(out, cap, "%s_t%d_%x", table, t, k);
-    else snprintf(out, cap, "%s_t%d", table, t);
+    if (t == 16) snprintf(out, cap, "%s_tx_%x", table, k); else snprintf(out, cap, "%s_t%d_%x", table, t, k);
 }
-#define NPART (7 * 16)
+#define NPART (17 * 16)
 
 
+typedef struct { uint32_t shard; uint32_t idx; } NRef;
+static NRef *bucket[NPART]; static uint64_t nbucket[NPART];
 static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_p, int atoms_needed){
     char tn[64]; Copy c = { 0 }; char sql[160]; uint8_t geo[64 * 1024];
     lp_id *ids = NULL; uint32_t *runs = NULL; size_t idc = 0;
@@ -78,8 +78,8 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
             size_t gl = lp_ewkb_point4(x, geo, sizeof geo);
             c16(&c, 4); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(T0[cp].hilbert)); c.rows++;
         }
-    for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) {
-        Node *x = &shard[s].node[i]; if (x->keep != 1 || part_of(&x->id, x->tier) != p) continue;
+    for (uint64_t b = 0; b < nbucket[p]; b++) {
+        int s = (int)bucket[p][b].shard; Node *x = &shard[s].node[bucket[p][b].idx];
         double xm[4]; for (int d = 0; d < 4; d++) xm[d] = (double)x->m[d] / LP_FIXED_ONE;
         lp_coord co; memcpy(co.m, x->m, 32); size_t gl = lp_ewkb_point4(xm, geo, sizeof geo);
         c16(&c, 4); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(lp_hilbert4(&co))); c.rows++;
@@ -93,8 +93,8 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
             uint32_t one = 1; size_t gl = lp_ewkb_runs(&T0[cp].id, &one, 1, geo, sizeof geo);
             c16(&c, 4); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cf_i64(&c, hsigned(T0[cp].hilbert)); cfield(&c, geo, (uint32_t)gl); c.rows++;
         }
-    for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) {
-        Node *x = &shard[s].node[i]; if (x->keep != 1 || part_of(&x->id, x->tier) != p) continue;
+    for (uint64_t b = 0; b < nbucket[p]; b++) {
+        int s = (int)bucket[p][b].shard; Node *x = &shard[s].node[bucket[p][b].idx];
         if (x->nv > idc) { idc = x->nv * 2; ids = xrealloc(ids, idc * sizeof(lp_id)); runs = xrealloc(runs, idc * 4); }
         for (uint32_t v = 0; v < x->nv; v++) { ids[v] = shard[s].vtx[x->voff + v].id; runs[v] = shard[s].vtx[x->voff + v].run; }
         size_t gl = lp_ewkb_runs(ids, runs, x->nv, NULL, 0); uint8_t *gp = gl > sizeof geo ? malloc(gl) : geo;
@@ -157,12 +157,16 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     free(front); fputc('\n', stderr);
     st->t_dedup = now() - t;
 
-    /* ---- every leaf partition on its own connection */
-    t = now(); uint64_t re[NPART] = { 0 }, rp[NPART] = { 0 };
+    /* ---- every leaf partition on its own connection; new nodes bucketed by partition once */
+    t = now();
+    { uint64_t cnt[NPART] = { 0 };
+      for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) if (shard[s].node[i].keep == 1) cnt[part_of(&shard[s].node[i].id, shard[s].node[i].tier)]++;
+      for (int p = 0; p < NPART; p++) { bucket[p] = malloc(sizeof(NRef) * (cnt[p] + 1)); nbucket[p] = 0; }
+      for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) if (shard[s].node[i].keep == 1) {
+          int p = part_of(&shard[s].node[i].id, shard[s].node[i].tier); bucket[p][nbucket[p]++] = (NRef){ (uint32_t)s, (uint32_t)i }; } } uint64_t re[NPART] = { 0 }, rp[NPART] = { 0 };
     #pragma omp parallel for num_threads(npg) schedule(dynamic)
     for (int p = 0; p < NPART; p++) {
-        int t2 = p / 16, k = p % 16;
-        if ((t2 == 1 || t2 >= 4) && k) continue;                                /* undivided tiers: one partition */
+        if (!nbucket[p] && !(atoms_needed && p / 16 == 0)) continue;             /* nothing new for this partition */
         write_node_rows(pg[omp_get_thread_num()], p, &re[p], &rp[p], atoms_needed);
     }
     for (int p = 0; p < NPART; p++) { st->ent_rows += re[p]; st->phy_rows += rp[p]; }
@@ -203,7 +207,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         }
         Copy c = { 0 };
         copy_begin(&c, pg[0], "COPY witness (id, lineage, trust) FROM STDIN (FORMAT binary)");
-        for (int fi = 0; fi < nfiles; fi++) if (files[fi].ev.n) { c16(&c, 3); cfield(&c, files[fi].trunk.id.b, 16); c32(&c, 0xFFFFFFFFu); cf_f64(&c, files[fi].recipe->trust); }
+        for (int fi = 0; fi < nfiles; fi++) if (files[fi].ev.n) { c16(&c, 3); cfield(&c, files[fi].witness.id.b, 16); c32(&c, 0xFFFFFFFFu); cf_f64(&c, files[fi].recipe->trust); }
         copy_end(&c);
         #pragma omp parallel for num_threads(npg) schedule(static, 1)
         for (int w = 0; w < npg; w++) {                                          /* the ledger, split across connections */
@@ -211,7 +215,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             copy_begin(&lc, pg[w], "COPY attestation (claim, witness, score) FROM STDIN (FORMAT binary)");
             for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++, k++) {
                 if (k % (uint64_t)npg != (uint64_t)w) continue;
-                c16(&lc, 3); cfield(&lc, files[fi].ev.e[i].claim.b, 16); cfield(&lc, files[fi].trunk.id.b, 16); cf_f32(&lc, files[fi].ev.e[i].score); lc.rows++;
+                c16(&lc, 3); cfield(&lc, files[fi].ev.e[i].claim.b, 16); cfield(&lc, files[fi].witness.id.b, 16); cf_f32(&lc, files[fi].ev.e[i].score); lc.rows++;
             }
             copy_end(&lc);
             #pragma omp atomic
