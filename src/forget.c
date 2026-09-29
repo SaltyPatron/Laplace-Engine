@@ -186,7 +186,7 @@ static uint64_t sweep(PGconn **pg, int npg, int dry){
             printf("\n"); reader_free(rd);
         }
         over_parts(pg, npg, pparts, going.id, going.n, "SELECT path FROM %s WHERE entity = ANY($1::uuid[])", each_release, &next, "what they held");
-        if (!dry) { over(pg, npg, going.id, going.n, "DELETE FROM standing WHERE claim = ANY($1::uuid[])", NULL, NULL, "standings");
+        if (!dry) { over(pg, npg, going.id, going.n, "DELETE FROM consensus WHERE claim = ANY($1::uuid[])", NULL, NULL, "standings");
                     over_parts(pg, npg, pparts, going.id, going.n, "DELETE FROM %s WHERE entity = ANY($1::uuid[])", NULL, NULL, "paths");
                     over_parts(pg, npg, eparts, going.id, going.n, "DELETE FROM %s WHERE id = ANY($1::uuid[])", NULL, NULL, "entities"); }
         total += going.n;

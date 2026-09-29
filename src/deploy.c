@@ -71,7 +71,7 @@ int cmd_deploy(int argc, char **argv){
     char *have = one(pg, "SELECT 1 FROM pg_class WHERE relname = 'entity' AND relkind = 'p'");
     if (have) printf("  %-52s %9s\n", "content schema", "present"); else { char *s = sql_file("schema.sql"); if (!run(pg, s, "content schema: entity, physicality, source")) return 1; free(s); }
     free(have);
-    { char *s = sql_file("semantics.sql"); if (!run(pg, s, "semantics: witness, attestation, standing")) return 1; free(s); }
+    { char *s = sql_file("semantics.sql"); if (!run(pg, s, "semantics: witness, attestation, consensus")) return 1; free(s); }
     { char *s = sql_file("lookup.sql"); if (!run(pg, s, "lookups ingestion needs: IDs")) return 1; free(s); }
     PQfinish(pg);
     return cmd_status(argc, argv);
@@ -112,7 +112,7 @@ int cmd_status(int argc, char **argv){
     for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) printf("  %-24s %'10lld files   %s\n", PQgetvalue(r, i, 0), atoll(PQgetvalue(r, i, 1)), PQgetvalue(r, i, 2));
     PQclear(r);
     r = PQexec(pg, "SELECT c.relname, c.reltuples::bigint, pg_size_pretty(pg_total_relation_size(c.oid)) FROM pg_class c "
-                   "WHERE c.relname IN ('witness', 'attestation', 'standing') AND c.relkind = 'r' ORDER BY 1");
+                   "WHERE c.relname IN ('witness', 'attestation', 'consensus') AND c.relkind = 'r' ORDER BY 1");
     printf("\nsemantics\n");
     for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) {
         if (atoll(PQgetvalue(r, i, 1)) < 0) printf("  %-24s %16s   %s\n", PQgetvalue(r, i, 0), "not counted yet", PQgetvalue(r, i, 2));

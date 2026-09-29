@@ -226,7 +226,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             uint32_t k = (uint32_t)(nold - i0 < CH ? nold - i0 : CH); uint8_t *ab = malloc(20 + 20 * (size_t)k);
             size_t len = uuid_param(ab, old + i0, k); PGconn *c = pg[omp_get_thread_num()];
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
-            PGresult *q = PQexecParams(c, "SELECT claim, rating, deviation, volatility, matches FROM standing WHERE claim = ANY($1::uuid[])", 1, NULL, v, l, f, 1);
+            PGresult *q = PQexecParams(c, "SELECT claim, rating, deviation, volatility, matches FROM consensus WHERE claim = ANY($1::uuid[])", 1, NULL, v, l, f, 1);
             if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "standing: %s", PQerrorMessage(c)); exit(1); }
             #pragma omp critical
             for (int j = 0; j < PQntuples(q); j++) {
@@ -334,7 +334,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
               lc.rows++;
           }
           copy_end(&lc); st->led += lc.rows; free(lc.b); }
-        copy_begin(&c, pg[0], "COPY standing (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)");
+        copy_begin(&c, pg[0], "COPY consensus (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)");
         for (uint64_t i = 0; i < sn; i++) {
             Standing *s = &stand[i]; if (s->had) continue;
             c16(&c, 5); cfield(&c, s->id.b, 16); cf_f64(&c, s->r.rating); cf_f64(&c, s->r.deviation); cf_f64(&c, s->r.volatility); cf_i32(&c, (int32_t)s->matches); st->std_new++;
@@ -359,7 +359,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
                 alen[f] = (int)(q - arr[f]);
             }
             const char *v[5] = { (char *)arr[0], (char *)arr[1], (char *)arr[2], (char *)arr[3], (char *)arr[4] }; int fm[5] = { 1, 1, 1, 1, 1 };
-            PGresult *u = PQexecParams(pg[0], "UPDATE standing s SET rating = u.r, deviation = u.d, volatility = u.v, matches = u.m "
+            PGresult *u = PQexecParams(pg[0], "UPDATE consensus s SET rating = u.r, deviation = u.d, volatility = u.v, matches = u.m "
                 "FROM unnest($1::uuid[], $2::float8[], $3::float8[], $4::float8[], $5::int[]) AS u(c, r, d, v, m) WHERE s.claim = u.c", 5, NULL, v, alen, fm, 0);
             if (PQresultStatus(u) != PGRES_COMMAND_OK) { fprintf(stderr, "standing update: %s", PQerrorMessage(pg[0])); return 1; }
             PQclear(u); for (int f = 0; f < 5; f++) free(arr[f]); st->std_upd += n;

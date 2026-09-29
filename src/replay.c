@@ -73,7 +73,7 @@ int cmd_replay(int argc, char **argv){
           uint64_t u = 0; const uint8_t *b = (const uint8_t *)PQgetvalue(r, j, 2); for (int y = 0; y < 8; y++) u = u << 8 | b[y]; memcpy(&wit[j].trust, &u, 8); }
       PQclear(r); }
     /* every claim that has a standing: they are what a row or a vertex can be */
-    { if (!PQsendQueryParams(pg[0], "SELECT claim FROM standing", 0, NULL, NULL, NULL, NULL, 1) || !PQsetSingleRowMode(pg[0])) { fprintf(stderr, "%s", PQerrorMessage(pg[0])); return 1; }
+    { if (!PQsendQueryParams(pg[0], "SELECT claim FROM consensus", 0, NULL, NULL, NULL, NULL, 1) || !PQsetSingleRowMode(pg[0])) { fprintf(stderr, "%s", PQerrorMessage(pg[0])); return 1; }
       PGresult *r; while ((r = PQgetResult(pg[0]))) { if (PQresultStatus(r) == PGRES_SINGLE_TUPLE) { lp_id id; memcpy(id.b, PQgetvalue(r, 0, 0), 16); find(&id, 1); } else must(pg[0], r, PGRES_TUPLES_OK, "standings"); PQclear(r); } }
     printf("  %-52s %'12llu   %d witnesses   (%.1f s)\n", "claims with a standing", (unsigned long long)ns, nw, now() - t); fflush(stdout);
 
@@ -150,8 +150,8 @@ int cmd_replay(int argc, char **argv){
     printf("  %-52s %'12llu   matchups %'llu\n", "claims entered", (unsigned long long)entered, (unsigned long long)played);
     printf("  %-52s %'12llu\n", "standings the ledger no longer accounts for", (unsigned long long)never);
     if (!dry) {
-        t = now(); must(pg[0], PQexec(pg[0], "BEGIN"), PGRES_COMMAND_OK, "begin"); must(pg[0], PQexec(pg[0], "TRUNCATE standing"), PGRES_COMMAND_OK, "standings");
-        PGresult *r = PQexec(pg[0], "COPY standing (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)"); must(pg[0], r, PGRES_COPY_IN, "standings"); PQclear(r);
+        t = now(); must(pg[0], PQexec(pg[0], "BEGIN"), PGRES_COMMAND_OK, "begin"); must(pg[0], PQexec(pg[0], "TRUNCATE consensus"), PGRES_COMMAND_OK, "standings");
+        PGresult *r = PQexec(pg[0], "COPY consensus (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)"); must(pg[0], r, PGRES_COPY_IN, "standings"); PQclear(r);
         size_t cap = 1u << 22, k = 0; uint8_t *b = malloc(cap + 128); static const uint8_t hdr[19] = { 'P','G','C','O','P','Y','\n',0xFF,'\r','\n',0, 0,0,0,0, 0,0,0,0 }; memcpy(b, hdr, 19); k = 19;
         for (uint64_t i = 0; i < ns; i++) { St *s = &st[i]; if (!s->entered) continue;
             b[k++] = 0; b[k++] = 5; b[k++] = 0; b[k++] = 0; b[k++] = 0; b[k++] = 16; memcpy(b + k, s->id.b, 16); k += 16;

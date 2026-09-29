@@ -63,7 +63,7 @@ Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, doub
     uint8_t ab[80]; size_t al = uuid_param(ab, keys, nk); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
     const char *v[2] = { (const char *)ab, lim }; int l[2] = { (int)al, 0 }, f[2] = { 1, 0 };
     PGresult *q = db_ask(pg,
-        "SELECT p.entity, p.path, s.rating, s.deviation, s.volatility, s.matches FROM physicality p JOIN standing s ON s.claim = p.entity "
+        "SELECT p.entity, p.path, s.rating, s.deviation, s.volatility, s.matches FROM physicality p JOIN consensus s ON s.claim = p.entity "
         "WHERE p.path @> $1::uuid[] LIMIT $2::int", 2, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
     int rows = PQntuples(q); *capped = rows > fan; if (rows > fan) rows = fan;
@@ -183,7 +183,7 @@ int cmd_hop(int argc, char **argv){
     t = now(); uint8_t ab[40]; size_t al = uuid_param(ab, &e.id, 1);
     const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
     PGresult *q = db_ask(pg, "SELECT p.tier FROM physicality p WHERE p.path @> $1::uuid[] "
-                                   "AND NOT EXISTS (SELECT 1 FROM standing s WHERE s.claim = p.entity)", 1, v, l, f);
+                                   "AND NOT EXISTS (SELECT 1 FROM consensus s WHERE s.claim = p.entity)", 1, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
     uint64_t by_tier[256] = { 0 }; int any = 0;
     for (int j = 0; j < PQntuples(q); j++) { uint16_t tb; memcpy(&tb, PQgetvalue(q, j, 0), 2); by_tier[ntohs(tb) & 255]++; any = 1; }
@@ -287,7 +287,7 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
     const char *v[2] = { (const char *)ab, lim }; int l[2] = { (int)al, 0 }, f[2] = { 1, 0 };
     PGresult *q = db_ask(pg,
         "SELECT u.i, c.entity, c.path, c.rating, c.deviation, c.volatility FROM unnest($1::uuid[]) WITH ORDINALITY AS u(id, i) "
-        "CROSS JOIN LATERAL (SELECT p.entity, p.path, s.rating, s.deviation, s.volatility FROM physicality p JOIN standing s ON s.claim = p.entity "
+        "CROSS JOIN LATERAL (SELECT p.entity, p.path, s.rating, s.deviation, s.volatility FROM physicality p JOIN consensus s ON s.claim = p.entity "
         "WHERE p.path @> ARRAY[u.id] LIMIT $2::int) c", 2, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
     w->trips++; w->expanded += (uint64_t)m;
