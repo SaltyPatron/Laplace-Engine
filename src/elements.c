@@ -4,7 +4,8 @@
  *   identity ELEMENT ATTRIBUTE          the thing is what the attribute names (* : any element that carries it)
  *   identity ELEMENT FIRST..LAST        the thing is a range of codepoints, written in hex as its first and its last:
  *                                       the path of the two. What is said of a range is said of the range
- *   identity ELEMENT >CHILD             the thing is what the text of the element CHILD inside it names
+ *   identity ELEMENT >CHILD             the thing is what the text of the element CHILD inside it names;
+ *                                       >CHILD.ATTRIBUTE: what that element's attribute names
  *   identity ELEMENT NAME within        the name stands only within the thing the element is inside: the thing is the
  *                                       path of that thing and the name
  *   identity ELEMENT NAME kind          the name stands only among elements of its kind (a source that numbers each
@@ -129,8 +130,13 @@ static int thing_of(const EW *w, const Tag *t, const Ref *S, long scp, Thing *th
         if (r->identity[i].own) found = t->has_content && !holds_elements(t->content) && value_ref(w, t->content, 0, 0, scp, &th->X), th->attr = found ? -2 : -1;
         else if (r->identity[i].child) {
             if (!t->has_content) continue; uint32_t nc = ts_node_child_count(t->content);
-            for (uint32_t c = 0; c < nc && !found; c++) { TSNode ch = ts_node_child(t->content, c); Tag ct; if (!is(ch, "element") || !tag_of(ch, &ct) || !named(w, ct.name, r->identity[i].attr)) continue;
-                if (ct.has_content && !holds_elements(ct.content) && value_ref(w, ct.content, 0, 0, scp, &th->X)) { found = 1; th->child = ts_node_start_byte(ch); } }
+            char cn[64]; snprintf(cn, sizeof cn, "%s", r->identity[i].attr); char *ca = strchr(cn, '.'); if (ca) *ca++ = 0;       /* CHILD, or CHILD.ATTRIBUTE */
+            TSTreeCursor cur = ts_tree_cursor_new(t->content);
+            if (ts_tree_cursor_goto_first_child(&cur)) do { TSNode ch = ts_tree_cursor_current_node(&cur); Tag ct; if (!is(ch, "element") || !tag_of(ch, &ct) || !named(w, ct.name, cn)) continue;
+                if (ca) { for (int a = 0; a < ct.na && !found; a++) if (named(w, ct.an[a], ca)) found = value_ref(w, ct.av[a], 0, 0, scp, &th->X); }
+                else if (ct.has_content && !holds_elements(ct.content) && value_ref(w, ct.content, 0, 0, scp, &th->X)) { found = 1; th->child = ts_node_start_byte(ch); }
+            } while (!found && ts_tree_cursor_goto_next_sibling(&cur));
+            ts_tree_cursor_delete(&cur); (void)nc;
         }
         else if (strstr(r->identity[i].attr, "..")) {                          /* a range of codepoints, written as its first and its last: the path of the two */
             char a1[64], *a2; snprintf(a1, sizeof a1, "%s", r->identity[i].attr); a2 = strstr(a1, ".."); *a2 = 0; a2 += 2; long lo = -1, hi = -1;
@@ -326,14 +332,30 @@ void attest_elements(const Recipe *r, File *f, void *root_node, const uint8_t *s
         if (found && c > cut[k - 1] && c < hi) cut[k++] = c; }
     cut[k] = hi; Events *pe = calloc((size_t)k + 1, sizeof(Events));
     #undef BEGINS
+    /* what stands around the run, parsed first: the things the run is inside are found in it, where the run was */
+    uint8_t *around = malloc(lo + (n - hi) + 1); memcpy(around, src, lo); memcpy(around + lo, src + hi, n - hi);
+    TSParser *aps = ts_parser_new(); ts_parser_set_language(aps, r->lang); TSTree *at = ts_parser_parse_string(aps, NULL, (const char *)around, (uint32_t)(lo + n - hi));
+    EW wa = w; wa.src = around; Ref S; int has_S = 0; long scp = -1;
+    { TSNode chain[64]; int nc = 0; TSNode nd = ts_node_descendant_for_byte_range(ts_tree_root_node(at), (uint32_t)(lo ? lo - 1 : 0), (uint32_t)lo);
+      for (; !ts_node_is_null(nd) && nc < 64; nd = ts_node_parent(nd)) if (is(nd, "element") && ts_node_start_byte(nd) < lo && ts_node_end_byte(nd) > lo) chain[nc++] = nd;
+      for (int i = nc - 1; i >= 0; i--) { Tag t; Thing th; if (tag_of(chain[i], &t) && thing_of(&wa, &t, has_S ? &S : NULL, scp, &th)) { S = th.X; scp = th.cp; has_S = 1; } } }
     #pragma omp taskloop grainsize(1)
     for (int i = 0; i <= k; i++) {
-        TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang); EW wi = w; uint8_t *around = NULL; TSTree *t;
-        if (i < k) { t = ts_parser_parse_string(ps, NULL, (const char *)src + cut[i], (uint32_t)(cut[i + 1] - cut[i])); wi.src = src + cut[i]; }
-        else { around = malloc(lo + (n - hi) + 1); memcpy(around, src, lo); memcpy(around + lo, src + hi, n - hi); t = ts_parser_parse_string(ps, NULL, (const char *)around, (uint32_t)(lo + n - hi)); wi.src = around; }
-        below(&wi, ts_tree_root_node(t), &pe[i]);
-        ts_tree_delete(t); ts_parser_delete(ps); free(around);
+        if (i == k) { below(&wa, ts_tree_root_node(at), &pe[i]); continue; }
+        /* a part, made a document of its own by an element around it that says nothing */
+        size_t len = cut[i + 1] - cut[i]; uint8_t *doc = malloc(len + 16); memcpy(doc, "<_>\n", 4); memcpy(doc + 4, src + cut[i], len); memcpy(doc + 4 + len, "\n</_>", 6);
+        TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang); TSTree *t = ts_parser_parse_string(ps, NULL, (const char *)doc, (uint32_t)(len + 9));
+        EW wi = w; wi.src = doc; TSNode root = ts_tree_root_node(t), top = { 0 }; int has_top = 0;
+        { TSTreeCursor cur = ts_tree_cursor_new(root); if (ts_tree_cursor_goto_first_child(&cur)) do { TSNode c = ts_tree_cursor_current_node(&cur); if (is(c, "element")) { top = c; has_top = 1; } } while (!has_top && ts_tree_cursor_goto_next_sibling(&cur)); ts_tree_cursor_delete(&cur); }
+        Tag tt; if (has_top && !ts_node_has_error(root) && tag_of(top, &tt) && tt.has_content) inside(&wi, tt.content, has_S ? &S : NULL, scp, NULL, UINT32_MAX, NULL, NULL, &pe[i]);
+        else {
+            #pragma omp atomic
+            f->incomplete++;
+            fprintf(stderr, "\n  %s: the part of %s from byte %zu to byte %zu does not parse as whole records; what it holds was not read\n", r->name, f->path, cut[i], cut[i + 1]);
+        }
+        ts_tree_delete(t); ts_parser_delete(ps); free(doc);
     }
+    ts_tree_delete(at); ts_parser_delete(aps); free(around);
     k++;
     for (int i = 0; i < k; i++) { for (uint64_t j = 0; j < pe[i].n; j++) ev_push(&f->ev, &pe[i].e[j]); free(pe[i].e); }
     free(pe); free(cut);

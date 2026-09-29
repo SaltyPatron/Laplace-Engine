@@ -115,8 +115,9 @@
  *                                     .iri  an identifier written between angle brackets, without them
  *                                     .tag  a tag written after an @, without it
  *                                     .cps  codepoints written in hex, as the text they are
- *                                     .range in a table: a codepoint in hex, or a range written FIRST..LAST, which
- *                                           is recorded as the range it is: the path of its first and its last
+ *                                     .range in a table: a codepoint in hex, a sequence of them, or a range written
+ *                                           FIRST..LAST, which is recorded as the range it is: the path of its first
+ *                                           and its last
  *                                     .xml  the node's text with XML references resolved (quotes stripped)
  *                                     .node the node itself, as recorded
  *                                     .NAME then looked up in map NAME; a part no map holds attests nothing
@@ -892,6 +893,8 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
                 const uint8_t *p = cell[ci].p; size_t n = cell[ci].n;
                 if (!strcmp(resolvers_of(b->in[role]), "range")) {               /* a codepoint, or a range of them written FIRST..LAST: the path of the two */
                     while (n && (p[0] == ' ' || p[0] == '\t')) { p++; n--; } while (n && (p[n - 1] == ' ' || p[n - 1] == '\t')) n--;
+                    if (memchr(p, ' ', n)) {                                       /* several codepoints: a sequence, the text it is */
+                        if (part_said(rd, b, role, "cps", buf, &p, &n)) { part[role] = part_ref(b, role, p, n); have[role] = 1; } continue; }
                     char z[40]; if (!n || n >= sizeof z) continue; memcpy(z, p, n); z[n] = 0; char *dots = strstr(z, ".."), *e1, *e2;
                     unsigned long lo = strtoul(z, &e1, 16), hi = dots ? strtoul(dots + 2, &e2, 16) : 0;
                     if (e1 == z || lo >= LP_NCP || (dots ? (e1 != dots || *e2 || hi >= LP_NCP) : *e1 != 0)) continue;
