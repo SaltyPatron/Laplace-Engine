@@ -114,6 +114,9 @@
  *                                     .head the node's text before its first colon
  *                                     .iri  an identifier written between angle brackets, without them
  *                                     .tag  a tag written after an @, without it
+ *                                     .term a Turtle term as what it stands for: an identifier without its angle
+ *                                           brackets, a text without its quotes and with its escapes resolved, and
+ *                                           anything else (a prefixed name, a number, a) as written
  *                                     .cps  codepoints written in hex, as the text they are
  *                                     .range in a table: a codepoint in hex, a sequence of them, or a range written
  *                                           FIRST..LAST, which is recorded as the range it is: the path of its first
@@ -657,7 +660,7 @@ static int resolve_subject_attr(const Recipe *r, TSNode nd, const uint8_t *src, 
 static int part_said(const Reading *rd, const Block *b, int role, const char *suffix, uint8_t *buf, const uint8_t **p, size_t *n);
 static int part_text(const Reading *rd, const Block *b, int role, const char *suffix, TSNode nd, const uint8_t *src, uint8_t *buf, const uint8_t **p, size_t *n){
     *p = src + ts_node_start_byte(nd); *n = ts_node_end_byte(nd) - ts_node_start_byte(nd);
-    unquote(p, n);
+    if (strncmp(suffix, "term", 4)) unquote(p, n);
     return part_said(rd, b, role, suffix, buf, p, n);
 }
 static int part_said(const Reading *rd, const Block *b, int role, const char *suffix, uint8_t *buf, const uint8_t **p, size_t *n){
@@ -679,10 +682,24 @@ static int part_said(const Reading *rd, const Block *b, int role, const char *su
         }
         if (!k) return 0; memcpy(buf, tmp, k); *p = buf; *n = k;
     }
+    else if (res && !strcmp(res, "term")) {                              /* a Turtle term, as what it stands for */
+        if (*n >= 2 && (*p)[0] == '<') { const uint8_t *e = memchr(*p, '>', *n); if (!e) return 0; (*p)++; *n = (size_t)(e - *p); }
+        else if ((*p)[0] == '"' || (*p)[0] == '\'') {                     /* a text: its quotes off (one or three), its escapes resolved; what follows the closing quote is not the text */
+            uint8_t q = (*p)[0]; size_t open = *n >= 6 && (*p)[1] == q && (*p)[2] == q ? 3 : 1, k = 0, i = open;
+            for (; i < *n; i++) { uint8_t c = (*p)[i];
+                if (c == q && (open == 1 || (i + 2 < *n && (*p)[i + 1] == q && (*p)[i + 2] == q))) break;
+                if (c != '\\' || i + 1 >= *n) { buf[k++] = c; continue; }
+                c = (*p)[++i];
+                if (c == 'n') buf[k++] = '\n'; else if (c == 't') buf[k++] = '\t'; else if (c == 'r') buf[k++] = '\r'; else if (c == 'b') buf[k++] = '\b'; else if (c == 'f') buf[k++] = '\f';
+                else if ((c == 'u' && i + 4 < *n) || (c == 'U' && i + 8 < *n)) { int w = c == 'u' ? 4 : 8; char h[9]; memcpy(h, *p + i + 1, (size_t)w); h[w] = 0; char *e; unsigned long cp = strtoul(h, &e, 16);
+                    if (*e || cp >= LP_NCP) return 0; k += lp_utf8_put((uint32_t)cp, buf + k); i += (size_t)w; }
+                else buf[k++] = c; }
+            if (i >= *n || !k) return 0; *p = buf; *n = k; }
+    }
     else if (res && !strcmp(res, "iri")) { if (*n < 3 || (*p)[0] != '<' || (*p)[*n - 1] != '>') return 0; (*p)++; *n -= 2; }
     else if (res && !strcmp(res, "tag")) { if (*n < 2 || (*p)[0] != '@') return 0; (*p)++; *n -= 1; }
     else if (res && !strcmp(res, "head")) { const uint8_t *c = memchr(*p, ':', *n); if (!c || c == *p) return 0; *n = (size_t)(c - *p); }
-    else if (res && strcmp(res, "text")) { save = NULL; snprintf(chain, sizeof chain, "%s", suffix); res = NULL; }     /* the first is already a map */
+    else if (res && strcmp(res, "text") && strcmp(res, "term")) { save = NULL; snprintf(chain, sizeof chain, "%s", suffix); res = NULL; }     /* the first is already a map */
     if (role == 2 && rd->r->itself && subject_cp >= 0 && res && strcmp(res, "cps") && memchr(*p, rd->r->itself, *n)) {   /* the codepoint, written out */
         char hex[16]; int hl = snprintf(hex, sizeof hex, "%04lX", subject_cp); size_t k = 0; uint8_t *o = malloc(*n * 8 + 8);
         for (size_t i = 0; i < *n; i++) { if ((*p)[i] == (uint8_t)rd->r->itself) { memcpy(o + k, hex, (size_t)hl); k += (size_t)hl; } else o[k++] = (*p)[i]; }
