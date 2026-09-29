@@ -92,6 +92,15 @@
  *                                 named word by lang_code word pos   is   [en, free, noun]
  *   linkage                       what a thing inside another says, it says of its being there: of the claim
  *                                 [thing, key..., thing inside]
+ *   specifics [claims under KEY...]
+ *                                 what is held with a claim is its specifics: each a pair of its key and its value,
+ *                                 recorded together with the claim as what is witnessed, and no claim of its own
+ *                                 ("For witnessing, the hash covers the claim's specifics. For consensus, the hash
+ *                                 covers only the main components"). A thing inside another is the claim
+ *                                 [thing, key..., thing inside], and what it holds the claim's specifics; an object
+ *                                 that is no thing is the tuple of its pairs. Under the KEYs named, what a thing
+ *                                 inside holds are claims of their own, said of its being there. In a table with a
+ *                                 JSON column, what the JSON and the attest columns hold are the row's claim's specifics.
  *   tuples                        a list of plain values inside a list is one tuple, as [text, target]
  *   keys things                   the keys of an object inside nothing are things, and each one's value speaks of it
  *   records                       a value on every line
@@ -104,7 +113,8 @@
  *   about PATTERN                 the first line that matches names what the file is about: the pattern's first part
  *     line PATTERN                in a claims block: a line that matches says its parts, which the pattern puts
  *                                 between parentheses: two parts are said of what the file is about, [about, 1, 2];
- *                                 three are the claim themselves; with "pair", two parts are the pair [1, 2]
+ *                                 three are the claim themselves; with "pair", two parts are the pair [1, 2]; with
+ *                                 "predicate NAME" (a name the source gives, as a table's heading), [1, NAME, 2]
  *   grammar fields: records of lines written KEY IS VALUE (a line that begins with a space continues the one before):
  *   record LINE                   the line that parts one record from the next
  *   field IS                      what parts a field's key from its value
@@ -386,6 +396,9 @@ static int recipe_parse(const char *path, Recipe *r){
             snprintf(r->named_key, 64, "%s", k); while ((tok = strtok(NULL, " \t\r\n")) && r->nnamed < 8) snprintf(r->named[r->nnamed++], 64, "%s", tok); }
         else if (!strcmp(tok, "paths")) { char *a = strtok(NULL, " \t\r\n"), *c = strtok(NULL, " \t\r\n"); if (!a) { fprintf(stderr, "%s: paths CHAR [CHAR]\n", path); fclose(f); return 0; } r->path_sep = a[0]; r->path_join = c ? c[0] : 0; }
         else if (!strcmp(tok, "linkage")) r->linkage = 1;
+        else if (!strcmp(tok, "specifics")) { r->specifics = r->linkage = 1; tok = strtok(NULL, " \t\r\n");
+            if (tok && !strcmp(tok, "claims")) { tok = strtok(NULL, " \t\r\n"); if (!tok || strcmp(tok, "under")) { fprintf(stderr, "%s: specifics [claims under KEY...]\n", path); fclose(f); return 0; }
+                while ((tok = strtok(NULL, " \t\r\n")) && r->nclaims_under < 8) snprintf(r->claims_under[r->nclaims_under++], 64, "%s", tok); } }
         else if (!strcmp(tok, "tuples")) r->tuples = 1;
         else if (!strcmp(tok, "keys")) { tok = strtok(NULL, " \t\r\n"); if (!tok || strcmp(tok, "things")) { fprintf(stderr, "%s: keys things\n", path); fclose(f); return 0; } r->keys_things = 1; }
         else if (!strcmp(tok, "empty-matches")) { char pat[256] = ""; rest_of(pat, sizeof pat); regex_t *re = malloc(sizeof *re);
@@ -1064,7 +1077,16 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
                 for (int a = 0; a < cols[k].nattest; a++) {                        /* columns that speak of the claim itself, each by its name */
                     int ci = cols[k].attest[a]; if (ci >= nc || !cell[ci].n) continue; const uint8_t *vp = cell[ci].p; size_t vn = cell[ci].n; if (!part_said(rd, b, 2, "text", buf, &vp, &vn)) continue;
                     Ref tr[3] = { mc, string_ref((const uint8_t *)name[ci], strlen(name[ci])), part_ref(r, 2, vp, vn) }; tr[0].said = LP_SAID_TUPLE;
-                    Ref c_ = said_claim(compose(tr, 3, over(tr, 3))); if (cl.n == cl.cap) { cl.cap = cl.cap ? cl.cap * 2 : 16; cl.c = xrealloc(cl.c, sizeof(Ref) * (size_t)cl.cap); } cl.c[cl.n++] = c_; }
+                    Ref c_ = r->specifics ? said_tuple(compose(tr + 1, 2, over(tr + 1, 2))) : said_claim(compose(tr, 3, over(tr, 3))); if (cl.n == cl.cap) { cl.cap = cl.cap ? cl.cap * 2 : 16; cl.c = xrealloc(cl.c, sizeof(Ref) * (size_t)cl.cap); } cl.c[cl.n++] = c_; }
+                if (r->specifics && cl.n) {                                        /* the claim and its specifics: what is witnessed; the claim: what stands */
+                    Ref *path = malloc(sizeof(Ref) * (size_t)(cl.n + 1)); path[0] = mc; memcpy(path + 1, cl.c, sizeof(Ref) * (size_t)cl.n); for (int i = 1; i <= cl.n; i++) path[i].said = LP_SAID_TUPLE;
+                    Ref rec = compose(path, (uint32_t)cl.n + 1, over(path, cl.n + 1)); free(path);
+                    for (int i = 0; i < (wf.n ? wf.n : 1); i++) {
+                        Event x = { rec.id, rec.id, score, b->enter_rating, b->enter_deviation, 0, EV_RECORD }, m = { mc.id, rec.id, score, b->enter_rating, b->enter_deviation, 0, EV_MEMBER };
+                        if (wf.n) { x.own_witness = m.own_witness = 1; x.witness = m.witness = wf.c[i].id; }
+                        ev_push(ev, &x); ev_push(ev, &m); }
+                    free(cl.c); free(wf.c); goto said_row;
+                }
                 for (int i = 0; i < wf.n; i++) { Event x = { mc.id, mc.id, score, b->enter_rating, b->enter_deviation, 0, EV_CLAIM, 1, wf.c[i].id }; ev_push(ev, &x); }
                 if (!wf.n) { Event x = { mc.id, mc.id, score, b->enter_rating, b->enter_deviation, 0, EV_CLAIM }; ev_push(ev, &x); }
                 if (cl.n) { Ref *path = malloc(sizeof(Ref) * (size_t)(cl.n + 1)); path[0] = mc; path[0].said = 0; memcpy(path + 1, cl.c, sizeof(Ref) * (size_t)cl.n); uint8_t tt = 0; for (int i = 0; i <= cl.n; i++) if (path[i].tier > tt) tt = path[i].tier;
@@ -1072,6 +1094,7 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
                     Event x = { rec.id, rec.id, 1.0f, b->enter_rating, b->enter_deviation, 0, EV_RECORD }; ev_push(ev, &x);
                     for (int i = 0; i < cl.n; i++) { Event m = { cl.c[i].id, rec.id, 1.0f, b->enter_rating, b->enter_deviation, 0, EV_MEMBER }; ev_push(ev, &m); } }
                 free(cl.c); free(wf.c);
+                said_row: ;
             }
             else if (b->pair && have[0] && have[2]) { Ref pr[2] = { part[0], part[2] }; if (!(b->distinct && !memcmp(&pr[0].id, &pr[1].id, 16))) SAY(pr, 2); }
             else if (have[0] && have[1] && have[2] && !(b->distinct && !memcmp(&part[0].id, &part[2].id, 16))) SAY(part, 3);

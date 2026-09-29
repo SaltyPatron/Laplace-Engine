@@ -104,8 +104,69 @@ static Ref say(JP *j, Ref *path, int np, Ref v, Refs *items){
     refs_push(&j->claims, c); if (items) refs_push(items, c);
     return c;
 }
+/* ---- specifics: what an object holds, each a pair of its key and its value */
+static Ref tuple_refs(Ref *t, int n){ for (int i = 0; i < n; i++) if (t[i].said != LP_SAID_TUPLE) t[i].said = 0; return n == 1 ? t[0] : said_tuple(compose(t, (uint32_t)n, tier_of(t, n))); }
+static Ref pair_of(Ref k, Ref v){ Ref t[2] = { k, v }; return tuple_refs(t, 2); }
+static void pairs(JP *j, int by, Ref X, Ref *kp, int nk, Refs *out);
+static void held_one(JP *j, Ref key, Ref *kp, int nk, Ref v, Refs *out){
+    if (j->nwp && nk + 1 == j->nwp) { int same = !memcmp(&key.id, &j->wpath[nk].id, 16); for (int i = 0; i < nk && same; i++) same = !memcmp(&kp[i].id, &j->wpath[i].id, 16); if (same) refs_push(&j->found, v); }
+    refs_push(out, pair_of(key, v));
+}
+static int plain_text(JP *j, Ref *v){                                       /* a text or a plain value at the cursor; 0 when it says nothing */
+    if (*j->p == '"') { const uint8_t *s; size_t n; if (!string(j, &s, &n)) return 0;
+        while (n && (s[0] == ' ' || s[0] == '\n' || s[0] == '\t')) { s++; n--; } while (n && (s[n - 1] == ' ' || s[n - 1] == '\n' || s[n - 1] == '\t' || s[n - 1] == '\r')) n--;
+        if (!n) return 0; *v = text_of(j, s, n); return 1; }
+    const uint8_t *at = j->p; skip(j); size_t n = (size_t)(j->p - at); if (!n) { j->bad = 1; return 0; }
+    if (n == 4 && !memcmp(at, "null", 4)) return 0; *v = string_ref(at, n); return 1;
+}
+static void held(JP *j, Ref key, Ref *kp, int nk, Refs *out){
+    ws(j); if (j->p >= j->e || j->bad) return;
+    uint8_t c = *j->p;
+    if (c == '{') { Ref one[1] = { key }, X = { 0 }; int by = thing_of(j, one, 1, &X); Refs mine = { 0 }; if (by != -1) refs_push(&mine, X);
+        Ref kq[9]; int nq = 0; if (nk < 8) { memcpy(kq, kp, sizeof(Ref) * (size_t)nk); kq[nk] = key; nq = nk + 1; }
+        pairs(j, by, X, kq, nq, &mine);
+        if (mine.n) refs_push(out, pair_of(key, tuple_refs(mine.c, mine.n))); else if (!j->bad) refs_push(out, key);    /* it holds nothing: its key is what is said */
+        free(mine.c); }
+    else if (c == '[') { j->p++; ws(j);
+        while (j->p < j->e && *j->p != ']' && !j->bad) {
+            if (*j->p == '[' && j->r->tuples) { const uint8_t *at = j->p; Ref t[16]; int nt = 0, plain = 1; j->p++; ws(j);
+                while (j->p < j->e && *j->p != ']' && nt < 16) { if (*j->p == '{' || *j->p == '[') { plain = 0; break; } Ref v; if (plain_text(j, &v)) t[nt++] = v; if (j->bad) { plain = 0; break; } ws(j); if (j->p < j->e && *j->p == ',') { j->p++; ws(j); } else break; }
+                if (plain && j->p < j->e && *j->p == ']') { j->p++; if (nt) held_one(j, key, kp, nk, tuple_refs(t, nt), out); }
+                else { j->p = at; j->bad = 0; int was = j->r->tuples; (void)was; j->p++; ws(j); while (j->p < j->e && *j->p != ']' && !j->bad) { held(j, key, kp, nk, out); ws(j); if (j->p < j->e && *j->p == ',') { j->p++; ws(j); } else break; } if (j->p < j->e && *j->p == ']') j->p++; else j->bad = 1; } }
+            else held(j, key, kp, nk, out);
+            ws(j); if (j->p < j->e && *j->p == ',') { j->p++; ws(j); } else break; }
+        if (j->p < j->e && *j->p == ']') j->p++; else j->bad = 1; }
+    else { Ref v; if (plain_text(j, &v)) held_one(j, key, kp, nk, v, out); }
+}
+/* The pairs an object holds. The cursor is on its opening brace. by, X: what named it, as thing_of gave them. */
+static void pairs(JP *j, int by, Ref X, Ref *kp, int nk, Refs *out){
+    j->p++; ws(j);
+    while (j->p < j->e && *j->p == '"' && !j->bad) {
+        const uint8_t *k; size_t kn; if (!string(j, &k, &kn)) break;
+        Ref key = kn ? string_ref(k, kn) : (Ref){ 0 }; int is_id = 0;
+        if (by >= 0) is_id = strlen(j->r->identity[by].attr) == kn && !memcmp(j->r->identity[by].attr, k, kn);
+        else if (by == -2) for (int i = 0; i < j->r->nnamed && !is_id; i++) is_id = strlen(j->r->named[i]) == kn && !memcmp(j->r->named[i], k, kn);
+        ws(j); if (j->p < j->e && *j->p == ':') j->p++; ws(j);
+        if (!kn || (is_id && by >= 0 && j->p < j->e && *j->p != '{')) skip(j);           /* the member that names it: said already */
+        else if (is_id && j->p < j->e && *j->p != '{' && *j->p != '[') { Ref v; if (plain_text(j, &v) && memcmp(&v.id, &X.id, 16)) held_one(j, key, kp, nk, v, out); }
+        else held(j, key, kp, nk, out);
+        ws(j); if (j->p < j->e && *j->p == ',') { j->p++; ws(j); } else break;
+    }
+    if (j->p < j->e && *j->p == '}') j->p++; else j->bad = 1;
+}
+static int claims_under(JP *j, const Ref *path, int np){
+    for (int i = 0; np >= 1 && i < j->r->nclaims_under; i++) { Ref u = string_ref((const uint8_t *)j->r->claims_under[i], strlen(j->r->claims_under[i])); if (!memcmp(&u.id, &path[np - 1].id, 16)) return 1; }
+    return 0;
+}
 static void object(JP *j, Ref *path, int np, Refs *items){
     Ref X; int by = thing_of(j, path, np, &X), thing = by != -1; Refs mine = { 0 };
+    if (j->r->specifics && np >= 1 && !(thing && claims_under(j, path, np))) {
+        if (thing) { Ref c = say(j, path, np, X, items); c.said = LP_SAID_TUPLE; refs_push(&mine, c); pairs(j, by, X, NULL, 0, &mine);
+            if (mine.n > 1 && items && !j->bad) refs_push(items, said_record(compose(mine.c, (uint32_t)mine.n, tier_of(mine.c, mine.n)))); }
+        else { pairs(j, -1, X, NULL, 0, &mine);
+            if (mine.n && !j->bad) say(j, path, np, tuple_refs(mine.c, mine.n), items); else if (!j->bad && np >= 2) say(j, path, np - 1, path[np - 1], items); }
+        free(mine.c); return;
+    }
     Ref sub[MAXPATH + 2]; int ns;
     if (thing) { sub[0] = X; ns = 1; if (np >= 1) { Ref c = say(j, path, np, X, items); if (j->r->linkage) sub[0] = c; } }
     else { memcpy(sub, path, sizeof(Ref) * (size_t)np); ns = np; }
@@ -211,7 +272,8 @@ static int row(JP *j, const Block *b, float er, float ed, Events *ev){
 int json_said_of(const Recipe *r, Ctx *ctx, const uint8_t *p, size_t n, Ref thing, RefList *claims, const Ref *wpath, int nwpath, RefList *found){
     JP j = { r, p, p + n, NULL, 0, 0, { 0 }, ctx, wpath, nwpath, { 0 } }; Refs items = { 0 };
     ws(&j); if (j.p >= j.e || *j.p != '{') return 0;
-    Ref path[1] = { thing }; value(&j, path, 1, &items);
+    Ref path[1] = { thing };
+    if (r->specifics) pairs(&j, -1, thing, NULL, 0, &j.claims); else value(&j, path, 1, &items);
     claims->c = j.claims.c; claims->n = j.claims.n; claims->cap = j.claims.cap; found->c = j.found.c; found->n = j.found.n; found->cap = j.found.cap;
     free(items.c); free(j.buf); return !j.bad;
 }

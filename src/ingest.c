@@ -55,6 +55,13 @@ static void show_tuple(const lp_id *id){
         else { Buf o = { 0 }; expand(&sh->vtx[c->voff + v].id, &o); fwrite(o.b, 1, o.n, stdout); free(o.b); } }
     putchar(']');
 }
+/* What a record holds besides its claims: the things and specifics said with them, and the records inside it. */
+static void show_held(const lp_id *id, int depth){
+    Node *c = table_find(id); if (!c || depth > 6) return; Shard *sh = &shard[c->id.b[0]];
+    for (uint32_t v = 0; v < c->nv; v++) { uint64_t said = sh->vtx[c->voff + v].run >> LP_M_RUN_BITS;
+        if (said == LP_SAID_TUPLE) { printf("%*s+ ", depth * 2 + 2, ""); show_tuple(&sh->vtx[c->voff + v].id); putchar('\n'); }
+        else if (said == LP_SAID_RECORD) { printf("%*s(\n", depth * 2 + 2, ""); show_held(&sh->vtx[c->voff + v].id, depth + 1); printf("%*s)\n", depth * 2 + 2, ""); } }
+}
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
     int threads = 0, do_load = 1, a = 1, show_claims = 0; const char *of = NULL;
@@ -159,7 +166,7 @@ int cmd_ingest(int argc, char **argv){
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
         size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
     #define SHOW(F) do { if (show_claims) for (uint64_t e = 0; e < (F)->ev.n; e++) { const Event *x_ = &(F)->ev.e[e]; \
-        if (x_->kind == EV_RECORD) { printf("-- record %u\n", x_->position); continue; } \
+        if (x_->kind == EV_RECORD) { printf("-- record %u", x_->position); if (x_->own_witness) { printf("   by "); show_tuple(&x_->witness); } putchar('\n'); show_held(&x_->witnessed, 0); continue; } \
         if (!table_find(&x_->claim)) continue; \
         show_tuple(&x_->claim); \
         if (x_->score != 1.0f) printf("   score %.3g", (double)x_->score); \

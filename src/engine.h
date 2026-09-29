@@ -136,6 +136,7 @@ typedef struct {
     char named_key[64], named[8][64]; int nnamed;       /* JSON: an object that holds named_key is the thing these members name together, in this order */
     char escaped;                                      /* a table: the character after this one is itself, a line's end included */
     char path_sep, path_join;                          /* a value that begins with path_sep is a path of parts, a part's words joined by path_join */
+    int specifics; char claims_under[8][64]; int nclaims_under;   /* what is held with a claim is its specifics: pairs, witnessed with it; but under these keys, claims of their own */
     int linkage, tuples;                               /* JSON: what a thing inside another says, it says of being there; a list of values inside a list is one tuple */
     int keys_things, members;                          /* JSON: the keys of an object inside nothing are things; read natively (members.c) */
     void *empty_like;                                 /* a table: a field that matches this is one the source leaves empty */
