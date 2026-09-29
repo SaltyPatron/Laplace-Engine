@@ -1,0 +1,48 @@
+# The program's own way through the records: k = 2, always the top, fan 4,096 on a hop and 512 on a search, 8 hops,
+# lambda = 0.05 (Semantics: Personality firmware, "One set of decisions").
+#
+# A firmware is one human being's selection: how the records are navigated and how an answer is reached. It is a
+# file, never a record, so it does not contaminate the knowledge; the same records can be pulled under another.
+# Every line is one decision. The decisions a line can make:
+#
+#   k N                        how far below its rating a standing must still hold, in deviations
+#   lambda N                   the tax on another hop
+#   fan N                      how many claims that hold an entity are read; one that holds more is reached, not crossed
+#   hops N                     how many hops a chain may run
+#   top always | within N      whether the top of a set is taken every time, or how near a tie has to be before
+#                              another strand can be taken (the temperature of that choice)
+#   refuse predicate NAME...   kinds of strand refused before they are scored
+#   refuse witness NAME...
+#   fact N                     a member of the set curated by a witness of at least this trust is returned as one
+#                              fact, the rest of the set held back; without the line, no such branch fires
+#   order witness | standing   on a claim with a part left open: the witness's own order before the standing, or not
+#   shape frechet | outliers N | dtw | edr N
+#                              which shape of the tree to favor, and how many variable vertices a match may skip
+#
+# An instruction set takes the steps of one operation of the forward pass: "for OPERATION", then the decisions that
+# hold for it, and for a pull the segments a step takes, in order:
+#
+#   take fact                  the single fact, when the branch above fires
+#   take segment               the rest of the branch the prompt is a run of, followed along what was observed
+#   take attestations N        the N strongest strands of the prompt itself
+#   take constituents N        the N strongest strands of each of its constituents
+k 2
+lambda 0.05
+hops 8
+top always
+order witness
+
+for hop
+  fan 4096
+
+for search
+  fan 512
+
+for translate
+  fan 4096
+
+for pull
+  fan 4096
+  take segment
+  take attestations 3
+  take constituents 1

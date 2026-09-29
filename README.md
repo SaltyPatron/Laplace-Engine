@@ -7,10 +7,12 @@ Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github
 | Command | What it does |
 | --- | --- |
 | `laplace tier0` | generates tier 0 from the Unicode data and prints its fingerprint |
-| `laplace deploy` | makes a database a Laplace database: extensions, content schema, semantics, its tier 0 |
-| `laplace ingest file...` | files through their recipes: decompose on every core, deduplicate trunk to leaf, record, attest |
+| `laplace deploy` | makes a database a Laplace database: the database itself if the server does not have it, extensions, content schema, semantics, its tier 0 |
+| `laplace ingest` | every source, in the order `recipes/order` gives, each with its own log; what is recorded already is passed over |
+| `laplace ingest source \| file...` | a source by its name, or files, through their recipes: decompose on every core, deduplicate trunk to leaf, record, attest |
 | `laplace index` | builds the container (GIN) and 4D (GiST) indexes after a bulk load |
 | `laplace text text` | a text's ID, tier, coordinate and constituents, computed here without the database |
+| `laplace pull prompt` | the forward pass: the prompt broken down, and the segments and strands its firmware takes |
 | `laplace hop text` | everything attested about an entity, by how hard each strand tugs back, and the content that holds it |
 | `laplace hop subject predicate object` | the claims that hold the given parts in their places, with `?` for a part left open |
 | `laplace translate word from to...` | a word up to its concepts and down into other languages, two lookups |
@@ -24,6 +26,21 @@ Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github
 | `laplace model dir` | a transformer checkpoint read as "b beats c given a" (needs MKL) |
 
 `laplace ingest --plan` shows which recipe takes which file; `--claims` prints what the recipes attest, as text, and loads nothing.
+
+## From an empty server to loaded content
+
+```sh
+./deploy.sh                                        # the database laplace.env names
+LAPLACE_CONNINFO="host=/tmp port=5432 user=laplace dbname=NAME" ./deploy.sh
+```
+
+`deploy.sh` runs the five steps of Deployment in order: build and install, tier 0 and its flags, `laplace deploy`, `laplace ingest`, `laplace index`, then `laplace status` and `laplace bench`. It can be run again: what is built is not rebuilt, what is recorded is passed over by its bytes, and a run that was cut off is taken up where it stopped. Each step's output is kept under `$LAPLACE_WORK/logs/deploy`, and each source's under `$LAPLACE_WORK/logs/ingest`.
+
+A source is not begun when the database's volume has not the room the source was measured to take (`room` in its `source` file); that is said, and the run goes on to the next.
+
+## Firmware
+
+How a pull reads the records is not in the program and not in the records: it is a firmware, a file of decisions, one for each human being. `firmware/program.firmware` is the program's own and says what a firmware can decide; `$LAPLACE_FIRMWARE`, or `--firmware FILE` on `pull`, `hop`, `translate` and `degrees`, names another. The same records pulled under another firmware give another selection, and no standing changes.
 
 ## Build
 

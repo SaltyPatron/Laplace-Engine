@@ -1,0 +1,25 @@
+# A firmware that does not navigate through layout and punctuation: SpaceAfter and punct are refused before they
+# are scored (Semantics: Personality firmware, "What was measured on one entity"). The standings stay as they are;
+# the program's own firmware keeps these strands, and this one does not.
+k 2
+lambda 0.05
+hops 8
+top always
+order witness
+refuse predicate SpaceAfter punct
+
+for hop
+  fan 4096
+
+for search
+  fan 512
+
+for translate
+  fan 4096
+
+for pull
+  fan 4096
+  take fact
+  take segment
+  take attestations 3
+  take constituents 1

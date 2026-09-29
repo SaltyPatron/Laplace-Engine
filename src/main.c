@@ -68,6 +68,7 @@ static const struct { const char *name; int (*run)(int, char **); const char *wh
     { "index",  cmd_index,  "build the indexes after a bulk load" },
     { "tree",   cmd_tree,   "a file's syntax tree, as its recipe's grammar reads it" },
     { "text",   cmd_text,   "a text's ID, coordinate and constituents, computed here" },
+    { "pull",   cmd_pull,   "the forward pass: a prompt, and the segments and strands its firmware takes" },
     { "hop",    cmd_hop,    "everything attested about an entity" },
     { "translate", cmd_translate, "a word up to its concepts and down into other languages" },
     { "degrees", cmd_degrees, "how far one entity is from another, over rated claims" },
@@ -81,6 +82,6 @@ int main(int argc, char **argv){
     if (argc > 1) for (size_t i = 0; i < sizeof CMD / sizeof *CMD; i++) if (!strcmp(argv[1], CMD[i].name)) return CMD[i].run(argc - 1, argv + 1);
     fprintf(stderr, "laplace <command> [options]\n\n");
     for (size_t i = 0; i < sizeof CMD / sizeof *CMD; i++) fprintf(stderr, "  %-10s %s\n", CMD[i].name, CMD[i].what);
-    fprintf(stderr, "\n  database  %s\n  tier 0    %s\n  recipes   %s\n  grammars  %s\n", laplace_db(), lp_tier0_path(), laplace_recipes(), laplace_grammars());
+    fprintf(stderr, "\n  database  %s\n  tier 0    %s\n  recipes   %s\n  grammars  %s\n  firmware  %s\n", laplace_db(), lp_tier0_path(), laplace_recipes(), laplace_grammars(), firmware_path());
     return 2;
 }

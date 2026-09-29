@@ -21,12 +21,44 @@ const char *laplace_ucd(void);                       /* LAPLACE_UCD */
 PGconn *db_connect(const char *conninfo);            /* exits with the server's message if it cannot */
 PGresult *db_ask(PGconn *, const char *sql, int n, const char *const *v, const int *l, const int *f);   /* planned once for the connection; sql: a literal */
 
+/* ---- the personality firmware: a pull's decisions, read from a file, never from the records (firmware.c) */
+enum { FW_HOP, FW_SEARCH, FW_TRANSLATE, FW_FOLLOWS, FW_PULL, FW_OPS };
+enum { FW_FRECHET, FW_OUTLIERS, FW_DTW, FW_EDR };
+enum { FW_TAKE_FACT, FW_TAKE_SEGMENT, FW_TAKE_ATTESTATIONS, FW_TAKE_CONSTITUENTS };
+#define FW_NAMES 32
+#define FW_TAKES 16
+typedef struct {
+    char path[4200];
+    double k, lambda;                                 /* how far below its rating a standing must hold; the tax on a hop */
+    int fan, hops;
+    double top_within;                                /* 0: the top every time; else how near a tie has to be */
+    double fact;                                      /* the trust at which a curated member is returned as one fact; above 1: never */
+    int order_witness;                                /* on an open claim, the witness's own order before the standing */
+    int shape; double shape_n;
+    char refuse_predicate[FW_NAMES][96], refuse_witness[FW_NAMES][96]; int nrefuse_predicate, nrefuse_witness;
+    struct { int what, n; } take[FW_TAKES]; int ntake; /* a pull's steps, in order */
+} Firmware;
+/* ---- the lookups the forward pass is made of (pull.c) */
+#define MAXPARTS 12
+typedef struct { lp_id id, part[MAXPARTS]; int np; lp_rating r; int matches; double conf; int position; } Claim;   /* a claim is a tuple: a pair, three parts, or a longer path */
+const char *firmware_path(void);                     /* LAPLACE_FIRMWARE, or firmware/program.firmware beside the recipes */
+Firmware firmware_for(const char *path, int op);
+void firmware_say(const Firmware *, int op);
+lp_ref entity_named(lp_text *, const char *text, lp_ref *parts, size_t cap, size_t *np);      /* a text's trunk, computed here */
+Claim *claims_like(PGconn *, const lp_id *part, const int *have, int fan, double k, int *n, int *capped);
+Claim *claims_of(PGconn *, const lp_id *e, int fan, double k, int *n, int *capped);    /* every claim that holds an entity */
+void   positions_of(PGconn *, Claim *, int n);
+int    claim_by_position(const void *, const void *);
+int    claim_by_conf(const void *, const void *);
+int    refused(PGconn *, lp_text *, const Firmware *, Claim *, int n);                  /* what the firmware refuses, taken out */
+
 /* ---- commands */
 int cmd_ingest(int argc, char **argv);
 int cmd_fills(int argc, char **argv);
 int cmd_hop(int argc, char **argv);
 int cmd_translate(int argc, char **argv);
 int cmd_degrees(int argc, char **argv);
+int cmd_pull(int argc, char **argv);
 int cmd_text(int argc, char **argv);
 int cmd_tree(int argc, char **argv);
 int cmd_deploy(int argc, char **argv);

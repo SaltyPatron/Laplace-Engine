@@ -13,7 +13,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 . "$here/laplace.env"
 log=$LAPLACE_WORK/logs/deploy/$(date -u +%Y%m%dT%H%M%SZ); mkdir -p "$log"
 step(){ name=$1; shift; echo; echo "=== $name   $(date -u +%H:%M:%S)"
-        { "$@" 2>&1; echo $? > "$log/$name.exit"; } | grep -v "^OMP: " | tee "$log/$name.log"
+        { "$@" 2>&1; echo $? > "$log/$name.exit"; } | grep --line-buffered -v "^OMP: " | tee "$log/$name.log"
         [ "$(cat "$log/$name.exit")" = 0 ] || { echo "=== $name did not finish; what it said is in $log/$name.log"; exit 1; }; }
 
 step build      "$here/build.sh" install

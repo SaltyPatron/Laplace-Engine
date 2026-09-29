@@ -322,6 +322,15 @@ int cmd_ingest(int argc, char **argv){
            (unsigned long long)st.ent_rows, (unsigned long long)st.phy_rows, (st.ent_rows + st.phy_rows) / (st.t_copy > 0 ? st.t_copy : 1));
     if (nev) printf("  %-44s %8.2f s   %'llu attestations; standings %'llu new, %'llu updated\n", "witnesses, ledger, standings", st.t_sem,
                     (unsigned long long)st.led, (unsigned long long)st.std_new, (unsigned long long)st.std_upd);
+    /* What the container index was handed during the load it keeps in a list of its own until it is merged, and
+     * every lookup reads that list through: it is merged here, once, so no lookup pays for a load. Where the index
+     * is not built yet (a bulk load: laplace index comes after) there is nothing to merge. */
+    { double tm = now(); PGconn *pg = db_connect(conninfo);
+      PGresult *r = PQexec(pg, "SELECT count(*), coalesce(sum(gin_clean_pending_list(i.indexrelid)), 0) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                               "JOIN pg_am a ON a.oid = c.relam WHERE a.amname = 'gin' AND c.relkind = 'i'");
+      if (PQresultStatus(r) != PGRES_TUPLES_OK) fprintf(stderr, "merging the container index: %s", PQerrorMessage(pg));
+      else if (atoll(PQgetvalue(r, 0, 0))) printf("  %-44s %8.2f s   %'lld pages merged in %s indexes\n", "container index, merged", now() - tm, atoll(PQgetvalue(r, 0, 1)), PQgetvalue(r, 0, 0));
+      PQclear(r); PQfinish(pg); }
     printf("\n== total %.1f s\n", now() - T);
     return mism ? 1 : 0;
 }

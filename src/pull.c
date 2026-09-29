@@ -8,9 +8,11 @@
  * (translate), and how far one entity is from another (degrees).
  *
  *   laplace text  text
- *   laplace hop   [-d conninfo] [-n N] [--fan K] text | subject predicate object (? for a part left open)
- *   laplace translate [-d conninfo] [-n N] word from to...
- *   laplace degrees [-d conninfo] [-n N] [--hops H] [--fan K] [--batch B] [--k K] [--per-hop C] from [to] */
+ *   laplace hop   [-d conninfo] [-n N] [--firmware FILE] text | subject predicate object (? for a part left open)
+ *   laplace translate [-d conninfo] [-n N] [--firmware FILE] word from to...
+ *   laplace degrees [-d conninfo] [-n N] [--firmware FILE] [--batch B] from [to]
+ * How a standing is read, how far a search walks, how many claims are read and what is refused are the firmware's
+ * decisions (firmware.c), not the program's; --k, --fan, --hops and --per-hop are there to measure against it. */
 #include "engine.h"
 #include <arpa/inet.h>
 #include <math.h>
@@ -19,7 +21,7 @@
 #include <string.h>
 
 /* ---- naming an entity: the text's trunk, computed on the client */
-static lp_ref named(Ctx *c, const char *text, lp_ref *parts, size_t cap, size_t *np){
+lp_ref entity_named(Ctx *c, const char *text, lp_ref *parts, size_t cap, size_t *np){
     lp_ref p[1]; size_t n;
     return lp_text_parts(c, (const uint8_t *)text, strlen(text), parts ? parts : p, parts ? cap : 1, np ? np : &n);
 }
@@ -34,7 +36,7 @@ static void show_ref(const char *label, const lp_ref *r){
 int cmd_text(int argc, char **argv){
     if (argc < 2) { fprintf(stderr, "usage: laplace text text\n"); return 2; }
     double t = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0);
-    lp_ref parts[64]; size_t np; lp_ref r = named(c, argv[1], parts, 64, &np);
+    lp_ref parts[64]; size_t np; lp_ref r = entity_named(c, argv[1], parts, 64, &np);
     double ms = (now() - t) * 1000;
     uint8_t fp[32]; lp_tier0_fingerprint(T0, fp);
     show_ref("entity", &r);
@@ -49,15 +51,14 @@ int cmd_text(int argc, char **argv){
 }
 
 /* ---- the claims that hold an entity */
-#define MAXPARTS 12
-typedef struct { lp_id id, part[MAXPARTS]; int np; lp_rating r; int matches; double conf; int position; } Claim;   /* a claim is a tuple: a pair, three parts, or a longer path */
+/* Claim, MAXPARTS: engine.h */
 
 static double be_f64(const char *p){ uint64_t u = 0; for (int i = 0; i < 8; i++) u = u << 8 | (uint8_t)p[i]; double d; memcpy(&d, &u, 8); return d; }
-static int claim_by_conf(const void *a, const void *b){ double x = ((const Claim *)a)->conf, y = ((const Claim *)b)->conf; return x < y ? 1 : x > y ? -1 : memcmp(a, b, 16); }
+int claim_by_conf(const void *a, const void *b){ double x = ((const Claim *)a)->conf, y = ((const Claim *)b)->conf; return x < y ? 1 : x > y ? -1 : memcmp(a, b, 16); }
 
 /* The claims that hold the given parts in their places (a part not given is open): at most fan of them; *capped says
  * there were more. k: how many deviations below its rating a claim is read at. */
-static Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, double k, int *n, int *capped){
+Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, double k, int *n, int *capped){
     lp_id keys[3]; uint32_t nk = 0; for (int i = 0; i < 3; i++) if (have[i]) keys[nk++] = part[i];
     uint8_t ab[80]; size_t al = uuid_param(ab, keys, nk); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
     const char *v[2] = { (const char *)ab, lim }; int l[2] = { (int)al, 0 }, f[2] = { 1, 0 };
@@ -90,12 +91,12 @@ static Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fa
     return c;
 }
 /* Every claim that holds an entity, wherever in it. */
-static Claim *claims_of(PGconn *pg, const lp_id *e, int fan, double k, int *n, int *capped){
+Claim *claims_of(PGconn *pg, const lp_id *e, int fan, double k, int *n, int *capped){
     lp_id part[3] = { *e, *e, *e }; int have[3] = { 1, 0, 0 };
     return claims_like(pg, part, have, fan, k, n, capped);
 }
 /* The position each claim was given by the witnesses that gave one: the least, as recorded in the ledger. */
-static void positions_of(PGconn *pg, Claim *c, int n){
+void positions_of(PGconn *pg, Claim *c, int n){
     if (!n) return;
     lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) ids[i] = c[i].id;
     uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = uuid_param(ab, ids, (uint32_t)n);
@@ -109,36 +110,65 @@ static void positions_of(PGconn *pg, Claim *c, int n){
     PQclear(q); free(ab); free(ids);
 }
 /* As given first, then by how hard the strand tugs back. */
-static int claim_by_position(const void *a, const void *b){
+int claim_by_position(const void *a, const void *b){
     const Claim *x = a, *y = b; int px = x->position ? x->position : 1 << 30, py = y->position ? y->position : 1 << 30;
     return px != py ? (px < py ? -1 : 1) : claim_by_conf(a, b);
 }
 
+/* The kinds of strand a firmware refuses, taken out of a set before it is used: a claim that holds a refused
+ * predicate in its middle, and a claim only refused witnesses attested. Returns how many are left. */
+int refused(PGconn *pg, Ctx *c, const Firmware *fw, Claim *cl, int n){
+    if (!n || (!fw->nrefuse_predicate && !fw->nrefuse_witness)) return n;
+    lp_id pred[FW_NAMES], wit[FW_NAMES];
+    for (int i = 0; i < fw->nrefuse_predicate; i++) pred[i] = entity_named(c, fw->refuse_predicate[i], NULL, 0, NULL).id;
+    for (int i = 0; i < fw->nrefuse_witness; i++) wit[i] = entity_named(c, fw->refuse_witness[i], NULL, 0, NULL).id;
+    uint8_t *out = calloc((size_t)n, 1);
+    for (int i = 0; i < n; i++) for (int p = 1; p < cl[i].np - 1 || (p == 1 && cl[i].np == 2); p++) { if (p >= cl[i].np) break;
+        for (int z = 0; z < fw->nrefuse_predicate; z++) if (!memcmp(&cl[i].part[p], &pred[z], 16)) out[i] = 1; }
+    if (fw->nrefuse_witness) {
+        lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) ids[i] = cl[i].id;
+        uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = uuid_param(ab, ids, (uint32_t)n);
+        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+        PGresult *q = db_ask(pg, "SELECT claim, witness FROM attestation WHERE claim = ANY($1::uuid[])", 1, v, l, f);
+        if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg)); exit(1); }
+        uint8_t *other = calloc((size_t)n, 1), *theirs = calloc((size_t)n, 1);
+        for (int j = 0; j < PQntuples(q); j++) { int is = 0; for (int z = 0; z < fw->nrefuse_witness; z++) is |= !memcmp(PQgetvalue(q, j, 1), wit[z].b, 16);
+            for (int i = 0; i < n; i++) if (!memcmp(cl[i].id.b, PQgetvalue(q, j, 0), 16)) { if (is) theirs[i] = 1; else other[i] = 1; break; } }
+        for (int i = 0; i < n; i++) if (theirs[i] && !other[i]) out[i] = 1;
+        PQclear(q); free(ab); free(ids); free(other); free(theirs);
+    }
+    int m = 0; for (int i = 0; i < n; i++) if (!out[i]) cl[m++] = cl[i];
+    free(out); return m;
+}
 int cmd_hop(int argc, char **argv){
-    const char *conninfo = laplace_db(); int limit = 24, fan = 4096, a = 1; double k = 2.0;
+    const char *conninfo = laplace_db(), *fwp = NULL; int limit = 24, fan = -1, a = 1; double k = -1;
     for (; a < argc - 1 && argv[a][0] == '-' && argv[a][1]; a++) {
         if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
         else if (!strcmp(argv[a], "-n") && a + 1 < argc) limit = atoi(argv[++a]);
-        else if (!strcmp(argv[a], "--fan") && a + 1 < argc) fan = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "--firmware") && a + 1 < argc) fwp = argv[++a];
+        else if (!strcmp(argv[a], "--fan") && a + 1 < argc) fan = atoi(argv[++a]);      /* to measure: over the firmware's */
         else if (!strcmp(argv[a], "--k") && a + 1 < argc) k = atof(argv[++a]);
     }
+    Firmware fw = firmware_for(fwp, FW_HOP); if (fan < 0) fan = fw.fan; if (k < 0) k = fw.k;
     if (a >= argc || (argc - a != 1 && argc - a != 3)) {
-        fprintf(stderr, "usage: laplace hop [-d conninfo] [-n N] [--fan K] [--k K] text\n"
+        fprintf(stderr, "usage: laplace hop [-d conninfo] [-n N] [--firmware FILE] text\n"
                         "       laplace hop [...] first middle last             with ? for a part left open: laplace hop was UPOS ?\n"); return 2; }
     double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_connect(conninfo);
     int n, capped, whole = argc - a == 1; Claim *cl; lp_ref e; double t;
-    if (whole) { e = named(c, argv[a], NULL, 0, NULL); show_ref("entity", &e); t = now(); cl = claims_of(pg, &e.id, fan, k, &n, &capped); }
+    if (whole) { e = entity_named(c, argv[a], NULL, 0, NULL); show_ref("entity", &e); t = now(); cl = claims_of(pg, &e.id, fan, k, &n, &capped); }
     else {
         lp_id part[3]; int have[3];
-        for (int i = 0; i < 3; i++) { have[i] = strcmp(argv[a + i], "?") ? 2 : 0; if (have[i]) { lp_ref r = named(c, argv[a + i], NULL, 0, NULL); part[i] = r.id; show_ref(i == 0 ? "subject" : i == 1 ? "predicate" : "object", &r); } }
+        for (int i = 0; i < 3; i++) { have[i] = strcmp(argv[a + i], "?") ? 2 : 0; if (have[i]) { lp_ref r = entity_named(c, argv[a + i], NULL, 0, NULL); part[i] = r.id; show_ref(i == 0 ? "subject" : i == 1 ? "predicate" : "object", &r); } }
         if (!have[0] && !have[1] && !have[2]) { fprintf(stderr, "every part is open\n"); return 2; }
         t = now(); cl = claims_like(pg, part, have, fan, k, &n, &capped);
     }
     double t_claims = (now() - t) * 1000;
-    positions_of(pg, cl, n); if (!whole) qsort(cl, (size_t)n, sizeof(Claim), claim_by_position);
+    n = refused(pg, c, &fw, cl, n);
+    positions_of(pg, cl, n); if (!whole && fw.order_witness) qsort(cl, (size_t)n, sizeof(Claim), claim_by_position);
     Reader *rd = reader_new(pg);
     for (int i = 0; i < n && i < limit; i++) for (int p = 0; p < cl[i].np; p++) reader_want(rd, &cl[i].part[p]);
-    printf("\nattested: %d claim%s%s\n", n, n == 1 ? "" : "s", capped ? " (more exist: raise --fan)" : "");
+    firmware_say(&fw, FW_HOP);
+    printf("\nattested: %d claim%s%s\n", n, n == 1 ? "" : "s", capped ? " (more exist than the fan reads)" : "");
     if (n) printf("%10s %8s %6s %8s %6s   %s\n", "confidence", "rating", "dev", "matches", "given", "claim");
     for (int i = 0; i < n && i < limit; i++) {
         char pos[16] = ""; if (cl[i].position) snprintf(pos, sizeof pos, "%d", cl[i].position);
@@ -170,9 +200,10 @@ int cmd_hop(int argc, char **argv){
  * the wordnets make, in the names WN-LMF writes them with:
  *   [word, Sense, sense]  [sense, synset, synset]  [synset, ili, ILI]  [lexicon, Synset, synset]  [lexicon, language, code]
  *   laplace translate [-d conninfo] [-n N] word from to...        laplace translate dog en de fr ja */
+static double read_k = 2.0;                                                  /* the firmware's k, for the lookups below */
 static Claim *one_open(PGconn *pg, Ctx *c, const lp_id *first, const char *middle, const lp_id *last, int fan, int *n){
     lp_id p[3]; int h[3] = { first ? 2 : 0, 2, last ? 2 : 0 }, capped; if (first) p[0] = *first; if (last) p[2] = *last;
-    p[1] = named(c, middle, NULL, 0, NULL).id; return claims_like(pg, p, h, fan, 2.0, n, &capped);
+    p[1] = entity_named(c, middle, NULL, 0, NULL).id; return claims_like(pg, p, h, fan, read_k, n, &capped);
 }
 typedef struct { lp_id lexicon; char code[24]; } Lang;
 static const char *language_of(PGconn *pg, Ctx *c, Reader *rd, const lp_id *synset, Lang **known, int *nknown){
@@ -184,14 +215,16 @@ static const char *language_of(PGconn *pg, Ctx *c, Reader *rd, const lp_id *syns
     free(lg); return k->code;
 }
 int cmd_translate(int argc, char **argv){
-    const char *conninfo = laplace_db(); int limit = 4, fan = 4096, a = 1;
+    const char *conninfo = laplace_db(), *fwp = NULL; int limit = 4, a = 1;
     for (; a < argc - 1 && argv[a][0] == '-' && argv[a][1]; a++) {
         if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
         else if (!strcmp(argv[a], "-n") && a + 1 < argc) limit = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "--firmware") && a + 1 < argc) fwp = argv[++a];
     }
+    Firmware fw = firmware_for(fwp, FW_TRANSLATE); int fan = fw.fan; read_k = fw.k;
     if (argc - a < 3) { fprintf(stderr, "usage: laplace translate [-d conninfo] [-n concepts] word from to...\n       languages as the wordnets write them: en de fr ja\n"); return 2; }
     double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_connect(conninfo); Reader *rd = reader_new(pg);
-    lp_id word = named(c, argv[a], NULL, 0, NULL).id; const char *from = argv[a + 1]; Lang *known = NULL; int nknown = 0, n, lookups = 0, shown = 0;
+    lp_id word = entity_named(c, argv[a], NULL, 0, NULL).id; const char *from = argv[a + 1]; Lang *known = NULL; int nknown = 0, n, lookups = 0, shown = 0;
     Claim *senses = one_open(pg, c, &word, "Sense", NULL, fan, &n); lookups++; positions_of(pg, senses, n); qsort(senses, (size_t)n, sizeof(Claim), claim_by_position);
     lp_id seen[64]; int nseen = 0;
     for (int i = 0; i < n && shown < limit; i++) {
@@ -308,9 +341,10 @@ static void show_chain(PGconn *pg, Reader *rd, const lp_id *chain, const lp_id *
 static int by_cost(const void *a, const void *b){ double x = ((const lp_reached *)a)->cost, y = ((const lp_reached *)b)->cost; return x < y ? -1 : x > y; }
 
 int cmd_degrees(int argc, char **argv){
-    const char *conninfo = laplace_db(); int limit = 24, fan = 512, hops = 8, batch = 64, a = 1; double k = 2.0, per_hop = 0.05;
+    const char *conninfo = laplace_db(), *fwp = NULL; int limit = 24, fan = -1, hops = -1, batch = 64, a = 1; double k = -1, per_hop = -1;
     for (; a < argc && argv[a][0] == '-' && argv[a][1]; a++) {
         if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
+        else if (!strcmp(argv[a], "--firmware") && a + 1 < argc) fwp = argv[++a];
         else if (!strcmp(argv[a], "-n") && a + 1 < argc) limit = atoi(argv[++a]);
         else if (!strcmp(argv[a], "--fan") && a + 1 < argc) fan = atoi(argv[++a]);
         else if (!strcmp(argv[a], "--hops") && a + 1 < argc) hops = atoi(argv[++a]);
@@ -320,9 +354,11 @@ int cmd_degrees(int argc, char **argv){
         else break;
     }
     if (a >= argc || batch < 1) { fprintf(stderr, "usage: laplace degrees [-d conninfo] [-n N] [--hops H] [--fan K] [--batch B] [--k K] [--per-hop C] from [to]\n"); return 2; }
+    Firmware way = firmware_for(fwp, FW_SEARCH); if (fan < 0) fan = way.fan; if (hops < 0) hops = way.hops; if (k < 0) k = way.k; if (per_hop < 0) per_hop = way.lambda;
+    firmware_say(&way, FW_SEARCH);
     double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0);
-    lp_ref from = named(c, argv[a], NULL, 0, NULL), to; int goal = a + 1 < argc;
-    show_ref("from", &from); if (goal) { to = named(c, argv[a + 1], NULL, 0, NULL); show_ref("to", &to); }
+    lp_ref from = entity_named(c, argv[a], NULL, 0, NULL), to; int goal = a + 1 < argc;
+    show_ref("from", &from); if (goal) { to = entity_named(c, argv[a + 1], NULL, 0, NULL); show_ref("to", &to); }
     PGconn *pg = db_connect(conninfo); Reader *rd = reader_new(pg); Work w = { 0 };
     lp_reached *closed = malloc(sizeof(lp_reached) * (size_t)batch); uint8_t *hub = malloc((size_t)batch);
     Side fw = { lp_frontier_new(), from.id }; lp_frontier_reach(fw.f, &from.id, NULL, NULL, 0, 0, 0);
