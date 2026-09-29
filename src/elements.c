@@ -2,6 +2,8 @@
  *
  * The recipe names which elements are things, and what names each:
  *   identity ELEMENT ATTRIBUTE          the thing is what the attribute names (* : any element that carries it)
+ *   identity ELEMENT FIRST..LAST        the thing is a range of codepoints, written in hex as its first and its last:
+ *                                       the path of the two. What is said of a range is said of the range
  *   identity ELEMENT >CHILD             the thing is what the text of the element CHILD inside it names
  *   identity ELEMENT NAME within        the name stands only within the thing the element is inside: the thing is the
  *                                       path of that thing and the name
@@ -52,16 +54,25 @@ static Ref name_of(const EW *w, TSNode n){ return string_ref(w->src + ts_node_st
 static Ref pair_of(Ref a, Ref b){ Ref t[2] = { a, b }; t[0].said = t[1].said = 0; return said_tuple(compose(t, 2, tier_of(t, 2))); }
 
 static int tag_of(TSNode el, Tag *t){
-    TSNode tag = ts_node_child(el, 0); t->na = 0; t->has_content = 0; int has_name = 0;
-    if (ts_node_is_null(tag) || (!is(tag, "STag") && !is(tag, "EmptyElemTag"))) return 0;
-    uint32_t nc = ts_node_child_count(el); for (uint32_t i = 1; i < nc; i++) { TSNode c = ts_node_child(el, i); if (is(c, "content")) { t->content = c; t->has_content = 1; break; } }
-    nc = ts_node_named_child_count(tag);
-    for (uint32_t i = 0; i < nc; i++) { TSNode c = ts_node_named_child(tag, i);
-        if (is(c, "Name") && !has_name) { t->name = c; has_name = 1; }
-        else if (is(c, "Attribute") && t->na < 256 && ts_node_named_child_count(c) >= 2) { t->an[t->na] = ts_node_named_child(c, 0); t->av[t->na] = ts_node_named_child(c, 1); t->na++; } }
-    return has_name;
+    t->na = 0; t->has_content = 0; int has_name = 0, has_tag = 0; TSNode tag = { 0 };
+    TSTreeCursor cur = ts_tree_cursor_new(el);                               /* children by cursor: asking for the i-th child costs i */
+    if (ts_tree_cursor_goto_first_child(&cur)) {
+        tag = ts_tree_cursor_current_node(&cur); has_tag = is(tag, "STag") || is(tag, "EmptyElemTag");
+        if (has_tag) while (ts_tree_cursor_goto_next_sibling(&cur)) { TSNode c = ts_tree_cursor_current_node(&cur); if (is(c, "content")) { t->content = c; t->has_content = 1; break; } }
+    }
+    if (has_tag) { ts_tree_cursor_reset(&cur, tag);
+        if (ts_tree_cursor_goto_first_child(&cur)) do { TSNode c = ts_tree_cursor_current_node(&cur);
+            if (is(c, "Name") && !has_name) { t->name = c; has_name = 1; }
+            else if (is(c, "Attribute") && t->na < 256) { TSNode n0 = ts_node_named_child(c, 0), n1 = ts_node_named_child(c, 1); if (!ts_node_is_null(n0) && !ts_node_is_null(n1)) { t->an[t->na] = n0; t->av[t->na] = n1; t->na++; } }
+        } while (ts_tree_cursor_goto_next_sibling(&cur)); }
+    ts_tree_cursor_delete(&cur);
+    return has_tag && has_name;
 }
-static int holds_elements(TSNode content){ uint32_t nc = ts_node_child_count(content); for (uint32_t i = 0; i < nc; i++) if (is(ts_node_child(content, i), "element")) return 1; return 0; }
+static int holds_elements(TSNode content){
+    TSTreeCursor cur = ts_tree_cursor_new(content); int yes = 0;
+    if (ts_tree_cursor_goto_first_child(&cur)) do yes = is(ts_tree_cursor_current_node(&cur), "element"); while (!yes && ts_tree_cursor_goto_next_sibling(&cur));
+    ts_tree_cursor_delete(&cur); return yes;
+}
 /* A value's bytes: quotes off; trimmed unless it is wanted exactly as written. */
 static int raw_of(const EW *w, TSNode val, int exact, const uint8_t **p, size_t *n){
     *p = w->src + ts_node_start_byte(val); *n = ts_node_end_byte(val) - ts_node_start_byte(val);
@@ -109,9 +120,9 @@ static void record_of(const EW *w, Events *ev, Ref node, const Ref *claim, int n
 }
 
 /* What an element is, if it is a thing. */
-typedef struct { Ref X; long cp; int attr; uint32_t child; } Thing;
+typedef struct { Ref X; long cp; int attr, attr2; uint32_t child; } Thing;
 static int thing_of(const EW *w, const Tag *t, const Ref *S, long scp, Thing *th){
-    const Recipe *r = w->r; th->cp = -1; th->attr = -1; th->child = UINT32_MAX;
+    const Recipe *r = w->r; th->cp = -1; th->attr = th->attr2 = -1; th->child = UINT32_MAX;
     for (int i = 0; i < r->nidentity; i++) {
         if (strcmp(r->identity[i].el, "*") && !named(w, t->name, r->identity[i].el)) continue;
         int found = 0;
@@ -120,6 +131,12 @@ static int thing_of(const EW *w, const Tag *t, const Ref *S, long scp, Thing *th
             if (!t->has_content) continue; uint32_t nc = ts_node_child_count(t->content);
             for (uint32_t c = 0; c < nc && !found; c++) { TSNode ch = ts_node_child(t->content, c); Tag ct; if (!is(ch, "element") || !tag_of(ch, &ct) || !named(w, ct.name, r->identity[i].attr)) continue;
                 if (ct.has_content && !holds_elements(ct.content) && value_ref(w, ct.content, 0, 0, scp, &th->X)) { found = 1; th->child = ts_node_start_byte(ch); } }
+        }
+        else if (strstr(r->identity[i].attr, "..")) {                          /* a range of codepoints, written as its first and its last: the path of the two */
+            char a1[64], *a2; snprintf(a1, sizeof a1, "%s", r->identity[i].attr); a2 = strstr(a1, ".."); *a2 = 0; a2 += 2; long lo = -1, hi = -1;
+            for (int a = 0; a < t->na; a++) { int which = named(w, t->an[a], a1) ? 1 : named(w, t->an[a], a2) ? 2 : 0; const uint8_t *p; size_t n; char h[16];
+                if (which && raw_of(w, t->av[a], 0, &p, &n) && n <= 8) { memcpy(h, p, n); h[n] = 0; char *e; unsigned long cp = strtoul(h, &e, 16); if (!*e && cp < LP_NCP) { if (which == 1) { lo = (long)cp; th->attr = a; } else { hi = (long)cp; th->attr2 = a; } } } }
+            if (lo >= 0 && hi >= 0) { Ref two[2] = { atom((uint32_t)lo), atom((uint32_t)hi) }; th->X = said_tuple(compose(two, 2, 1)); found = 1; } else th->attr = th->attr2 = -1;
         }
         else for (int a = 0; a < t->na && !found; a++) if (named(w, t->an[a], r->identity[i].attr)) {
             if (r->identity[i].res == 1) { const uint8_t *p; size_t n; char h[16];
@@ -220,7 +237,7 @@ static void element(const EW *w, TSNode el, const Ref *S, long scp, const Txt *t
         /* what it says itself it says together: its place in what it is inside, its attributes, its own text */
         Refs own = { 0 }; Ref place; int has_place = 0;
         if (S) { place = claim3(*S, nref, th.X); has_place = 1; if (!rec) refs_push(&own, place); }
-        for (int a = 0; a < t.na; a++) if (a != th.attr) said_by(w, &t, a, th.X, th.cp, &own, NULL);
+        for (int a = 0; a < t.na; a++) if (a != th.attr && a != th.attr2) said_by(w, &t, a, th.X, th.cp, &own, NULL);
         if (th.attr != -2 && t.has_content && !holds_elements(t.content)) { Ref v; if (value_ref(w, t.content, 0, is_span_text(w, t.name), th.cp, &v)) refs_push(&own, claim3(th.X, nref, v)); }
         if (own.n == 1) alone(w, ev, own.c[0]);
         else if (own.n > 1) {
@@ -281,7 +298,43 @@ static void element(const EW *w, TSNode el, const Ref *S, long scp, const Txt *t
     }
     free(mine.c); free(items.c);
 }
+/* Down through whatever is not an element (the document, a stretch the parser could not read) to the elements. */
+static void below(const EW *w, TSNode nd, Events *ev){
+    if (holds_elements(nd)) inside(w, nd, NULL, -1, NULL, UINT32_MAX, NULL, NULL, ev);
+    TSTreeCursor cur = ts_tree_cursor_new(nd);
+    if (ts_tree_cursor_goto_first_child(&cur)) do { TSNode c = ts_tree_cursor_current_node(&cur); if (!is(c, "element") && ts_node_child_count(c)) below(w, c, ev); } while (ts_tree_cursor_goto_next_sibling(&cur));
+    ts_tree_cursor_delete(&cur);
+}
 void attest_elements(const Recipe *r, File *f, void *root_node, const uint8_t *src, size_t n){
-    (void)n; EW w = { r, src, 1500.0f, 0.0f, "" }; dir_of(f->path, w.dir, sizeof w.dir); for (int k = 0; k < r->nblock; k++) if (!r->block[k].is_map) { w.er = r->block[k].enter_rating; w.ed = r->block[k].enter_deviation; break; }
-    inside(&w, *(TSNode *)root_node, NULL, -1, NULL, UINT32_MAX, NULL, NULL, &f->ev);
+    EW w = { r, src, 1500.0f, 0.0f, "" }; dir_of(f->path, w.dir, sizeof w.dir); for (int k = 0; k < r->nblock; k++) if (!r->block[k].is_map) { w.er = r->block[k].enter_rating; w.ed = r->block[k].enter_deviation; break; }
+    if (root_node) { inside(&w, *(TSNode *)root_node, NULL, -1, NULL, UINT32_MAX, NULL, NULL, &f->ev); return; }
+    /* a long file of records, each a thing on lines of its own. The run of them, from the first line that begins one
+     * to the end of the last, is parted before lines that begin one; the parts are parsed and read on every core.
+     * What stands before and after the run is read together, as the one document it is without the run. */
+    char open[80], close[80]; int ol = snprintf(open, sizeof open, "<%s ", r->identity[0].el), cl = snprintf(close, sizeof close, "</%s>", r->identity[0].el);
+    #define BEGINS(c) ({ size_t b_ = (c); while (b_ < n && (src[b_] == ' ' || src[b_] == '\t')) b_++; b_ + (size_t)ol < n && !memcmp(src + b_, open, (size_t)ol); })
+    size_t lo = n, hi = 0, last = n;
+    for (size_t c = 0; c < n; ) { if (BEGINS(c)) { if (lo == n) lo = c; last = c; } const uint8_t *nl = memchr(src + c, '\n', n - c); c = nl ? (size_t)(nl - src) + 1 : n; }
+    if (lo == n) { TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang); TSTree *t = ts_parser_parse_string(ps, NULL, (const char *)src, (uint32_t)n);
+                   below(&w, ts_tree_root_node(t), &f->ev); ts_tree_delete(t); ts_parser_delete(ps); return; }
+    { const uint8_t *nl = memchr(src + last, '\n', n - last); size_t e = nl ? (size_t)(nl - src) : n, x = e; while (x > last && (src[x - 1] == '\r' || src[x - 1] == ' ')) x--;
+      if (x >= 2 && src[x - 2] == '/' && src[x - 1] == '>') hi = nl ? e + 1 : n;                       /* the last one ends on its own line */
+      else { const uint8_t *c2 = memmem(src + last, n - last, close, (size_t)cl); const uint8_t *n2 = c2 ? memchr(c2, '\n', n - (size_t)(c2 - src)) : NULL; hi = n2 ? (size_t)(n2 - src) + 1 : n; } }
+    int np = omp_get_num_threads() * 4; if (np < 1) np = 1; size_t *cut = malloc(sizeof(size_t) * (size_t)(np + 1)); cut[0] = lo; int k = 1;
+    for (int i = 1; i < np; i++) { size_t c = lo + (hi - lo) / (size_t)np * (size_t)i; int found = 0;
+        while (c < hi && !found) { while (c < hi && src[c - 1] != '\n') c++; if (c < hi && BEGINS(c)) found = 1; else c++; }
+        if (found && c > cut[k - 1] && c < hi) cut[k++] = c; }
+    cut[k] = hi; Events *pe = calloc((size_t)k + 1, sizeof(Events));
+    #undef BEGINS
+    #pragma omp taskloop grainsize(1)
+    for (int i = 0; i <= k; i++) {
+        TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang); EW wi = w; uint8_t *around = NULL; TSTree *t;
+        if (i < k) { t = ts_parser_parse_string(ps, NULL, (const char *)src + cut[i], (uint32_t)(cut[i + 1] - cut[i])); wi.src = src + cut[i]; }
+        else { around = malloc(lo + (n - hi) + 1); memcpy(around, src, lo); memcpy(around + lo, src + hi, n - hi); t = ts_parser_parse_string(ps, NULL, (const char *)around, (uint32_t)(lo + n - hi)); wi.src = around; }
+        below(&wi, ts_tree_root_node(t), &pe[i]);
+        ts_tree_delete(t); ts_parser_delete(ps); free(around);
+    }
+    k++;
+    for (int i = 0; i < k; i++) { for (uint64_t j = 0; j < pe[i].n; j++) ev_push(&f->ev, &pe[i].e[j]); free(pe[i].e); }
+    free(pe); free(cut);
 }

@@ -115,6 +115,8 @@
  *                                     .iri  an identifier written between angle brackets, without them
  *                                     .tag  a tag written after an @, without it
  *                                     .cps  codepoints written in hex, as the text they are
+ *                                     .range in a table: a codepoint in hex, or a range written FIRST..LAST, which
+ *                                           is recorded as the range it is: the path of its first and its last
  *                                     .xml  the node's text with XML references resolved (quotes stripped)
  *                                     .node the node itself, as recorded
  *                                     .NAME then looked up in map NAME; a part no map holds attests nothing
@@ -888,6 +890,15 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
                 int ci = cols[k].in[role]; if (ci < 0 || ci >= nc) continue;
                 if (role == 2 && listc[ci]) continue;                          /* several objects: said one by one, below */
                 const uint8_t *p = cell[ci].p; size_t n = cell[ci].n;
+                if (!strcmp(resolvers_of(b->in[role]), "range")) {               /* a codepoint, or a range of them written FIRST..LAST: the path of the two */
+                    while (n && (p[0] == ' ' || p[0] == '\t')) { p++; n--; } while (n && (p[n - 1] == ' ' || p[n - 1] == '\t')) n--;
+                    char z[40]; if (!n || n >= sizeof z) continue; memcpy(z, p, n); z[n] = 0; char *dots = strstr(z, ".."), *e1, *e2;
+                    unsigned long lo = strtoul(z, &e1, 16), hi = dots ? strtoul(dots + 2, &e2, 16) : 0;
+                    if (e1 == z || lo >= LP_NCP || (dots ? (e1 != dots || *e2 || hi >= LP_NCP) : *e1 != 0)) continue;
+                    if (!dots) { part[role] = atom((uint32_t)lo); if (role == 0) subject_cp = (long)lo; }
+                    else { Ref two[2] = { atom((uint32_t)lo), atom((uint32_t)hi) }; part[role] = said_tuple(compose(two, 2, 1)); }
+                    have[role] = 1; continue;
+                }
                 if (part_said(rd, b, role, resolvers_of(b->in[role]), buf, &p, &n)) { part[role] = part_ref(b, role, p, n); have[role] = 1;
                     if (role == 0 && part[0].tier == 0) subject_cp = (long)lp_tier0_codepoint(T0, &part[0].id); }
             }
@@ -1069,6 +1080,7 @@ void decompose_file(Ctx *c, File *f){
     else if (r && !strcmp(r->grammar, "table") && r->word[0]) attest_records(r, f, src, n);
     else if (r && !strcmp(r->grammar, "table")) attest_table(r, f->path, src, n, &f->ev);
     else if (!r || !r->lang) f->trunk = text_ref(c, src, n);
+    else if (r->records && r->nidentity && n > (16u << 20)) attest_elements(r, f, NULL, src, n);
     else if (r->records && n > (64u << 20) && !getenv("LAPLACE_ONE_PARSE")) {
         /* line records: split after a line break, parse the pieces on every core, and join their top-level children
          * (with the bytes between them) under one root, exactly as one parse of the whole file would give */
