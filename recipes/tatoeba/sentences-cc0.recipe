@@ -1,0 +1,15 @@
+name tatoeba-sentences-cc0
+# "Contains all the sentences available under CC0."
+# Fields and structure: Sentence id [tab] Lang [tab] Text [tab] Date last modified
+match sentences_CC0.csv
+grammar table
+escaped \
+# "\N: Unknown (rare)."
+empty-matches ^\\N$
+columns "Sentence id" Lang Text "Date last modified"
+kinds own
+kind "Sentence id" "Sentence id"
+
+claims
+subject in "Sentence id"
+attest Lang Text "Date last modified"

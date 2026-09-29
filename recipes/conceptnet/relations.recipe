@@ -1,0 +1,16 @@
+name conceptnet-relations
+# ConceptNet's page "Relations in ConceptNet 5": a table, a row for each relation, under the headings the page gives:
+#   | Relation URI | Description | Examples
+#   | /r/IsA | A is a subtype or a specific instance of B; every A is a B. ... | car → vehicle; Chicago → city
+# What a row says of a relation is said under the heading of its column.
+match Relations.md
+grammar lines
+paths / _
+
+claims
+predicate Description
+line ^\| *(/r/[^ |]+) *\| *([^|]*[^| ]) *\|
+
+claims
+predicate Examples
+line ^\| *(/r/[^ |]+) *\|[^|]*\| *([^|]*[^| ]) *$

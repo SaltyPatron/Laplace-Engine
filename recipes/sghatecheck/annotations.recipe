@@ -1,0 +1,19 @@
+name sghatecheck-annotations
+# The README, "/annotations": "This folder contains annotations of selected test cases", and "Human annotation of
+# test cases": "up to three bilingual annotators annotated the test cases as hateful if it has harmful language
+# directed at a protected group. Other annotation choices are non-hateful and nonsensical".
+# The columns' names are the files' own: c_id, annotator_1, annotator_2, annotator_3, p_label, p_value, p_target,
+# c_testcase, t_case_local, t_function, t_gold, t_direction, t_id, c_order, annotation_common, annotation_selected.
+# Each annotator column is an annotator of that file's language, and its field what that annotator says of the
+# test case; nothing is written between the two. The rest is said of the test case by the set.
+match annotations/*_annotations.csv
+grammar table
+separator ,
+header
+quoted
+voices within-file
+
+claims
+subject in c_testcase
+attest c_id p_label p_value p_target t_case_local t_function t_gold t_direction t_id c_order annotation_common annotation_selected
+voices annotator_*

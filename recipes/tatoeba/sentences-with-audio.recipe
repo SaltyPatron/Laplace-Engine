@@ -1,0 +1,19 @@
+name tatoeba-sentences-with-audio
+# "Contains the ids of the sentences, in all languages, for which audio is available. Other fields indicate who
+# recorded the audio, its license and a URL to attribute the author." "A single sentence can have one or more
+# audio, each from a different voice."
+# Fields and structure: Sentence id [tab] Audio id [tab] Username [tab] License [tab] Attribution URL
+match sentences_with_audio.csv
+grammar table
+escaped \
+# "\N: Unknown (rare)."
+empty-matches ^\\N$
+columns "Sentence id" "Audio id" Username License "Attribution URL"
+kinds own
+kind "Sentence id" "Sentence id"
+kind "Audio id" "Audio id"
+kind Username Username
+
+claims
+subject in "Audio id"
+attest "Sentence id" Username License "Attribution URL"

@@ -1,0 +1,16 @@
+name tatoeba-links
+# "Contains the links between the sentences. 1 [tab] 77 means that sentence #77 is the translation of sentence #1.
+# The reciprocal link is also present"   Fields and structure: Sentence id [tab] Translation id
+match links.csv
+grammar table
+escaped \
+# "\N: Unknown (rare)."
+empty-matches ^\\N$
+columns "Sentence id" "Translation id"
+kinds own
+kind "Sentence id" "Sentence id"
+kind "Translation id" "Sentence id"
+
+claims
+subject in "Sentence id"
+attest "Translation id"

@@ -1,0 +1,13 @@
+name ud-documentation
+# A page documents one tag, relation or feature, named by its title. The page's head says what it is, shortly
+# (shortdef: 'number'), and a feature's page says what each of its values is:
+#   ### <a name="Sing">`Sing`</a>: singular number        is        [Number, Sing, singular number]
+match *.md
+grammar lines
+about ^title: '(.*)'$
+
+claims
+line ^(shortdef): '(.*)'$
+
+claims
+line ^### <a name="[^"]*">`([^`]+)`</a>: (.*)$

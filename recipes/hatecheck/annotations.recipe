@@ -1,110 +1,21 @@
 name hatecheck-annotations
-# The labels the annotators gave each test case, a case on every row, named by its case_id. The first row names
-# the columns: label_1 to label_10 are each the label "provided for the test case by a given annotator" (README),
-# so an annotator is known only by the number in the column's name. The first column has no name: not attested.
-# A field written with a doubled double quote is left unread, as in hatecheck-cases.
+# HateCheck's README, of "test_suite_annotations.csv" and "all_annotations.csv":
+#   label_[1:10] "The label provided for the test case by a given annotator. We recruited and trained a team of ten
+#   annotators. Each test case was annotated by exactly five annotators."
+#   count_label_h "The number of annotators who labeled a given test case as hateful."   count_label_nh, likewise
+#   label_annot_maj "The majority label."
+# Each of the ten columns is an annotator, and its field what that annotator says of the case: nothing is written
+# between the case and the label. The other columns are said of the case by the set, under their own names.
 match all_annotations.csv test_suite_annotations.csv
-grammar csv
-records
+grammar table
+separator ,
+header
+quoted
+kinds own
+kind case_id case_id
+kind templ_id templ_id
 
 claims
-predicate functionality
-query
-(row . (field) . (field) @object.text . (field) @subject.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate templ_id
-query
-(row . (field) . (field) . (field) @subject.text . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate test_case
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate label_gold
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate label_1
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate label_2
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate label_3
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate label_4
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate label_5
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate label_6
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate label_7
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate label_8
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate label_9
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate label_10
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate count_label_h
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate count_label_nh
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate label_annot_maj
-query
-(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
+subject in case_id
+attest functionality templ_id test_case label_gold count_label_h count_label_nh label_annot_maj
+voices label_1 label_2 label_3 label_4 label_5 label_6 label_7 label_8 label_9 label_10

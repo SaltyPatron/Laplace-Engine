@@ -1,0 +1,24 @@
+name tatoeba-transcriptions
+# "Contains all transcriptions in auxiliary or alternative scripts. A username associated with a transcription
+# indicates the user who last reviewed and possibly modified it. A transcription without a username has not been
+# marked as reviewed. The script name is defined according to the ISO 15924 standard."
+# Fields and structure: Sentence id [tab] Lang [tab] Script name [tab] Username [tab] Transcription
+match transcriptions.csv
+grammar table
+escaped \
+# "\N: Unknown (rare)."
+empty-matches ^\\N$
+columns "Sentence id" Lang "Script name" Username Transcription
+kinds own
+kind "Sentence id" "Sentence id"
+kind Username Username
+
+claims
+subject in "Sentence id"
+predicate in "Script name"
+object in Transcription
+witness in Username
+
+claims
+subject in "Sentence id"
+attest Lang

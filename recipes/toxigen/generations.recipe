@@ -1,40 +1,24 @@
 name toxigen-generations
-# The dataset card: "prompt is the prompt used for generation"; "generation is the TOXIGEN generated text";
-# "generation_method denotes whether or not ALICE was used to generate the corresponding generation";
-# "prompt_label is the binary value indicating whether or not the prompt is toxic"; "group indicates the target
-# group of the prompt"; "roberta_prediction is the probability predicted by our corresponding RoBERTa model for each
-# instance". So prompt, generation_method and roberta_prediction are said of the generation, and prompt_label and
-# group of the prompt, each under the name the first row gives it.
-# A field written with a doubled double quote is left unread rather than recorded with the doubling.
-match toxigen.csv
-grammar csv
+# The set's card (README.md, "Data Fields"): "We release TOXIGEN as a dataframe with the following fields:
+#   prompt is the prompt used for generation.   generation is the TOXIGEN generated text.
+#   generation_method denotes whether or not ALICE was used to generate the corresponding generation.
+#   prompt_label is the binary value indicating whether or not the prompt is toxic (1 is toxic, 0 is benign).
+#   group indicates the target group of the prompt.
+#   roberta_prediction is the probability predicted by our corresponding RoBERTa model for each instance."
+# A generation has no name of its own: it is the text it is. What the row says of the prompt (prompt_label, group)
+# is said of the prompt; the rest, of the generation. The row is said together.
+# The file is Parquet, written out beside it as a table (extracted/, by parquet-to-text.py).
+match train/train-*.tsv
+grammar table
+header
+escaped \
 
 claims
-predicate prompt
-query
-(row . (field) @object.text . (field) @subject.text (#not-eq? @subject.text "generation") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
+together
+subject in generation
+attest prompt generation_method roberta_prediction
 
 claims
-predicate generation_method
-query
-(row . (field) . (field) @subject.text . (field) @object.text (#not-eq? @subject.text "generation") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate group
-query
-(row . (field) @subject.text . (field) . (field) . (field) @object.text (#not-eq? @subject.text "prompt") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate prompt_label
-query
-(row . (field) @subject.text . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "prompt") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate roberta_prediction
-query
-(row . (field) . (field) @subject.text . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "generation") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
+together
+subject in prompt
+attest prompt_label group

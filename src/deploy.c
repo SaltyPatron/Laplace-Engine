@@ -1,7 +1,7 @@
 /* A database as a Laplace database: deployed, indexed, and looked at. The SQL is Laplace-postgres's; the engine runs
  * it, so there is one way to stand a database up and one place that says what it holds.
  *
- *   laplace deploy [-d conninfo]     extensions, content schema, semantics, and the database's tier 0
+ *   laplace deploy [-d conninfo]     the database if it is not there, extensions, content schema, semantics, its tier 0
  *   laplace index  [-d conninfo]     the indexes, after a bulk load
  *   laplace status [-d conninfo]     what it holds */
 #include "engine.h"
@@ -39,7 +39,24 @@ static char *one(PGconn *pg, const char *sql){
     PQclear(r); return v;
 }
 
+/* The database the connection string names, made if the server does not have it: asked of the server's own
+ * database, "postgres", by the same role over the same connection. */
+static void database_made(const char *conninfo){
+    PGconn *pg = PQconnectdb(conninfo); int there = PQstatus(pg) == CONNECTION_OK; PQfinish(pg); if (there) return;
+    char *err = NULL; PQconninfoOption *o = PQconninfoParse(conninfo, &err); if (!o) { fprintf(stderr, "%s", err ? err : "the connection string does not parse\n"); exit(1); }
+    const char *kw[32], *vl[32], *db = NULL; int n = 0;
+    for (PQconninfoOption *x = o; x->keyword && n < 30; x++) { if (!x->val) continue; if (!strcmp(x->keyword, "dbname")) { db = x->val; continue; } kw[n] = x->keyword; vl[n++] = x->val; }
+    if (!db) { PQconninfoFree(o); return; }
+    kw[n] = "dbname"; vl[n++] = "postgres"; kw[n] = NULL; vl[n] = NULL;
+    pg = PQconnectdbParams(kw, vl, 0);
+    if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "%s", PQerrorMessage(pg)); exit(1); }
+    char *id = PQescapeIdentifier(pg, db, strlen(db)), q[512]; snprintf(q, sizeof q, "CREATE DATABASE %s", id);
+    printf("laplace deploy   the server has no database %s: making it\n", db);
+    if (!run(pg, q, "the database")) exit(1);
+    PQfreemem(id); PQfinish(pg); PQconninfoFree(o);
+}
 int cmd_deploy(int argc, char **argv){
+    database_made(conn_arg(argc, argv));
     PGconn *pg = db_connect(conn_arg(argc, argv)); tier0_open(NULL);
     printf("laplace deploy   %s\n", PQdb(pg));
     static const char *ext[] = { "postgis", "laplace", "pg_stat_statements", "pg_buffercache" };

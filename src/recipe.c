@@ -10,7 +10,9 @@
  *                                 Several roots may be given: the first that exists is the source
  *   files PATTERN                 the files it is, when it is not everything under a root (several may be given)
  *   except PATTERN...             files under its root that are not the source
- *   after SOURCE...               the sources it comes after
+ *   room N                        what it takes in the database, in times what its files hold, as it was measured
+ *   after SOURCE...               the sources it comes after. The order of all the sources is the file "order" in
+ *                                 the recipes directory: their names, one on a line
  *   reads FORMAT...               its files are ordinary content, read as these formats
  * A recipe of a source takes the source's witness, lineage and trust unless it names its own.
  *
@@ -466,6 +468,7 @@ static int source_parse(const char *path, Source *s){
         else if (!strcmp(tok, "deviation")) { tok = strtok(NULL, " \t\r\n"); if (tok) { double phi = atof(tok) / LP_GLICKO_SCALE; s->trust = 1.0 / sqrt(1.0 + 3.0 * phi * phi / (M_PI * M_PI)); } }
         else if (!strcmp(tok, "root")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nroot < 8) path_expand(tok, s->root[s->nroot++], 512); }
         else if (!strcmp(tok, "files")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nfiles < 8) path_expand(tok, s->files[s->nfiles++], 512); }
+        else if (!strcmp(tok, "room")) { tok = strtok(NULL, " \t\r\n"); if (tok) s->room = atof(tok); }
         else if (!strcmp(tok, "after")) while ((tok = strtok(NULL, " \t\r\n")) && s->nafter < 16) snprintf(s->after[s->nafter++], 64, "%s", tok);
         else if (!strcmp(tok, "except")) while ((tok = strtok(NULL, " \t\r\n")) && s->nexcept < 8) snprintf(s->except[s->nexcept++], 128, "%s", tok);
         else if (!strcmp(tok, "reads")) while ((tok = strtok(NULL, " \t\r\n")) && s->nreads < 8) snprintf(s->reads[s->nreads++], 64, "%s", tok);
@@ -509,21 +512,35 @@ static int recipes_in(const char *dir, int source, Recipe **out, int n){
     }
     free(names); return n;
 }
-/* Sources in the order they go in: each after the sources it names. */
+/* Sources in the order they go in. The file "order" in the recipes directory names them, one on a line, in the
+ * order that grows what is known: what everything is written in, then languages, concepts, words, what is said
+ * between them, and only then whole sentences and texts. A source still comes after every source it names
+ * (after ...), and one the file does not name comes after those it does. */
+static char order_dir[4096];
 static void sources_order(void){
-    Source *o = malloc(sizeof(Source) * (size_t)(nsources ? nsources : 1)); int *at = malloc(sizeof(int) * (size_t)(nsources ? nsources : 1)), *done = calloc((size_t)(nsources ? nsources : 1), sizeof(int)), k = 0;
+    int n = nsources ? nsources : 1;
+    Source *o = malloc(sizeof(Source) * (size_t)n); int *at = malloc(sizeof(int) * (size_t)n), *done = calloc((size_t)n, sizeof(int)), *rank = malloc(sizeof(int) * (size_t)n), k = 0;
+    for (int i = 0; i < nsources; i++) rank[i] = 1 << 20;
+    { char p[4200], line[256]; snprintf(p, sizeof p, "%s/order", order_dir); FILE *f = fopen(p, "r"); int r = 0;
+      while (f && fgets(line, sizeof line, f)) { char *c = line; while (*c == ' ' || *c == '\t') c++; if (*c == '#' || *c == '\n' || !*c) continue;
+          char *e = c; while (*e && *e != ' ' && *e != '\t' && *e != '\n' && *e != '\r') e++; *e = 0;
+          int j = 0; while (j < nsources && strcmp(sources[j].name, c)) j++;
+          if (j == nsources) { fprintf(stderr, "%s names %s, which is not a source\n", p, c); exit(2); }
+          if (rank[j] == 1 << 20) rank[j] = r++; }
+      if (f) fclose(f); }
     while (k < nsources) {
-        int moved = 0;
+        int best = -1;
         for (int i = 0; i < nsources; i++) {
             if (done[i]) continue; int ready = 1;
             for (int a = 0; a < sources[i].nafter && ready; a++) { int j = 0; while (j < nsources && strcmp(sources[j].name, sources[i].after[a])) j++;
                 if (j == nsources) { fprintf(stderr, "source %s comes after %s, which is not a source\n", sources[i].name, sources[i].after[a]); exit(2); }
                 ready = done[j]; }
-            if (ready) { at[i] = k; o[k++] = sources[i]; done[i] = 1; moved = 1; }
+            if (ready && (best < 0 || rank[i] < rank[best])) best = i;
         }
-        if (!moved) { fprintf(stderr, "sources come after one another in a circle\n"); exit(2); }
+        if (best < 0) { fprintf(stderr, "sources come after one another in a circle\n"); exit(2); }
+        at[best] = k; o[k++] = sources[best]; done[best] = 1;
     }
-    memcpy(sources, o, sizeof(Source) * (size_t)nsources); free(o); free(done);
+    memcpy(sources, o, sizeof(Source) * (size_t)nsources); free(o); free(done); free(rank);
     extern Recipe *recipes_now; extern int nrecipes_now;
     for (int i = 0; i < nrecipes_now; i++) if (recipes_now[i].source >= 0) recipes_now[i].source = at[recipes_now[i].source];
     free(at);
@@ -539,7 +556,7 @@ int recipes_load(const char *dir, Recipe **out){
         snprintf(r[i].name, sizeof r[i].name, "%s", me.name); memcpy(r[i].match, me.match, sizeof me.match); r[i].nmatch = me.nmatch; r[i].source = me.source;
         memcpy(r[i].witness, me.witness, sizeof me.witness); memcpy(r[i].lineage, me.lineage, sizeof me.lineage); r[i].trust = me.trust; r[i].like[0] = 0;
     }
-    recipes_now = r; nrecipes_now = n; sources_order();
+    recipes_now = r; nrecipes_now = n; snprintf(order_dir, sizeof order_dir, "%s", dir); sources_order();
     *out = r; return n;
 }
 Source *sources_loaded(int *n){ *n = nsources; return sources; }

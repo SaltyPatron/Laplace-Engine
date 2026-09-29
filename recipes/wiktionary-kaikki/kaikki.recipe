@@ -1,0 +1,15 @@
+name wiktextract-kaikki
+# The entries of one language, as kaikki.org gives them: the same JSON object on every line as in the raw file
+# (see wiktextract.recipe for what Wiktextract's README says of it), and read the same way, so that what two
+# editions say of the same entry, they say of the same thing. Here a sense also holds an "id" of its own
+# (en-dictionary-en-noun-hIt8uVcE), which is said of the sense like everything else it holds.
+match kaikki.org-dictionary-*.jsonl
+grammar json
+records
+named word by lang_code word pos etymology_number
+identity * title
+identity senses glosses
+identity forms form
+identity examples text
+specifics claims under senses
+tuples

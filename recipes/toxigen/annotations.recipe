@@ -1,0 +1,28 @@
+name toxigen-annotations
+# The set's card names this file's columns (dataset_info, config "annotations") and says nothing more of them. A row
+# is one worker's answers about one text: the columns named Input. hold what the worker was shown, the columns named
+# Answer. what the worker answered, and HashedWorkerId who answered.
+# What was answered of the text, the worker says, of the text; what the worker answered of themself
+# (Answer.annotator...) is said of the worker. What the row holds of the text that was shown, the set says.
+# The texts are written as Python writes bytes (b'...'); they are recorded as written.
+# The file is Parquet, written out beside it as a table (extracted/, by parquet-to-text.py).
+match annotations/train-*.tsv
+grammar table
+header
+escaped \
+kinds own
+kind HashedWorkerId HashedWorkerId
+
+claims
+subject in Input.text
+attest Input.prompt Input.time Input.generation_method Input.prompt_label Input.target_group Input.binary_prompt_label
+
+claims
+subject in Input.text
+attest Answer.factSelect Answer.framingQ Answer.inGroup* Answer.ingroup* Answer.intent* Answer.lewd* Answer.refTarget Answer.stateFrame Answer.stateGroup Answer.stereo* Answer.toAI* Answer.toPER* Answer.writer*
+witness in HashedWorkerId
+
+claims
+subject in HashedWorkerId
+attest Answer.annotator*
+witness in HashedWorkerId

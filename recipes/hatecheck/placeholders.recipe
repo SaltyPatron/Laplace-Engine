@@ -1,0 +1,14 @@
+name hatecheck-placeholders
+# HateCheck's README: "template_placeholders.csv" contains the tokens that the placeholders in the case templates
+# are replaced with for generating the test cases. Two columns, Placeholder and Values; a field of Values holds
+# several, parted by commas.
+match template_placeholders.csv
+grammar table
+separator ,
+header
+quoted
+list Values ,
+
+claims
+subject in Placeholder
+attest Values

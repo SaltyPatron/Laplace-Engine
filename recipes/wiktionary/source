@@ -7,6 +7,9 @@ witness Wiktextract
 lineage Wiktionary
 # Entering unrated, as tatoeba's recipe does for a source written by its users; the specification does not give one.
 trust 0.67
+# The edition read is the latest one held (2026-08-28). The older editions beside it are the same witness saying
+# the same entries earlier.
 root $LAPLACE_DATA/.refresh-*/Wiktionary
-root $LAPLACE_DATA/Wiktionary
+# Measured, not loaded: 1,147,563,067 compositions from 24,537 MB, at 750 bytes each with their indexes and standings.
+room 38
 after unicode iso-639

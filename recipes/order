@@ -1,0 +1,42 @@
+# The order the sources go in: one name on a line. What everything is written in first, then languages, concepts,
+# words and what is said of them, the mappings between the resources, annotated text, what is said between terms,
+# and only then whole sentences and texts, names of places, and the sets about harm.
+unicode
+iso-639
+cili
+open-english-wordnet
+open-multilingual-wordnet
+princeton-wordnet
+propbank
+verbnet
+framenet
+semlink
+predicate-matrix
+mapnet
+verbatlas
+wordframenet
+universal-dependencies-tools
+universal-dependencies-documentation
+universal-dependencies
+wsd-evaluation-framework
+wiktionary-kaikki
+wiktionary
+conceptnet
+atomic-2020
+framebase
+atomic-10x
+tatoeba
+opensubtitles
+project-gutenberg
+tokenizers
+geonames
+hatecheck
+sghatecheck
+xstest
+social-bias-frames
+social-chemistry-101
+prosocial-dialog
+real-toxicity-prompts
+toxigen
+measuring-hate-speech
+civil-comments

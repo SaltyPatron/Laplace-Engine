@@ -5,5 +5,5 @@ witness UniversalDependencies tools
 # The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
 deviation 90
 root $LAPLACE_DATA/.refresh-*/UD-Tools/*/data
-after universal-dependencies
+after unicode iso-639
 reads text

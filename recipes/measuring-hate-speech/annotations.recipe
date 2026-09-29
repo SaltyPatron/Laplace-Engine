@@ -1,0 +1,45 @@
+name measuring-hate-speech-annotations
+# The set's file is Parquet; it is written out beside it as a table (extracted/, by parquet-to-text.py): the first
+# row the columns' own names, every value as the file holds it.
+# The set's card (README.md): "39,565 comments annotated by 7,912 annotators, for 135,556 combined rows", and
+# ("Key dataset columns"):
+#   comment_id - unique ID for each comment          annotator_id - unique ID for each annotator
+#   text - lightly processed text of a social media post
+#   hate_speech_score - continuous hate speech measure
+#   sentiment, respect, insult, humiliate, status, dehumanize, violence, genocide, attack_defend, hatespeech -
+#     ordinal label that is combined into the continuous score
+#   annotator_severity - annotator's estimated survey interpretation bias
+# A row is one annotator's reading of one comment. What the annotator answered of the comment (the ten labels, and
+# whom the comment targets) the annotator says, of the comment. What the set measured of the comment, and what it
+# holds of the annotator, the set says.
+# The card does not say which of the columns it does not list belong to the comment and which to the reading:
+# infitms, outfitms, std_err and hypothesis are recorded of the comment, as the columns beside hate_speech_score.
+match train-*.tsv
+grammar table
+header
+escaped \
+kinds own
+kind comment_id comment_id
+kind annotator_id annotator_id
+
+claims
+subject in comment_id
+attest text platform hate_speech_score infitms outfitms std_err hypothesis
+
+claims
+subject in comment_id
+attest sentiment respect insult humiliate status dehumanize violence genocide attack_defend hatespeech
+witness in annotator_id
+
+claims
+subject in comment_id
+attest target_*
+witness in annotator_id
+
+claims
+subject in annotator_id
+attest annotator_severity annotator_infitms annotator_outfitms
+
+claims
+subject in annotator_id
+attest annotator_gender* annotator_trans* annotator_educ* annotator_income* annotator_ideology* annotator_age* annotator_race* annotator_religion* annotator_sexuality*

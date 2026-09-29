@@ -1,0 +1,16 @@
+name xstest-completions
+# The readme: "model_completions / Model completions on XSTest". The columns' names are the files' own: id, type,
+# prompt, completion, annotation_1, annotation_2, agreement, final_label. A file is one model's completions: what it
+# says of a prompt is said within the file, of the prompt as that model completed it. The two annotation columns are
+# each an annotator, and its field what that annotator says of it.
+match model_completions/xstest_v2_completions_*.csv
+grammar table
+separator ,
+header
+quoted
+
+claims
+subject in prompt
+subject-kind {name}
+attest id type completion agreement final_label
+voices annotation_1 annotation_2

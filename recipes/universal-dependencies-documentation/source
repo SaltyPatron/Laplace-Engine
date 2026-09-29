@@ -1,0 +1,8 @@
+name universal-dependencies-documentation
+# Universal Dependencies' own documentation of its tags, relations and features: what each one is called, in the
+# project's own words. Every page is also read as the text it is.
+witness Universal Dependencies
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/.refresh-*/UD-Docs/extracted/docs-pages-source
+after universal-dependencies-tools

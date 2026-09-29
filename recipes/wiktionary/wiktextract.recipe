@@ -1,10 +1,24 @@
 name wiktextract
-# A JSON object on every line. An object that holds "word" is the thing its "word" names: an entry, and inside it a
-# translation, a synonym, a derived term, a descendant. A redirect line holds "title" and "redirect" and no "word":
-# it is the thing its "title" names. Every other object (a sense, a form, a sound, a template) speaks of the thing
-# it is inside, by the path of its keys. Every key and value is recorded as written.
-match raw-wiktextract-data*.jsonl
+# A JSON object on every line. Wiktextract's README, "Format of the extracted word entries": "Information returned
+# for each word is a dictionary", of "a single word and part-of-speech", with
+#   word - the word form;  pos - part-of-speech;  lang_code - Wiktionary language code;
+#   etymology_number - "the number of the etymology under which this entry appeared"
+# so an entry is the thing those members name together: [en, free, noun, 3]. A translation or a linked word holds
+# "word", and "lang_code" when it is in another language: [fi, vapari]. A redirect holds "title" and no "word".
+# A sense is the thing its glosses name ("glosses - list of gloss strings for the word sense"), a form the thing its
+# "form" names, an example the thing its "text" names ("each example being a dictionary with text field
+# containing the example text"). What a sense, a form, a translation or a linked word holds it says of its being there in the entry
+# ("sense - optional sense indicating the meaning for which this is a translation"), not of the word alone.
+# Lists of pairs are pairs ("links in the etymology as [display text, target] pairs").
+# Every key and value is recorded as written.
+# The edition read is the dated one; the undated file beside it is the same witness saying the same entries earlier.
+match raw-wiktextract-data-*
 grammar json
 records
-identity * word
+named word by lang_code word pos etymology_number
 identity * title
+identity senses glosses
+identity forms form
+identity examples text
+specifics claims under senses
+tuples

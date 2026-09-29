@@ -1,0 +1,34 @@
+name social-bias-frames-annotations
+# The set's README: "Each line in the file contains the following fields (in order)":
+#   whoTarget: group vs. individual target;  intentYN: was the intent behind the statement to offend;
+#   sexYN: is the post a sexual or lewd reference;  sexReason: free text explanations of what is sexual;
+#   offensiveYN: could the post be offensive to anyone;  sexPhrase: part of the post that references something sexual;
+#   speakerMinorityYN: whether the speaker was part of the same minority group that's being targeted;
+#   WorkerId: hashed version of the MTurk workerId;  HITId: id that uniquely identifies each post;
+#   annotatorGender, annotatorMinority, annotatorPolitics, annotatorRace, annotatorAge: of the MTurk worker;
+#   post: post that was annotated;  targetMinority: demographic group targeted;
+#   targetCategory: high-level category of the demographic group(s) targeted;  targetStereotype: implied statement;
+#   dataSource: source of the post
+# A line is one worker's reading of one post. What the worker answered of the post, the worker says, of the post;
+# what the line holds of the worker is said of the worker; the post's text and source, the set says.
+match SBIC.v2.trn.csv SBIC.v2.dev.csv SBIC.v2.tst.csv
+grammar table
+separator ,
+header
+quoted
+kinds own
+kind HITId HITId
+kind WorkerId WorkerId
+
+claims
+subject in HITId
+attest post dataSource
+
+claims
+subject in HITId
+attest whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype
+witness in WorkerId
+
+claims
+subject in WorkerId
+attest annotator*

@@ -1,21 +1,32 @@
 name conceptnet-assertions
-# One edge on every line, five fields parted by tabs, no header row. No documentation of the file is on this machine,
-# so no column is given a name: the columns are told apart by their position in the row (1 .. 5), and the position is
-# never recorded. The second, third and fourth fields are the edge, recorded in the row's own order, each as written:
-#   /r/Antonym   /c/ab/агыруа/n   /c/ab/аҧсуа      is      [/c/ab/агыруа/n, /r/Antonym, /c/ab/аҧсуа]
-# The fifth field is a JSON object that speaks of the edge, with names of its own (dataset, license, sources,
-# surfaceText, surfaceStart, surfaceEnd, weight): everything in it is said of the edge itself. Its "sources" name who
-# contributed the edge, under "contributor": each contributor is a witness of its own and attests the edge. An edge
-# that names no contributor is attested by ConceptNet.
-# Not recorded: the first field, the edge's own identifier (/a/[/r/Antonym/,/c/ab/агыруа/n/,/c/ab/аҧсуа/]), which
-# writes the same three things again.
+# One edge on every line, five fields parted by tabs, no header row. ConceptNet's documentation (Downloads):
+#   "The five fields of each line are: The URI of the whole edge; The relation expressed by the edge; The node at the
+#    start of the edge; The node at the end of the edge; A JSON structure of additional information about the edge"
+# and (Edges) names the fields: uri, rel, start, end, and in the JSON weight, sources, license, dataset, surfaceText.
+# The edge is its start, its relation and its end. Its uri and everything in the JSON are said of the edge itself.
+#
+# (URI hierarchy) "Every object in ConceptNet has a URI that is structured like a path"; "Concept URIs contain the
+# text of the concept, with spaces replaced by underscores"; a concept has "the initial /c", "a part that indicates
+# its language", "a part with the concept text", and "an optional fourth component gives the part of speech". So
+#   /c/en/ice_cream/n   is   [c, en, [ice, cream], n]
+# and an assertion's URI, "in a bracketed list", /a/[/r/IsA/,/c/en/dog/,/c/en/animal/], is
+#   [a, [[r, IsA], [c, en, dog], [c, en, animal]]]
+#
+# (Edges) "sources: the sources that, when combined, say that this assertion should be true": each "contributor"
+# among them is a witness of its own and attests the edge. An edge that names no contributor is attested by ConceptNet.
+# (Edges) "weight: the strength with which this edge expresses this assertion. A typical weight is 1, but weights can
+# be higher or lower. All weights are positive." It gives no scale, so the weight is recorded as what is said of the
+# edge and is not taken for a score.
 match assertions.csv
 grammar table
-columns 1 2 3 4 5
+columns uri rel start end json
+paths / _
+specifics
 
 claims
-subject in 3
-predicate in 2
-object in 4
-json 5
+subject in start
+predicate in rel
+object in end
+json json
 witnesses sources contributor
+attest uri

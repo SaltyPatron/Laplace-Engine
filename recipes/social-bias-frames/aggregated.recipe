@@ -1,46 +1,18 @@
 name social-bias-frames-aggregated
-# The files "aggregated per post" (README): a post on every row, and the first row names the columns. Each is said
-# of the post under that name. whoTarget, intentYN, sexYN and offensiveYN are here the mean of the workers' answers
-# (README: "aggDict.update({c: lambda x: np.mean(x) for c in classFields})"). The first column has no name: not
-# attested. targetMinority, targetCategory and targetStereotype are lists written as JSON inside a CSV field
-# (README: "To load the list of implications, use json.loads"): nothing reads that, so they are not attested.
-# A post written with a doubled double quote is left unread rather than recorded with the doubling.
-# A field may hold line breaks, so the file is not read as a record on every line.
+# The set's README ("Aggregation"): the files "aggregated per post": for a post, the mean of whoTarget, intentYN,
+# sexYN and offensiveYN over its annotations, the set of what was written as targetMinority, targetCategory and
+# targetStereotype, each written as a JSON list ("To load the list of implications, use json.loads"), and
+# hasBiasedImplication. A post has no HITId here: it is the text it is. The first column has no name and says nothing.
 match SBIC.v2.agg.*.csv
-grammar csv
+grammar table
+separator ,
+header
+quoted
+list targetMinority json
+list targetCategory json
+list targetStereotype json
 
 claims
-predicate whoTarget
-query
-(row . (field) . (field) @subject.text . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "post") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate intentYN
-query
-(row . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "post") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate sexYN
-query
-(row . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "post") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate offensiveYN
-query
-(row . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "post") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate dataSource
-query
-(row . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "post") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
-
-claims
-predicate hasBiasedImplication
-query
-(row . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "post") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
-end
+together
+subject in post
+attest *

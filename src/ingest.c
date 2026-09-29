@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 /* laplace ingest: files through their recipes.
  *   laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes/] [-j threads] [-s source] [--whole] [--no-load] [--plan] file...
+ *   laplace ingest [options]          with nothing named: every source, in the order they go in
  * Files already recorded byte for byte are skipped by one query over their BLAKE3-256 hashes. The rest decompose on
  * every core; each is recomposed from the node table and compared with its bytes; then new nodes, claims and
  * standings are written. Live counters go to stderr, phase times to stdout. */
@@ -62,6 +63,75 @@ static void show_held(const lp_id *id, int depth){
         if (said == LP_SAID_TUPLE) { printf("%*s+ ", depth * 2 + 2, ""); show_tuple(&sh->vtx[c->voff + v].id); putchar('\n'); }
         else if (said == LP_SAID_RECORD) { printf("%*s(\n", depth * 2 + 2, ""); show_held(&sh->vtx[c->voff + v].id, depth + 1); printf("%*s)\n", depth * 2 + 2, ""); } }
 }
+/* Every source there is, in the order they go in, each in a process of its own with the options given, its output
+ * kept in a log of its own. A source none of whose files is here is said so and passed over; a source that fails
+ * stops the run, since what comes after it counts on it. What is already recorded is passed over by its bytes, so
+ * a run that was cut off is taken up by running it again. */
+#include <sys/wait.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/statvfs.h>
+/* How much a source's files hold, as its recipes would read them (what gzip holds is taken as eight times its size). */
+static uint64_t source_bytes(const Source *sc, Recipe *rec, int nrec){
+    int from = npaths; const Source *was = walking; walking = sc;
+    if (sc->nfiles) for (int z = 0; z < sc->nfiles; z++) { glob_t g; if (!glob(sc->files[z], 0, NULL, &g)) for (size_t y = 0; y < g.gl_pathc; y++) add_path(g.gl_pathv[y]); globfree(&g); }
+    else nftw(sc->found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+    walking = was; uint64_t sum = 0;
+    for (int i = from; i < npaths; i++) { struct stat st; if (recipe_for(rec, nrec, paths[i], sc) && !stat(paths[i], &st)) { size_t l = strlen(paths[i]); sum += (uint64_t)st.st_size * (l > 3 && !strcmp(paths[i] + l - 3, ".gz") ? 8 : 1); } free(paths[i]); }
+    npaths = from; return sum;
+}
+/* The room left where the database keeps its data, or -1 when that cannot be seen from here (another machine). */
+static double room_left(const char *conninfo){
+    PGconn *pg = PQconnectdb(conninfo); double gb = -1;
+    if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SHOW data_directory");
+        if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) { struct statvfs v; if (!statvfs(PQgetvalue(r, 0, 0), &v)) gb = (double)v.f_bavail * (double)v.f_frsize / 1e9; }
+        PQclear(r); }
+    PQfinish(pg); return gb;
+}
+static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int nrec){
+    char self[4096]; ssize_t sl = readlink("/proc/self/exe", self, sizeof self - 1); if (sl <= 0) { perror("/proc/self/exe"); return 1; } self[sl] = 0;
+    const char *work = getenv("LAPLACE_WORK"); char dir[4096]; snprintf(dir, sizeof dir, "%s/logs/ingest", work && *work ? work : "."); 
+    { char cmd[4200]; snprintf(cmd, sizeof cmd, "%s", dir); for (char *c = cmd + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(cmd, 0775); *c = '/'; } mkdir(cmd, 0775); }
+    setlocale(LC_NUMERIC, "en_US.UTF-8");
+    const char *conninfo = laplace_db(); int loads = 1;
+    for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[a + 1]; if (!strcmp(argv[a], "--no-load") || !strcmp(argv[a], "--plan") || !strcmp(argv[a], "--claims")) loads = 0; }
+    /* What a source takes in the database is what its source file says was measured (room N, in times what its files
+     * hold), or 35 times when it says nothing (LAPLACE_ROOM_FACTOR). A source is not begun when the volume would be
+     * left with less than a tenth of itself, and that is said. */
+    double factor = getenv("LAPLACE_ROOM_FACTOR") ? atof(getenv("LAPLACE_ROOM_FACTOR")) : 35.0; int short_of_room = 0;
+    printf("laplace ingest   every source, in order   logs in %s\n\n", dir);
+    printf("%-4s %-38s %-10s %10s   %s\n", "", "source", "", "seconds", "");
+    double T = now(); int failed = 0, absent = 0, empty = 0, went = 0;
+    for (int i = 0; i < nsrc && !failed; i++) {
+        int mine = 0; for (int k = 0; k < nrec; k++) mine += rec[k].source == i; mine += src[i].nreads;
+        if (!mine) { printf("%-4d %-38s %-10s %10s   no recipe reads it yet\n", i + 1, src[i].name, "passed", ""); empty++; continue; }
+        if (!src[i].found[0]) { printf("%-4d %-38s %-10s %10s   it is at none of its roots\n", i + 1, src[i].name, "absent", ""); absent++; continue; }
+        if (loads) { double have = room_left(conninfo), need = (double)source_bytes(&src[i], rec, nrec) * (src[i].room > 0 ? src[i].room : factor) / 1e9; struct statvfs v; double whole = 0;
+            { PGconn *pg = PQconnectdb(conninfo); if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SHOW data_directory"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !statvfs(PQgetvalue(r, 0, 0), &v)) whole = (double)v.f_blocks * (double)v.f_frsize / 1e9; PQclear(r); } PQfinish(pg); }
+            if (have >= 0 && have - need < whole / 10) { char why[128]; snprintf(why, sizeof why, "no room: it may take %.0f GB, and %.0f GB is left", need, have);
+                printf("%-4d %-38s %-10s %10s   %s\n", i + 1, src[i].name, "not begun", "", why); short_of_room++; continue; } }
+        char log[4300]; snprintf(log, sizeof log, "%s/%s.log", dir, src[i].name);
+        printf("%-4d %-38s ", i + 1, src[i].name); fflush(stdout);
+        double t = now(); pid_t pid = fork();
+        if (pid < 0) { perror("fork"); return 1; }
+        if (!pid) {
+            int fd = open(log, O_WRONLY | O_CREAT | O_TRUNC, 0664); if (fd < 0) { perror(log); _exit(127); }
+            dup2(fd, 1); dup2(fd, 2); close(fd);
+            char **av = malloc(sizeof(char *) * (size_t)(argc + 3)); int n = 0; av[n++] = self; av[n++] = "ingest";
+            for (int a = 1; a < argc; a++) av[n++] = argv[a];                            /* the options, as they were given */
+            av[n++] = (char *)src[i].name; av[n] = NULL;
+            execv(self, av); perror(self); _exit(127);
+        }
+        int st = 0; while (waitpid(pid, &st, 0) < 0) { }
+        int code = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+        char last[256] = ""; { FILE *f = fopen(log, "r"); char line[4096]; while (f && fgets(line, sizeof line, f)) { char *cr = strrchr(line, '\r'); const char *c = cr && cr[1] && cr[1] != '\n' ? cr + 1 : line; while (*c == ' ') c++;
+              if (strstr(c, "attestations") || strstr(c, "already recorded") || (code && *c && *c != '\n')) { snprintf(last, sizeof last, "%.200s", c); char *nl = strchr(last, '\n'); if (nl) *nl = 0; } } if (f) fclose(f); }
+        printf("%-10s %'10.1f   %s\n", code ? "FAILED" : "in", now() - t, last); fflush(stdout);
+        if (code) { failed = 1; fprintf(stderr, "\n%s did not go in (exit %d); what it said is in %s\n", src[i].name, code, log); } else went++;
+    }
+    printf("\n%d sources in, %d absent, %d without a recipe, %d not begun for want of room%s   %'.1f s\n", went, absent, empty, short_of_room, failed ? ", and one that failed: the run stops there" : "", now() - T);
+    return failed;
+}
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
     int threads = 0, do_load = 1, a = 1, show_claims = 0; const char *of = NULL;
@@ -91,6 +161,7 @@ int cmd_ingest(int argc, char **argv){
         else if (!stat(argv[i], &st) && S_ISDIR(st.st_mode)) nftw(argv[i], walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
         else add_path(argv[i]);
     }
+    if (a >= argc && !of) return ingest_every(argc, argv, src, nsrc, rec, nrec);         /* nothing named: every source, in order */
     int nfiles = npaths; if (nfiles <= 0) { fprintf(stderr, "no files\n"); return 2; }
     { int stop = 0, direct = 0; const Source *seen[64]; int ns = 0;          /* a recipe that did not load stops its own source only */
       for (int i = 0; i < nfiles; i++) { if (!path_of[i]) { direct = 1; continue; } int k = 0; while (k < ns && seen[k] != path_of[i]) k++; if (k == ns && ns < 64) seen[ns++] = path_of[i]; }
