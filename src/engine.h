@@ -90,6 +90,7 @@ typedef struct {
     int rest;                                         /* in a table: the fields after the named columns: 1 pairs of predicate and object, 2 objects */
     int row_tuple;                                    /* in a table: the row itself is the claim, the path of its fields in order */
     char field_pair;                                  /* in a table: every field is written A, this character, B, and is the pair [A, B] */
+    char subject_kind[64];                            /* in a table: the subject's name stands only among things of this kind ({dir}: within the file's directory) */
     int together;                                     /* in a table: what a row says it says together: the row is one record */
     int pair;                                         /* the claims are pairs: the source writes no predicate between the two */
     char attest[64][64]; int nattest;                 /* in a table: columns that are each a predicate, by the name the table gives them */
@@ -117,8 +118,11 @@ typedef struct {
     char column[64][64]; int ncolumn;                 /* a table's columns, when no row names them */
     char predicate[64];
     char witness[128];                                /* the witness's name, recorded as content */
-    struct { char el[64], attr[64]; int res, within, child; } identity[32]; int nidentity;   /* within: the name stands only within the thing it is inside; child: the name is the text of an element inside it */     /* XML: the elements that are things, and the attribute that names each (res: 1 a codepoint, 2 codepoints) */
-    struct { char el[64], pred[64], obj[64]; } link[16]; int nlink;             /* XML: elements that are relations of what they are inside */
+    struct { char el[64], attr[64], as[64]; int res, within, child, kind, own; } identity[48]; int nidentity;   /* within: the name stands only within the thing it is inside; child: the name is the text of an element inside it */     /* XML: the elements that are things, and the attribute that names each (res: 1 a codepoint, 2 codepoints) */
+    struct { char el[64], attr[64], kind[64]; } refer[48]; int nrefer;                  /* XML: attributes whose value names a thing of a kind */
+    struct { char el[64], start[32], end[32], text[64]; int inclusive; } stretch[8]; int nstretch;   /* XML: elements that speak of a stretch of a text */
+    struct { char rec[64], word[8][64]; int nword; } words[4]; int nwords;      /* XML: an element that is a record of words, and the elements inside it that are its words */
+    struct { char el[64], pred[64], obj[64], kind[64]; } link[16]; int nlink;             /* XML: elements that are relations of what they are inside */
     char codepoints[32][32]; int ncodepoints;          /* XML: attributes whose values are codepoints written in hex */
     int keys_things, members;                          /* JSON: the keys of an object inside nothing are things; read natively (members.c) */
     void *empty_like;                                 /* a table: a field that matches this is one the source leaves empty */
@@ -173,7 +177,8 @@ void ev_push(Events *, const Event *);
 void attest_records(const Recipe *, File *, const uint8_t *src, size_t n);      /* records.c */
 void attest_fields(const Recipe *, File *, const uint8_t *src, size_t n);
 void attest_members(const Recipe *, File *, const uint8_t *src, size_t n);       /* members.c */
-void attest_elements(const Recipe *, File *, void *root_node, const uint8_t *src, size_t n);      /* elements.c */
+void attest_elements(const Recipe *, File *, void *root_node, const uint8_t *src, size_t n);
+void dir_of(const char *path, char *out, size_t cap);                 /* the name of the directory a file is in */      /* elements.c */
 
 typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, led, std_new, std_upd; double t_dedup, t_copy, t_sem; } LoadStats;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);

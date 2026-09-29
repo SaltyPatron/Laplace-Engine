@@ -49,7 +49,8 @@ int cmd_text(int argc, char **argv){
 }
 
 /* ---- the claims that hold an entity */
-typedef struct { lp_id id, part[3]; int np; lp_rating r; int matches; double conf; int position; } Claim;
+#define MAXPARTS 12
+typedef struct { lp_id id, part[MAXPARTS]; int np; lp_rating r; int matches; double conf; int position; } Claim;   /* a claim is a tuple: a pair, three parts, or a longer path */
 
 static double be_f64(const char *p){ uint64_t u = 0; for (int i = 0; i < 8; i++) u = u << 8 | (uint8_t)p[i]; double d; memcpy(&d, &u, 8); return d; }
 static int claim_by_conf(const void *a, const void *b){ double x = ((const Claim *)a)->conf, y = ((const Claim *)b)->conf; return x < y ? 1 : x > y ? -1 : memcmp(a, b, 16); }
@@ -71,10 +72,14 @@ static Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fa
         const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1), &vx);
         for (size_t i = 0; i < nv; i++) {
             double xyz[3], run; memcpy(xyz, vx + 32 * i, 24); memcpy(&run, vx + 32 * i + 24, 8); lp_id id; lp_xyz_to_id(xyz, &id);
-            for (int r = 0; r < (int)lp_m_run(run) && x->np < 3; r++) x->part[x->np++] = id;
+            for (int r = 0; r < (int)lp_m_run(run) && x->np < MAXPARTS; r++) x->part[x->np++] = id;
         }
-        if (x->np != 3) continue;                                            /* a claim is subject, predicate, object */
-        int fits = 1; for (int i = 0; i < 3; i++) if (have[i] > 1 && memcmp(&x->part[i], &part[i], 16)) fits = 0;   /* in its place */
+        if (x->np < 2) continue;
+        /* in its place: the first part given is the claim's first, the last its last, and the middle one between them */
+        int fits = 1, last = x->np - 1;
+        if (have[0] > 1 && memcmp(&x->part[0], &part[0], 16)) fits = 0;
+        if (have[2] > 1 && memcmp(&x->part[last], &part[2], 16)) fits = 0;
+        if (have[1] > 1) { int in = 0; for (int i = 1; i < last || (i == 1 && x->np == 2 && i <= last); i++) if (!memcmp(&x->part[i], &part[1], 16)) in = 1; if (!in) fits = 0; }
         if (!fits) continue;
         x->r = (lp_rating){ be_f64(PQgetvalue(q, j, 2)), be_f64(PQgetvalue(q, j, 3)), be_f64(PQgetvalue(q, j, 4)) };
         uint32_t mb; memcpy(&mb, PQgetvalue(q, j, 5), 4); x->matches = (int)ntohl(mb);
@@ -119,7 +124,7 @@ int cmd_hop(int argc, char **argv){
     }
     if (a >= argc || (argc - a != 1 && argc - a != 3)) {
         fprintf(stderr, "usage: laplace hop [-d conninfo] [-n N] [--fan K] [--k K] text\n"
-                        "       laplace hop [...] subject predicate object      with ? for a part left open: laplace hop dog eng ?\n"); return 2; }
+                        "       laplace hop [...] first middle last             with ? for a part left open: laplace hop was UPOS ?\n"); return 2; }
     double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_connect(conninfo);
     int n, capped, whole = argc - a == 1; Claim *cl; lp_ref e; double t;
     if (whole) { e = named(c, argv[a], NULL, 0, NULL); show_ref("entity", &e); t = now(); cl = claims_of(pg, &e.id, fan, k, &n, &capped); }
@@ -132,14 +137,14 @@ int cmd_hop(int argc, char **argv){
     double t_claims = (now() - t) * 1000;
     positions_of(pg, cl, n); if (!whole) qsort(cl, (size_t)n, sizeof(Claim), claim_by_position);
     Reader *rd = reader_new(pg);
-    for (int i = 0; i < n && i < limit; i++) for (int p = 0; p < 3; p++) reader_want(rd, &cl[i].part[p]);
+    for (int i = 0; i < n && i < limit; i++) for (int p = 0; p < cl[i].np; p++) reader_want(rd, &cl[i].part[p]);
     printf("\nattested: %d claim%s%s\n", n, n == 1 ? "" : "s", capped ? " (more exist: raise --fan)" : "");
     if (n) printf("%10s %8s %6s %8s %6s   %s\n", "confidence", "rating", "dev", "matches", "given", "claim");
     for (int i = 0; i < n && i < limit; i++) {
-        char *s = reader_text(rd, &cl[i].part[0], 48), *p = reader_text(rd, &cl[i].part[1], 32), *o = reader_text(rd, &cl[i].part[2], 72), pos[16] = "";
-        if (cl[i].position) snprintf(pos, sizeof pos, "%d", cl[i].position);
-        printf("%10.3f %8.0f %6.0f %8d %6s   [%s, %s, %s]\n", cl[i].conf, cl[i].r.rating, cl[i].r.deviation, cl[i].matches, pos, s, p, o);
-        free(s); free(p); free(o);
+        char pos[16] = ""; if (cl[i].position) snprintf(pos, sizeof pos, "%d", cl[i].position);
+        printf("%10.3f %8.0f %6.0f %8d %6s   [", cl[i].conf, cl[i].r.rating, cl[i].r.deviation, cl[i].matches, pos);
+        for (int p = 0; p < cl[i].np; p++) { char *tx = reader_text(rd, &cl[i].part[p], p == cl[i].np - 1 ? 72 : 48); printf("%s%s", p ? ", " : "", tx); free(tx); }
+        printf("]\n");
     }
     if (!whole) { printf("\nclaims %.1f ms   %llu round trips for text   total %.1f ms\n", t_claims, (unsigned long long)reader_trips(rd), (now() - T) * 1000);
                   free(cl); reader_free(rd); PQfinish(pg); return 0; }

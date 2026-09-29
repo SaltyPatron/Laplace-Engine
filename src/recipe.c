@@ -32,6 +32,8 @@
  *   and in a table's claims and maps, in place of a query:
  *     subject in COLUMN[.resolver...]    predicate in COLUMN    object in COLUMN    key in COLUMN    value in COLUMN
  *     subject in COLUMN COLUMN...   the subject is the path of several columns' fields, in that order
+ *     subject-kind KIND             the subject's name stands only among things of its kind: the subject is the path
+ *                                   of the kind and the name ({dir}: the directory the file is in)
  *     rest pairs | values           the fields after the named columns come in pairs, a predicate and its object
  *                                   (after the block's predicate, when the file's name or the recipe gives one); or
  *                                   are each an object (under the block's predicate, or as the second of a pair)
@@ -58,8 +60,23 @@
  *   identity ELEMENT >CHILD       an ELEMENT is the thing the text of the element CHILD inside it names
  *   identity ELEMENT NAME within  the name stands only within the thing the element is inside: the thing is the
  *                                 path of that thing and the name
+ *   identity ELEMENT NAME kind [KIND]
+ *                                 the name stands only among things of its kind: the thing is the path of the kind
+ *                                 (the element's name, unless the source writes the kind under another name, KIND)
+ *                                 and the name. NAME written . is the element's own text
+ *   refer [ELEMENT.]ATTRIBUTE KIND
+ *                                 the attribute's value names a thing of that kind, and is recorded as that thing
+ *   words RECORD WORD...          an element RECORD is a record of words (a sentence): the text of each element WORD
+ *                                 inside it is a word, and that element's attributes are said of the word, within the
+ *                                 record. What the record is about is the path of its words, in order
+ *   A KIND written {dir} is the name of the directory the file is in: a name that stands only within its data set.
+ *   span ELEMENT START END TEXT [inclusive]
+ *                                 the element speaks of a stretch of the text of the element TEXT, between two
+ *                                 characters; what it says is said of that stretch (see elements.c)
  *   list ATTRIBUTE CHAR           an attribute whose value is several values, parted by CHAR
- *   link ELEMENT A B              an ELEMENT is a relation of the thing it is inside: [thing, value of A, value of B]
+ *   link ELEMENT A B              an ELEMENT is a relation of the thing it is inside: [thing, value of A, value of B];
+ *                                 B written >CHILD is the text of each element CHILD inside it; a KIND after B says
+ *                                 B names a thing of that kind
  *   codepoints ATTRIBUTE...       attributes whose values are codepoints written in hex, recorded as the text they are
  *   grammar json, read as what it says (members.c) when the recipe names what says what an object is:
  *   identity KEY...               an object is the thing the first of these members names
@@ -106,6 +123,7 @@
  *   like RECIPE                   it reads as that recipe does: the same grammar and statements, under its own name,
  *                                 witness, lineage and trust
  *   witness NAME...               the source as witness, named as content ({dir}: the directory the file is in;
+ *                                 {name}: the file's own name, without what follows its last dot;
  *                                 {first NAME}: what the file first writes as NAME="..."). A recipe with a query is a curated source:
  *                                 what is recorded is what it attests — the claims and the entities they relate — never
  *                                 the file's own syntax (rows, tags, delimiters)
@@ -280,14 +298,34 @@ static int recipe_parse(const char *path, Recipe *r){
         else if (!strcmp(tok, "together") && b) b->together = 1;
         else if (!strcmp(tok, "like")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->like, sizeof r->like, "%s", tok); }
         else if (!strcmp(tok, "predicate-in-name") && b) { char *x = strtok(NULL, " \t\r\n"), *y = strtok(NULL, " \t\r\n"); if (x && y) { b->name_after = x[0]; b->name_before = y[0]; } }
-        else if (!strcmp(tok, "identity") && r->nidentity < 32) {
+        else if (!strcmp(tok, "identity") && r->nidentity < 48) {
             char *el = strtok(NULL, " \t\r\n"), *at = strtok(NULL, " \t\r\n"), *wi = strtok(NULL, " \t\r\n"); if (!el || !at) { fprintf(stderr, "%s: identity ELEMENT ATTRIBUTE\n", path); fclose(f); return 0; }
-            r->identity[r->nidentity].within = wi && !strcmp(wi, "within"); r->identity[r->nidentity].child = at[0] == '>'; if (at[0] == '>') at++;
+            r->identity[r->nidentity].within = wi && !strcmp(wi, "within"); r->identity[r->nidentity].kind = wi && !strcmp(wi, "kind"); r->identity[r->nidentity].child = at[0] == '>'; if (at[0] == '>') at++;
+            r->identity[r->nidentity].own = !strcmp(at, "."); r->identity[r->nidentity].as[0] = 0;
+            if (r->identity[r->nidentity].kind) { char *as = strtok(NULL, " \t\r\n"); if (as) snprintf(r->identity[r->nidentity].as, 64, "%s", as); }
             char *dot = strrchr(at, '.'); int res = 0; if (dot && !strcmp(dot, ".cp")) { res = 1; *dot = 0; } else if (dot && !strcmp(dot, ".cps")) { res = 2; *dot = 0; }
             snprintf(r->identity[r->nidentity].el, 64, "%s", el); snprintf(r->identity[r->nidentity].attr, 64, "%s", at); r->identity[r->nidentity++].res = res;
         }
+        else if (!strcmp(tok, "words") && r->nwords < 4) {
+            char *rec = strtok(NULL, " \t\r\n"); if (!rec) { fprintf(stderr, "%s: words RECORD WORD...\n", path); fclose(f); return 0; }
+            snprintf(r->words[r->nwords].rec, 64, "%s", rec); while ((tok = strtok(NULL, " \t\r\n")) && r->words[r->nwords].nword < 8) snprintf(r->words[r->nwords].word[r->words[r->nwords].nword++], 64, "%s", tok);
+            r->nwords++;
+        }
+        else if (!strcmp(tok, "subject-kind") && b) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(b->subject_kind, 64, "%s", tok); }
+        else if (!strcmp(tok, "refer") && r->nrefer < 48) {
+            char *at = strtok(NULL, " \t\r\n"), *kd = strtok(NULL, " \t\r\n"); if (!at || !kd) { fprintf(stderr, "%s: refer [ELEMENT.]ATTRIBUTE KIND\n", path); fclose(f); return 0; }
+            char *dot = strchr(at, '.'); r->refer[r->nrefer].el[0] = 0; if (dot) { *dot = 0; snprintf(r->refer[r->nrefer].el, 64, "%s", at); at = dot + 1; }
+            snprintf(r->refer[r->nrefer].attr, 64, "%s", at); snprintf(r->refer[r->nrefer++].kind, 64, "%s", kd);
+        }
+        else if (!strcmp(tok, "span") && r->nstretch < 8) {
+            char *el = strtok(NULL, " \t\r\n"), *a = strtok(NULL, " \t\r\n"), *b2 = strtok(NULL, " \t\r\n"), *tx = strtok(NULL, " \t\r\n"), *inc = strtok(NULL, " \t\r\n");
+            if (!el || !a || !b2 || !tx) { fprintf(stderr, "%s: span ELEMENT START END TEXT [inclusive]\n", path); fclose(f); return 0; }
+            snprintf(r->stretch[r->nstretch].el, 64, "%s", el); snprintf(r->stretch[r->nstretch].start, 32, "%s", a); snprintf(r->stretch[r->nstretch].end, 32, "%s", b2); snprintf(r->stretch[r->nstretch].text, 64, "%s", tx);
+            r->stretch[r->nstretch++].inclusive = inc && !strcmp(inc, "inclusive");
+        }
         else if (!strcmp(tok, "link") && r->nlink < 16) {
             char *el = strtok(NULL, " \t\r\n"), *pa = strtok(NULL, " \t\r\n"), *oa = strtok(NULL, " \t\r\n"); if (!el || !pa || !oa) { fprintf(stderr, "%s: link ELEMENT ATTRIBUTE ATTRIBUTE\n", path); fclose(f); return 0; }
+            char *kd = strtok(NULL, " \t\r\n"); snprintf(r->link[r->nlink].kind, 64, "%s", kd ? kd : "");
             snprintf(r->link[r->nlink].el, 64, "%s", el); snprintf(r->link[r->nlink].pred, 64, "%s", pa); snprintf(r->link[r->nlink++].obj, 64, "%s", oa);
         }
         else if (!strcmp(tok, "keys")) { tok = strtok(NULL, " \t\r\n"); if (!tok || strcmp(tok, "things")) { fprintf(stderr, "%s: keys things\n", path); fclose(f); return 0; } r->keys_things = 1; }
@@ -588,7 +626,7 @@ static int map_get(const Map *m, const uint8_t *k, size_t kl, const uint8_t **v,
     return 0;
 }
 /* What a file is read with: its recipe, and the maps its recipe's map blocks filled (one per block). */
-typedef struct { const Recipe *r; Map *map; char (*predicate)[64]; } Reading;
+typedef struct { const Recipe *r; Map *map; char (*predicate)[64]; char dir[256]; } Reading;
 static __thread long subject_cp = -1;                                  /* the codepoint the claim being read is about, when it is one */
 
 static int attr_named(TSNode tag, const uint8_t *src, const char *name, TSNode *val){
@@ -859,6 +897,8 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
                 uint8_t ts = 0; for (int i = 0; i < nsp; i++) if (sp[i].tier > ts) ts = sp[i].tier;
                 part[0] = nsp > 1 ? said_tuple(compose(sp, (uint32_t)nsp, (uint8_t)(ts + 1))) : sp[0];
             }
+            if (have[0] && b->subject_kind[0]) { const char *kd = !strcmp(b->subject_kind, "{dir}") ? rd->dir : b->subject_kind;
+                Ref kp[2] = { string_ref((const uint8_t *)kd, strlen(kd)), part[0] }; kp[1].said = 0; part[0] = said_tuple(compose(kp, 2, (uint8_t)((kp[0].tier > kp[1].tier ? kp[0].tier : kp[1].tier) + 1))); }
             if (!have[1] && rd->predicate[k][0]) { part[1] = string_ref((const uint8_t *)rd->predicate[k], strlen(rd->predicate[k])); have[1] = 1; }
             for (int a = 0; have[0] && a < cols[k].nattest; a++) {               /* columns that are each a predicate, by name */
                 int ci = cols[k].attest[a]; if (ci >= nc || !cell[ci].n) continue;
@@ -914,13 +954,13 @@ static const Map *map_from(const Recipe *r, int k){
         size_t n; uint8_t *src = read_all(b->from, &n); if (!src) { perror(b->from); fprintf(stderr, "%s: map %s cannot be read\n", r->name, b->name); exit(2); }
         if (!b->lang) {                                                         /* a table */
             char name[64][64]; int nn; memset(name, 0, sizeof name); size_t at = table_columns(src, n, b->separator ? b->separator : '\t', r->comment, !b->ncolumn, b->column, b->ncolumn, name, &nn);
-            Reading rd = { r, calloc((size_t)r->nblock, sizeof(Map)), NULL }; Cols *cols = cols_for(r, name, nn, k);
+            Reading rd = { r, calloc((size_t)r->nblock, sizeof(Map)), NULL, "" }; Cols *cols = cols_for(r, name, nn, k);
             table_rows(&rd, cols, name, 1, k, b->separator ? b->separator : '\t', r->comment, src, at, n, NULL);
             Map *m = malloc(sizeof *m); *m = rd.map[k]; b->cache = m; free(rd.map); free(cols); free(src);
         } else {
         TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, b->lang);
         TSTree *t = ts_parser_parse_string(ps, NULL, (const char *)src, (uint32_t)n);
-        Recipe whole = *r; whole.unit = r->unit; Reading rd = { &whole, calloc((size_t)r->nblock, sizeof(Map)), NULL };
+        Recipe whole = *r; whole.unit = r->unit; Reading rd = { &whole, calloc((size_t)r->nblock, sizeof(Map)), NULL, "" };
         TSQueryCursor *qc = ts_query_cursor_new(); uint8_t *buf = malloc(n + 4); ts_query_cursor_set_match_limit(qc, 1u << 14);
         TSTreeCursor cur = ts_tree_cursor_new(ts_tree_root_node(t));           /* its records, one at a time */
         if (ts_tree_cursor_goto_first_child(&cur)) do map_node(&rd, k, qc, ts_tree_cursor_current_node(&cur), src, buf); while (ts_tree_cursor_goto_next_sibling(&cur));
@@ -932,7 +972,7 @@ static const Map *map_from(const Recipe *r, int k){
     return b->cache;
 }
 static void attest_tree(const Recipe *r, const char *path, TSNode root, const uint8_t *src, size_t n, Events *ev, uint64_t *incomplete){
-    Reading rd = { r, calloc((size_t)(r->nblock ? r->nblock : 1), sizeof(Map)), calloc((size_t)(r->nblock ? r->nblock : 1), 64) }; int has_maps = 0;
+    Reading rd = { r, calloc((size_t)(r->nblock ? r->nblock : 1), sizeof(Map)), calloc((size_t)(r->nblock ? r->nblock : 1), 64), "" }; int has_maps = 0;
     const char *base = strrchr(path, '/'); base = base ? base + 1 : path;
     for (int k = 0; k < r->nblock; k++) {
         const Block *b = &r->block[k]; snprintf(rd.predicate[k], 64, "%s", b->predicate);
@@ -950,7 +990,8 @@ static void attest_tree(const Recipe *r, const char *path, TSNode root, const ui
 }
 
 static void attest_table(const Recipe *r, const char *path, const uint8_t *src, size_t n, Events *ev){
-    Reading rd = { r, calloc((size_t)(r->nblock ? r->nblock : 1), sizeof(Map)), calloc((size_t)(r->nblock ? r->nblock : 1), 64) }; int has_maps = 0;
+    Reading rd = { r, calloc((size_t)(r->nblock ? r->nblock : 1), sizeof(Map)), calloc((size_t)(r->nblock ? r->nblock : 1), 64), "" }; int has_maps = 0;
+    dir_of(path, rd.dir, sizeof rd.dir);
     const char *base = strrchr(path, '/'); base = base ? base + 1 : path;
     for (int k = 0; k < r->nblock; k++) {
         const Block *b = &r->block[k]; snprintf(rd.predicate[k], 64, "%s", b->predicate);
@@ -987,6 +1028,10 @@ static uint8_t *read_all(const char *path, size_t *n){
     uint8_t *b = malloc(m + 1); if (fread(b, 1, m, fp) != m) { fclose(fp); free(b); return NULL; }
     fclose(fp); *n = m; return b;
 }
+void dir_of(const char *path, char *out, size_t cap){
+    const char *e = strrchr(path, '/'), *s = e; while (s && s > path && s[-1] != '/') s--;
+    snprintf(out, cap, "%.*s", e ? (int)(e - s) : 0, e ? s : "");
+}
 /* A witness's name, with {dir} as the directory the file is in. */
 static void named_for(const char *name, const char *path, const uint8_t *src, size_t n, char *out, size_t cap){
     const char *fa = strstr(name, "{first ");
@@ -995,6 +1040,11 @@ static void named_for(const char *name, const char *path, const uint8_t *src, si
         const uint8_t *v = fe ? memmem(src, n, key, (size_t)kl) : NULL, *q = v ? memchr(v + kl, '"', n - (size_t)(v + kl - src)) : NULL;
         uint8_t val[400]; size_t vl = 0; if (q && (size_t)(q - v - kl) < 200) vl = xml_unescape(v + kl, (size_t)(q - v - kl), val);
         snprintf(out, cap, "%.*s%.*s%s", (int)(fa - name), name, (int)vl, (const char *)val, fe ? fe + 1 : ""); return;
+    }
+    const char *nm = strstr(name, "{name}");
+    if (nm) {                                                              /* the file's own name, without what follows its last dot */
+        const char *b = strrchr(path, '/'); b = b ? b + 1 : path; const char *d = strrchr(b, '.'); size_t l = d && d > b ? (size_t)(d - b) : strlen(b);
+        snprintf(out, cap, "%.*s%.*s%s", (int)(nm - name), name, (int)l, b, nm + 6); return;
     }
     const char *at = strstr(name, "{dir}"); if (!at) { snprintf(out, cap, "%s", name); return; }
     const char *e = strrchr(path, '/'), *s = e; while (s && s > path && s[-1] != '/') s--;
