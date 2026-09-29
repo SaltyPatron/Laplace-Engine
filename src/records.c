@@ -293,9 +293,10 @@ void attest_lines(const Recipe *r, File *f, const uint8_t *src, size_t n){
         memcpy(ln, src + at, l); ln[l] = 0;
         if (!pass) { if (!has_about && r->about_re && !regexec(r->about_re, ln, 2, m, 0) && m[1].rm_so >= 0 && m[1].rm_eo > m[1].rm_so) { about = string_ref((const uint8_t *)ln + m[1].rm_so, (size_t)(m[1].rm_eo - m[1].rm_so)); has_about = 1; } at = next; if (has_about) break; continue; }
         for (int k = 0; k < r->nblock; k++) { const Block *b = &r->block[k]; if (b->is_map || !b->line_re || regexec(b->line_re, ln, 5, m, 0)) continue;
-            Ref part[4]; int np = 0; for (int g = 1; g < 5 && np < 4; g++) if (m[g].rm_so >= 0 && m[g].rm_eo > m[g].rm_so) { size_t gl = (size_t)(m[g].rm_eo - m[g].rm_so); part[np++] = gl > 256 ? text_ref(CTX[omp_get_thread_num()], (const uint8_t *)ln + m[g].rm_so, gl) : string_ref((const uint8_t *)ln + m[g].rm_so, gl); }
+            Ref part[4]; int np = 0; for (int g = 1; g < 5 && np < 4; g++) if (m[g].rm_so >= 0 && m[g].rm_eo > m[g].rm_so) { size_t gl = (size_t)(m[g].rm_eo - m[g].rm_so); part[np++] = r->path_sep && ln[m[g].rm_so] == r->path_sep ? path_ref((const uint8_t *)ln + m[g].rm_so, gl, r->path_sep, r->path_join) : gl > 256 ? text_ref(CTX[omp_get_thread_num()], (const uint8_t *)ln + m[g].rm_so, gl) : string_ref((const uint8_t *)ln + m[g].rm_so, gl); }
             Ref t[4]; int nt = 0;
-            if (np == 2 && !b->pair) { if (!has_about) continue; t[nt++] = about; t[nt++] = part[0]; t[nt++] = part[1]; }
+            if (np == 2 && b->predicate[0]) { t[nt++] = part[0]; t[nt++] = string_ref((const uint8_t *)b->predicate, strlen(b->predicate)); t[nt++] = part[1]; }
+            else if (np == 2 && !b->pair) { if (!has_about) continue; t[nt++] = about; t[nt++] = part[0]; t[nt++] = part[1]; }
             else if (np >= 2) { for (int i = 0; i < np; i++) t[nt++] = part[i]; }
             else continue;
             Ref c = said_claim(compose(t, (uint32_t)nt, tier_over(t, (size_t)nt))); Event x = { c.id, c.id, 1.0f, b->enter_rating, b->enter_deviation, 0, EV_CLAIM }; ev_push(&f->ev, &x); }
