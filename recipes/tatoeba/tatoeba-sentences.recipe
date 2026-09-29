@@ -1,5 +1,4 @@
 name tatoeba-sentences
-witness Tatoeba
 # Tatoeba's sentences: each row gives a sentence's Tatoeba number, its language (ISO 639-3) and its text. A curated
 # source: what is recorded is each sentence, as content, and the claim [sentence, lang, code] it attests.
 match sentences.csv

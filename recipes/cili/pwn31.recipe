@@ -1,0 +1,11 @@
+name ili-map-pwn31
+# The index's map to Princeton WordNet 3.1: which synset each concept is. Part of the highway between resources.
+match ili-map-pwn31.tab
+grammar table
+columns ili synset
+
+claims
+predicate Princeton WordNet 3.1
+enter 1500 250
+subject in ili
+object in synset

@@ -104,11 +104,12 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
 typedef struct { lp_id id; lp_rating r; uint32_t matches; uint8_t had; } Standing;
 static Standing *stand; static uint32_t *smap; static uint64_t scap, sn;
 static uint64_t skey(const lp_id *id){ uint64_t k; memcpy(&k, id->b + 4, 8); return k; }
-static Standing *stand_get(const lp_id *id, int add){
+static Standing *stand_get(const lp_id *id, const Event *add){
     uint64_t k = skey(id) & (scap - 1);
     while (smap[k]) { Standing *s = &stand[smap[k] - 1]; if (!memcmp(&s->id, id, 16)) return s; k = (k + 1) & (scap - 1); }
     if (!add) return NULL;
-    stand[sn] = (Standing){ *id, { 1500.0, 350.0, 0.06 }, 0, 0 }; smap[k] = (uint32_t)++sn; return &stand[sn - 1];
+    stand[sn] = (Standing){ *id, { add->enter_rating, add->enter_deviation, 0.06 }, 0, 0 };     /* the stock default for its level of attestation */
+    smap[k] = (uint32_t)++sn; return &stand[sn - 1];
 }
 
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
@@ -170,7 +171,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     t = now(); uint64_t nev = 0; for (int fi = 0; fi < nfiles; fi++) nev += files[fi].ev.n;
     if (nev) {
         scap = 1; while (scap < nev * 2) scap <<= 1; smap = calloc(scap, 4); stand = malloc(sizeof(Standing) * (nev + 1)); sn = 0;
-        for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) stand_get(&files[fi].ev.e[i].claim, 1);
+        for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) stand_get(&files[fi].ev.e[i].claim, &files[fi].ev.e[i]);
         /* claims already recorded start from their recorded standing */
         lp_id *old = malloc(sizeof(lp_id) * (sn + 1)); uint64_t nold = 0;
         for (uint64_t i = 0; i < sn; i++) { Node *x = table_find(&stand[i].id); if (!x || x->keep != 1) old[nold++] = stand[i].id; }
@@ -184,7 +185,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "standing: %s", PQerrorMessage(c)); exit(1); }
             #pragma omp critical
             for (int j = 0; j < PQntuples(q); j++) {
-                lp_id id; memcpy(id.b, PQgetvalue(q, j, 0), 16); Standing *s = stand_get(&id, 0); if (!s) continue;
+                lp_id id; memcpy(id.b, PQgetvalue(q, j, 0), 16); Standing *s = stand_get(&id, NULL); if (!s) continue;
                 double d[3]; for (int z = 0; z < 3; z++) { uint64_t u = 0; const uint8_t *b = (const uint8_t *)PQgetvalue(q, j, 1 + z); for (int y = 0; y < 8; y++) u = u << 8 | b[y]; memcpy(&d[z], &u, 8); }
                 const uint8_t *mb = (const uint8_t *)PQgetvalue(q, j, 4);
                 s->r = (lp_rating){ d[0], d[1], d[2] }; s->matches = (uint32_t)mb[0] << 24 | mb[1] << 16 | mb[2] << 8 | mb[3]; s->had = 1;
@@ -227,26 +228,42 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
                 }
                 if (played) continue;
                 seen[k].used = 1; seen[k].claim = *claim; seen[k].lin = *lin;
-                Standing *s = stand_get(claim, 0);
-                lp_attest(&s->r, rc->trust, files[fi].ev.e[i].score, 1500.0, 0.5, 0.0); s->matches++;
+                Standing *s = stand_get(claim, NULL);
+                lp_attest(&s->r, rc->trust, files[fi].ev.e[i].score, 1500.0, 0.5, 30.0); s->matches++;
             }
         }
         free(seen);
         Copy c = { 0 };
-        copy_begin(&c, pg[0], "COPY witness (id, lineage, trust) FROM STDIN (FORMAT binary)");
+        /* witnesses: each once, and only those the database does not know yet */
+        lp_id *wid = malloc(sizeof(lp_id) * (size_t)nfiles); int *wfile = malloc(sizeof(int) * (size_t)nfiles), nw = 0;
         for (int fi = 0; fi < nfiles; fi++) if (files[fi].ev.n) {
+            int k = 0; while (k < nw && memcmp(&wid[k], &files[fi].witness.id, 16)) k++;
+            if (k == nw) { wid[nw] = files[fi].witness.id; wfile[nw++] = fi; }
+        }
+        uint8_t *known = calloc((size_t)(nw ? nw : 1), 1);
+        { uint8_t *ab = malloc(20 + 20 * (size_t)nw); size_t len = uuid_param(ab, wid, (uint32_t)nw);
+          const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
+          PGresult *q = PQexecParams(pg[0], "SELECT id FROM witness WHERE id = ANY($1::uuid[])", 1, NULL, v, l, f, 1);
+          if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg[0])); return 1; }
+          for (int j = 0; j < PQntuples(q); j++) for (int k = 0; k < nw; k++) if (!memcmp(wid[k].b, PQgetvalue(q, j, 0), 16)) known[k] = 1;
+          PQclear(q); free(ab); }
+        copy_begin(&c, pg[0], "COPY witness (id, lineage, trust) FROM STDIN (FORMAT binary)");
+        for (int k = 0; k < nw; k++) if (!known[k]) {
+            int fi = wfile[k];
             c16(&c, 3); cfield(&c, files[fi].witness.id.b, 16);
             if (files[fi].has_lineage) cfield(&c, files[fi].lineage.id.b, 16); else c32(&c, 0xFFFFFFFFu);
             cf_f64(&c, files[fi].recipe->trust);
         }
-        copy_end(&c);
+        copy_end(&c); free(wid); free(wfile); free(known);
         #pragma omp parallel for num_threads(npg) schedule(static, 1)
         for (int w = 0; w < npg; w++) {                                          /* the ledger, split across connections */
             Copy lc = { 0 }; uint64_t k = 0;
-            copy_begin(&lc, pg[w], "COPY attestation (claim, witness, score) FROM STDIN (FORMAT binary)");
+            copy_begin(&lc, pg[w], "COPY attestation (claim, witness, score, position) FROM STDIN (FORMAT binary)");
             for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++, k++) {
                 if (k % (uint64_t)npg != (uint64_t)w) continue;
-                c16(&lc, 3); cfield(&lc, files[fi].ev.e[i].claim.b, 16); cfield(&lc, files[fi].witness.id.b, 16); cf_f32(&lc, files[fi].ev.e[i].score); lc.rows++;
+                c16(&lc, 4); cfield(&lc, files[fi].ev.e[i].claim.b, 16); cfield(&lc, files[fi].witness.id.b, 16); cf_f32(&lc, files[fi].ev.e[i].score);
+                if (files[fi].ev.e[i].position) cf_i32(&lc, (int32_t)files[fi].ev.e[i].position); else c32(&lc, 0xFFFFFFFFu);
+                lc.rows++;
             }
             copy_end(&lc);
             #pragma omp atomic

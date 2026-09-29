@@ -47,7 +47,10 @@ int cmd_deploy(int argc, char **argv){
     if (!run(pg, "ALTER EXTENSION laplace UPDATE", "laplace extension at its newest version")) return 1;
     { char q[4400], *esc = PQescapeLiteral(pg, lp_tier0_path(), strlen(lp_tier0_path())), *db = PQescapeIdentifier(pg, PQdb(pg), strlen(PQdb(pg)));
       snprintf(q, sizeof q, "ALTER DATABASE %s SET laplace.tier0 = %s", db, esc); if (!run(pg, q, "the database's tier 0")) return 1;
-      snprintf(q, sizeof q, "SET laplace.tier0 = %s", esc); PQclear(PQexec(pg, q)); PQfreemem(esc); PQfreemem(db); }
+      snprintf(q, sizeof q, "SET laplace.tier0 = %s", esc); PQclear(PQexec(pg, q)); PQfreemem(esc);
+      esc = PQescapeLiteral(pg, lp_flags_path(), strlen(lp_flags_path()));
+      snprintf(q, sizeof q, "ALTER DATABASE %s SET laplace.flags = %s", db, esc); if (!run(pg, q, "the flags that go with it")) return 1;
+      PQfreemem(esc); PQfreemem(db); }
     char *have = one(pg, "SELECT 1 FROM pg_class WHERE relname = 'entity' AND relkind = 'p'");
     if (have) printf("  %-52s %9s\n", "content schema", "present"); else { char *s = sql_file("schema.sql"); if (!run(pg, s, "content schema: entity, physicality, source")) return 1; free(s); }
     free(have);
@@ -104,5 +107,24 @@ int cmd_status(int argc, char **argv){
     if (PQresultStatus(r) == PGRES_TUPLES_OK) printf("\nindexes    container (GIN) %s, 4D (GiST) %s, of %s on entity and physicality\n", PQgetvalue(r, 0, 0), PQgetvalue(r, 0, 1), PQgetvalue(r, 0, 2));
     PQclear(r);
     free(ver); free(isa); free(t0); free(fp); free(size); free(srv); PQfinish(pg);
+    return 0;
+}
+
+/* laplace sources: the sources there are recipes for, in the order they go in, where each is, and whether it is in. */
+int cmd_sources(int argc, char **argv){
+    PGconn *pg = db_connect(conn_arg(argc, argv));
+    Recipe *rec = NULL; int nrec = recipes_load(laplace_recipes(), &rec), n; Source *s = sources_loaded(&n);
+    printf("%-4s %-28s %-8s %-9s %s\n", "", "source", "recipes", "in", "kept at");
+    for (int i = 0; i < n; i++) {
+        int mine = 0, in = 0;
+        for (int k = 0; k < nrec; k++) if (rec[k].source == i) {
+            mine++; const char *v[1] = { rec[k].name };
+            PGresult *r = PQexecParams(pg, "SELECT 1 FROM source WHERE format = $1 LIMIT 1", 1, NULL, v, NULL, NULL, 0);
+            in += PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) > 0; PQclear(r);
+        }
+        printf("%-4d %-28s %-8d %-9s %s\n", i + 1, s[i].name, mine, in ? "yes" : "no", s[i].found[0] ? s[i].found : "(not at any of its roots)");
+        if (s[i].nafter) { printf("     %-28s after", ""); for (int a = 0; a < s[i].nafter; a++) printf(" %s", s[i].after[a]); printf("\n"); }
+    }
+    PQfinish(pg);
     return 0;
 }

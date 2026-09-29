@@ -1,0 +1,14 @@
+name ili
+# The index itself: every concept with its definition. [ILI, definition, text]. Whether an identifier is a concept or
+# an instance is enumerated by the index: a flag, not a claim.
+match ili.ttl
+grammar turtle
+
+claims
+predicate definition
+enter 1500 250
+query
+((triple (subject (iri_reference) @subject.iri)
+   (property_list (property (predicate (prefixed_name (pn_local) @_p)) (object_list (rdf_literal (string) @object.text)))))
+ (#eq? @_p "definition") (#match? @subject.iri "^<i[0-9]+>$"))
+end

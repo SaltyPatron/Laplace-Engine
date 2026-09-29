@@ -12,7 +12,11 @@ Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github
 | `laplace index` | builds the container (GIN) and 4D (GiST) indexes after a bulk load |
 | `laplace text text` | a text's ID, tier, coordinate and constituents, computed here without the database |
 | `laplace hop text` | everything attested about an entity, by how hard each strand tugs back, and the content that holds it |
-| `laplace pull from [to]` | fans out from an entity over rated claims, or finds the chain between two |
+| `laplace hop subject predicate object` | the claims that hold the given parts in their places, with `?` for a part left open |
+| `laplace translate word from to...` | a word up to its concepts and down into other languages, two lookups |
+| `laplace degrees from [to]` | how far one entity is from another over rated claims, or what is nearest one |
+| `laplace forget witness` | what one witness attested, taken back out, and whatever nothing holds any more with it |
+| `laplace sweep` | whatever nothing holds, removed |
 | `laplace fills phrase` | what follows a phrase, counted across every source |
 | `laplace status` | what a database holds, and whether its tier 0 is this engine's |
 | `laplace tree file` | a file's syntax tree as its recipe's grammar reads it, for writing recipes |
@@ -33,6 +37,6 @@ The three repositories sit side by side under one source root. Build trees go to
 
 ## Recipes
 
-A recipe says how a kind of file decomposes and what it attests. `recipes/*.recipe`; the format is described at the top of `src/recipe.c`. A recipe with a query is a curated source: what is recorded is the claims it attests and the entities they relate.
+A recipe says how a kind of file decomposes and what it attests. `recipes/*.recipe`; the format is described at the top of `src/recipe.c`. A recipe with a query is a curated source: what is recorded is the claims it attests and the entities they are about, never the file's own identifiers. A `map` binds the source's identifiers to what they stand for, and each kind of claim says the stock default it enters at.
 
 Queries run inside the parts of a file's syntax tree no larger than the recipe's `unit`, in reading order. A pattern should name a record's parts by position (anchors), not pair any two siblings: tree-sitter checks text predicates after it has matched structure, so pairing siblings costs the square of their number. When a unit holds more partial matches than a query keeps, ingestion says so.

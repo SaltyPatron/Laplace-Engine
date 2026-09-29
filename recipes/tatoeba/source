@@ -1,0 +1,5 @@
+name tatoeba
+witness Tatoeba
+root $LAPLACE_DATA/.refresh-*/Tatoeba
+root $LAPLACE_DATA/Tatoeba
+after iso-639

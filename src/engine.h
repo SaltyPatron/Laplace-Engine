@@ -24,13 +24,18 @@ PGconn *db_connect(const char *conninfo);            /* exits with the server's 
 int cmd_ingest(int argc, char **argv);
 int cmd_fills(int argc, char **argv);
 int cmd_hop(int argc, char **argv);
-int cmd_pull(int argc, char **argv);
+int cmd_translate(int argc, char **argv);
+int cmd_degrees(int argc, char **argv);
 int cmd_text(int argc, char **argv);
 int cmd_tree(int argc, char **argv);
 int cmd_deploy(int argc, char **argv);
 int cmd_index(int argc, char **argv);
+int cmd_forget(int argc, char **argv);
+int cmd_sweep(int argc, char **argv);
 int cmd_status(int argc, char **argv);
+int cmd_sources(int argc, char **argv);
 int cmd_tier0(int argc, char **argv);
+int cmd_flags(int argc, char **argv);
 int cmd_bench(int argc, char **argv);
 int cmd_model(int argc, char **argv);
 
@@ -69,6 +74,25 @@ Ref    vocabulary_ref(Ctx *, const uint8_t *src, size_t n, uint64_t *tokens, uin
 /* ---- recipes */
 typedef struct TSLanguage TSLanguage;
 typedef struct TSQuery TSQuery;
+typedef struct { uint8_t role; char from[64], to[64]; } Say;        /* a part's text as the source writes it, and as it is said */
+/* A block of a recipe's patterns: a map (key to value, read before anything is attested), or the claims one kind of
+ * statement attests, with the stock default such claims enter at. */
+typedef struct {
+    int is_map; char name[32];
+    char predicate[64];                               /* the claims' predicate, when the source states it by position */
+    float enter_rating, enter_deviation;             /* the stock default for this level of attestation */
+    int ordered, distinct;                            /* record each claim's position in its record; subject and object differ */
+    char spaces[5];                                   /* per part: a character the source writes for a space */
+    Say *say; int nsay;
+    Say *ending; int nending;                         /* per part: an ending the source writes, and the one it stands for */
+    char name_after, name_before;                     /* the predicate is in the file's name, between these two characters */
+    char from[512]; const TSLanguage *lang;           /* a map read from another file, with that file's grammar */
+    void *cache;                                      /* that map, read once */
+    char in[5][96];                                   /* in a table: the column each part is in (subject, predicate, object, key, value), with its resolvers */
+    struct { char col[64]; int op; char val[128]; void *re; } where[8]; int nwhere;   /* in a table: the rows it speaks of */
+    char column[64][64]; int ncolumn; char separator; /* a map kept in another table: its columns */
+    char *query_src; TSQuery *query;
+} Block;
 typedef struct {
     char name[64];
     char match[16][128]; int nmatch;                 /* filename globs */
@@ -77,17 +101,34 @@ typedef struct {
     double trust;                                    /* the witness's trust, -1 .. 1 */
     int records;
     uint32_t unit;                                   /* queries run inside parts of the tree no larger than this */
+    char itself;                                      /* a character that, in an object, stands for the subject's codepoint */
+    char separator, comment; int header;              /* a table: what parts its fields, what begins a line that is not a row, whether its first row names its columns */
+    char column[64][64]; int ncolumn;                 /* a table's columns, when no row names them */
     char predicate[64];
     char witness[128];                                /* the witness's name, recorded as content */
     char lineage[128];                                /* the witness this one derives from; copies of it are one consensus */
     char subject_attr[3][48];                         /* subject from a sibling attribute: codepoint, first, last */
-    char *query_src; TSQuery *query;                  /* captures: subject, predicate, object; suffix .cp .text .xml .node */
+    int source;                                       /* the source it belongs to, or -1: a format any file may be read as */
+    TSQuery *query;                                   /* set when the recipe attests: a curated source */
+    Block *block; int nblock;
 } Recipe;
+/* A source: a body of content with one identity, however many files it comes in. Its recipes say how each kind of
+ * its files reads; the source says who the witness is, where the source is kept, and which sources it comes after. */
+typedef struct {
+    char name[64];
+    char witness[128], lineage[128]; double trust;
+    char root[8][512]; int nroot;                     /* where it may be kept: the first that exists, newest of a pattern */
+    char after[16][64]; int nafter;                   /* the sources it comes after */
+    char except[8][128]; int nexcept;                 /* files of its roots that are not the source */
+    char reads[8][64]; int nreads;                    /* formats its files are read as (recipes that belong to no source) */
+    char found[1024];                                 /* where it is */
+} Source;
 int     recipes_load(const char *dir, Recipe **out);
-Recipe *recipe_for(Recipe *r, int n, const char *path);
+Source *sources_loaded(int *n);                                       /* in the order they go in */
+Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of);   /* of: among that source's recipes only */
 
 /* ---- attestation events, in reading order within each file */
-typedef struct { lp_id claim; float score; } Event;
+typedef struct { lp_id claim; float score, enter_rating, enter_deviation; uint32_t position; } Event;
 typedef struct { Event *e; uint64_t n, cap; } Events;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */

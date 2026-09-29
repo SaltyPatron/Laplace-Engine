@@ -31,8 +31,11 @@ static int expand(const lp_id *id, Buf *o){
 }
 
 /* Directories are walked for every file under them. */
-static char **paths; static int npaths, cpaths;
-static void add_path(const char *p){ if (npaths == cpaths) { cpaths = cpaths ? cpaths * 2 : 1024; paths = xrealloc(paths, sizeof(char *) * cpaths); } paths[npaths++] = strdup(p); }
+static char **paths; static const Source **path_of; static int npaths, cpaths; static const Source *walking;
+static void add_path(const char *p){
+    if (npaths == cpaths) { cpaths = cpaths ? cpaths * 2 : 1024; paths = xrealloc(paths, sizeof(char *) * cpaths); path_of = xrealloc(path_of, sizeof(Source *) * cpaths); }
+    path_of[npaths] = walking; paths[npaths++] = strdup(p);
+}
 static int walk_cb(const char *p, const struct stat *st, int type, struct FTW *fw){
     const char *b = p + fw->base;
     if (type == FTW_D && b[0] == '.' && fw->level > 0) return FTW_SKIP_SUBTREE;          /* hidden directories */
@@ -53,7 +56,16 @@ int cmd_ingest(int argc, char **argv){
         else if (!strcmp(argv[a], "--claims")) { show_claims = 1; do_load = 0; }     /* what the recipes attest, as text; nothing is loaded */
         else { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] file...\n"); return 2; }
     }
-    for (int i = a; i < argc; i++) { struct stat st; if (!stat(argv[i], &st) && S_ISDIR(st.st_mode)) nftw(argv[i], walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL); else add_path(argv[i]); }
+    Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec), nsrc; Source *src = sources_loaded(&nsrc);
+    for (int i = a; i < argc; i++) {                                         /* a source by its name, or files and directories */
+        struct stat st; int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++;
+        if (k < nsrc && stat(argv[i], &st)) {
+            if (!src[k].found[0]) { fprintf(stderr, "source %s is not at any of its roots\n", src[k].name); return 1; }
+            walking = &src[k]; nftw(src[k].found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL); walking = NULL;
+        }
+        else if (!stat(argv[i], &st) && S_ISDIR(st.st_mode)) nftw(argv[i], walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+        else add_path(argv[i]);
+    }
     int nfiles = npaths; if (nfiles <= 0) { fprintf(stderr, "no files\n"); return 2; }
     if (threads <= 0) threads = omp_get_num_procs();
     omp_set_num_threads(threads); omp_set_max_active_levels(1);
@@ -62,12 +74,16 @@ int cmd_ingest(int argc, char **argv){
 
     tier0_open(t0p);
     table_init();
-    Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec);
     printf("laplace ingest   %d threads   cpu: %s   dispatch: %s   %d recipes\n", threads, lp_cpu_describe(lp_cpu_features()), lp_cpu_describe(lp_cpu_active()), nrec);
 
     File *files = calloc(nfiles, sizeof(File));
     int uncovered = 0;
-    for (int i = 0; i < nfiles; i++) { files[i].path = paths[i]; files[i].recipe = recipe_for(rec, nrec, files[i].path); if (!files[i].recipe) { files[i].skipped = 1; uncovered++; } }
+    for (int i = 0; i < nfiles; i++) { files[i].path = paths[i]; files[i].recipe = recipe_for(rec, nrec, files[i].path, path_of[i]);
+                                       if (!files[i].recipe) { files[i].skipped = 1; uncovered += path_of[i] == NULL; } }     /* a source takes the files its recipes name */
+    /* a source's files, most trusted witness first; among equals, as they were found */
+    for (int i = 1; i < nfiles; i++) { File x = files[i]; int j = i;
+        while (j > 0 && path_of[i] && x.recipe && files[j - 1].recipe && x.recipe->trust > files[j - 1].recipe->trust) { files[j] = files[j - 1]; j--; }
+        files[j] = x; }
     if (uncovered) {                                                                  /* what no recipe covers yet, by extension */
         typedef struct { char ext[16]; int n; } Ext; Ext ex[512]; int ne = 0;
         for (int i = 0; i < nfiles; i++) if (!files[i].recipe) {
@@ -93,7 +109,10 @@ int cmd_ingest(int argc, char **argv){
         while ((k = fread(buf, 1, sizeof buf, f))) blake3_hasher_update(&h, buf, k);
         fclose(f); blake3_hasher_finalize(&h, files[i].sha, 32);
     }
-    int nknown = 0;
+    int nknown = 0, nsame = 0;
+    for (int i = 0; i < nfiles; i++) if (!files[i].skipped)                        /* the same bytes twice among these files: once */
+        for (int j = 0; j < i; j++) if (!files[j].skipped && !memcmp(files[i].sha, files[j].sha, 32)) { files[i].skipped = 1; nsame++; break; }
+    if (nsame) printf("files that are the same bytes as another of these: %d\n", nsame);
     if (do_load) {
         PGconn *pg = db_connect(conninfo);
         uint8_t *ab = malloc(20 + 36 * (size_t)nfiles), *q = ab + 20;

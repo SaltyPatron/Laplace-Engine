@@ -1,0 +1,36 @@
+name omw-wiktionary
+witness Open Multilingual Wordnet: Wiktionary-derived
+lineage Wiktionary
+# Open Multilingual Wordnet data derived from Wiktionary: rows of a WordNet 3.0 synset, what the row gives, and the lemma. A curated source:
+# each lemma row attests a lexicalization, [lemma, language, ILI], with the language as the predicate. The synset is
+# recorded as the concept it stands for, through CILI's map; a row whose synset has no ILI attests nothing.
+match wn-wikt-*.tab
+grammar table
+columns synset kind lemma
+comment #
+# Derived from Wiktionary by alignment, not built by experts. It plays with a deviation of 160.
+deviation 160
+
+map ili from $LAPLACE_DATA/.refresh-*/CILI/extracted/ili-map-pwn30.tab table
+columns ili synset
+key in synset
+value in ili
+end
+
+# the row says its language
+claims
+enter 1500 350
+ending object -s -a
+subject in lemma
+predicate in kind.head
+object in synset.ili
+where kind matches :lemma$
+
+# the file's name says its language
+claims
+predicate-in-name - .
+enter 1500 350
+ending object -s -a
+subject in lemma
+object in synset.ili
+where kind is lemma

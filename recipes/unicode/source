@@ -1,0 +1,6 @@
+name unicode
+# The Unicode Standard's data: the character database, the collation table, the emoji data. The floor of everything.
+witness Unicode Character Database
+# The standard that defines these properties.
+trust 1.0
+root $LAPLACE_DATA/UCD/Public/UCD/latest

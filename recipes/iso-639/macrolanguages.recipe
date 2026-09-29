@@ -1,0 +1,10 @@
+name iso-639-3-macrolanguages
+# ISO 639-3's macrolanguage mappings: the individual languages each macrolanguage holds.
+match iso-639-3-macrolanguages.tab
+grammar table
+header
+
+claims
+predicate macrolanguage
+subject in I_Id
+object in M_Id

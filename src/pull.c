@@ -1,13 +1,16 @@
-/* The pull. An entity is named by its text and found by the ID computed here; everything attested about it is the
- * claims whose paths hold it, fetched through the container index with their standings, one set-based fetch per
- * step: O(log N) to find them, O(K) to read them. How hard a strand tugs back is its claim's confidence
- * (lp_confidence); crossing it costs lp_cost, so the cheapest chain between two entities is the one whose confidences
- * multiply to the most. The search itself is Laplace-Native's frontier. Nothing is brute-forced, and nothing here
- * changes a standing: querying reads scores, it does not move them.
+/* Reading the web of claims. An entity is named by its text and found by the ID computed here; everything attested
+ * about it is the claims whose paths hold it, fetched through the container index with their standings, one set-based
+ * fetch per step: O(log N) to find them, O(K) to read them. How hard a strand tugs back is its claim's confidence.
+ * Nothing here changes a standing: querying reads scores, it does not move them.
+ *
+ * This is not yet the forward pass. It is the lookups the forward pass is made of: what is attested about an entity
+ * (hop), a claim with a part left open (hop a b ?), a word up to its concepts and down into another language
+ * (translate), and how far one entity is from another (degrees).
  *
  *   laplace text  text
- *   laplace hop   [-d conninfo] [-n N] [--fan K] text
- *   laplace pull  [-d conninfo] [-n N] [--hops H] [--fan K] [--batch B] [--k K] [--per-hop C] from [to] */
+ *   laplace hop   [-d conninfo] [-n N] [--fan K] text | subject predicate object (? for a part left open)
+ *   laplace translate [-d conninfo] [-n N] word from to...
+ *   laplace degrees [-d conninfo] [-n N] [--hops H] [--fan K] [--batch B] [--k K] [--per-hop C] from [to] */
 #include "engine.h"
 #include <arpa/inet.h>
 #include <math.h>
@@ -46,14 +49,16 @@ int cmd_text(int argc, char **argv){
 }
 
 /* ---- the claims that hold an entity */
-typedef struct { lp_id id, part[3]; int np; lp_rating r; int matches; double conf; } Claim;
+typedef struct { lp_id id, part[3]; int np; lp_rating r; int matches; double conf; int position; } Claim;
 
 static double be_f64(const char *p){ uint64_t u = 0; for (int i = 0; i < 8; i++) u = u << 8 | (uint8_t)p[i]; double d; memcpy(&d, &u, 8); return d; }
 static int claim_by_conf(const void *a, const void *b){ double x = ((const Claim *)a)->conf, y = ((const Claim *)b)->conf; return x < y ? 1 : x > y ? -1 : memcmp(a, b, 16); }
 
-/* At most fan claims; *capped says there were more. k: how many deviations below its rating a claim is read at. */
-static Claim *claims_of(PGconn *pg, const lp_id *e, int fan, double k, int *n, int *capped){
-    uint8_t ab[40]; size_t al = uuid_param(ab, e, 1); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
+/* The claims that hold the given parts in their places (a part not given is open): at most fan of them; *capped says
+ * there were more. k: how many deviations below its rating a claim is read at. */
+static Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, double k, int *n, int *capped){
+    lp_id keys[3]; uint32_t nk = 0; for (int i = 0; i < 3; i++) if (have[i]) keys[nk++] = part[i];
+    uint8_t ab[80]; size_t al = uuid_param(ab, keys, nk); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
     const char *v[2] = { (const char *)ab, lim }; int l[2] = { (int)al, 0 }, f[2] = { 1, 0 };
     PGresult *q = PQexecParams(pg,
         "SELECT p.entity, p.path, s.rating, s.deviation, s.volatility, s.matches FROM physicality p JOIN standing s ON s.claim = p.entity "
@@ -62,13 +67,15 @@ static Claim *claims_of(PGconn *pg, const lp_id *e, int fan, double k, int *n, i
     int rows = PQntuples(q); *capped = rows > fan; if (rows > fan) rows = fan;
     Claim *c = malloc(sizeof(Claim) * (size_t)(rows ? rows : 1)); int m = 0;
     for (int j = 0; j < rows; j++) {
-        Claim *x = &c[m]; memcpy(x->id.b, PQgetvalue(q, j, 0), 16); x->np = 0;
+        Claim *x = &c[m]; memcpy(x->id.b, PQgetvalue(q, j, 0), 16); x->np = 0; x->position = 0;
         const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1), &vx);
         for (size_t i = 0; i < nv; i++) {
             double xyz[3], run; memcpy(xyz, vx + 32 * i, 24); memcpy(&run, vx + 32 * i + 24, 8); lp_id id; lp_xyz_to_id(xyz, &id);
             for (int r = 0; r < (run < 1 ? 1 : (int)run) && x->np < 3; r++) x->part[x->np++] = id;
         }
         if (x->np != 3) continue;                                            /* a claim is subject, predicate, object */
+        int fits = 1; for (int i = 0; i < 3; i++) if (have[i] > 1 && memcmp(&x->part[i], &part[i], 16)) fits = 0;   /* in its place */
+        if (!fits) continue;
         x->r = (lp_rating){ be_f64(PQgetvalue(q, j, 2)), be_f64(PQgetvalue(q, j, 3)), be_f64(PQgetvalue(q, j, 4)) };
         uint32_t mb; memcpy(&mb, PQgetvalue(q, j, 5), 4); x->matches = (int)ntohl(mb);
         x->conf = lp_confidence(&x->r, k); m++;
@@ -77,52 +84,122 @@ static Claim *claims_of(PGconn *pg, const lp_id *e, int fan, double k, int *n, i
     qsort(c, (size_t)m, sizeof(Claim), claim_by_conf);
     return c;
 }
+/* Every claim that holds an entity, wherever in it. */
+static Claim *claims_of(PGconn *pg, const lp_id *e, int fan, double k, int *n, int *capped){
+    lp_id part[3] = { *e, *e, *e }; int have[3] = { 1, 0, 0 };
+    return claims_like(pg, part, have, fan, k, n, capped);
+}
+/* The position each claim was given by the witnesses that gave one: the least, as recorded in the ledger. */
+static void positions_of(PGconn *pg, Claim *c, int n){
+    if (!n) return;
+    lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) ids[i] = c[i].id;
+    uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = uuid_param(ab, ids, (uint32_t)n);
+    const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+    PGresult *q = PQexecParams(pg, "SELECT claim, position FROM attestation WHERE claim = ANY($1::uuid[]) AND position IS NOT NULL", 1, NULL, v, l, f, 1);
+    if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "positions: %s", PQerrorMessage(pg)); exit(1); }
+    for (int j = 0; j < PQntuples(q); j++) {
+        uint32_t pb; memcpy(&pb, PQgetvalue(q, j, 1), 4); int pos = (int)ntohl(pb);
+        for (int i = 0; i < n; i++) if (!memcmp(c[i].id.b, PQgetvalue(q, j, 0), 16)) { if (!c[i].position || pos < c[i].position) c[i].position = pos; break; }
+    }
+    PQclear(q); free(ab); free(ids);
+}
+/* As given first, then by how hard the strand tugs back. */
+static int claim_by_position(const void *a, const void *b){
+    const Claim *x = a, *y = b; int px = x->position ? x->position : 1 << 30, py = y->position ? y->position : 1 << 30;
+    return px != py ? (px < py ? -1 : 1) : claim_by_conf(a, b);
+}
 
 int cmd_hop(int argc, char **argv){
     const char *conninfo = laplace_db(); int limit = 24, fan = 4096, a = 1; double k = 2.0;
-    for (; a < argc - 1 && argv[a][0] == '-'; a++) {
+    for (; a < argc - 1 && argv[a][0] == '-' && argv[a][1]; a++) {
         if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
         else if (!strcmp(argv[a], "-n") && a + 1 < argc) limit = atoi(argv[++a]);
         else if (!strcmp(argv[a], "--fan") && a + 1 < argc) fan = atoi(argv[++a]);
         else if (!strcmp(argv[a], "--k") && a + 1 < argc) k = atof(argv[++a]);
     }
-    if (a >= argc) { fprintf(stderr, "usage: laplace hop [-d conninfo] [-n N] [--fan K] [--k K] text\n"); return 2; }
-    double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0);
-    lp_ref e = named(c, argv[a], NULL, 0, NULL); show_ref("entity", &e);
-    PGconn *pg = db_connect(conninfo);
-
-    double t = now(); int n, capped; Claim *cl = claims_of(pg, &e.id, fan, k, &n, &capped); double t_claims = (now() - t) * 1000;
+    if (a >= argc || (argc - a != 1 && argc - a != 3)) {
+        fprintf(stderr, "usage: laplace hop [-d conninfo] [-n N] [--fan K] [--k K] text\n"
+                        "       laplace hop [...] subject predicate object      with ? for a part left open: laplace hop dog eng ?\n"); return 2; }
+    double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_connect(conninfo);
+    int n, capped, whole = argc - a == 1; Claim *cl; lp_ref e; double t;
+    if (whole) { e = named(c, argv[a], NULL, 0, NULL); show_ref("entity", &e); t = now(); cl = claims_of(pg, &e.id, fan, k, &n, &capped); }
+    else {
+        lp_id part[3]; int have[3];
+        for (int i = 0; i < 3; i++) { have[i] = strcmp(argv[a + i], "?") ? 2 : 0; if (have[i]) { lp_ref r = named(c, argv[a + i], NULL, 0, NULL); part[i] = r.id; show_ref(i == 0 ? "subject" : i == 1 ? "predicate" : "object", &r); } }
+        if (!have[0] && !have[1] && !have[2]) { fprintf(stderr, "every part is open\n"); return 2; }
+        t = now(); cl = claims_like(pg, part, have, fan, k, &n, &capped);
+    }
+    double t_claims = (now() - t) * 1000;
+    positions_of(pg, cl, n); if (!whole) qsort(cl, (size_t)n, sizeof(Claim), claim_by_position);
     Reader *rd = reader_new(pg);
     for (int i = 0; i < n && i < limit; i++) for (int p = 0; p < 3; p++) reader_want(rd, &cl[i].part[p]);
-    printf("\nattested: %d claim%s hold it%s\n", n, n == 1 ? "" : "s", capped ? " (more exist: raise --fan)" : "");
-    if (n) printf("%10s %8s %6s %8s   %s\n", "confidence", "rating", "dev", "matches", "claim");
+    printf("\nattested: %d claim%s%s\n", n, n == 1 ? "" : "s", capped ? " (more exist: raise --fan)" : "");
+    if (n) printf("%10s %8s %6s %8s %6s   %s\n", "confidence", "rating", "dev", "matches", "given", "claim");
     for (int i = 0; i < n && i < limit; i++) {
-        char *s = reader_text(rd, &cl[i].part[0], 48), *p = reader_text(rd, &cl[i].part[1], 32), *o = reader_text(rd, &cl[i].part[2], 72);
-        printf("%10.3f %8.0f %6.0f %8d   [%s, %s, %s]\n", cl[i].conf, cl[i].r.rating, cl[i].r.deviation, cl[i].matches, s, p, o);
+        char *s = reader_text(rd, &cl[i].part[0], 48), *p = reader_text(rd, &cl[i].part[1], 32), *o = reader_text(rd, &cl[i].part[2], 72), pos[16] = "";
+        if (cl[i].position) snprintf(pos, sizeof pos, "%d", cl[i].position);
+        printf("%10.3f %8.0f %6.0f %8d %6s   [%s, %s, %s]\n", cl[i].conf, cl[i].r.rating, cl[i].r.deviation, cl[i].matches, pos, s, p, o);
         free(s); free(p); free(o);
     }
+    if (!whole) { printf("\nclaims %.1f ms   %llu round trips for text   total %.1f ms\n", t_claims, (unsigned long long)reader_trips(rd), (now() - T) * 1000);
+                  free(cl); reader_free(rd); PQfinish(pg); return 0; }
 
     /* observed: the content that holds it, which is not claims */
     t = now(); uint8_t ab[40]; size_t al = uuid_param(ab, &e.id, 1);
     const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = PQexecParams(pg, "SELECT p.tier, count(*) FROM physicality p WHERE p.path @> $1::uuid[] "
-                                   "AND NOT EXISTS (SELECT 1 FROM standing s WHERE s.claim = p.entity) GROUP BY 1 ORDER BY 1", 1, NULL, v, l, f, 0);
+    PGresult *q = PQexecParams(pg, "SELECT p.tier FROM physicality p WHERE p.path @> $1::uuid[] "
+                                   "AND NOT EXISTS (SELECT 1 FROM standing s WHERE s.claim = p.entity)", 1, NULL, v, l, f, 1);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
-    printf("\nobserved: held by"); if (!PQntuples(q)) printf(" nothing recorded");
-    for (int j = 0; j < PQntuples(q); j++) printf("%s %s path%s of tier %s", j ? "," : "", PQgetvalue(q, j, 1), strcmp(PQgetvalue(q, j, 1), "1") ? "s" : "", PQgetvalue(q, j, 0));
-    printf("\n"); PQclear(q);
-    printf("\nclaims %.1f ms   containers %.1f ms   %llu round trips for text   total %.1f ms\n", t_claims, (now() - t) * 1000,
+    uint64_t by_tier[256] = { 0 }; int any = 0;
+    for (int j = 0; j < PQntuples(q); j++) { uint16_t tb; memcpy(&tb, PQgetvalue(q, j, 0), 2); by_tier[ntohs(tb) & 255]++; any = 1; }
+    PQclear(q);
+    printf("\nobserved: held by"); if (!any) printf(" nothing recorded");
+    for (int tr = 0, first = 1; tr < 256; tr++) if (by_tier[tr]) { printf("%s %llu path%s of tier %d", first ? "" : ",", (unsigned long long)by_tier[tr], by_tier[tr] == 1 ? "" : "s", tr); first = 0; }
+    printf("\n\nclaims %.1f ms   containers %.1f ms   %llu round trips for text   total %.1f ms\n", t_claims, (now() - t) * 1000,
            (unsigned long long)reader_trips(rd), (now() - T) * 1000);
     free(cl); reader_free(rd); PQfinish(pg);
     return 0;
 }
 
-/* ---- fan out, or the chain between two entities
+/* ---- translation through the ILI: a word bubbles up to its concepts and down into another language, two lookups
+ *   laplace translate [-d conninfo] [-n N] word from to...        laplace translate dog eng deu fra jpn */
+int cmd_translate(int argc, char **argv){
+    const char *conninfo = laplace_db(); int limit = 4, fan = 4096, a = 1; double k = 2.0;
+    for (; a < argc - 1 && argv[a][0] == '-' && argv[a][1]; a++) {
+        if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
+        else if (!strcmp(argv[a], "-n") && a + 1 < argc) limit = atoi(argv[++a]);
+    }
+    if (argc - a < 3) { fprintf(stderr, "usage: laplace translate [-d conninfo] [-n concepts] word from to...\n"); return 2; }
+    double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_connect(conninfo); Reader *rd = reader_new(pg);
+    lp_id word = named(c, argv[a], NULL, 0, NULL).id, from = named(c, argv[a + 1], NULL, 0, NULL).id, def = named(c, "definition", NULL, 0, NULL).id;
+    int n, capped; lp_id up[3] = { word, from, word }; int hu[3] = { 2, 2, 0 };
+    double t = now(); Claim *senses = claims_like(pg, up, hu, fan, k, &n, &capped); positions_of(pg, senses, n);
+    qsort(senses, (size_t)n, sizeof(Claim), claim_by_position); double t_up = (now() - t) * 1000, t_down = 0;
+    printf("%s, %s: %d concept%s, as given and then by standing (%.1f ms)\n", argv[a], argv[a + 1], n, n == 1 ? "" : "s", t_up);
+    for (int i = 0; i < n && i < limit; i++) {
+        lp_id ili = senses[i].part[2]; char *it = reader_text(rd, &ili, 24);
+        int nd, cd; lp_id dp[3] = { ili, def, ili }; int hd[3] = { 2, 2, 0 }; Claim *d = claims_like(pg, dp, hd, 64, k, &nd, &cd);
+        char *dt = nd ? reader_text(rd, &d[0].part[2], 96) : strdup("");
+        printf("\n  %-10s %4.0f \xC2\xB1 %-3.0f  %s\n", it, senses[i].r.rating, senses[i].r.deviation, dt); free(it); free(dt); free(d);
+        for (int g = a + 2; g < argc; g++) {
+            lp_id lang = named(c, argv[g], NULL, 0, NULL).id, dn[3] = { ili, lang, ili }; int hn[3] = { 0, 2, 2 }, nl, cl2;
+            t = now(); Claim *lex = claims_like(pg, dn, hn, fan, k, &nl, &cl2); t_down += (now() - t) * 1000;
+            printf("    %-6s", argv[g]);
+            for (int j = 0; j < nl && j < 8; j++) { char *w = reader_text(rd, &lex[j].part[0], 40); printf("%s%s %.0f\xC2\xB1%.0f", j ? ", " : " ", w, lex[j].r.rating, lex[j].r.deviation); free(w); }
+            if (!nl) printf(" (nothing attested)");
+            printf("\n"); free(lex);
+        }
+    }
+    printf("\nup %.1f ms   down %.1f ms   total %.1f ms\n", t_up, t_down, (now() - T) * 1000);
+    free(senses); reader_free(rd); PQfinish(pg);
+    return 0;
+}
+
+/* ---- degrees of separation: how far anything is from anything else
  * Best-first over claims, a batch of the nearest open entities per round trip: each entity in the batch gets its claims
- * through the container index, read at most fan + 1 of them. An entity that holds more than fan claims is a hub (a part
- * of speech, a language): it is reached, never crossed, because what passes through everything says nothing, and
- * fanning it out is not O(K). Between two entities the search runs from both ends and stops when no open strand can
- * beat the best chain found. */
+ * through the container index, read at most K (--fan) of them, which is what keeps a step O(K). An entity that holds
+ * more than K claims (a part of speech, a language) is reached and not read through. Between two entities the search
+ * runs from both ends and stops when no open strand can beat the best chain found. */
 typedef struct { lp_frontier *f; lp_id origin; } Side;
 typedef struct { uint64_t trips, expanded, claims, hubs; } Work;
 
@@ -200,7 +277,7 @@ static void show_chain(PGconn *pg, Reader *rd, const lp_id *chain, const lp_id *
 }
 static int by_cost(const void *a, const void *b){ double x = ((const lp_reached *)a)->cost, y = ((const lp_reached *)b)->cost; return x < y ? -1 : x > y; }
 
-int cmd_pull(int argc, char **argv){
+int cmd_degrees(int argc, char **argv){
     const char *conninfo = laplace_db(); int limit = 24, fan = 512, hops = 8, batch = 64, a = 1; double k = 2.0, per_hop = 0.05;
     for (; a < argc && argv[a][0] == '-' && argv[a][1]; a++) {
         if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
@@ -212,7 +289,7 @@ int cmd_pull(int argc, char **argv){
         else if (!strcmp(argv[a], "--per-hop") && a + 1 < argc) per_hop = atof(argv[++a]);
         else break;
     }
-    if (a >= argc || batch < 1) { fprintf(stderr, "usage: laplace pull [-d conninfo] [-n N] [--hops H] [--fan K] [--batch B] [--k K] [--per-hop C] from [to]\n"); return 2; }
+    if (a >= argc || batch < 1) { fprintf(stderr, "usage: laplace degrees [-d conninfo] [-n N] [--hops H] [--fan K] [--batch B] [--k K] [--per-hop C] from [to]\n"); return 2; }
     double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0);
     lp_ref from = named(c, argv[a], NULL, 0, NULL), to; int goal = a + 1 < argc;
     show_ref("from", &from); if (goal) { to = named(c, argv[a + 1], NULL, 0, NULL); show_ref("to", &to); }
@@ -235,7 +312,7 @@ int cmd_pull(int argc, char **argv){
         qsort(near, nn, sizeof *near, by_cost);
         printf("\n%10s %5s   %s\n", "confidence", "hops", "reached");
         for (size_t i = 0; i < nn && i < (size_t)limit; i++) { lp_id chain[66], via[66]; int n = chain_to(fw.f, &near[i].id, chain, via, 66); show_chain(pg, rd, chain, via, n, near[i].cost, per_hop); }
-        printf("\n%llu entities expanded in %llu round trips, %llu claims crossed, %zu entities reached, %llu hubs not crossed; search %.1f ms, total %.1f ms\n",
+        printf("\n%llu entities expanded in %llu round trips, %llu claims crossed, %zu entities reached, %llu not read through; search %.1f ms, total %.1f ms\n",
                (unsigned long long)w.expanded, (unsigned long long)w.trips, (unsigned long long)w.claims, lp_frontier_count(fw.f), (unsigned long long)w.hubs, t_search, (now() - T) * 1000);
         free(near);
     } else {
@@ -260,7 +337,7 @@ int cmd_pull(int argc, char **argv){
             for (int i = m - 2; i >= 0; i--) { chain[n] = back[i]; via[n] = bvia[i + 1]; n++; }
             printf("\n%10s %5s   %s\n", "confidence", "hops", "chain"); show_chain(pg, rd, chain, via, n, best, per_hop);
         }
-        printf("\n%llu entities expanded in %llu round trips, %llu claims crossed, %zu + %zu entities reached, %llu hubs not crossed; search %.1f ms, total %.1f ms\n",
+        printf("\n%llu entities expanded in %llu round trips, %llu claims crossed, %zu + %zu entities reached, %llu not read through; search %.1f ms, total %.1f ms\n",
                (unsigned long long)w.expanded, (unsigned long long)w.trips, (unsigned long long)w.claims, lp_frontier_count(fw.f), lp_frontier_count(bw.f),
                (unsigned long long)w.hubs, t_search, (now() - T) * 1000);
         lp_frontier_free(bw.f);
