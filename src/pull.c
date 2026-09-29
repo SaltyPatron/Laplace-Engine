@@ -166,37 +166,62 @@ int cmd_hop(int argc, char **argv){
     return 0;
 }
 
-/* ---- translation through the ILI: a word bubbles up to its concepts and down into another language, two lookups
- *   laplace translate [-d conninfo] [-n N] word from to...        laplace translate dog eng deu fra jpn */
+/* ---- translation through the ILI: a word bubbles up to its concepts and down into other languages, along the claims
+ * the wordnets make, in the names WN-LMF writes them with:
+ *   [word, Sense, sense]  [sense, synset, synset]  [synset, ili, ILI]  [lexicon, Synset, synset]  [lexicon, language, code]
+ *   laplace translate [-d conninfo] [-n N] word from to...        laplace translate dog en de fr ja */
+static Claim *one_open(PGconn *pg, Ctx *c, const lp_id *first, const char *middle, const lp_id *last, int fan, int *n){
+    lp_id p[3]; int h[3] = { first ? 2 : 0, 2, last ? 2 : 0 }, capped; if (first) p[0] = *first; if (last) p[2] = *last;
+    p[1] = named(c, middle, NULL, 0, NULL).id; return claims_like(pg, p, h, fan, 2.0, n, &capped);
+}
+typedef struct { lp_id lexicon; char code[24]; } Lang;
+static const char *language_of(PGconn *pg, Ctx *c, Reader *rd, const lp_id *synset, Lang **known, int *nknown){
+    int n; Claim *lx = one_open(pg, c, NULL, "Synset", synset, 8, &n); if (!n) { free(lx); return ""; }
+    lp_id lex = lx[0].part[0]; free(lx);
+    for (int i = 0; i < *nknown; i++) if (!memcmp(&(*known)[i].lexicon, &lex, 16)) return (*known)[i].code;
+    Claim *lg = one_open(pg, c, &lex, "language", NULL, 8, &n); *known = xrealloc(*known, sizeof(Lang) * (size_t)(*nknown + 1)); Lang *k = &(*known)[(*nknown)++]; k->lexicon = lex; k->code[0] = 0;
+    if (n) { char *t = reader_text(rd, &lg[0].part[lg[0].np - 1], 20); snprintf(k->code, sizeof k->code, "%s", t); free(t); }
+    free(lg); return k->code;
+}
 int cmd_translate(int argc, char **argv){
-    const char *conninfo = laplace_db(); int limit = 4, fan = 4096, a = 1; double k = 2.0;
+    const char *conninfo = laplace_db(); int limit = 4, fan = 4096, a = 1;
     for (; a < argc - 1 && argv[a][0] == '-' && argv[a][1]; a++) {
         if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
         else if (!strcmp(argv[a], "-n") && a + 1 < argc) limit = atoi(argv[++a]);
     }
-    if (argc - a < 3) { fprintf(stderr, "usage: laplace translate [-d conninfo] [-n concepts] word from to...\n"); return 2; }
+    if (argc - a < 3) { fprintf(stderr, "usage: laplace translate [-d conninfo] [-n concepts] word from to...\n       languages as the wordnets write them: en de fr ja\n"); return 2; }
     double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_connect(conninfo); Reader *rd = reader_new(pg);
-    lp_id word = named(c, argv[a], NULL, 0, NULL).id, from = named(c, argv[a + 1], NULL, 0, NULL).id, def = named(c, "definition", NULL, 0, NULL).id;
-    int n, capped; lp_id up[3] = { word, from, word }; int hu[3] = { 2, 2, 0 };
-    double t = now(); Claim *senses = claims_like(pg, up, hu, fan, k, &n, &capped); positions_of(pg, senses, n);
-    qsort(senses, (size_t)n, sizeof(Claim), claim_by_position); double t_up = (now() - t) * 1000, t_down = 0;
-    printf("%s, %s: %d concept%s, as given and then by standing (%.1f ms)\n", argv[a], argv[a + 1], n, n == 1 ? "" : "s", t_up);
-    for (int i = 0; i < n && i < limit; i++) {
-        lp_id ili = senses[i].part[2]; char *it = reader_text(rd, &ili, 24);
-        int nd, cd; lp_id dp[3] = { ili, def, ili }; int hd[3] = { 2, 2, 0 }; Claim *d = claims_like(pg, dp, hd, 64, k, &nd, &cd);
-        char *dt = nd ? reader_text(rd, &d[0].part[2], 96) : strdup("");
-        printf("\n  %-10s %4.0f \xC2\xB1 %-3.0f  %s\n", it, senses[i].r.rating, senses[i].r.deviation, dt); free(it); free(dt); free(d);
+    lp_id word = named(c, argv[a], NULL, 0, NULL).id; const char *from = argv[a + 1]; Lang *known = NULL; int nknown = 0, n, lookups = 0, shown = 0;
+    Claim *senses = one_open(pg, c, &word, "Sense", NULL, fan, &n); lookups++; positions_of(pg, senses, n); qsort(senses, (size_t)n, sizeof(Claim), claim_by_position);
+    lp_id seen[64]; int nseen = 0;
+    for (int i = 0; i < n && shown < limit; i++) {
+        int ny; Claim *sy = one_open(pg, c, &senses[i].part[senses[i].np - 1], "synset", NULL, 8, &ny); lookups++; if (!ny) { free(sy); continue; }
+        lp_id synset = sy[0].part[sy[0].np - 1]; free(sy);
+        if (strcmp(language_of(pg, c, rd, &synset, &known, &nknown), from)) continue;
+        int ni; Claim *il = one_open(pg, c, &synset, "ili", NULL, 8, &ni); lookups += 3; if (!ni) { free(il); continue; }
+        lp_id ili = il[0].part[il[0].np - 1]; lp_rating ir = il[0].r; free(il);
+        int dup = 0; for (int z = 0; z < nseen; z++) dup |= !memcmp(&seen[z], &ili, 16); if (dup) continue; if (nseen < 64) seen[nseen++] = ili;
+        int nd; Claim *df = one_open(pg, c, &synset, "Definition", NULL, 8, &nd); lookups++;
+        char *it = reader_text(rd, &ili, 24), *dt = nd ? reader_text(rd, &df[0].part[df[0].np - 1], 100) : strdup(""); free(df);
+        printf("\n  %-10s %4.0f \xC2\xB1 %-3.0f  %s\n", it, ir.rating, ir.deviation, dt); free(it); free(dt); shown++;
+        int no; Claim *others = one_open(pg, c, NULL, "ili", &ili, fan, &no); lookups++;
         for (int g = a + 2; g < argc; g++) {
-            lp_id lang = named(c, argv[g], NULL, 0, NULL).id, dn[3] = { ili, lang, ili }; int hn[3] = { 0, 2, 2 }, nl, cl2;
-            t = now(); Claim *lex = claims_like(pg, dn, hn, fan, k, &nl, &cl2); t_down += (now() - t) * 1000;
-            printf("    %-6s", argv[g]);
-            for (int j = 0; j < nl && j < 8; j++) { char *w = reader_text(rd, &lex[j].part[0], 40); printf("%s%s %.0f\xC2\xB1%.0f", j ? ", " : " ", w, lex[j].r.rating, lex[j].r.deviation); free(w); }
-            if (!nl) printf(" (nothing attested)");
-            printf("\n"); free(lex);
+            printf("    %-6s", argv[g]); int any = 0;
+            for (int o = 0; o < no; o++) { lp_id y = others[o].part[0];
+                if (strcmp(language_of(pg, c, rd, &y, &known, &nknown), argv[g])) continue;
+                int ns; Claim *ss = one_open(pg, c, NULL, "synset", &y, 256, &ns); lookups++;
+                for (int q = 0; q < ns && any < 8; q++) { int nw; Claim *ws = one_open(pg, c, NULL, "Sense", &ss[q].part[0], 8, &nw); lookups++;
+                    for (int w = 0; w < nw && any < 8; w++) { char *tx = reader_text(rd, &ws[w].part[0], 40); printf("%s%s %.0f\xC2\xB1%.0f", any ? ", " : " ", tx, ws[w].r.rating, ws[w].r.deviation); free(tx); any++; }
+                    free(ws); }
+                free(ss); }
+            if (!any) printf(" (nothing attested)");
+            printf("\n");
         }
+        free(others);
     }
-    printf("\nup %.1f ms   down %.1f ms   total %.1f ms\n", t_up, t_down, (now() - T) * 1000);
-    free(senses); reader_free(rd); PQfinish(pg);
+    if (!shown) printf("%s: no sense of it is attested in a wordnet whose language is written %s\n", argv[a], from);
+    printf("\n%d lookups   total %.1f ms\n", lookups, (now() - T) * 1000);
+    free(senses); free(known); reader_free(rd); PQfinish(pg);
     return 0;
 }
 
