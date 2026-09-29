@@ -96,9 +96,9 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
     const char *conninfo = laplace_db(); int loads = 1;
     for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[a + 1]; if (!strcmp(argv[a], "--no-load") || !strcmp(argv[a], "--plan") || !strcmp(argv[a], "--claims")) loads = 0; }
     /* What a source takes in the database is what its source file says was measured (room N, in times what its files
-     * hold), or 35 times when it says nothing (LAPLACE_ROOM_FACTOR). A source is not begun when the volume would be
+     * hold), or 65 times, the most measured of any, when it says nothing (LAPLACE_ROOM_FACTOR). A source is not begun when the volume would be
      * left with less than a tenth of itself, and that is said. */
-    double factor = getenv("LAPLACE_ROOM_FACTOR") ? atof(getenv("LAPLACE_ROOM_FACTOR")) : 35.0; int short_of_room = 0;
+    double factor = getenv("LAPLACE_ROOM_FACTOR") ? atof(getenv("LAPLACE_ROOM_FACTOR")) : 65.0; int short_of_room = 0;
     printf("laplace ingest   every source, in order   logs in %s\n\n", dir);
     printf("%-4s %-38s %-10s %10s   %s\n", "", "source", "", "seconds", "");
     double T = now(); int failed = 0, absent = 0, empty = 0, went = 0;

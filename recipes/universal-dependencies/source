@@ -6,4 +6,6 @@ witness {dir}
 deviation 90
 root $LAPLACE_DATA/.refresh-*/UD-Treebanks/extracted/ud-treebanks-*
 root $LAPLACE_DATA/UD-Treebanks/ud-treebanks-*
+# Measured when it was loaded: 15,632,387 compositions from 501 MB of it, at 750 bytes each with their indexes and standings.
+room 24
 after unicode iso-639

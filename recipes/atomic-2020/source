@@ -6,4 +6,6 @@ witness ATOMIC 2020 Knowledge Graph
 deviation 90
 root $LAPLACE_DATA/Atomic2020
 reads text
+# Measured when it was loaded: 1,913,456 compositions from 68 MB, at 750 bytes each with their indexes and standings.
+room 21
 after unicode iso-639

@@ -2,5 +2,7 @@ name tokenizers
 # The vocabularies of the tokenizers of the models kept on this machine: each token as the text it stands for, and the
 # vocabulary as the path of its tokens in the order the tokenizer numbers them. Ordinary content: it attests nothing.
 files $LAPLACE_MODELS/*/tokenizer.json
+# Measured when it was loaded: 191,108 compositions from 9 MB, at 750 bytes each with their indexes and standings.
+room 16
 after unicode
 reads vocabulary

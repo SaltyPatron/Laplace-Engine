@@ -16,4 +16,6 @@ except */sample-dataset/*
 # SemCor's 39 MB took 3.3 GB of memory, and at that rate this file takes more than this machine has. It is not read.
 # Its gold file is.
 except */semcor+omsti.data.xml
+# Measured when it was loaded: 6,459,459 compositions from 119 MB, at 750 bytes each with their indexes and standings.
+room 41
 after princeton-wordnet cili

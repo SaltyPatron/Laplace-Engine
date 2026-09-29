@@ -6,4 +6,6 @@ witness ATOMIC10X
 # deviation (350, trust 0.67), and earns its trust by its agreement with witnesses of higher tiers (Research: Trust).
 trust 0.67
 root $LAPLACE_DATA/.refresh-*/Atomic
+# Measured when it was loaded: 63,925,381 compositions from 1,536 MB, at 750 bytes each with their indexes and standings.
+room 32
 after unicode iso-639

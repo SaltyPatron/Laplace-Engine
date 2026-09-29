@@ -8,4 +8,6 @@ lineage WordNet
 # does not give one.
 deviation 35
 root $LAPLACE_DATA/Wordnet/WordNet-3.0
+# Measured when it was loaded: 2,639,563 compositions from 38 MB, at 750 bytes each with their indexes and standings.
+room 53
 after unicode

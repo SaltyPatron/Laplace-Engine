@@ -6,4 +6,6 @@ lineage WordNet
 deviation 35
 root $LAPLACE_DATA/.refresh-*/CILI/extracted
 
+# Measured when it was loaded: 6,055,916 compositions from 100 MB, at 750 bytes each with their indexes and standings.
+room 46
 after unicode iso-639

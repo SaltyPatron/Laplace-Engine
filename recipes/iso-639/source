@@ -3,4 +3,6 @@ name iso-639
 witness ISO 639
 trust 1.0
 root $LAPLACE_DATA/ISO639
+# Measured when it was loaded: 175,147 compositions from 3.7 MB, at 750 bytes each with their indexes and standings.
+room 36
 after unicode

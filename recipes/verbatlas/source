@@ -5,5 +5,7 @@ witness VerbAtlas 1.1.0
 # The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
 deviation 90
 root $LAPLACE_DATA/.refresh-*/VerbAtlas-1.1/extracted/VerbAtlas-1.1.0
+# Measured when it was loaded: 226,000 compositions from 2.8 MB, at 750 bytes each with their indexes and standings.
+room 61
 after unicode iso-639
 reads text

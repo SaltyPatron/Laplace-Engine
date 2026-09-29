@@ -1,5 +1,7 @@
 name project-gutenberg
 # Books from Project Gutenberg, as plain text. Ordinary content: it is observed, and attests nothing.
 root $LAPLACE_DATA/ProjectGutenberg/text
+# Measured when it was loaded: 2,791,039 compositions from 208 MB, at 750 bytes each with their indexes and standings.
+room 11
 after unicode
 reads text
