@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <regex.h>
 
 typedef struct { const uint8_t *p; size_t n; } Cell;
 typedef struct {
@@ -280,4 +281,25 @@ void attest_fields(const Recipe *r, File *f, const uint8_t *src, size_t n){
         at = next;
     }
     for (int i = 0; i < 256; i++) free(fld[i].v);
+}
+
+/* ---- lines that say something where they match a pattern: a page of a source's own documentation */
+void attest_lines(const Recipe *r, File *f, const uint8_t *src, size_t n){
+    Ref about = { 0 }; int has_about = 0; char *ln = malloc(1 << 16); regmatch_t m[5];
+    for (int pass = 0; pass < 2; pass++)
+    for (size_t at = 0; at < n; ) {
+        const uint8_t *nl = memchr(src + at, '\n', n - at); size_t e = nl ? (size_t)(nl - src) : n, next = e + 1; if (e > at && src[e - 1] == '\r') e--;
+        size_t l = e - at; if (!l || l >= (1 << 16)) { at = next; continue; }
+        memcpy(ln, src + at, l); ln[l] = 0;
+        if (!pass) { if (!has_about && r->about_re && !regexec(r->about_re, ln, 2, m, 0) && m[1].rm_so >= 0 && m[1].rm_eo > m[1].rm_so) { about = string_ref((const uint8_t *)ln + m[1].rm_so, (size_t)(m[1].rm_eo - m[1].rm_so)); has_about = 1; } at = next; if (has_about) break; continue; }
+        for (int k = 0; k < r->nblock; k++) { const Block *b = &r->block[k]; if (b->is_map || !b->line_re || regexec(b->line_re, ln, 5, m, 0)) continue;
+            Ref part[4]; int np = 0; for (int g = 1; g < 5 && np < 4; g++) if (m[g].rm_so >= 0 && m[g].rm_eo > m[g].rm_so) { size_t gl = (size_t)(m[g].rm_eo - m[g].rm_so); part[np++] = gl > 256 ? text_ref(CTX[omp_get_thread_num()], (const uint8_t *)ln + m[g].rm_so, gl) : string_ref((const uint8_t *)ln + m[g].rm_so, gl); }
+            Ref t[4]; int nt = 0;
+            if (np == 2 && !b->pair) { if (!has_about) continue; t[nt++] = about; t[nt++] = part[0]; t[nt++] = part[1]; }
+            else if (np >= 2) { for (int i = 0; i < np; i++) t[nt++] = part[i]; }
+            else continue;
+            Ref c = said_claim(compose(t, (uint32_t)nt, tier_over(t, (size_t)nt))); Event x = { c.id, c.id, 1.0f, b->enter_rating, b->enter_deviation, 0, EV_CLAIM }; ev_push(&f->ev, &x); }
+        at = next;
+    }
+    free(ln);
 }

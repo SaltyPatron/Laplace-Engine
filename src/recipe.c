@@ -25,6 +25,10 @@
  *   separator tab | CHAR          what parts a row's fields (tab unless said)
  *   header                        the first row names the columns
  *   columns NAME...               the columns, when no row names them
+ *   quoted                        a field may stand between double quotes, where it may hold the separator or a
+ *                                 line's end, and a quote in it is written twice
+ *   escaped CHAR                  the character written after CHAR is itself and nothing else: the separator, a line's
+ *                                 end, CHAR (CHAR and N alone in a field is left as written: what the source leaves unknown)
  *   skip N                        the first N lines are not rows
  *   kind COLUMN KIND              the values of this column name things of a kind (a source's own numbers): each is
  *                                 recorded as the path of the kind and the value ({dir}, {name}: the file's)
@@ -82,10 +86,25 @@
  *                                 B names a thing of that kind
  *   codepoints ATTRIBUTE...       attributes whose values are codepoints written in hex, recorded as the text they are
  *   grammar json, read as what it says (members.c) when the recipe names what says what an object is:
- *   identity KEY...               an object is the thing the first of these members names
+ *   identity * KEY                an object is the thing the first of these members it holds names (a text, a number,
+ *   identity UNDER KEY            or a list of texts, which name it together); UNDER: only an object under that key
+ *   named KEY by KEY...           an object that holds KEY is the thing those members name together, in that order:
+ *                                 named word by lang_code word pos   is   [en, free, noun]
+ *   linkage                       what a thing inside another says, it says of its being there: of the claim
+ *                                 [thing, key..., thing inside]
+ *   tuples                        a list of plain values inside a list is one tuple, as [text, target]
  *   keys things                   the keys of an object inside nothing are things, and each one's value speaks of it
  *   records                       a value on every line
  *   A table's empty fields: empty TEXT, or empty-matches PATTERN (a field so written is one the source leaves empty).
+ *     json COLUMN                 the column holds a JSON object that speaks of the row's claim; "attest COLUMN..."
+ *                                 then names columns that speak of the claim too, each by its name
+ *   paths CHAR [CHAR]             a value that begins with CHAR is a path, the tuple of its parts: /c/en/dog is [c, en, dog];
+ *                                 with a second CHAR, a part's words are joined by it: ice_cream is [ice, cream]
+ *   grammar lines: a text whose lines, where they match a pattern, say something (a documentation page):
+ *   about PATTERN                 the first line that matches names what the file is about: the pattern's first part
+ *     line PATTERN                in a claims block: a line that matches says its parts, which the pattern puts
+ *                                 between parentheses: two parts are said of what the file is about, [about, 1, 2];
+ *                                 three are the claim themselves; with "pair", two parts are the pair [1, 2]
  *   grammar fields: records of lines written KEY IS VALUE (a line that begins with a space continues the one before):
  *   record LINE                   the line that parts one record from the next
  *   field IS                      what parts a field's key from its value
@@ -111,6 +130,12 @@
  *                                   said of the claim itself, as the path from the claim to each value
  *     witnesses KEY...              in that object, the path of keys to who witnessed the claim. Each of them is
  *                                   a witness of its own, and attests the claim; the file's witness attests the rest
+ *     witness in COLUMN             who says the row: each one named there is a witness of its own, and what the
+ *                                   row attests it attests
+ *     score in COLUMN from A to B   the score the row gives, on the scale the source writes it on: A is a loss, B a
+ *                                   win, halfway a draw
+ *     itself                        what the row attests is its subject itself (a review of a sentence), not
+ *                                   something said of it
  *     together                      in a table: what a row says it says together. The row is one record, the path
  *                                   of its claims, witnessed once, and its claims within it
  *     score in COLUMN               in a table: the score the row gives its claim (a win when it gives none)
@@ -217,6 +242,7 @@ static int table_says(const char *path, Block *b, char *tok){
                      if (!strncmp(rest, "in ", 3)) { char *at = rest + 3, nm[96];
                          if (!name_next(&at, nm, sizeof nm)) return 0; if (*at == '.') { size_t k = strlen(nm); snprintf(nm + k, sizeof nm - k, "%s", at); char *sp = strchr(nm + k, ' '); if (sp) *sp = 0; at += strcspn(at, " \t"); }
                          snprintf(b->in[role], 96, "%s", nm);
+                         if (role == 5) { char w1[32], lo[32], w2[32], hi[32]; if (name_next(&at, w1, sizeof w1) && !strcmp(w1, "from") && name_next(&at, lo, sizeof lo) && name_next(&at, w2, sizeof w2) && !strcmp(w2, "to") && name_next(&at, hi, sizeof hi)) { b->score_from = atof(lo); b->score_to = atof(hi); b->score_mapped = b->score_to > b->score_from; } }
                          while (role == 0 && b->nsubj < 8 && name_next(&at, nm, sizeof nm)) snprintf(b->subj[b->nsubj++], 96, "%s", nm);      /* a subject of several columns */
                          return 1; }
                      if (role == 1) { snprintf(b->predicate, sizeof b->predicate, "%s", rest); return 1; }      /* the predicate, said outright */
@@ -233,6 +259,8 @@ static int table_says(const char *path, Block *b, char *tok){
     if (!strcmp(tok, "columns")) { char *at = strtok(NULL, "\r\n"), nm[64]; while (b->ncolumn < 64 && name_next(&at, nm, sizeof nm)) snprintf(b->column[b->ncolumn++], 64, "%s", nm); return 1; }
     if (!strcmp(tok, "separator")) { b->separator = sep_named(strtok(NULL, " \t\r\n")); return 1; }
     if (!strcmp(tok, "attest")) { char *at = strtok(NULL, "\r\n"), nm[64]; while (b->nattest < 64 && name_next(&at, nm, sizeof nm)) snprintf(b->attest[b->nattest++], 64, "%s", nm); return 1; }
+    if (!strcmp(tok, "witness")) { char *in = strtok(NULL, " \t\r\n"), *at = strtok(NULL, "\r\n"), nm[64]; if (!in || strcmp(in, "in") || !name_next(&at, nm, sizeof nm)) { fprintf(stderr, "%s: witness in COLUMN\n", path); exit(2); } snprintf(b->witness_in, 64, "%s", nm); return 1; }
+    if (!strcmp(tok, "itself")) { b->itself = 1; return 1; }
     if (!strcmp(tok, "rest")) { tok = strtok(NULL, " \t\r\n"); b->rest = tok && !strcmp(tok, "pairs") ? 1 : tok && !strcmp(tok, "values") ? 2 : 0; if (!b->rest) { fprintf(stderr, "%s: rest pairs | values\n", path); exit(2); } return 1; }
     if (!strcmp(tok, "row")) { tok = strtok(NULL, " \t\r\n"); if (!tok || strcmp(tok, "tuple")) { fprintf(stderr, "%s: row tuple\n", path); exit(2); } b->row_tuple = 1; return 1; }
     if (!strcmp(tok, "fields")) { tok = strtok(NULL, " \t\r\n"); char *c = strtok(NULL, " \t\r\n"); if (!tok || strcmp(tok, "pairs") || !c) { fprintf(stderr, "%s: fields pairs CHAR\n", path); exit(2); } b->field_pair = c[0]; return 1; }
@@ -276,6 +304,8 @@ static int recipe_parse(const char *path, Recipe *r){
         else if (!strcmp(tok, "header")) r->header = 1;
         else if (!strcmp(tok, "comment")) { tok = strtok(NULL, " \t\r\n"); r->comment = tok ? tok[0] : '#'; }
         else if (!strcmp(tok, "columns") && !b) { char *at = strtok(NULL, "\r\n"), nm[64]; while (r->ncolumn < 64 && name_next(&at, nm, sizeof nm)) snprintf(r->column[r->ncolumn++], 64, "%s", nm); }
+        else if (!strcmp(tok, "quoted")) r->quoted = 1;
+        else if (!strcmp(tok, "escaped")) { tok = strtok(NULL, " \t\r\n"); if (!tok) { fprintf(stderr, "%s: escaped CHAR\n", path); fclose(f); return 0; } r->escaped = tok[0]; }
         else if (!strcmp(tok, "skip")) { tok = strtok(NULL, " \t\r\n"); if (tok) r->skip = atoi(tok); }
         else if (!strcmp(tok, "list") && r->nlist < 16) { char *at = strtok(NULL, "\r\n"), nm[64], sp[8]; if (!name_next(&at, nm, sizeof nm) || !name_next(&at, sp, sizeof sp)) { fprintf(stderr, "%s: list COLUMN CHAR\n", path); fclose(f); return 0; }
             snprintf(r->list[r->nlist].col, 64, "%s", nm); r->list[r->nlist++].sep = sep_named(sp); }
@@ -283,6 +313,10 @@ static int recipe_parse(const char *path, Recipe *r){
         else if (!strcmp(tok, "field")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->field_is, sizeof r->field_is, "%s", tok); }
         else if (!strcmp(tok, "empty")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->empty, sizeof r->empty, "%s", tok); }
         else if (!strcmp(tok, "note")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->note_is, sizeof r->note_is, "%s", tok); }
+        else if (!strcmp(tok, "about") && !strcmp(r->grammar, "lines")) { rest_of(r->about_line, sizeof r->about_line); regex_t *re = malloc(sizeof *re);
+            if (regcomp(re, r->about_line, REG_EXTENDED)) { fprintf(stderr, "%s: about PATTERN does not compile\n", path); fclose(f); return 0; } r->about_re = re; }
+        else if (!strcmp(tok, "line") && b) { rest_of(b->line, sizeof b->line); regex_t *re = malloc(sizeof *re);
+            if (regcomp(re, b->line, REG_EXTENDED)) { fprintf(stderr, "%s: line PATTERN does not compile\n", path); fclose(f); return 0; } b->line_re = re; }
         else if (!strcmp(tok, "about")) rest_of(r->about, sizeof r->about);
         else if (!strcmp(tok, "word")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->word, sizeof r->word, "%s", tok); }
         else if (!strcmp(tok, "number")) { tok = strtok(NULL, " \t\r\n"); char *sp = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->number, sizeof r->number, "%s", tok); if (sp) r->span = sp[0]; }
@@ -307,7 +341,8 @@ static int recipe_parse(const char *path, Recipe *r){
             snprintf(r->kinds[r->nkinds].col, 64, "%s", c1); snprintf(r->kinds[r->nkinds++].kind, 64, "%s", k1); }
         else if (!strcmp(tok, "json") && b) { char *at = strtok(NULL, "\r\n"), c1[64]; if (name_next(&at, c1, sizeof c1)) snprintf(b->json, 64, "%s", c1); }
         else if (!strcmp(tok, "witnesses") && b) { char *at = strtok(NULL, "\r\n"), c1[64]; while (b->nwitnesses < 8 && name_next(&at, c1, sizeof c1)) snprintf(b->witnesses[b->nwitnesses++], 64, "%s", c1); }
-        else if (b && !strcmp(r->grammar, "table") && (part_named(tok) >= 0 || !strcmp(tok, "where") || !strcmp(tok, "attest") || !strcmp(tok, "rest") || !strcmp(tok, "row") || !strcmp(tok, "fields")) && table_says(path, b, tok)) { }
+        else if (b && !strcmp(r->grammar, "table") && !strcmp(tok, "witness") && table_says(path, b, tok)) { }
+        else if (b && !strcmp(r->grammar, "table") && (part_named(tok) >= 0 || !strcmp(tok, "where") || !strcmp(tok, "attest") || !strcmp(tok, "rest") || !strcmp(tok, "row") || !strcmp(tok, "fields") || !strcmp(tok, "itself")) && table_says(path, b, tok)) { }
         else if (!strcmp(tok, "claims")) b = block_new(r, 0);
         else if (!strcmp(tok, "query")) { if (!b || b->query_src) b = block_new(r, 0); inq = 1; ql = 0; }
         else if (!strcmp(tok, "enter") && b) { tok = strtok(NULL, " \t\r\n"); char *d = strtok(NULL, " \t\r\n"); if (tok && d) { b->enter_rating = (float)atof(tok); b->enter_deviation = (float)atof(d); } }
@@ -347,6 +382,11 @@ static int recipe_parse(const char *path, Recipe *r){
             char *kd = strtok(NULL, " \t\r\n"); snprintf(r->link[r->nlink].kind, 64, "%s", kd ? kd : "");
             snprintf(r->link[r->nlink].el, 64, "%s", el); snprintf(r->link[r->nlink].pred, 64, "%s", pa); snprintf(r->link[r->nlink++].obj, 64, "%s", oa);
         }
+        else if (!strcmp(tok, "named")) { char *k = strtok(NULL, " \t\r\n"), *by = strtok(NULL, " \t\r\n"); if (!k || !by || strcmp(by, "by")) { fprintf(stderr, "%s: named KEY by KEY...\n", path); fclose(f); return 0; }
+            snprintf(r->named_key, 64, "%s", k); while ((tok = strtok(NULL, " \t\r\n")) && r->nnamed < 8) snprintf(r->named[r->nnamed++], 64, "%s", tok); }
+        else if (!strcmp(tok, "paths")) { char *a = strtok(NULL, " \t\r\n"), *c = strtok(NULL, " \t\r\n"); if (!a) { fprintf(stderr, "%s: paths CHAR [CHAR]\n", path); fclose(f); return 0; } r->path_sep = a[0]; r->path_join = c ? c[0] : 0; }
+        else if (!strcmp(tok, "linkage")) r->linkage = 1;
+        else if (!strcmp(tok, "tuples")) r->tuples = 1;
         else if (!strcmp(tok, "keys")) { tok = strtok(NULL, " \t\r\n"); if (!tok || strcmp(tok, "things")) { fprintf(stderr, "%s: keys things\n", path); fclose(f); return 0; } r->keys_things = 1; }
         else if (!strcmp(tok, "empty-matches")) { char pat[256] = ""; rest_of(pat, sizeof pat); regex_t *re = malloc(sizeof *re);
             if (!pat[0] || regcomp(re, pat, REG_EXTENDED | REG_NOSUB)) { fprintf(stderr, "%s: empty-matches PATTERN does not compile\n", path); fclose(f); return 0; } r->empty_like = re; }
@@ -366,7 +406,8 @@ static int recipe_parse(const char *path, Recipe *r){
     if (!r->unit) r->unit = 65536;
     if (!r->separator) r->separator = '\t';
     { int rows = 0; for (int k = 0; k < r->nblock; k++) rows |= !r->block[k].is_map && r->block[k].in[0][0] && r->block[k].in[2][0];
-      if (!strcmp(r->grammar, "json") && (r->nidentity || r->keys_things || rows)) { r->members = 1; r->query = (TSQuery *)r; return 1; } }
+      if (!strcmp(r->grammar, "json") && (r->nidentity || r->nnamed || r->keys_things || rows)) { r->members = 1; r->query = (TSQuery *)r; return 1; } }
+    if (!strcmp(r->grammar, "lines")) { r->query = (TSQuery *)r; return 1; }
     if (!strcmp(r->grammar, "fields")) { r->query = (TSQuery *)r; if (!r->nblock) block_new(r, 0); return 1; }
     if (!strcmp(r->grammar, "table")) { for (int k = 0; k < r->nblock; k++) if (!r->block[k].is_map) r->query = (TSQuery *)r; if (r->word[0]) r->query = (TSQuery *)r; }   /* it attests: a curated source */
     else if (strcmp(r->grammar, "text") && strcmp(r->grammar, "vocabulary")) {
@@ -651,7 +692,7 @@ static int map_get(const Map *m, const uint8_t *k, size_t kl, const uint8_t **v,
     return 0;
 }
 /* What a file is read with: its recipe, and the maps its recipe's map blocks filled (one per block). */
-typedef struct { const Recipe *r; Map *map; char (*predicate)[64]; char dir[256], name[256]; } Reading;
+typedef struct { const Recipe *r; Map *map; char (*predicate)[64]; char dir[256], name[256]; char rowend; } Reading;   /* rowend: what ends a row, when it is not a line's end (a quoted table written out plainly) */
 static __thread long subject_cp = -1;                                  /* the codepoint the claim being read is about, when it is one */
 
 static int attr_named(TSNode tag, const uint8_t *src, const char *name, TSNode *val){
@@ -732,7 +773,43 @@ static int part_said(const Reading *rd, const Block *b, int role, const char *su
     return *n > 0;
 }
 /* A part, as the source writes it. */
-static Ref part_ref(const Block *b, int role, const uint8_t *p, size_t n){ (void)b; (void)role; return string_ref(p, n); }
+/* A value written as a path, /c/en/ice_cream/n: the tuple of its parts, [c, en, [ice, cream], n]. A part written
+ * between brackets is a list of paths, /a/[/r/IsA/,/c/en/dog/,/c/en/animal/]: [a, [[r, IsA], [c, en, dog], [c, en, animal]]]. */
+static uint8_t over(const Ref *t, int n){ uint8_t m = 0; for (int i = 0; i < n; i++) if (t[i].tier > m) m = t[i].tier; return (uint8_t)(m < 255 ? m + 1 : 255); }
+static Ref tuple_of(Ref *t, int n){ for (int i = 0; i < n; i++) if (t[i].said != LP_SAID_TUPLE) t[i].said = 0; return n == 1 ? t[0] : said_tuple(compose(t, (uint32_t)n, over(t, n))); }
+static Ref path_part(const uint8_t *p, size_t n, char join){
+    if (!join || !memchr(p, join, n)) return string_ref(p, n);
+    Ref w[32]; int nw = 0; const uint8_t *e = p + n;
+    while (p < e && nw < 32) { const uint8_t *q = memchr(p, join, (size_t)(e - p)); if (!q) q = e; if (q > p) w[nw++] = string_ref(p, (size_t)(q - p)); p = q + 1; }
+    if (p < e || !nw) return string_ref(e - n, n);                             /* more words than are held: the text it is */
+    return tuple_of(w, nw);
+}
+static const uint8_t *path_list(const uint8_t *p, const uint8_t *e, char sep, char join, Ref *out, int *ok, int depth);
+static const uint8_t *path_run(const uint8_t *p, const uint8_t *e, char sep, char join, Ref *out, int *ok, int depth, int inside){
+    Ref t[32]; int nt = 0;
+    while (p < e && *ok) {
+        if (*p == (uint8_t)sep) { p++; continue; }
+        if (inside && (*p == ',' || *p == ']') && (p + 1 == e || p[1] == (uint8_t)sep)) break;
+        if (*p == '[' && p + 1 < e && p[1] == (uint8_t)sep) { Ref l; if (depth > 6 || nt >= 32) { *ok = 0; break; } p = path_list(p + 1, e, sep, join, &l, ok, depth + 1); if (*ok) t[nt++] = l; continue; }
+        const uint8_t *q = memchr(p, sep, (size_t)(e - p)); if (!q) q = e;
+        if (nt >= 32) { *ok = 0; break; } t[nt++] = path_part(p, (size_t)(q - p), join); p = q;
+    }
+    if (!nt) *ok = 0; if (*ok) *out = tuple_of(t, nt);
+    return p;
+}
+static const uint8_t *path_list(const uint8_t *p, const uint8_t *e, char sep, char join, Ref *out, int *ok, int depth){
+    Ref t[16]; int nt = 0;
+    while (p < e && *ok) { Ref one; p = path_run(p, e, sep, join, &one, ok, depth, 1); if (!*ok) break; if (nt >= 16) { *ok = 0; break; } t[nt++] = one;
+        if (p < e && *p == ',') { p++; continue; } if (p < e && *p == ']') { p++; break; } *ok = 0; }
+    if (!nt) *ok = 0; if (*ok) { for (int i = 0; i < nt; i++) t[i].said = LP_SAID_TUPLE; *out = nt == 1 ? t[0] : said_tuple(compose(t, (uint32_t)nt, over(t, nt))); }
+    return p;
+}
+Ref path_ref(const uint8_t *p, size_t n, char sep, char join){
+    if (n < 2 || p[0] != (uint8_t)sep || n > 2048) return string_ref(p, n);
+    Ref out; int ok = 1; const uint8_t *q = path_run(p, p + n, sep, join, &out, &ok, 0, 0);
+    return ok && q == p + n ? out : string_ref(p, n);
+}
+static Ref part_ref(const Recipe *r, int role, const uint8_t *p, size_t n){ (void)role; return r->path_sep ? path_ref(p, n, r->path_sep, r->path_join) : string_ref(p, n); }
 static int capture_role(const char *name, uint32_t l, const char *what, char *suf, size_t cap){
     size_t wl = strlen(what); if (l < wl || memcmp(name, what, wl) || (l > wl && name[wl] != '.')) return 0;
     snprintf(suf, cap, "%.*s", l > wl ? (int)(l - wl - 1) : 4, l > wl ? name + wl + 1 : "text");
@@ -787,7 +864,7 @@ static void attest_node(const Reading *rd, int k, TSQueryCursor *qc, TSNode nd, 
                 if (*e || v >= LP_NCP) continue; part[role] = atom((uint32_t)v); have[role] = 1; continue;
             }
             const uint8_t *p; size_t n;
-            if (part_text(rd, b, role, suf, cn, src, buf, &p, &n)) { part[role] = part_ref(b, role, p, n); have[role] = 1; }
+            if (part_text(rd, b, role, suf, cn, src, buf, &p, &n)) { part[role] = part_ref(r, role, p, n); have[role] = 1; }
         }
         if (void_match) continue;
         if (!have[1] && rd->predicate[k][0]) { part[1] = string_ref((const uint8_t *)rd->predicate[k], strlen(rd->predicate[k])); have[1] = 1; }
@@ -844,7 +921,7 @@ static uint8_t *read_all(const char *path, size_t *n);
 
 /* ---- tables: rows of fields, read natively. Columns are named by the first row or by the recipe. */
 typedef struct { const uint8_t *p; size_t n; } Cell;
-typedef struct { int in[6], where[8], attest[64], nattest, subj[8], named, json; } Cols;      /* per block: where each part and condition is, or -1 */
+typedef struct { int in[6], where[8], attest[64], nattest, subj[8], named, json, witness; } Cols;      /* per block: where each part and condition is, or -1 */
 static int column_named(char (*name)[64], int n, const char *spec){
     size_t l = strcspn(spec, ".");
     for (int i = 0; i < n; i++) if (strlen(name[i]) == l && !memcmp(name[i], spec, l)) return i;
@@ -856,7 +933,8 @@ static Cols *cols_for(const Recipe *r, char (*name)[64], int n, int only){
         const Block *b = &r->block[k]; if (only >= 0 && k != only) continue;
         for (int i = 0; i < 6; i++) { c[k].in[i] = b->in[i][0] ? column_named(name, n, b->in[i]) : -1;
             if (b->in[i][0] && c[k].in[i] < 0 && !(b->is_map && b->from[0] && only < 0)) { fprintf(stderr, "%s: there is no column %s\n", r->name, b->in[i]); exit(2); } }
-        c[k].named = n; c[k].json = b->json[0] ? column_named(name, n, b->json) : -1;
+        c[k].named = n; c[k].json = b->json[0] ? column_named(name, n, b->json) : -1; c[k].witness = b->witness_in[0] ? column_named(name, n, b->witness_in) : -1;
+        if (b->witness_in[0] && c[k].witness < 0) { fprintf(stderr, "%s: there is no column %s\n", r->name, b->witness_in); exit(2); }
         if (b->json[0] && c[k].json < 0) { fprintf(stderr, "%s: there is no column %s\n", r->name, b->json); exit(2); }
         for (int i = 0; i < b->nsubj; i++) { c[k].subj[i] = column_named(name, n, b->subj[i]); if (c[k].subj[i] < 0) { fprintf(stderr, "%s: there is no column %s\n", r->name, b->subj[i]); exit(2); } }
         for (int i = 0; i < b->nattest; i++) {
@@ -891,8 +969,9 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
     char listc[64] = { 0 };                                                   /* per column: what parts its field into several values */
     for (int i = 0; i < r->nlist; i++) { if (!strcmp(r->list[i].col, "*")) { for (int j = 0; j < 64; j++) if (!listc[j]) listc[j] = r->list[i].sep; continue; }
         for (int j = 0; j < 64 && name[j][0]; j++) if (!strcmp(name[j], r->list[i].col)) listc[j] = r->list[i].sep; }
+    const char rowend = rd->rowend ? rd->rowend : '\n';
     for (size_t at = lo; at < hi; ) {
-        const uint8_t *nl = memchr(src + at, '\n', hi - at); size_t e = nl ? (size_t)(nl - src) : hi, next = e + 1; if (e > at && src[e - 1] == '\r') e--;
+        const uint8_t *nl = memchr(src + at, rowend, hi - at); size_t e = nl ? (size_t)(nl - src) : hi, next = e + 1; if (e > at && src[e - 1] == '\r') e--;
         if (e == at || (comment && src[at] == (uint8_t)comment) || e - at > r->unit) { at = next; continue; }
         if (r->remark) { const uint8_t *rm = memchr(src + at, r->remark, e - at); if (rm) e = (size_t)(rm - src); }
         int nc = 0; for (size_t i = at, f0 = at; i <= e && nc < 64; i++) if (i == e || src[i] == (uint8_t)sep) { cell[nc++] = (Cell){ src + f0, i - f0 }; f0 = i + 1; }
@@ -912,14 +991,20 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
             }
             Ref part[3], tg[256]; int have[3] = { 0, 0, 0 }, ntg = 0; subject_cp = -1;
             float score = 1.0f;                                              /* the score the row gives, as it writes it */
-            if (cols[k].in[5] >= 0 && cols[k].in[5] < nc && cell[cols[k].in[5]].n && cell[cols[k].in[5]].n < 32) { char z[32]; memcpy(z, cell[cols[k].in[5]].p, cell[cols[k].in[5]].n); z[cell[cols[k].in[5]].n] = 0; char *e2; double v = strtod(z, &e2); if (e2 != z && v >= 0.0 && v <= 1.0) score = (float)v; }
+            if (cols[k].in[5] >= 0 && cols[k].in[5] < nc && cell[cols[k].in[5]].n && cell[cols[k].in[5]].n < 32) { char z[32]; memcpy(z, cell[cols[k].in[5]].p, cell[cols[k].in[5]].n); z[cell[cols[k].in[5]].n] = 0; char *e2; double v = strtod(z, &e2);
+                if (e2 != z && b->score_mapped) { v = (v - b->score_from) / (b->score_to - b->score_from); if (v >= 0.0 && v <= 1.0) score = (float)v; }
+                else if (e2 != z && v >= 0.0 && v <= 1.0) score = (float)v; }
+            Ref said_by = { 0 }; int has_by = 0;                               /* who says the row, when the row names one */
+            if (cols[k].witness >= 0 && cols[k].witness < nc && cell[cols[k].witness].n) { const uint8_t *p = cell[cols[k].witness].p; size_t n = cell[cols[k].witness].n;
+                if (part_said(rd, b, 0, "text", kb, &p, &n)) { said_by = KIND(cols[k].witness, string_ref(p, n)); has_by = 1; } }
+            uint64_t ev_from = ev->n;
             #define SAY(parts_, n_) do { uint8_t t_ = 0; for (int i_ = 0; i_ < (n_); i_++) if ((parts_)[i_].tier > t_) t_ = (parts_)[i_].tier; \
                 Ref c_ = compose((parts_), (uint32_t)(n_), (uint8_t)(t_ < 255 ? t_ + 1 : 255)); \
                 if (b->together || b->field_pair) { if (ntg < 256) tg[ntg++] = said_claim(c_); } \
                 else { Event x_ = { c_.id, c_.id, score, b->enter_rating, b->enter_deviation, 0, EV_CLAIM }; ev_push(ev, &x_); } } while (0)
             #define EACH(cell_, ci_, ...) do { char ls_ = listc[(ci_) < 64 ? (ci_) : 63]; const uint8_t *p_ = (cell_).p, *e_ = p_ + (cell_).n; \
                 while (p_ < e_) { const uint8_t *q_ = ls_ ? memchr(p_, ls_, (size_t)(e_ - p_)) : NULL; if (!q_) q_ = e_; \
-                    const uint8_t *vp = p_; size_t vn = (size_t)(q_ - p_); if (part_said(rd, b, 2, "text", buf, &vp, &vn)) { Ref val = KIND((ci_), string_ref(vp, vn)); __VA_ARGS__; } p_ = q_ + 1; } } while (0)
+                    const uint8_t *vp = p_; size_t vn = (size_t)(q_ - p_); if (part_said(rd, b, 2, "text", buf, &vp, &vn)) { Ref val = KIND((ci_), part_ref(r, 2, vp, vn)); __VA_ARGS__; } p_ = q_ + 1; } } while (0)
             if (b->field_pair) {                                                /* every field a pair */
                 for (int i = 0; i < nc; i++) { const uint8_t *m = memchr(cell[i].p, b->field_pair, cell[i].n); if (!m || m == cell[i].p || m + 1 >= cell[i].p + cell[i].n) continue;
                     Ref pr[2] = { string_ref(cell[i].p, (size_t)(m - cell[i].p)), string_ref(m + 1, (size_t)(cell[i].p + cell[i].n - m - 1)) }; SAY(pr, 2); }
@@ -936,7 +1021,7 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
                 if (!strcmp(resolvers_of(b->in[role]), "range")) {               /* a codepoint, or a range of them written FIRST..LAST: the path of the two */
                     while (n && (p[0] == ' ' || p[0] == '\t')) { p++; n--; } while (n && (p[n - 1] == ' ' || p[n - 1] == '\t')) n--;
                     if (memchr(p, ' ', n)) {                                       /* several codepoints: a sequence, the text it is */
-                        if (part_said(rd, b, role, "cps", buf, &p, &n)) { part[role] = part_ref(b, role, p, n); have[role] = 1; } continue; }
+                        if (part_said(rd, b, role, "cps", buf, &p, &n)) { part[role] = part_ref(r, role, p, n); have[role] = 1; } continue; }
                     char z[40]; if (!n || n >= sizeof z) continue; memcpy(z, p, n); z[n] = 0; char *dots = strstr(z, ".."), *e1, *e2;
                     unsigned long lo = strtoul(z, &e1, 16), hi = dots ? strtoul(dots + 2, &e2, 16) : 0;
                     if (e1 == z || lo >= LP_NCP || (dots ? (e1 != dots || *e2 || hi >= LP_NCP) : *e1 != 0)) continue;
@@ -944,7 +1029,7 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
                     else { Ref two[2] = { atom((uint32_t)lo), atom((uint32_t)hi) }; part[role] = said_tuple(compose(two, 2, 1)); }
                     have[role] = 1; continue;
                 }
-                if (part_said(rd, b, role, resolvers_of(b->in[role]), buf, &p, &n)) { part[role] = part_ref(b, role, p, n); have[role] = 1;
+                if (part_said(rd, b, role, resolvers_of(b->in[role]), buf, &p, &n)) { part[role] = part_ref(r, role, p, n); have[role] = 1;
                     if (role == 0 && part[0].tier == 0) subject_cp = (long)lp_tier0_codepoint(T0, &part[0].id);
                     part[role] = KIND(ci, part[role]); }
             }
@@ -957,7 +1042,7 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
             if (have[0] && b->subject_kind[0]) { const char *kd = !strcmp(b->subject_kind, "{dir}") ? rd->dir : b->subject_kind;
                 Ref kp[2] = { string_ref((const uint8_t *)kd, strlen(kd)), part[0] }; kp[1].said = 0; part[0] = said_tuple(compose(kp, 2, (uint8_t)((kp[0].tier > kp[1].tier ? kp[0].tier : kp[1].tier) + 1))); }
             if (!have[1] && rd->predicate[k][0]) { part[1] = string_ref((const uint8_t *)rd->predicate[k], strlen(rd->predicate[k])); have[1] = 1; }
-            for (int a = 0; have[0] && a < cols[k].nattest; a++) {               /* columns that are each a predicate, by name */
+            for (int a = 0; have[0] && !b->json[0] && a < cols[k].nattest; a++) { /* columns that are each a predicate, by name */
                 int ci = cols[k].attest[a]; if (ci >= nc || !cell[ci].n) continue;
                 Ref pred = string_ref((const uint8_t *)name[ci], strlen(name[ci]));
                 EACH(cell[ci], ci, { Ref tr[3] = { part[0], pred, val }; if (!(b->distinct && !memcmp(&tr[0].id, &tr[2].id, 16))) SAY(tr, 3); });
@@ -976,6 +1061,10 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
                 Ref mc = said_claim(compose(tp, (uint32_t)np_, (uint8_t)(tc + 1))); RefList cl = { 0 }, wf = { 0 }; Ref wp[8]; int jc = cols[k].json;
                 for (int i = 0; i < b->nwitnesses; i++) wp[i] = string_ref((const uint8_t *)b->witnesses[i], strlen(b->witnesses[i]));
                 if (jc < nc && cell[jc].n && !json_said_of(r, ctx_here(), cell[jc].p, cell[jc].n, mc, &cl, wp, b->nwitnesses, &wf)) { cl.n = 0; wf.n = 0; }
+                for (int a = 0; a < cols[k].nattest; a++) {                        /* columns that speak of the claim itself, each by its name */
+                    int ci = cols[k].attest[a]; if (ci >= nc || !cell[ci].n) continue; const uint8_t *vp = cell[ci].p; size_t vn = cell[ci].n; if (!part_said(rd, b, 2, "text", buf, &vp, &vn)) continue;
+                    Ref tr[3] = { mc, string_ref((const uint8_t *)name[ci], strlen(name[ci])), part_ref(r, 2, vp, vn) }; tr[0].said = LP_SAID_TUPLE;
+                    Ref c_ = said_claim(compose(tr, 3, over(tr, 3))); if (cl.n == cl.cap) { cl.cap = cl.cap ? cl.cap * 2 : 16; cl.c = xrealloc(cl.c, sizeof(Ref) * (size_t)cl.cap); } cl.c[cl.n++] = c_; }
                 for (int i = 0; i < wf.n; i++) { Event x = { mc.id, mc.id, score, b->enter_rating, b->enter_deviation, 0, EV_CLAIM, 1, wf.c[i].id }; ev_push(ev, &x); }
                 if (!wf.n) { Event x = { mc.id, mc.id, score, b->enter_rating, b->enter_deviation, 0, EV_CLAIM }; ev_push(ev, &x); }
                 if (cl.n) { Ref *path = malloc(sizeof(Ref) * (size_t)(cl.n + 1)); path[0] = mc; path[0].said = 0; memcpy(path + 1, cl.c, sizeof(Ref) * (size_t)cl.n); uint8_t tt = 0; for (int i = 0; i <= cl.n; i++) if (path[i].tier > tt) tt = path[i].tier;
@@ -987,6 +1076,7 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
             else if (b->pair && have[0] && have[2]) { Ref pr[2] = { part[0], part[2] }; if (!(b->distinct && !memcmp(&pr[0].id, &pr[1].id, 16))) SAY(pr, 2); }
             else if (have[0] && have[1] && have[2] && !(b->distinct && !memcmp(&part[0].id, &part[2].id, 16))) SAY(part, 3);
             }
+            if (b->itself && have[0]) { Event x_ = { part[0].id, part[0].id, score, b->enter_rating, b->enter_deviation, 0, EV_CLAIM }; ev_push(ev, &x_); }
             #undef SAY
             #undef EACH
             (void)kindc;
@@ -998,20 +1088,21 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
                 for (int i = 0; i < ntg; i++) { int dup = 0; for (int j = 0; j < i && !dup; j++) dup = !memcmp(&tg[j].id, &tg[i].id, 16);
                     if (!dup) { Event m = { tg[i].id, rec.id, score, b->enter_rating, b->enter_deviation, 0, EV_MEMBER }; ev_push(ev, &m); } }
             }
+            if (has_by) for (uint64_t i = ev_from; i < ev->n; i++) if (!ev->e[i].own_witness) { ev->e[i].own_witness = 1; ev->e[i].witness = said_by.id; }
         }
         at = next;
     }
     free(buf); free(kb);
 }
 /* A table's columns: the recipe's, or the block's, or its first row's. Returns where its rows begin. */
-static __thread int skip_lines;
+static __thread int skip_lines; static __thread char head_rowend;
 static size_t table_columns(const uint8_t *src, size_t n, char sep, char comment, int header, char (*given)[64], int ngiven, char (*name)[64], int *nn){
-    size_t at = 0; *nn = 0;
+    size_t at = 0; *nn = 0; const char rowend = head_rowend ? head_rowend : '\n';
     for (int i = 0; i < ngiven; i++) snprintf(name[(*nn)++], 64, "%s", given[i]);
-    for (int i = 0; i < skip_lines && at < n; i++) { const uint8_t *nl = memchr(src + at, '\n', n - at); at = nl ? (size_t)(nl - src) + 1 : n; }
+    for (int i = 0; i < skip_lines && at < n; i++) { const uint8_t *nl = memchr(src + at, rowend, n - at); at = nl ? (size_t)(nl - src) + 1 : n; }
     if (!header || ngiven) return at;
-    while (at < n && comment && src[at] == (uint8_t)comment) { const uint8_t *nl = memchr(src + at, '\n', n - at); at = nl ? (size_t)(nl - src) + 1 : n; }
-    const uint8_t *nl = memchr(src + at, '\n', n - at); size_t e = nl ? (size_t)(nl - src) : n, next = e + 1; if (e > at && src[e - 1] == '\r') e--;
+    while (at < n && comment && src[at] == (uint8_t)comment) { const uint8_t *nl = memchr(src + at, rowend, n - at); at = nl ? (size_t)(nl - src) + 1 : n; }
+    const uint8_t *nl = memchr(src + at, rowend, n - at); size_t e = nl ? (size_t)(nl - src) : n, next = e + 1; if (e > at && src[e - 1] == '\r') e--;
     for (size_t i = at, f0 = at; i <= e && *nn < 64; i++) if (i == e || src[i] == (uint8_t)sep) { snprintf(name[(*nn)++], 64, "%.*s", (int)(i - f0 > 63 ? 63 : i - f0), src + f0); f0 = i + 1; }
     return next < n ? next : n;
 }
@@ -1062,7 +1153,29 @@ static void attest_tree(const Recipe *r, const char *path, TSNode root, const ui
 }
 
 static void attest_table(const Recipe *r, File *f, const uint8_t *src, size_t n, Events *ev){
-    const char *path = f->path;
+    const char *path = f->path; uint8_t *plain = NULL; char sep0 = r->separator, end0 = '\n';
+    if (r->escaped && !r->quoted) {
+        plain = malloc(n + 1); size_t k = 0, field = 0;
+        for (size_t i = 0; i < n; i++) { uint8_t c = src[i];
+            if (c == (uint8_t)r->escaped && i + 1 < n) {
+                if (src[i + 1] == 'N' && k == field && (i + 2 == n || src[i + 2] == (uint8_t)r->separator || src[i + 2] == '\n' || src[i + 2] == '\r')) { plain[k++] = c; plain[k++] = 'N'; i++; }
+                else plain[k++] = src[++i]; }
+            else if (c == (uint8_t)r->separator) { plain[k++] = 0x1F; field = k; }
+            else if (c == '\n') { if (k && plain[k - 1] == '\r') k--; plain[k++] = 0x1E; field = k; }
+            else plain[k++] = c; }
+        src = plain; n = k; sep0 = 0x1F; end0 = 0x1E;
+    }
+    if (r->quoted) {                                                          /* written out plainly: fields parted by one character and rows by another, neither of which text holds */
+        plain = malloc(n + 1); size_t k = 0; int in = 0;
+        for (size_t i = 0; i < n; i++) { uint8_t c = src[i];
+            if (in) { if (c == '"') { if (i + 1 < n && src[i + 1] == '"') { plain[k++] = '"'; i++; } else in = 0; } else plain[k++] = c; }
+            else if (c == '"') in = 1;
+            else if (c == (uint8_t)r->separator) plain[k++] = 0x1F;
+            else if (c == '\n') { if (k && plain[k - 1] == '\r') k--; plain[k++] = 0x1E; }
+            else plain[k++] = c; }
+        src = plain; n = k; sep0 = 0x1F; end0 = 0x1E;
+    }
+    head_rowend = end0 == '\n' ? 0 : end0;
     Reading rd = { r, calloc((size_t)(r->nblock ? r->nblock : 1), sizeof(Map)), calloc((size_t)(r->nblock ? r->nblock : 1), 64), "", "" }; int has_maps = 0;
     dir_of(path, rd.dir, sizeof rd.dir);
     { const char *bn = strrchr(path, '/'); bn = bn ? bn + 1 : path; const char *d = strchr(bn, '.'); snprintf(rd.name, sizeof rd.name, "%.*s", d && d > bn ? (int)(d - bn) : (int)strlen(bn), bn); }
@@ -1074,17 +1187,18 @@ static void attest_table(const Recipe *r, File *f, const uint8_t *src, size_t n,
     }
     char name[64][64]; int nn; memset(name, 0, sizeof name); skip_lines = r->skip; size_t at = 0;
     if (f->columns) { memcpy(name, f->columns, sizeof name); nn = f->ncolumns; }     /* a later stretch: the columns are the ones its head gave */
-    else { at = table_columns(src, n, r->separator, r->comment, r->header, (char (*)[64])r->column, r->ncolumn, name, &nn);
+    else { at = table_columns(src, n, sep0, r->comment, r->header, (char (*)[64])r->column, r->ncolumn, name, &nn);
            if (f->partial) { f->columns = malloc(sizeof name); memcpy(f->columns, name, sizeof name); f->ncolumns = nn; } }
-    skip_lines = 0;
+    skip_lines = 0; head_rowend = 0; rd.rowend = end0 == '\n' ? 0 : end0;
     Cols *cols = cols_for(r, name, nn, -1);
-    if (has_maps) table_rows(&rd, cols, name, 1, -1, r->separator, r->comment, src, at, n, NULL);
+    if (has_maps) table_rows(&rd, cols, name, 1, -1, sep0, r->comment, src, at, n, NULL);
     int nt = omp_get_num_threads() * 8; if ((size_t)nt > (n - at) / 65536 + 1) nt = (int)((n - at) / 65536 + 1);
     size_t *cut = malloc(sizeof(size_t) * (size_t)(nt + 1)); cut[0] = at; int k = 1;
-    for (int i = 1; i < nt; i++) { size_t c = at + (n - at) / (size_t)nt * (size_t)i; while (c < n && src[c - 1] != '\n') c++; if (c > cut[k - 1] && c < n) cut[k++] = c; }
+    for (int i = 1; i < nt; i++) { size_t c = at + (n - at) / (size_t)nt * (size_t)i; while (c < n && src[c - 1] != (uint8_t)end0) c++; if (c > cut[k - 1] && c < n) cut[k++] = c; }
     cut[k] = n; Events *pe = calloc((size_t)k, sizeof(Events));
     #pragma omp taskloop grainsize(1)
-    for (int t = 0; t < k; t++) table_rows(&rd, cols, name, 0, -1, r->separator, r->comment, src, cut[t], cut[t + 1], &pe[t]);
+    for (int t = 0; t < k; t++) table_rows(&rd, cols, name, 0, -1, sep0, r->comment, src, cut[t], cut[t + 1], &pe[t]);
+    free(plain);
     for (int t = 0; t < k; t++) { for (uint64_t j = 0; j < pe[t].n; j++) ev_push(ev, &pe[t].e[j]); free(pe[t].e); }   /* in reading order */
     for (int i = 0; i < r->nblock; i++) if (!r->block[i].from[0]) { free(rd.map[i].t); free(rd.map[i].pool); }
     free(pe); free(cut); free(cols); free(rd.map); free(rd.predicate);
@@ -1151,6 +1265,7 @@ void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
         if (!f->tokens) f->skipped = 1;                                          /* not a tokenizer's file after all */
     }
     else if (r && r->members) attest_members(r, f, src, n);
+    else if (r && !strcmp(r->grammar, "lines")) attest_lines(r, f, src, n);
     else if (r && !strcmp(r->grammar, "fields")) attest_fields(r, f, src, n);
     else if (r && !strcmp(r->grammar, "table") && r->word[0]) attest_records(r, f, src, n);
     else if (r && !strcmp(r->grammar, "table")) attest_table(r, f, src, n, &f->ev);

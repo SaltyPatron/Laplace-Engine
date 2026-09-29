@@ -90,6 +90,10 @@ typedef struct {
     int rest;                                         /* in a table: the fields after the named columns: 1 pairs of predicate and object, 2 objects */
     int row_tuple;                                    /* in a table: the row itself is the claim, the path of its fields in order */
     char field_pair;                                  /* in a table: every field is written A, this character, B, and is the pair [A, B] */
+    char line[512]; void *line_re;                    /* grammar lines: the pattern a line must match to say something, its parts between parentheses */
+    char witness_in[64];                              /* in a table: the column that names who says the row */
+    double score_from, score_to; int score_mapped;    /* the score is written on a scale of its own: from the lowest to the highest */
+    int itself;                                       /* what the row attests is its subject itself */
     char json[64];                                    /* in a table: the column whose field is a JSON object that speaks of the row's claim */
     char witnesses[8][64]; int nwitnesses;            /* in that object: the path of keys to who witnessed the claim */
     char subject_kind[64];                            /* in a table: the subject's name stands only among things of this kind ({dir}: within the file's directory) */
@@ -114,6 +118,7 @@ typedef struct {
     uint32_t unit;                                   /* queries run inside parts of the tree no larger than this */
     char itself;                                      /* a character that, in an object, stands for the subject's codepoint */
     struct { char col[64], kind[64]; } kinds[16]; int nkinds;   /* a table: columns whose values name things of a kind */
+    int quoted;                                       /* a table whose fields may stand between double quotes (a quote inside is doubled) */
     int skip;                                         /* a table: lines at its head that are not rows */
     struct { char col[64], sep; } list[16]; int nlist;  /* a table: columns whose field is several values, and what parts them (* every column) */
     char remark;                                      /* in a table's row: what follows this character is not the row */
@@ -127,6 +132,11 @@ typedef struct {
     struct { char rec[64], word[8][64]; int nword; } words[4]; int nwords;      /* XML: an element that is a record of words, and the elements inside it that are its words */
     struct { char el[64], pred[64], obj[64], kind[64]; } link[16]; int nlink;             /* XML: elements that are relations of what they are inside */
     char codepoints[32][32]; int ncodepoints;          /* XML: attributes whose values are codepoints written in hex */
+    char about_line[512]; void *about_re;              /* grammar lines: the pattern of the line that names what the file is about */
+    char named_key[64], named[8][64]; int nnamed;       /* JSON: an object that holds named_key is the thing these members name together, in this order */
+    char escaped;                                      /* a table: the character after this one is itself, a line's end included */
+    char path_sep, path_join;                          /* a value that begins with path_sep is a path of parts, a part's words joined by path_join */
+    int linkage, tuples;                               /* JSON: what a thing inside another says, it says of being there; a list of values inside a list is one tuple */
     int keys_things, members;                          /* JSON: the keys of an object inside nothing are things; read natively (members.c) */
     void *empty_like;                                 /* a table: a field that matches this is one the source leaves empty */
     char like[64];                                    /* the recipe it reads as: that recipe's grammar and statements */
@@ -186,6 +196,8 @@ Ref  string_ref(const uint8_t *s, size_t n);                          /* text as
 void ev_push(Events *, const Event *);
 void attest_records(const Recipe *, File *, const uint8_t *src, size_t n);      /* records.c */
 void attest_fields(const Recipe *, File *, const uint8_t *src, size_t n);
+Ref path_ref(const uint8_t *p, size_t n, char sep, char join);
+void attest_lines(const Recipe *, File *, const uint8_t *src, size_t n);
 void attest_members(const Recipe *, File *, const uint8_t *src, size_t n);       /* members.c */
 /* A JSON value that speaks of a thing: every claim it makes of it, and the values at the path of keys wpath. */
 typedef struct { Ref *c; int n, cap; } RefList;

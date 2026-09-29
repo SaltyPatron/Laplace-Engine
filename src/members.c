@@ -47,26 +47,43 @@ static int string(JP *j, const uint8_t **s, size_t *n){
     }
     *s = j->buf; *n = k; j->p = q + 1; return 1;
 }
-static Ref text_of(JP *j, const uint8_t *s, size_t n){ return n > 256 ? text_ref(j->ctx, s, n) : string_ref(s, n); }
+static Ref text_of(JP *j, const uint8_t *s, size_t n){ if (j->r->path_sep && n > 1 && s[0] == (uint8_t)j->r->path_sep) return path_ref(s, n, j->r->path_sep, j->r->path_join); return n > 256 ? text_ref(j->ctx, s, n) : string_ref(s, n); }
 static void skip(JP *j);
 static void value(JP *j, Ref *path, int np, Refs *items);
 
-/* What an object is: the value of the first identity key it holds. The cursor is on its opening brace, and stays. */
-static int thing_of(JP *j, Ref *out){
-    const Recipe *r = j->r; if (!r->nidentity) return 0;
-    const uint8_t *save = j->p; int best = -1; Ref found = { 0 };
+/* What an object is: the thing the members the recipe names say it is. The cursor is on its opening brace, and
+ * stays. Gives which identity named it (-2: the members that name it together), or -1 when nothing does. */
+static int thing_of(JP *j, const Ref *path, int np, Ref *out){
+    const Recipe *r = j->r; if (!r->nidentity && !r->nnamed) return -1;
+    const uint8_t *save = j->p; int best = -1, holds = 0; Ref found = { 0 }, part[8]; uint8_t have[8] = { 0 };
     j->p++; ws(j);
     while (j->p < j->e && *j->p == '"' && !j->bad) {
         const uint8_t *k; size_t kn; if (!string(j, &k, &kn)) break;
-        int which = -1; for (int i = 0; i < r->nidentity; i++) if (strlen(r->identity[i].attr) == kn && !memcmp(r->identity[i].attr, k, kn)) { which = i; break; }
+        int which = -1, nm = -1;
+        for (int i = 0; i < r->nidentity; i++) if (strlen(r->identity[i].attr) == kn && !memcmp(r->identity[i].attr, k, kn)) {
+            const char *el = r->identity[i].el; if (el[0] && strcmp(el, "*")) { if (np < 1) continue; Ref u = string_ref((const uint8_t *)el, strlen(el)); if (memcmp(&u.id, &path[np - 1].id, 16)) continue; }
+            which = i; break; }
+        for (int i = 0; i < r->nnamed; i++) if (strlen(r->named[i]) == kn && !memcmp(r->named[i], k, kn)) { nm = i; break; }
+        if (r->nnamed && strlen(r->named_key) == kn && !memcmp(r->named_key, k, kn)) holds = 1;
         ws(j); if (j->p < j->e && *j->p == ':') j->p++; ws(j);
-        if (which >= 0 && (best < 0 || which < best) && j->p < j->e && *j->p == '"') { const uint8_t *v; size_t vn; if (string(j, &v, &vn) && vn) { found = text_of(j, v, vn); best = which; } }
-        else if (which >= 0 && (best < 0 || which < best) && j->p < j->e && ((*j->p >= '0' && *j->p <= '9') || *j->p == '-')) { const uint8_t *v = j->p; skip(j); found = string_ref(v, (size_t)(j->p - v)); best = which; }
+        int wanted = (which >= 0 && (best < 0 || which < best)) || nm >= 0; Ref v = { 0 }; int got = 0;
+        if (wanted && j->p < j->e && *j->p == '"') { const uint8_t *t; size_t tn; if (string(j, &t, &tn) && tn) { v = text_of(j, t, tn); got = 1; } }
+        else if (wanted && j->p < j->e && ((*j->p >= '0' && *j->p <= '9') || *j->p == '-')) { const uint8_t *t = j->p; skip(j); v = string_ref(t, (size_t)(j->p - t)); got = 1; }
+        else if (wanted && nm < 0 && j->p < j->e && *j->p == '[') {                 /* a list of texts names it together */
+            const uint8_t *at = j->p; Ref t[8]; int nt = 0, plain = 1; j->p++; ws(j);
+            while (j->p < j->e && *j->p == '"' && nt < 8) { const uint8_t *x; size_t xn; if (!string(j, &x, &xn)) { plain = 0; break; } if (xn) t[nt++] = text_of(j, x, xn); ws(j); if (j->p < j->e && *j->p == ',') { j->p++; ws(j); } else break; }
+            if (plain && nt && j->p < j->e && *j->p == ']') { j->p++; v = nt == 1 ? t[0] : said_tuple(compose(t, (uint32_t)nt, tier_of(t, nt))); got = 1; }
+            else { j->p = at; j->bad = 0; skip(j); } }
         else skip(j);
+        if (got && nm >= 0) { part[nm] = v; have[nm] = 1; }
+        if (got && which >= 0 && (best < 0 || which < best)) { found = v; best = which; }
         ws(j); if (j->p < j->e && *j->p == ',') { j->p++; ws(j); } else break;
     }
     j->p = save; j->bad = 0;
-    if (best < 0) return 0; *out = found; return 1;
+    if (holds) { Ref t[8]; int nt = 0; for (int i = 0; i < r->nnamed; i++) if (have[i]) { t[nt] = part[i]; t[nt].said = t[nt].said == LP_SAID_TUPLE ? LP_SAID_TUPLE : 0; nt++; }
+        if (nt > 1) { *out = said_tuple(compose(t, (uint32_t)nt, tier_of(t, nt))); return -2; }
+        if (nt == 1) { *out = t[0]; return -2; } }
+    if (best < 0) return -1; *out = found; return best;
 }
 static void skip(JP *j){
     ws(j); if (j->p >= j->e) return;
@@ -79,28 +96,31 @@ static void skip(JP *j){
         j->bad = 1; return; }
     while (j->p < j->e && *j->p != ',' && *j->p != '}' && *j->p != ']' && *j->p != ' ' && *j->p != '\n' && *j->p != '\r' && *j->p != '\t') j->p++;
 }
-static void say(JP *j, Ref *path, int np, Ref v, Refs *items){
-    if (np < 1) return;                                                       /* nothing it would be said of */
+static Ref say(JP *j, Ref *path, int np, Ref v, Refs *items){
+    if (np < 1) return (Ref){ 0 };                                                       /* nothing it would be said of */
     if (j->nwp && np - 1 == j->nwp) { int same = 1; for (int i = 0; i < j->nwp && same; i++) same = !memcmp(&path[i + 1].id, &j->wpath[i].id, 16); if (same) refs_push(&j->found, v); }
     Ref t[MAXPATH + 2]; memcpy(t, path, sizeof(Ref) * (size_t)np); for (int i = 0; i < np; i++) if (t[i].said == LP_SAID_CLAIM) t[i].said = LP_SAID_TUPLE; t[np] = v;       /* a claim that is spoken of is a thing like any other */
     Ref c = said_claim(compose(t, (uint32_t)np + 1, tier_of(t, np + 1)));
     refs_push(&j->claims, c); if (items) refs_push(items, c);
+    return c;
 }
 static void object(JP *j, Ref *path, int np, Refs *items){
-    Ref X; int thing = thing_of(j, &X); Refs mine = { 0 };
+    Ref X; int by = thing_of(j, path, np, &X), thing = by != -1; Refs mine = { 0 };
     Ref sub[MAXPATH + 2]; int ns;
-    if (thing) { if (np >= 1) say(j, path, np, X, items); sub[0] = X; ns = 1; }
+    if (thing) { sub[0] = X; ns = 1; if (np >= 1) { Ref c = say(j, path, np, X, items); if (j->r->linkage) sub[0] = c; } }
     else { memcpy(sub, path, sizeof(Ref) * (size_t)np); ns = np; }
     int keys_things = !thing && np == 0 && j->r->keys_things;
     j->p++; ws(j);
     while (j->p < j->e && *j->p == '"' && !j->bad) {
         const uint8_t *k; size_t kn; if (!string(j, &k, &kn)) break;
         Ref key = kn ? string_ref(k, kn) : (Ref){ 0 }; int is_id = 0;
-        if (thing) for (int i = 0; i < j->r->nidentity && !is_id; i++) is_id = strlen(j->r->identity[i].attr) == kn && !memcmp(j->r->identity[i].attr, k, kn);
+        if (by >= 0) is_id = strlen(j->r->identity[by].attr) == kn && !memcmp(j->r->identity[by].attr, k, kn);
+        else if (by == -2) for (int i = 0; i < j->r->nnamed && !is_id; i++) is_id = strlen(j->r->named[i]) == kn && !memcmp(j->r->named[i], k, kn);
         ws(j); if (j->p < j->e && *j->p == ':') j->p++; ws(j);
         if (!kn || ns >= MAXPATH) skip(j);
         else if (keys_things) { Ref one[1] = { key }; value(j, one, 1, &mine); }
-        else if (is_id && j->p < j->e && *j->p != '{' && *j->p != '[') {        /* the member that names it: said already, unless another names it first */
+        else if (is_id && j->p < j->e && *j->p == '[') skip(j);                   /* the texts that name it together: said already */
+        else if (is_id && j->p < j->e && *j->p != '{') {        /* the member that names it: said already, unless another names it first */
             const uint8_t *at = j->p; Ref v; int same = 0;
             if (*j->p == '"') { const uint8_t *s; size_t n; if (string(j, &s, &n) && n) { v = text_of(j, s, n); same = !memcmp(&v.id, &X.id, 16); if (!same) { sub[ns] = key; say(j, sub, ns + 1, v, &mine); } } }
             else { skip(j); v = string_ref(at, (size_t)(j->p - at)); same = !memcmp(&v.id, &X.id, 16); if (!same) { sub[ns] = key; say(j, sub, ns + 1, v, &mine); } }
@@ -118,7 +138,18 @@ static void value(JP *j, Ref *path, int np, Refs *items){
     uint8_t c = *j->p;
     if (c == '{') object(j, path, np, items);
     else if (c == '[') { j->p++; ws(j);
-        while (j->p < j->e && *j->p != ']' && !j->bad) { value(j, path, np, items); ws(j); if (j->p < j->e && *j->p == ',') { j->p++; ws(j); } else break; }
+        while (j->p < j->e && *j->p != ']' && !j->bad) {
+            if (j->r->tuples && *j->p == '[') {                                     /* a list of plain values inside a list: one tuple */
+                const uint8_t *at = j->p; Ref t[16]; int nt = 0, plain = 1; j->p++; ws(j);
+                while (j->p < j->e && *j->p != ']' && nt < 16) {
+                    if (*j->p == '"') { const uint8_t *x; size_t xn; if (!string(j, &x, &xn)) { plain = 0; break; } if (xn) t[nt++] = text_of(j, x, xn); }
+                    else if (*j->p == '{' || *j->p == '[') { plain = 0; break; }
+                    else { const uint8_t *x = j->p; skip(j); size_t xn = (size_t)(j->p - x); if (!xn) { plain = 0; break; } if (!(xn == 4 && !memcmp(x, "null", 4))) t[nt++] = string_ref(x, xn); }
+                    ws(j); if (j->p < j->e && *j->p == ',') { j->p++; ws(j); } else break; }
+                if (plain && j->p < j->e && *j->p == ']') { j->p++; if (nt) say(j, path, np, nt == 1 ? t[0] : said_tuple(compose(t, (uint32_t)nt, tier_of(t, nt))), items); }
+                else { j->p = at; j->bad = 0; value(j, path, np, items); }
+            }
+            else value(j, path, np, items); ws(j); if (j->p < j->e && *j->p == ',') { j->p++; ws(j); } else break; }
         if (j->p < j->e && *j->p == ']') j->p++; else j->bad = 1; }
     else if (c == '"') { const uint8_t *s; size_t n; if (string(j, &s, &n) && n) { while (n && (s[0] == ' ' || s[0] == '\n' || s[0] == '\t')) { s++; n--; } while (n && (s[n - 1] == ' ' || s[n - 1] == '\n' || s[n - 1] == '\t' || s[n - 1] == '\r')) n--; if (n) say(j, path, np, text_of(j, s, n), items); } }
     else { const uint8_t *at = j->p; skip(j); size_t n = (size_t)(j->p - at); if (!n) { j->bad = 1; return; }

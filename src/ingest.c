@@ -45,6 +45,16 @@ static int walk_cb(const char *p, const struct stat *st, int type, struct FTW *f
     return FTW_CONTINUE;
 }
 
+/* A claim or a tuple as text: its parts between brackets, a part that is itself a tuple the same way. */
+static void show_tuple(const lp_id *id){
+    Node *c = table_find(id); if (!c) { Buf o = { 0 }; expand(id, &o); fwrite(o.b, 1, o.n, stdout); free(o.b); return; }
+    Shard *sh = &shard[c->id.b[0]]; int first = 1; putchar('[');
+    for (uint32_t v = 0; v < c->nv; v++) for (uint32_t r = 0; r < VRUN(sh->vtx[c->voff + v].run); r++) {
+        if (!first) printf(", "); first = 0;
+        if ((sh->vtx[c->voff + v].run >> LP_M_RUN_BITS) == LP_SAID_TUPLE && table_find(&sh->vtx[c->voff + v].id)) show_tuple(&sh->vtx[c->voff + v].id);
+        else { Buf o = { 0 }; expand(&sh->vtx[c->voff + v].id, &o); fwrite(o.b, 1, o.n, stdout); free(o.b); } }
+    putchar(']');
+}
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
     int threads = 0, do_load = 1, a = 1, show_claims = 0; const char *of = NULL;
@@ -148,18 +158,13 @@ int cmd_ingest(int argc, char **argv){
     uint64_t *size = calloc((size_t)nfiles, 8);
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
         size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
-    #define SHOW(F) do { if (show_claims) for (uint64_t e = 0; e < (F)->ev.n; e++) { \
-        if ((F)->ev.e[e].kind == EV_RECORD) { printf("-- record %u\n", (F)->ev.e[e].position); continue; } \
-        Node *c = table_find(&(F)->ev.e[e].claim); if (!c) continue; \
-        Shard *sh = &shard[c->id.b[0]]; int first = 1; putchar('['); \
-        for (uint32_t v = 0; v < c->nv; v++) for (uint32_t r_ = 0; r_ < VRUN(sh->vtx[c->voff + v].run); r_++) { \
-            if (!first) printf(", "); first = 0; \
-            Node *tn = (sh->vtx[c->voff + v].run >> LP_M_RUN_BITS) == LP_SAID_TUPLE ? table_find(&sh->vtx[c->voff + v].id) : NULL; \
-            if (tn) { Shard *ts = &shard[tn->id.b[0]]; putchar('['); \
-                for (uint32_t y = 0; y < tn->nv; y++) { Buf o = { 0 }; expand(&ts->vtx[tn->voff + y].id, &o); if (y) printf(", "); fwrite(o.b, 1, o.n, stdout); free(o.b); } \
-                putchar(']'); continue; } \
-            Buf o = { 0 }; expand(&sh->vtx[c->voff + v].id, &o); fwrite(o.b, 1, o.n, stdout); free(o.b); } \
-        printf("]\n"); } } while (0)
+    #define SHOW(F) do { if (show_claims) for (uint64_t e = 0; e < (F)->ev.n; e++) { const Event *x_ = &(F)->ev.e[e]; \
+        if (x_->kind == EV_RECORD) { printf("-- record %u\n", x_->position); continue; } \
+        if (!table_find(&x_->claim)) continue; \
+        show_tuple(&x_->claim); \
+        if (x_->score != 1.0f) printf("   score %.3g", (double)x_->score); \
+        if (x_->own_witness) { printf("   by "); show_tuple(&x_->witness); } \
+        putchar('\n'); } } while (0)
     for (int a0 = 0; a0 < nfiles; ) {
         int b0 = a0; uint64_t sum = 0; char boundary = 0;
         while (b0 < nfiles && (b0 == a0 || sum + size[b0] <= batch)) { sum += size[b0]; b0++; }
