@@ -6,14 +6,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-size_t uuid_param(uint8_t *out, const lp_id *ids, uint32_t n){
-    uint32_t hdr[5] = { htonl(1), htonl(0), htonl(2950), htonl(n), htonl(1) }; memcpy(out, hdr, 20); uint8_t *q = out + 20;
+size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n){
+    uint32_t hdr[5] = { htonl(1), htonl(0), htonl(id_oid), htonl(n), htonl(1) }; memcpy(out, hdr, 20); uint8_t *q = out + 20;
     for (uint32_t i = 0; i < n; i++) { uint32_t l = htonl(16); memcpy(q, &l, 4); memcpy(q + 4, ids[i].b, 16); q += 20; }
     return (size_t)(q - out);
 }
-void id_text(const lp_id *id, char out[37]){
-    const uint8_t *b = id->b;
-    snprintf(out, 37, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15]);
+void id_text(const lp_id *id, char out[33]){
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < 16; i++) { out[2 * i] = hex[id->b[i] >> 4]; out[2 * i + 1] = hex[id->b[i] & 15]; } out[32] = 0;
 }
 
 typedef struct { lp_id id; lp_id *kid; uint32_t *run; uint32_t nv; uint8_t state; } Ent;      /* state: 0 wanted, 1 fetched, 2 not recorded */
@@ -45,9 +45,9 @@ static size_t fetch(Reader *r){
     if (!nw) return 0;
     lp_id *ids = malloc(sizeof(lp_id) * nw); size_t k = 0;
     for (size_t i = 0; i < r->n; i++) if (r->e[i].state == 0) { ids[k++] = r->e[i].id; r->e[i].state = 2; }
-    uint8_t *ab = malloc(20 + 20 * nw); size_t al = uuid_param(ab, ids, (uint32_t)nw);
+    uint8_t *ab = malloc(20 + 20 * nw); size_t al = ids_param(ab, ids, (uint32_t)nw);
     const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = db_ask(r->pg, "SELECT entity, path FROM physicality WHERE entity = ANY($1::uuid[])", 1, v, l, f);
+    PGresult *q = db_ask(r->pg, "SELECT entity, path FROM physicality WHERE entity = ANY($1::blake3[])", 1, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "paths: %s", PQerrorMessage(r->pg)); exit(1); }
     r->trips++;
     for (int j = 0; j < PQntuples(q); j++) {
@@ -88,7 +88,7 @@ char *reader_text(Reader *r, const lp_id *id, size_t limit){
         if (!o.wants) break;
     }
     Ent *x = ent(r, id, 0);
-    if (!o.n && x && x->state == 2) { free(o.b); char t[37]; id_text(id, t); char *s = malloc(48); snprintf(s, 48, "{%s}", t); return s; }   /* not recorded */
+    if (!o.n && x && x->state == 2) { free(o.b); char t[33]; id_text(id, t); char *s = malloc(48); snprintf(s, 48, "{%s}", t); return s; }   /* not recorded */
     if (o.n >= o.limit) {                                   /* cut at a character, and say so */
         size_t n = o.n; if (n > o.limit) { n = o.limit; while (n > 0 && ((uint8_t)o.b[n] & 0xC0) == 0x80) n--; }
         o.b = xrealloc(o.b, n + 8); memcpy(o.b + n, "\xE2\x80\xA6", 4); return o.b;

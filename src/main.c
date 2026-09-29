@@ -30,10 +30,13 @@ const char *laplace_grammars(void){ return env_or("LAPLACE_GRAMMARS", LAPLACE_GR
 const char *laplace_sql(void){ return env_or("LAPLACE_SQL", LAPLACE_SQL_DEFAULT); }
 const char *laplace_ucd(void){ return env_or("LAPLACE_UCD", LAPLACE_UCD_DEFAULT); }
 
+uint32_t id_oid;
 PGconn *db_connect(const char *conninfo){
     PGconn *pg = PQconnectdb(conninfo);
     if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "%s (LAPLACE_CONNINFO: %s)\n", PQerrorMessage(pg), conninfo); exit(1); }
     PQclear(PQexec(pg, "SET client_min_messages = warning"));
+    if (!id_oid) { PGresult *r = PQexec(pg, "SELECT 'blake3'::regtype::oid");          /* a database not deployed yet has no such type */
+                   if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) id_oid = (uint32_t)strtoul(PQgetvalue(r, 0, 0), NULL, 10); PQclear(r); }
     return pg;
 }
 /* A query that is asked again and again is planned once for the connection: over the partitions of entity and
@@ -64,7 +67,6 @@ static const struct { const char *name; int (*run)(int, char **); const char *wh
     { "ingest", cmd_ingest, "a source by its name, or files, through their recipes" },
     { "forget", cmd_forget, "what one witness attested, taken back out" },
     { "sweep",  cmd_sweep,  "whatever nothing holds, removed" },
-    { "replay", cmd_replay, "every standing, played again from the ledger in the order it was written" },
     { "index",  cmd_index,  "build the indexes after a bulk load" },
     { "tree",   cmd_tree,   "a file's syntax tree, as its recipe's grammar reads it" },
     { "text",   cmd_text,   "a text's ID, coordinate and constituents, computed here" },

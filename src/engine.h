@@ -65,7 +65,6 @@ int cmd_deploy(int argc, char **argv);
 int cmd_index(int argc, char **argv);
 int cmd_forget(int argc, char **argv);
 int cmd_sweep(int argc, char **argv);
-int cmd_replay(int argc, char **argv);
 int cmd_status(int argc, char **argv);
 int cmd_sources(int argc, char **argv);
 int cmd_tier0(int argc, char **argv);
@@ -81,6 +80,7 @@ typedef struct { lp_id id; uint32_t run; } __attribute__((packed)) Vtx;      /* 
 #define VRUN(m) ((m) & ((1u << LP_M_RUN_BITS) - 1))
 static inline Ref said_claim(Ref r){ r.said = LP_SAID_CLAIM; return r; }
 static inline Ref said_tuple(Ref r){ r.said = LP_SAID_TUPLE; return r; }
+static inline Ref said_metadata(Ref r){ r.said = LP_SAID_METADATA; return r; }
 static inline Ref said_record(Ref r){ if (r.said != LP_SAID_CLAIM && r.said != LP_SAID_TUPLE) r.said = LP_SAID_RECORD; return r; }
 typedef struct { lp_id id; int64_t m[4]; uint64_t voff; uint32_t nv, len; uint8_t tier, keep; } Node;
 typedef struct {
@@ -221,7 +221,11 @@ typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviat
 typedef struct { Event *e; uint64_t n, cap; } Events;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */
-typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; int has_lineage; uint64_t bytes, tokens, incomplete; uint8_t sha[32]; int exact, skipped, known; Events ev;
+typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; int has_lineage; uint64_t bytes, tokens, incomplete; int exact, skipped, known; Events ev;
+                 const Source *source;                 /* the source it is a file of, or NULL for a file given by itself */
+                 double trust;                         /* how far its witness is trusted */
+                 Ref file; int has_file;               /* the file in the DAG: its trunk, over its metadata and its content */
+                 Ref *said; uint64_t nsaid, csaid;     /* what it witnessed, in the order it was read: a curated file's content */
                  int partial;                          /* more of it is still to come: it is not yet a recorded source */
                  void *columns; int ncolumns;          /* a table read a stretch at a time: its columns, from its head */
                  uint64_t records; } File;             /* records read so far: a stretch's positions go on from the last */
@@ -242,12 +246,17 @@ int  json_said_of(const Recipe *, Ctx *, const uint8_t *p, size_t n, Ref thing, 
 void attest_elements(const Recipe *, File *, void *root_node, const uint8_t *src, size_t n);
 void dir_of(const char *path, char *out, size_t cap);                 /* the name of the directory a file is in */      /* elements.c */
 
-typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, led, std_new, std_upd; double t_dedup, t_copy, t_sem; } LoadStats;
+typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, led, std_new, std_upd, known; double t_dedup, t_copy, t_sem; } LoadStats;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
 
 /* ---- reading the database: set-based fetches, decoded here */
-size_t uuid_param(uint8_t *out, const lp_id *ids, uint32_t n);        /* a binary uuid[] parameter; out holds 20 + 20 n bytes */
-void   id_text(const lp_id *id, char out[37]);                        /* as PostgreSQL writes a uuid */
+extern uint32_t id_oid;                                               /* the database's own number for the type of an ID, blake3 */
+size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n);         /* a binary blake3[] parameter; out holds 20 + 20 n bytes */
+void   id_text(const lp_id *id, char out[33]);                        /* 32 hexadecimal digits */
+
+/* ---- a file in the DAG (file.c) */
+void file_take(File *);                                               /* what was just read of it, into its content */
+void file_close(File *);                                              /* the file is whole: its metadata, its content, its trunk */
 
 /* Entities back to their text: paths fetched one level at a time for every entity at once, expanded here down to tier 0. */
 typedef struct Reader Reader;

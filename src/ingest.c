@@ -2,11 +2,10 @@
 /* laplace ingest: files through their recipes.
  *   laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes/] [-j threads] [-s source] [--whole] [--no-load] [--plan] file...
  *   laplace ingest [options]          with nothing named: every source, in the order they go in
- * Files already recorded byte for byte are skipped by one query over their BLAKE3-256 hashes. The rest decompose on
- * every core; each is recomposed from the node table and compared with its bytes; then new nodes, claims and
- * standings are written. Live counters go to stderr, phase times to stdout. */
+ * Files decompose on every core; each is recomposed from the node table and compared with its bytes. A file is a
+ * trunk in the DAG, over its metadata and its content (file.c); a file whose trunk is recorded already is recorded,
+ * and nothing of it is written again. Then new nodes are written, and what was attested is played and recorded. Live counters go to stderr, phase times to stdout. */
 #include "engine.h"
-#include "blake3.h"
 #include <arpa/inet.h>
 #include <locale.h>
 #include <ftw.h>
@@ -179,7 +178,8 @@ int cmd_ingest(int argc, char **argv){
 
     File *files = calloc(nfiles, sizeof(File));
     int uncovered = 0;
-    for (int i = 0; i < nfiles; i++) { files[i].path = paths[i]; files[i].recipe = recipe_for(rec, nrec, files[i].path, path_of[i]);
+    for (int i = 0; i < nfiles; i++) { files[i].path = paths[i]; files[i].recipe = recipe_for(rec, nrec, files[i].path, path_of[i]); files[i].source = path_of[i];
+                                       if (files[i].recipe) files[i].trust = path_of[i] && files[i].recipe->source < 0 ? path_of[i]->trust : files[i].recipe->trust;
                                        if (!files[i].recipe) { files[i].skipped = 1; uncovered += path_of[i] == NULL; } }     /* a source takes the files its recipes name */
     /* a source's files, most trusted witness first; among equals, as they were found */
     for (int i = 1; i < nfiles; i++) { File x = files[i]; int j = i;
@@ -201,36 +201,13 @@ int cmd_ingest(int argc, char **argv){
         return 0;
     }
 
-    /* ---- files already recorded, by their bytes */
-    t = now();
-    #pragma omp parallel for schedule(dynamic)
-    for (int i = 0; i < nfiles; i++) {
-        if (files[i].skipped) continue;                                          /* no recipe reads it: it is not read at all */
-        FILE *f = fopen(files[i].path, "rb"); if (!f) { files[i].skipped = 1; continue; }
-        blake3_hasher h; blake3_hasher_init(&h); uint8_t buf[1 << 16]; size_t k;
-        while ((k = fread(buf, 1, sizeof buf, f))) blake3_hasher_update(&h, buf, k);
-        fclose(f); blake3_hasher_finalize(&h, files[i].sha, 32);
-    }
-    int nknown = 0, nsame = 0;
-    for (int i = 0; i < nfiles; i++) if (!files[i].skipped)                        /* the same bytes twice among these files: once */
-        for (int j = 0; j < i; j++) if (!files[j].skipped && !memcmp(files[i].sha, files[j].sha, 32)) { files[i].skipped = 1; nsame++; break; }
-    if (nsame) printf("files that are the same bytes as another of these: %d\n", nsame);
-    if (do_load) {
-        PGconn *pg = db_connect(conninfo);
-        uint8_t *ab = malloc(20 + 36 * (size_t)nfiles), *q = ab + 20;
-        for (int i = 0; i < nfiles; i++) { uint32_t l = htonl(32); memcpy(q, &l, 4); memcpy(q + 4, files[i].sha, 32); q += 36; }
-        uint32_t hdr[5] = { htonl(1), htonl(0), htonl(17), htonl((uint32_t)nfiles), htonl(1) }; memcpy(ab, hdr, 20);
-        const char *v[1] = { (const char *)ab }; int l[1] = { (int)(q - ab) }, fm[1] = { 1 };
-        PGresult *r = PQexecParams(pg, "SELECT content FROM source WHERE content = ANY($1::bytea[])", 1, NULL, v, l, fm, 1);
-        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "%s", PQerrorMessage(pg)); return 1; }
-        for (int j = 0; j < PQntuples(r); j++) for (int i = 0; i < nfiles; i++) if (!files[i].known && !memcmp(files[i].sha, PQgetvalue(r, j, 0), 32)) { files[i].known = 1; nknown++; }
-        PQclear(r); PQfinish(pg); free(ab);
-    }
-    printf("files already recorded byte for byte: %d of %d (%.1f ms)\n", nknown, nfiles, (now() - t) * 1000);
+    /* Whether a file is recorded is not asked of its bytes: it is decomposed, its trunk is computed here, and the
+     * trunk is looked for, trunk to leaf, with everything else (load). */
+    int nknown = 0; ctx_open(threads);
 
     /* ---- a batch at a time: decomposed on every core, recomposed and compared, recorded, and the table emptied for
      * the next. A file too long for one batch is read a stretch at a time, if its records can be parted. */
-    ctx_open(threads); t = now();
+    t = now();
     uint64_t batch = (uint64_t)(getenv("LAPLACE_BATCH_MB") ? atoll(getenv("LAPLACE_BATCH_MB")) : 1024) << 20;
     uint64_t bytes = 0, nev = 0; int done = 0, exact = 0, mism = 0, batches = 0; double t_dec = 0, t_rec = 0; LoadStats st = { 0 };
     uint64_t *size = calloc((size_t)nfiles, 8);
@@ -243,31 +220,47 @@ int cmd_ingest(int argc, char **argv){
         if (x_->score != 1.0f) printf("   score %.3g", (double)x_->score); \
         if (x_->own_witness) { printf("   by "); show_tuple(&x_->witness); } \
         putchar('\n'); } } while (0)
+    /* What was read of a file is kept for its content; a file read to its end gets its trunk. */
+    #define WHOLE(F) do { File *f_ = (F); file_take(f_); if (!f_->partial) file_close(f_); } while (0)
     for (int a0 = 0; a0 < nfiles; ) {
         int b0 = a0; uint64_t sum = 0; char boundary = 0;
         while (b0 < nfiles && (b0 == a0 || sum + size[b0] <= batch)) { sum += size[b0]; b0++; }
         if (b0 == a0 + 1 && size[a0] > batch && reads_in_stretches(files[a0].recipe, &boundary)) {
-            /* one long file, a stretch at a time */
-            File *f = &files[a0]; size_t l = strlen(f->path); int gz = l > 3 && !strcmp(f->path + l - 3, ".gz");
-            gzFile g = gzopen(f->path, "rb"); if (!g) { f->skipped = 1; a0 = b0; continue; } gzbuffer(g, 1 << 20); (void)gz;
-            size_t cap = (size_t)batch / 2 + (64u << 20), have = 0; uint8_t *buf = malloc(cap + 1); int first = 1, last = 0;
-            while (!last) {
-                double td = now(); int got; while (have < cap - (1u << 20) && (got = gzread(g, buf + have, (unsigned)((cap - have) > (1u << 30) ? (1u << 30) : (cap - have)))) > 0) have += (size_t)got;
-                last = have < cap - (1u << 20); size_t end = have;
-                if (!last) { end = 0; for (size_t i = have; i > 1; i--) if (buf[i - 1] == '\n' && (boundary == 1 || (i >= 2 && buf[i - 2] == '\n') || (i >= 3 && buf[i - 2] == '\r' && buf[i - 3] == '\n'))) { end = i; break; }
-                             if (!end) { fprintf(stderr, "\n  %s: a record longer than a stretch (%zu MB): the file cannot be read in stretches of this length\n", f->path, cap >> 20); mism++; break; } }
-                f->partial = !last;
-                #pragma omp parallel
-                #pragma omp single
-                decompose_bytes(CTX[omp_get_thread_num()], f, buf, end, first);
-                first = 0; f->bytes += end; bytes += end; nev += f->ev.n; t_dec += now() - td; batches++;
-                fprintf(stderr, "\r  %s: %.1f MB read  %.1f MB/s  %'llu nodes in this stretch   ", f->path, f->bytes / 1e6, bytes / 1e6 / (now() - t), (unsigned long long)table_count());
-                SHOW(f);
-                if (do_load && load(conninfo, threads, f, 1, &st)) return 1;
-                free(f->ev.e); memset(&f->ev, 0, sizeof f->ev); table_reset();
-                memmove(buf, buf + end, have - end); have -= end;
+            /* One long file, a stretch at a time. It is read twice: first for what it is, its trunk, with nothing
+             * recorded; and, if that trunk is not recorded, again to record it. A file already recorded costs its
+             * decomposition and one lookup, and nothing is written. */
+            File *f = &files[a0]; int failed = 0;
+            for (int pass = do_load ? 0 : 1; pass < 2 && !failed && !f->known; pass++) {
+                gzFile g = gzopen(f->path, "rb"); if (!g) { f->skipped = 1; break; } gzbuffer(g, 1 << 20);
+                size_t cap = (size_t)batch / 2 + (64u << 20), have = 0; uint8_t *buf = malloc(cap + 1); int first = 1, last = 0;
+                f->bytes = 0; f->records = 0; f->incomplete = 0; f->has_file = 0; free(f->columns); f->columns = NULL; f->ncolumns = 0;
+                while (!last) {
+                    double td = now(); int got; while (have < cap - (1u << 20) && (got = gzread(g, buf + have, (unsigned)((cap - have) > (1u << 30) ? (1u << 30) : (cap - have)))) > 0) have += (size_t)got;
+                    last = have < cap - (1u << 20); size_t end = have;
+                    if (!last) { end = 0; for (size_t i = have; i > 1; i--) if (buf[i - 1] == '\n' && (boundary == 1 || (i >= 2 && buf[i - 2] == '\n') || (i >= 3 && buf[i - 2] == '\r' && buf[i - 3] == '\n'))) { end = i; break; }
+                                 if (!end) { fprintf(stderr, "\n  %s: a record longer than a stretch (%zu MB): the file cannot be read in stretches of this length\n", f->path, cap >> 20); mism++; failed = 1; break; } }
+                    f->partial = !last;
+                    #pragma omp parallel
+                    #pragma omp single
+                    decompose_bytes(CTX[omp_get_thread_num()], f, buf, end, first);
+                    first = 0; f->bytes += end; WHOLE(f); t_dec += now() - td;
+                    if (pass) { bytes += end; nev += f->ev.n; batches++; }
+                    fprintf(stderr, "\r  %s: %s  %.1f MB read  %'llu nodes in this stretch   ", f->path, pass ? "recording" : "its trunk", f->bytes / 1e6, (unsigned long long)table_count());
+                    if (pass) { SHOW(f); if (do_load && load(conninfo, threads, f, 1, &st)) return 1; }
+                    free(f->ev.e); memset(&f->ev, 0, sizeof f->ev); table_reset();
+                    memmove(buf, buf + end, have - end); have -= end;
+                }
+                gzclose(g); free(buf);
+                if (!pass && !failed && f->has_file) {                          /* is its trunk recorded */
+                    PGconn *pg = db_connect(conninfo); uint8_t ab[40]; size_t al = ids_param(ab, &f->file.id, 1);
+                    const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, fm[1] = { 1 };
+                    PGresult *r = PQexecParams(pg, "SELECT 1 FROM entity WHERE id = ANY($1::blake3[])", 1, NULL, v, l, fm, 0);
+                    if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "%s", PQerrorMessage(pg)); return 1; }
+                    if (PQntuples(r)) { f->known = 1; st.known++; }
+                    PQclear(r); PQfinish(pg);
+                }
             }
-            gzclose(g); free(buf); free(f->columns); f->columns = NULL; done++; exact++; a0 = b0; continue;
+            free(f->columns); f->columns = NULL; done++; exact++; a0 = b0; continue;
         }
         double td = now();
         #pragma omp parallel
@@ -299,16 +292,18 @@ int cmd_ingest(int argc, char **argv){
             free(o.b); free(src);
         }
         t_rec += now() - td;
-        for (int i = a0; i < b0; i++) { nev += files[i].ev.n; SHOW(&files[i]); }
+        for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
         if (do_load && load(conninfo, threads, files + a0, b0 - a0, &st)) return 1;
         batches++;
         if (b0 < nfiles) { for (int i = a0; i < b0; i++) { free(files[i].ev.e); memset(&files[i].ev, 0, sizeof files[i].ev); } table_reset(); }
         a0 = b0;
     }
     #undef SHOW
+    #undef WHOLE
     fputc('\n', stderr);
     extern uint64_t table_total(void), table_hits(void);
-    printf("\n== decomposition: %d files, %.1f MB, content recomposed byte for byte or curated %d, mismatched %d%s\n", nfiles - nknown, bytes / 1e6, exact, mism, batches > 1 ? ", a batch at a time" : "");
+    printf("\n== decomposition: %d files, %.1f MB, content recomposed byte for byte or curated %d, mismatched %d%s\n", nfiles, bytes / 1e6, exact, mism, batches > 1 ? ", a batch at a time" : "");
+    if (do_load) printf("   files whose trunk was already recorded: %'llu\n", (unsigned long long)st.known);
     printf("   %'llu compositions, %'llu reused; %'llu attestations\n", (unsigned long long)table_total(), (unsigned long long)table_hits(), (unsigned long long)nev);
     { uint64_t inc = 0; for (int i = 0; i < nfiles; i++) inc += files[i].incomplete;
       if (inc) { printf("   %'llu parts were not read whole: what they attest is incomplete (see above)\n", (unsigned long long)inc); mism++; } }

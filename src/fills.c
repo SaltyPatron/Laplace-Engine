@@ -82,10 +82,10 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
     lp_id *keys = malloc(sizeof(lp_id) * np); int nk = 0;
     for (int i = 0; i < np; i++) if (table_find(&ph[i])) keys[nk++] = ph[i];
     if (!nk) { memcpy(keys, ph, sizeof(lp_id) * np); nk = np; }
-    uint8_t *ab = malloc(20 + 20 * (size_t)nk); size_t al = uuid_param(ab, keys, (uint32_t)nk);
+    uint8_t *ab = malloc(20 + 20 * (size_t)nk); size_t al = ids_param(ab, keys, (uint32_t)nk);
     char pt[16]; snprintf(pt, sizeof pt, "%d", ptier);
     const char *v1[2] = { (const char *)ab, pt }; int l1[2] = { (int)al, 0 }, f1[2] = { 1, 0 };
-    PGresult *r = PQexecParams(pg, "SELECT entity, path, tier FROM physicality WHERE tier > $2::smallint AND path @> $1::uuid[]", 2, NULL, v1, l1, f1, 1);
+    PGresult *r = PQexecParams(pg, "SELECT entity, path, tier FROM physicality WHERE tier > $2::smallint AND path @> $1::blake3[]", 2, NULL, v1, l1, f1, 1);
     if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
     lp_id *front = malloc(sizeof(lp_id) * (PQntuples(r) + 1)); int nf = 0, ftier = 1 << 30;
     for (int i = 0; i < PQntuples(r); i++) {
@@ -107,10 +107,10 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
         levels++; lp_id *next = malloc(sizeof(lp_id) * 1024); int nx = 0, cx = 1024, ntier = 1 << 30;
         for (int i0 = 0; i0 < nf; i0 += 20000) {
             int k = nf - i0 < 20000 ? nf - i0 : 20000;
-            uint8_t *pb = malloc(20 + 20 * (size_t)k); size_t pl = uuid_param(pb, front + i0, (uint32_t)k);
+            uint8_t *pb = malloc(20 + 20 * (size_t)k); size_t pl = ids_param(pb, front + i0, (uint32_t)k);
             char tt[16]; snprintf(tt, sizeof tt, "%d", ftier);                    /* a container sits above its constituents */
             const char *v[2] = { (const char *)pb, tt }; int l[2] = { (int)pl, 0 }, f[2] = { 1, 0 };
-            PGresult *q = PQexecParams(pg, "SELECT p.entity, t.id, t.times, p.tier FROM physicality p, laplace_path_times(p.path, $1::uuid[]) t WHERE p.tier > $2::smallint AND p.path && $1::uuid[]", 2, NULL, v, l, f, 1);
+            PGresult *q = PQexecParams(pg, "SELECT p.entity, t.id, t.times, p.tier FROM physicality p, laplace_path_times(p.path, $1::blake3[]) t WHERE p.tier > $2::smallint AND p.path && $1::blake3[]", 2, NULL, v, l, f, 1);
             if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "parents: %s", PQerrorMessage(pg)); return 1; }
             fetched += (uint64_t)PQntuples(q);
             for (int j = 0; j < PQntuples(q); j++) {

@@ -69,7 +69,7 @@ int cmd_deploy(int argc, char **argv){
       snprintf(q, sizeof q, "ALTER DATABASE %s SET laplace.flags = %s", db, esc); if (!run(pg, q, "the flags that go with it")) return 1;
       PQfreemem(esc); PQfreemem(db); }
     char *have = one(pg, "SELECT 1 FROM pg_class WHERE relname = 'entity' AND relkind = 'p'");
-    if (have) printf("  %-52s %9s\n", "content schema", "present"); else { char *s = sql_file("schema.sql"); if (!run(pg, s, "content schema: entity, physicality, source")) return 1; free(s); }
+    if (have) printf("  %-52s %9s\n", "content schema", "present"); else { char *s = sql_file("schema.sql"); if (!run(pg, s, "content schema: entity, physicality")) return 1; free(s); }
     free(have);
     { char *s = sql_file("semantics.sql"); if (!run(pg, s, "semantics: witness, attestation, consensus")) return 1; free(s); }
     { char *s = sql_file("lookup.sql"); if (!run(pg, s, "lookups ingestion needs: IDs")) return 1; free(s); }
@@ -102,14 +102,10 @@ int cmd_status(int argc, char **argv){
                       printf("           %s\n", strcmp(hex, fp) ? "DIFFERS from this engine's tier 0: the two would give the same content different coordinates" : "the same as this engine's"); }
 
     PGresult *r = PQexec(pg, "SELECT p.tier, sum(c.reltuples)::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))) "
-                             "FROM pg_class c JOIN LATERAL (SELECT (regexp_match(c.relname, '^entity_t([0-9]+|x)_[0-9a-f]$'))[1] AS tier) p ON p.tier IS NOT NULL "
+                             "FROM pg_class c JOIN LATERAL (SELECT (regexp_match(c.relname, '^entity_t([0-9]+|x)(_[0-9a-f])?$'))[1] AS tier) p ON p.tier IS NOT NULL "
                              "WHERE c.relkind = 'r' AND c.reltuples > 0 GROUP BY 1 ORDER BY CASE WHEN p.tier = 'x' THEN 99 ELSE p.tier::int END");
     printf("\nentities, by tier (the planner's counts)\n");
     for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) printf("  tier %-3s %'16lld   %s\n", PQgetvalue(r, i, 0), atoll(PQgetvalue(r, i, 1)), PQgetvalue(r, i, 2));
-    PQclear(r);
-    r = PQexec(pg, "SELECT format, count(*), pg_size_pretty(sum(bytes)) FROM source GROUP BY 1 ORDER BY sum(bytes) DESC");
-    printf("\nsources, by recipe\n");
-    for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) printf("  %-24s %'10lld files   %s\n", PQgetvalue(r, i, 0), atoll(PQgetvalue(r, i, 1)), PQgetvalue(r, i, 2));
     PQclear(r);
     r = PQexec(pg, "SELECT c.relname, c.reltuples::bigint, pg_size_pretty(pg_total_relation_size(c.oid)) FROM pg_class c "
                    "WHERE c.relname IN ('witness', 'attestation', 'consensus') AND c.relkind = 'r' ORDER BY 1");
@@ -129,15 +125,17 @@ int cmd_status(int argc, char **argv){
 
 /* laplace sources: the sources there are recipes for, in the order they go in, where each is, and whether it is in. */
 int cmd_sources(int argc, char **argv){
-    PGconn *pg = db_connect(conn_arg(argc, argv));
+    PGconn *pg = db_connect(conn_arg(argc, argv)); tier0_open(NULL); lp_text *tx = lp_text_new(T0);
     Recipe *rec = NULL; int nrec = recipes_load(laplace_recipes(), &rec), n; Source *s = sources_loaded(&n);
     printf("%-4s %-28s %-8s %-9s %s\n", "", "source", "recipes", "in", "kept at");
     for (int i = 0; i < n; i++) {
         int mine = 0, in = 0;
-        for (int k = 0; k < nrec; k++) if (rec[k].source == i) {
-            mine++; const char *v[1] = { rec[k].name };
-            PGresult *r = PQexecParams(pg, "SELECT 1 FROM source WHERE format = $1 LIMIT 1", 1, NULL, v, NULL, NULL, 0);
-            in += PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) > 0; PQclear(r);
+        for (int k = 0; k < nrec; k++) mine += rec[k].source == i;
+        if (s[i].witness[0] && !strchr(s[i].witness, '{')) {                   /* it is in when its witness is known */
+            lp_id w = lp_text_decompose(tx, (const uint8_t *)s[i].witness, strlen(s[i].witness), NULL, NULL).id; uint8_t ab[40]; size_t al = ids_param(ab, &w, 1);
+            const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+            PGresult *r = PQexecParams(pg, "SELECT 1 FROM witness WHERE id = ANY($1::blake3[])", 1, NULL, v, l, f, 0);
+            in = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) > 0; PQclear(r);
         }
         printf("%-4d %-28s %-8d %-9s %s\n", i + 1, s[i].name, mine, in ? "yes" : "no", s[i].found[0] ? s[i].found : "(not at any of its roots)");
         if (s[i].nafter) { printf("     %-28s after", ""); for (int a = 0; a < s[i].nafter; a++) printf(" %s", s[i].after[a]); printf("\n"); }
