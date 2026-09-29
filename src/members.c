@@ -6,6 +6,8 @@
  * A claim is the path from a thing to a value, every key and value as written:
  *   [thing, key, value]   [thing, key, key, value]   ...   and, where the path ends at another thing, [thing, key, thing]
  * An array says each of its values under the same path. null, and an empty text, say nothing.
+ * An object can instead be a row (subject in KEY, predicate in KEY, object in KEY, score in KEY): those members are the
+ * claim, the score the one the row gives it, and every other member is said of the claim itself.
  * Everything a top-level value says it says together: it is one record, the path of its claims and of the records of
  * the objects inside it, witnessed once, and its claims within it. */
 #define _GNU_SOURCE
@@ -16,7 +18,7 @@
 #include <string.h>
 
 typedef struct { Ref *c; int n, cap; } Refs;
-typedef struct { const Recipe *r; const uint8_t *p, *e; uint8_t *buf; size_t bcap; int bad; Refs claims; Ctx *ctx; } JP;
+typedef struct { const Recipe *r; const uint8_t *p, *e; uint8_t *buf; size_t bcap; int bad; Refs claims; Ctx *ctx; const Ref *wpath; int nwp; Refs found; } JP;
 #define MAXPATH 24
 
 static void refs_push(Refs *a, Ref x){ if (a->n == a->cap) { a->cap = a->cap ? a->cap * 2 : 64; a->c = xrealloc(a->c, sizeof(Ref) * (size_t)a->cap); } a->c[a->n++] = x; }
@@ -79,7 +81,8 @@ static void skip(JP *j){
 }
 static void say(JP *j, Ref *path, int np, Ref v, Refs *items){
     if (np < 1) return;                                                       /* nothing it would be said of */
-    Ref t[MAXPATH + 2]; memcpy(t, path, sizeof(Ref) * (size_t)np); t[np] = v;
+    if (j->nwp && np - 1 == j->nwp) { int same = 1; for (int i = 0; i < j->nwp && same; i++) same = !memcmp(&path[i + 1].id, &j->wpath[i].id, 16); if (same) refs_push(&j->found, v); }
+    Ref t[MAXPATH + 2]; memcpy(t, path, sizeof(Ref) * (size_t)np); for (int i = 0; i < np; i++) if (t[i].said == LP_SAID_CLAIM) t[i].said = LP_SAID_TUPLE; t[np] = v;       /* a claim that is spoken of is a thing like any other */
     Ref c = said_claim(compose(t, (uint32_t)np + 1, tier_of(t, np + 1)));
     refs_push(&j->claims, c); if (items) refs_push(items, c);
 }
@@ -124,6 +127,7 @@ static void value(JP *j, Ref *path, int np, Refs *items){
 /* One top-level value: a record, and its claims within it. */
 static int record(JP *j, Ref *path, int np, float er, float ed, Events *ev){
     j->claims.n = 0; Refs items = { 0 };
+    ws(j); if (np == 0 && (j->p >= j->e || (*j->p != '{' && *j->p != '['))) { j->bad = 1; return 0; }
     value(j, path, np, &items);
     int ok = !j->bad && j->claims.n > 0;
     if (ok) {
@@ -140,6 +144,46 @@ static int record(JP *j, Ref *path, int np, float er, float ed, Events *ev){
     }
     free(items.c); return ok;
 }
+/* An object that is a row: three of its members (or two) are the claim, and its other members are said of the claim. */
+static int member_text(JP *j, Ref *out){
+    ws(j); if (j->p >= j->e) return 0;
+    if (*j->p == '"') { const uint8_t *s; size_t n; if (!string(j, &s, &n) || !n) return 0; *out = text_of(j, s, n); return 1; }
+    if (*j->p == '{' || *j->p == '[') { skip(j); return 0; }
+    const uint8_t *at = j->p; skip(j); size_t n = (size_t)(j->p - at); if (!n || (n == 4 && !memcmp(at, "null", 4))) return 0; *out = string_ref(at, n); return 1;
+}
+static int row(JP *j, const Block *b, float er, float ed, Events *ev){
+    j->claims.n = 0; ws(j); if (j->p >= j->e || *j->p != '{') { j->bad = 1; return 0; }
+    const uint8_t *start = j->p; Ref part[3]; int have[3] = { 0, 0, 0 }; float score = 1.0f;
+    j->p++; ws(j);
+    while (j->p < j->e && *j->p == '"' && !j->bad) { const uint8_t *k; size_t kn; if (!string(j, &k, &kn)) break; char key[96]; snprintf(key, sizeof key, "%.*s", (int)(kn < 95 ? kn : 95), k);
+        ws(j); if (j->p < j->e && *j->p == ':') j->p++; ws(j); int role = -1; for (int i = 0; i < 3; i++) if (b->in[i][0] && !strcmp(b->in[i], key)) role = i;
+        if (role >= 0) have[role] = member_text(j, &part[role]);
+        else if (b->in[5][0] && !strcmp(b->in[5], key)) { const uint8_t *at = j->p; skip(j); char z[32]; size_t n = (size_t)(j->p - at); if (n && n < 32) { memcpy(z, at, n); z[n] = 0; char *e; double v = strtod(z, &e); if (e != z && v >= 0.0 && v <= 1.0) score = (float)v; } }
+        else skip(j);
+        ws(j); if (j->p < j->e && *j->p == ',') { j->p++; ws(j); } else break; }
+    if (j->bad || !have[0] || !have[2] || (!have[1] && !b->pair)) return 0;
+    Ref tp[3] = { part[0], have[1] ? part[1] : part[2], part[2] }; int n = have[1] ? 3 : 2;
+    Ref claim = said_claim(compose(tp, (uint32_t)n, tier_of(tp, n))); refs_push(&j->claims, claim);
+    Refs items = { 0 }; refs_push(&items, claim);
+    j->p = start + 1; ws(j);                                                  /* again, for what is said of the claim */
+    while (j->p < j->e && *j->p == '"' && !j->bad) { const uint8_t *k; size_t kn; if (!string(j, &k, &kn)) break; char key[96]; snprintf(key, sizeof key, "%.*s", (int)(kn < 95 ? kn : 95), k); Ref kr = kn ? string_ref(k, kn) : (Ref){ 0 };
+        ws(j); if (j->p < j->e && *j->p == ':') j->p++; ws(j); int is_part = 0; for (int i = 0; i < 3; i++) if (b->in[i][0] && !strcmp(b->in[i], key)) is_part = 1;
+        if (is_part || !kn) skip(j); else { Ref path[2] = { claim, kr }; value(j, path, 2, &items); }
+        ws(j); if (j->p < j->e && *j->p == ',') { j->p++; ws(j); } else break; }
+    if (j->claims.n == 1) { Event x = { claim.id, claim.id, score, er, ed, 0, EV_CLAIM }; ev_push(ev, &x); }
+    else { Ref node = said_record(compose(items.c, (uint32_t)items.n, tier_of(items.c, items.n)));
+        Event x = { node.id, node.id, score, er, ed, 0, EV_RECORD }; ev_push(ev, &x);
+        for (int i = 0; i < j->claims.n; i++) { int dup = 0; for (int y = 0; y < i && !dup; y++) dup = !memcmp(&j->claims.c[y].id, &j->claims.c[i].id, 16);
+            if (!dup) { Event m = { j->claims.c[i].id, node.id, i ? 1.0f : score, er, ed, 0, EV_MEMBER }; ev_push(ev, &m); } } }
+    free(items.c); return 1;
+}
+int json_said_of(const Recipe *r, Ctx *ctx, const uint8_t *p, size_t n, Ref thing, RefList *claims, const Ref *wpath, int nwpath, RefList *found){
+    JP j = { r, p, p + n, NULL, 0, 0, { 0 }, ctx, wpath, nwpath, { 0 } }; Refs items = { 0 };
+    ws(&j); if (j.p >= j.e || *j.p != '{') return 0;
+    Ref path[1] = { thing }; value(&j, path, 1, &items);
+    claims->c = j.claims.c; claims->n = j.claims.n; claims->cap = j.claims.cap; found->c = j.found.c; found->n = j.found.n; found->cap = j.found.cap;
+    free(items.c); free(j.buf); return !j.bad;
+}
 void attest_members(const Recipe *r, File *f, const uint8_t *src, size_t n){
     const Block *b = NULL; for (int k = 0; k < r->nblock && !b; k++) if (!r->block[k].is_map) b = &r->block[k];
     float er = b ? b->enter_rating : 1500.0f, ed = b ? b->enter_deviation : 0.0f;
@@ -149,7 +193,8 @@ void attest_members(const Recipe *r, File *f, const uint8_t *src, size_t n){
     cut[k] = n; Events *pe = calloc(k, sizeof(Events)); uint64_t bad = 0;
     #pragma omp taskloop grainsize(1) reduction(+:bad)
     for (size_t t = 0; t < k; t++) {
-        JP j = { r, src + cut[t], src + cut[t + 1], NULL, 0, 0, { 0 }, CTX[omp_get_thread_num()] };
+        JP j = { r, src + cut[t], src + cut[t + 1], NULL, 0, 0, { 0 }, CTX[omp_get_thread_num()], NULL, 0, { 0 } };
+        int rows = b && b->in[0][0] && b->in[2][0];                              /* every value is a row: a claim, and what is said of it */
         if (!r->records && r->keys_things) {                                   /* every key a thing, and what its value says a record */
             ws(&j); if (j.p < j.e && *j.p == '{') { j.p++; ws(&j);
                 while (j.p < j.e && *j.p == '"' && !j.bad) { const uint8_t *ks; size_t kn; if (!string(&j, &ks, &kn)) break; Ref key[1]; if (kn) key[0] = string_ref(ks, kn);
@@ -158,10 +203,10 @@ void attest_members(const Recipe *r, File *f, const uint8_t *src, size_t n){
                     ws(&j); if (j.p < j.e && *j.p == ',') { j.p++; ws(&j); } else break; } }
             if (j.bad) bad++;
         }
-        else if (!r->records) { if (!record(&j, NULL, 0, er, ed, &pe[t]) && j.bad) bad++; }
+        else if (!r->records) { if (!(rows ? row(&j, b, er, ed, &pe[t]) : record(&j, NULL, 0, er, ed, &pe[t])) && j.bad) bad++; }
         else while (j.p < j.e) {
             const uint8_t *nl = memchr(j.p, '\n', (size_t)(j.e - j.p)), *end = nl ? nl : j.e, *whole = j.e;
-            j.e = end; j.bad = 0; ws(&j); if (j.p < j.e) { if (!record(&j, NULL, 0, er, ed, &pe[t]) && j.bad) bad++; }
+            j.e = end; j.bad = 0; ws(&j); if (j.p < j.e) { if (!(rows ? row(&j, b, er, ed, &pe[t]) : record(&j, NULL, 0, er, ed, &pe[t])) && j.bad) bad++; }
             j.e = whole; j.p = nl ? nl + 1 : whole;
         }
         free(j.buf); free(j.claims.c);

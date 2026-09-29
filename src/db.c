@@ -163,7 +163,9 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         Node *x = table_find(&files[fi].trunk.id); if (x && !x->keep) { x->keep = 3; FPUSH(x->id); }
         if (files[fi].ev.n) { Node *w = table_find(&files[fi].witness.id); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } }
         if (files[fi].has_lineage) { Node *lin = table_find(&files[fi].lineage.id); if (lin && !lin->keep) { lin->keep = 3; FPUSH(lin->id); } }
-        for (uint64_t i = 0; i < files[fi].ev.n; i++) { Node *c = table_find(&files[fi].ev.e[i].claim); if (c && !c->keep) { c->keep = 3; FPUSH(c->id); } }     /* a record's claims are under it */
+        for (uint64_t i = 0; i < files[fi].ev.n; i++) { Node *c = table_find(&files[fi].ev.e[i].claim); if (c && !c->keep) { c->keep = 3; FPUSH(c->id); }     /* a record's claims are under it */
+            if (files[fi].ev.e[i].kind == EV_RECORD) { Node *w = table_find(&files[fi].ev.e[i].witnessed); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } }
+            if (files[fi].ev.e[i].own_witness) { Node *w = table_find(&files[fi].ev.e[i].witness); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } } }
     }
     while (nf) {
         st->rounds++; st->checked += nf;
@@ -259,9 +261,9 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
          * the rating its record would enter at, with the deviation its trust gives, and the outcome it attests. */
         for (int fi = 0; fi < nfiles; fi++) {
             const Recipe *rc = files[fi].recipe; int copy = 0;
-            const lp_id *lin = files[fi].has_lineage ? &files[fi].lineage.id : &files[fi].witness.id;
+            const lp_id *flin = files[fi].has_lineage ? &files[fi].lineage.id : &files[fi].witness.id;
             for (uint64_t i = 0; i < files[fi].ev.n; i++) {
-                const Event *e = &files[fi].ev.e[i];
+                const Event *e = &files[fi].ev.e[i]; const lp_id *lin = e->own_witness ? &e->witness : flin;
                 if (e->kind != EV_MEMBER) {                                  /* what is witnessed: once per lineage */
                     uint64_t k_; SEEN_AT(&e->witnessed, lin, copy);
                     if (!copy) { seen[k_].used = 1; seen[k_].witnessed = e->witnessed; seen[k_].lin = *lin; }
@@ -281,6 +283,22 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             int k = 0; while (k < nw && memcmp(&wid[k], &files[fi].witness.id, 16)) k++;
             if (k == nw) { wid[nw] = files[fi].witness.id; wfile[nw++] = fi; }
         }
+        /* witnesses a source names statement by statement: each is its own lineage, and plays at the source's trust */
+        lp_id *own = NULL; double *owntrust = NULL; uint64_t nown = 0, cown = 0, ocap = 1 << 16; uint32_t *oslot = calloc(ocap, 4);
+        for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (!e->own_witness) continue;
+            if ((nown + 1) * 2 > ocap) { free(oslot); ocap *= 2; oslot = calloc(ocap, 4); for (uint64_t j = 0; j < nown; j++) { uint64_t h; memcpy(&h, own[j].b, 8); uint64_t k = h & (ocap - 1); while (oslot[k]) k = (k + 1) & (ocap - 1); oslot[k] = (uint32_t)j + 1; } }
+            uint64_t h; memcpy(&h, e->witness.b, 8); uint64_t k = h & (ocap - 1); int seen_ = 0;
+            while (oslot[k]) { if (!memcmp(&own[oslot[k] - 1], &e->witness, 16)) { seen_ = 1; break; } k = (k + 1) & (ocap - 1); }
+            if (seen_) continue;
+            if (nown == cown) { cown = cown ? cown * 2 : 4096; own = xrealloc(own, cown * sizeof(lp_id)); owntrust = xrealloc(owntrust, cown * 8); }
+            own[nown] = e->witness; owntrust[nown] = files[fi].recipe->trust; oslot[k] = (uint32_t)++nown; }
+        uint8_t *oknown = calloc(nown ? nown : 1, 1);
+        for (uint64_t i0 = 0; i0 < nown; i0 += 50000) { uint32_t k = (uint32_t)(nown - i0 < 50000 ? nown - i0 : 50000); uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t len = uuid_param(ab, own + i0, k);
+            const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
+            PGresult *q = PQexecParams(pg[0], "SELECT u.i FROM unnest($1::uuid[]) WITH ORDINALITY AS u(id, i) JOIN witness w ON w.id = u.id", 1, NULL, v, l, f, 0);
+            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg[0])); return 1; }
+            for (int j = 0; j < PQntuples(q); j++) oknown[i0 + (uint64_t)atoll(PQgetvalue(q, j, 0)) - 1] = 1;
+            PQclear(q); free(ab); }
         uint8_t *known = calloc((size_t)(nw ? nw : 1), 1);
         { uint8_t *ab = malloc(20 + 20 * (size_t)nw); size_t len = uuid_param(ab, wid, (uint32_t)nw);
           const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
@@ -295,12 +313,14 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             if (files[fi].has_lineage) cfield(&c, files[fi].lineage.id.b, 16); else c32(&c, 0xFFFFFFFFu);
             cf_f64(&c, files[fi].recipe->trust);
         }
-        copy_end(&c); free(wid); free(wfile); free(known);
+        for (uint64_t i = 0; i < nown; i++) if (!oknown[i]) { int dup = 0; for (int k = 0; k < nw && !dup; k++) dup = !memcmp(&wid[k], &own[i], 16); if (dup) continue;
+            c16(&c, 3); cfield(&c, own[i].b, 16); c32(&c, 0xFFFFFFFFu); cf_f64(&c, owntrust[i]); }
+        copy_end(&c); free(wid); free(wfile); free(known); free(own); free(owntrust); free(oslot); free(oknown);
         { Copy lc = { 0 };                                                       /* the ledger, in reading order: its order is the order of play */
           copy_begin(&lc, pg[0], "COPY attestation (claim, witness, score, position) FROM STDIN (FORMAT binary)");
           for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) {
               if (files[fi].ev.e[i].kind == EV_MEMBER) continue;                /* witnessed within its record: the record's row */
-              c16(&lc, 4); cfield(&lc, files[fi].ev.e[i].witnessed.b, 16); cfield(&lc, files[fi].witness.id.b, 16); cf_f32(&lc, files[fi].ev.e[i].score);
+              c16(&lc, 4); cfield(&lc, files[fi].ev.e[i].witnessed.b, 16); cfield(&lc, files[fi].ev.e[i].own_witness ? files[fi].ev.e[i].witness.b : files[fi].witness.id.b, 16); cf_f32(&lc, files[fi].ev.e[i].score);
               if (files[fi].ev.e[i].position) cf_i32(&lc, (int32_t)files[fi].ev.e[i].position); else c32(&lc, 0xFFFFFFFFu);
               lc.rows++;
           }

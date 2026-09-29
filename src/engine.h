@@ -90,6 +90,8 @@ typedef struct {
     int rest;                                         /* in a table: the fields after the named columns: 1 pairs of predicate and object, 2 objects */
     int row_tuple;                                    /* in a table: the row itself is the claim, the path of its fields in order */
     char field_pair;                                  /* in a table: every field is written A, this character, B, and is the pair [A, B] */
+    char json[64];                                    /* in a table: the column whose field is a JSON object that speaks of the row's claim */
+    char witnesses[8][64]; int nwitnesses;            /* in that object: the path of keys to who witnessed the claim */
     char subject_kind[64];                            /* in a table: the subject's name stands only among things of this kind ({dir}: within the file's directory) */
     int together;                                     /* in a table: what a row says it says together: the row is one record */
     int pair;                                         /* the claims are pairs: the source writes no predicate between the two */
@@ -111,6 +113,7 @@ typedef struct {
     int records;
     uint32_t unit;                                   /* queries run inside parts of the tree no larger than this */
     char itself;                                      /* a character that, in an object, stands for the subject's codepoint */
+    struct { char col[64], kind[64]; } kinds[16]; int nkinds;   /* a table: columns whose values name things of a kind */
     int skip;                                         /* a table: lines at its head that are not rows */
     struct { char col[64], sep; } list[16]; int nlist;  /* a table: columns whose field is several values, and what parts them (* every column) */
     char remark;                                      /* in a table's row: what follows this character is not the row */
@@ -166,7 +169,7 @@ int     recipes_broken(const Recipe *r, int n, const Source *of);             /*
  * statement that stands alone is both at once. A record (a sentence with what is said of it) is witnessed once, and
  * every claim in it is witnessed in it. */
 enum { EV_CLAIM = 0, EV_RECORD = 1, EV_MEMBER = 2 };      /* a claim that is its own record; a record; a claim within the record before it */
-typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviation; uint32_t position; uint8_t kind; } Event;
+typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviation; uint32_t position; uint8_t kind, own_witness; lp_id witness; } Event;   /* witness: who witnessed it, when the source names one for this statement and not for the whole file */
 typedef struct { Event *e; uint64_t n, cap; } Events;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */
@@ -177,6 +180,9 @@ void ev_push(Events *, const Event *);
 void attest_records(const Recipe *, File *, const uint8_t *src, size_t n);      /* records.c */
 void attest_fields(const Recipe *, File *, const uint8_t *src, size_t n);
 void attest_members(const Recipe *, File *, const uint8_t *src, size_t n);       /* members.c */
+/* A JSON value that speaks of a thing: every claim it makes of it, and the values at the path of keys wpath. */
+typedef struct { Ref *c; int n, cap; } RefList;
+int  json_said_of(const Recipe *, Ctx *, const uint8_t *p, size_t n, Ref thing, RefList *claims, const Ref *wpath, int nwpath, RefList *found);
 void attest_elements(const Recipe *, File *, void *root_node, const uint8_t *src, size_t n);
 void dir_of(const char *path, char *out, size_t cap);                 /* the name of the directory a file is in */      /* elements.c */
 
