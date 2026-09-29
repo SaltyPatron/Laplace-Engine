@@ -145,6 +145,7 @@ static Standing *stand_get(const lp_id *id, const Event *add, double trust){
     smap[k] = (uint32_t)++sn; return &stand[sn - 1];
 }
 
+int load_whole;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     PGconn **pg = malloc(sizeof(PGconn *) * npg);
     for (int i = 0; i < npg; i++) {
@@ -159,6 +160,8 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     double t = now();
     uint64_t cap = 1 << 20, nf = 0; lp_id *front = malloc(cap * sizeof(lp_id));
     #define FPUSH(x) do { if (nf == cap) { cap *= 2; front = xrealloc(front, cap * sizeof(lp_id)); } front[nf++] = (x); } while (0)
+    if (load_whole)                                                          /* every node is looked for: nothing is taken to be recorded because what holds it is */
+        for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) if (!shard[s].node[i].keep) { shard[s].node[i].keep = 3; FPUSH(shard[s].node[i].id); }
     for (int fi = 0; fi < nfiles; fi++) {
         if (files[fi].known || files[fi].skipped) continue;
         Node *x = table_find(&files[fi].trunk.id); if (x && !x->keep) { x->keep = 3; FPUSH(x->id); }
@@ -196,10 +199,15 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
       for (int p = 0; p < NPART; p++) { bucket[p] = malloc(sizeof(NRef) * (cnt[p] + 1)); nbucket[p] = 0; }
       for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) if (shard[s].node[i].keep == 1) {
           int p = part_of(&shard[s].node[i].id, shard[s].node[i].tier); bucket[p][nbucket[p]++] = (NRef){ (uint32_t)s, (uint32_t)i }; } } uint64_t re[NPART] = { 0 }, rp[NPART] = { 0 };
-    #pragma omp parallel for num_threads(npg) schedule(dynamic)
-    for (int p = 0; p < NPART; p++) {
-        if (!nbucket[p] && !(atoms_needed && p / 16 == 0)) continue;             /* nothing new for this partition */
-        write_node_rows(pg[omp_get_thread_num()], p, &re[p], &rp[p], atoms_needed);
+    /* A tier at a time, from the lowest: what a composition is made of is always of a lower tier than it, so whatever
+     * is recorded has everything under it recorded, even if the writing is cut off. Trunk-to-leaf deduplication
+     * rests on that. */
+    for (int tier = 0; tier <= 16; tier++) {
+        #pragma omp parallel for num_threads(npg) schedule(dynamic)
+        for (int p = tier * 16; p < tier * 16 + 16; p++) {
+            if (!nbucket[p] && !(atoms_needed && p / 16 == 0)) continue;         /* nothing new for this partition */
+            write_node_rows(pg[omp_get_thread_num()], p, &re[p], &rp[p], atoms_needed);
+        }
     }
     for (int p = 0; p < NPART; p++) { st->ent_rows += re[p]; st->phy_rows += rp[p]; free(bucket[p]); bucket[p] = NULL; }
     st->t_copy += now() - t;

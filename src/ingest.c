@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 /* laplace ingest: files through their recipes.
- *   laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes/] [-j threads] [-s source] [--no-load] [--plan] file...
+ *   laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes/] [-j threads] [-s source] [--whole] [--no-load] [--plan] file...
  * Files already recorded byte for byte are skipped by one query over their BLAKE3-256 hashes. The rest decompose on
  * every core; each is recomposed from the node table and compared with its bytes; then new nodes, claims and
  * standings are written. Live counters go to stderr, phase times to stdout. */
@@ -54,6 +54,7 @@ int cmd_ingest(int argc, char **argv){
         else if (!strcmp(argv[a], "-r") && a + 1 < argc) rdir = argv[++a];
         else if (!strcmp(argv[a], "-j") && a + 1 < argc) threads = atoi(argv[++a]);
         else if (!strcmp(argv[a], "-s") && a + 1 < argc) of = argv[++a];            /* the files named are this source's: a part of it at a time */
+        else if (!strcmp(argv[a], "--whole")) { extern int load_whole; load_whole = 1; }   /* after a run that was cut off: every node is looked for */
         else if (!strcmp(argv[a], "--no-load")) do_load = 0;
         else if (!strcmp(argv[a], "--plan")) do_load = -1;
         else if (!strcmp(argv[a], "--claims")) { show_claims = 1; do_load = 0; }     /* what the recipes attest, as text; nothing is loaded */
