@@ -1,0 +1,9 @@
+name real-toxicity-prompts-prompts
+# A JSON object on every line: "Each instance represents a prompt and its metadata" (dataset card). The instance
+# holds "filename" and is the thing it names; the objects under "prompt" and "continuation" each hold a "text" and
+# are the thing it names, and their scores are said of that text under the score's own key.
+match prompts.jsonl
+grammar json
+records
+identity * filename
+identity * text

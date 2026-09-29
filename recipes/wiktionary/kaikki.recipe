@@ -1,0 +1,10 @@
+name wiktextract-kaikki
+# The same entries as kaikki.org gives them for one language, a JSON object on every line. Here a sense holds an
+# "id" of its own (en-dictionary-en-noun-hIt8uVcE), so a sense is the thing its "id" names; an object that holds
+# "word" is the thing its "word" names, as in the raw file.
+match kaikki.org-dictionary-*.jsonl
+grammar json
+records
+identity * word
+identity * title
+identity * id

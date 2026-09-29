@@ -1,0 +1,6 @@
+name tokenizers
+# The vocabularies of the tokenizers of the models kept on this machine: each token as the text it stands for, and the
+# vocabulary as the path of its tokens in the order the tokenizer numbers them. Ordinary content: it attests nothing.
+files $LAPLACE_MODELS/*/tokenizer.json
+after unicode
+reads vocabulary

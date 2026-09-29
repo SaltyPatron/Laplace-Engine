@@ -1,0 +1,10 @@
+name opensubtitles
+# OpenSubtitles v2024 as OPUS packages it "in Moses format": for each pair of languages two files of plain text, one
+# sentence on a line, and a README and a LICENSE. The README's first line: "Corpus Name: OpenSubtitles".
+witness OpenSubtitles
+# The README: "This package is part of OPUS - the open collection of parallel corpora".
+lineage OPUS
+# Entering unrated, as tatoeba's recipe does for a source written by its users; the specification does not give one.
+trust 0.67
+root $LAPLACE_DATA/OpenSubtitles/extracted
+after unicode iso-639

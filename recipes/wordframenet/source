@@ -1,0 +1,9 @@
+name wordframenet
+# WordFrameNet (WFN/WordFrameNet) and its extension (XWFN/eXtendedWFN): under a line "Frame: NAME", rows of words with
+# a part of speech and a synset offset.
+# The set has no documentation: no README, no format page, in its directory or in its two archives. Nothing in it says
+# what the source calls itself beyond the names of its two files, nor what the fields of a row are. No witness is
+# named here and there is no recipe: see the report. WFN.tar.gz and XWFN.tar.gz hold the same two files, byte for byte.
+root $LAPLACE_DATA/WordFrameNet
+except *.tar.gz
+after unicode iso-639

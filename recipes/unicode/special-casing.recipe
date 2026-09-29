@@ -1,0 +1,42 @@
+name unicode-special-casing
+# SpecialCasing.txt. The header names the fields:
+#   "# <code>; <lower>; <title>; <upper>; (<condition_list>;)? # <comment>"
+#   "# The <condition_list> is optional. Where present, it consists of one or more language IDs"
+#   "# or casing contexts, separated by spaces."
+# Only the rows that carry a condition_list are read here: the rows without one are the full case mappings the
+# XML gives as lc, tc and uc. A row says each of its mappings together with its conditions: the mapping, as the
+# text it is, and each condition of the list, are one record. A mapping the row leaves empty attests nothing.
+match SpecialCasing.txt
+grammar table
+separator ;
+comment #
+remark #
+columns code lower title upper condition_list
+list condition_list space
+
+claims
+together
+where condition_list matches [A-Za-z]
+where lower matches [0-9A-F]
+subject in code.range
+predicate lower
+object in lower.cps
+attest condition_list
+
+claims
+together
+where condition_list matches [A-Za-z]
+where title matches [0-9A-F]
+subject in code.range
+predicate title
+object in title.cps
+attest condition_list
+
+claims
+together
+where condition_list matches [A-Za-z]
+where upper matches [0-9A-F]
+subject in code.range
+predicate upper
+object in upper.cps
+attest condition_list

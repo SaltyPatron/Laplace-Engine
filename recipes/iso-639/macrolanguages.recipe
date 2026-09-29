@@ -3,6 +3,8 @@ name iso-639-3-macrolanguages
 match iso-639-3-macrolanguages.tab
 grammar table
 header
+# The table does not name who publishes it; the pages kept beside it in sil/ are signed "Copyright © 2026 SIL Global".
+witness SIL Global
 
 claims
 subject in I_Id

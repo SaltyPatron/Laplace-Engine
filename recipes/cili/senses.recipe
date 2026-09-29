@@ -6,6 +6,5 @@ columns synset sense
 
 claims
 predicate-in-name ^ .
-enter 1500 250
 subject in synset
 object in sense

@@ -1,0 +1,13 @@
+name wordnet-cntlist
+# cntlist.5: "The fields are separated by one space", and
+#   "Each line in cntlist is of the form:   tag_cnt  sense_key  sense_number"
+# Every row says of its sense_key its tag_cnt and its sense_number. The sense_key is recorded whole (see index.sense).
+match cntlist
+grammar table
+separator space
+columns tag_cnt sense_key sense_number
+
+claims
+together
+subject in sense_key
+attest tag_cnt sense_number

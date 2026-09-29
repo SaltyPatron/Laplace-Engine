@@ -1,0 +1,4 @@
+name unicode-readme
+# The ReadMe files of the directories: ordinary text.
+match ReadMe.txt ucdxml.readme.txt
+grammar text

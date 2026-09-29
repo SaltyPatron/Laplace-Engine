@@ -1,0 +1,27 @@
+name predicate-matrix
+# README.txt, "File description of the Predicate Matrix v1.3":
+#   "Each row of the Predicate Matrix represents the mapping of
+#    a role over the different resources and includes all the
+#    aligned knowledge about its corresponding verb."
+#   "The Predicate Matrix v1.3 file is structured in 27 columns. The first four
+#    form the index of the row:"
+#   "- 3_ID_PRED: this column contains the predicate."
+# The file's first row names the 27 columns, and every predicate is one of those names, as the row writes it.
+#   "Each row is indetified by the unique index formed by the first four columns."
+# A row is one record, said together. What it speaks of is its index: the path of its first four fields, in the
+# row's order. Every other column is said of that, under the column's own name.
+#
+# Every field is written as the file writes it, with the prefix it carries (id: vn: wn: mcr: fn: pb: eso:).
+#
+# NULL. The file writes id:NULL, vn:NULL, wn:NULL, mcr:NULL, fn:NULL, pb:NULL and eso:NULL. README.txt does not
+# mention NULL anywhere, so this recipe does not decide that such a field is one the source leaves empty: it is
+# recorded as written. If it is the source's empty marker, this one line says so:
+#   empty-matches ^[a-z]+:NULL$
+match PredicateMatrix.v*.txt
+grammar table
+header
+
+claims
+together
+subject in 1_ID_LANG 2_ID_POS 3_ID_PRED 4_ID_ROLE
+attest *

@@ -1,0 +1,16 @@
+name wsd-system-output
+# The answers of the systems the framework compared, one file for each system, on the data set ALL. Each file is that
+# system's testimony, not the framework's, and is named as its file is named. The ids are ALL's.
+# The deviation is the stock deviation of an unrated witness; the source gives none.
+match *.key
+grammar table
+separator space
+columns id
+witness {name}
+deviation 350
+
+claims
+pair
+subject in id
+subject-kind ALL
+rest values

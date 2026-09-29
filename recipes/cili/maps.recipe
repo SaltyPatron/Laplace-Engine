@@ -7,7 +7,6 @@ columns ili synset score
 
 claims
 predicate-in-name - .
-enter 1500 250
 subject in ili
 object in synset
 score in score

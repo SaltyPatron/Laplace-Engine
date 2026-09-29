@@ -1,0 +1,10 @@
+name geonames-admin2-codes
+# readme.txt:
+#   "admin2Codes.txt          : names for administrative subdivision 'admin2 code' (UTF8), Format : concatenated codes <tab>name <tab> asciiname <tab> geonameId"
+match admin2Codes.txt
+grammar table
+columns "concatenated codes" name asciiname geonameId
+
+claims
+subject in "concatenated codes"
+attest *

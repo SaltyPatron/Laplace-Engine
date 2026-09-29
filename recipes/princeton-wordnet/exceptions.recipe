@@ -1,0 +1,15 @@
+name wordnet-exceptions
+# The exception lists. wndb.5: "The first field of each line is an inflected form, followed by a space separated
+# list of one or more base forms of the word. There is one exception list file for each syntactic category."
+# wndb.5 gives these fields no names. Each claim is the inflected form, the syntactic category the file's name
+# gives (noun.exc: noun), and a base form; a line that lists several base forms says each.
+# The name after "columns" is this recipe's handle for the first field; it is never recorded.
+match noun.exc verb.exc adj.exc adv.exc
+grammar table
+separator space
+columns inflected
+
+claims
+predicate-in-name ^ .
+subject in inflected
+rest values

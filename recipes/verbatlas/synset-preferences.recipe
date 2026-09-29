@@ -1,0 +1,14 @@
+name verbatlas-synset-preferences
+# VA_synset_preferences.tsv is in the package, but README.txt neither lists it under PACKAGE CONTENTS nor describes it
+# under FORMAT: its two columns have no name anywhere in the source. Each row is recorded as a pair, in the row's own
+# order. The names after "columns" only point at a position in the row and are never recorded.
+# The file's first line is a licence line ("VerbAtlas 1.1.0 - SapienzaNLP - LICENSE: ..."), not a row.
+match VA_synset_preferences.tsv
+grammar table
+comment V
+columns first second
+
+claims
+pair
+subject in first
+object in second

@@ -1,23 +1,20 @@
 name turtle
 # Turtle. Every statement is recorded as written: [subject, predicate, object]. An identifier between angle brackets
-# is recorded without them, and a quoted text without its quotes; a name written with a prefix keeps it.
-# A text that carries a language tag says so: [text, tag].
+# is recorded without them, in whichever of the three places it stands; a quoted text without its quotes and with its
+# escapes resolved; a name written with a prefix keeps it; "a" is recorded as the "a" the file writes.
+# A text that carries a language tag says so, [text, tag], and one that carries a datatype says that: [text, datatype].
+# Not read: statements of a node the file does not name (a blank node), and collections.
 grammar turtle
 
 claims
-enter 1500 250
 query
-(triple (subject (iri_reference) @subject.iri) (property_list (property (predicate) @predicate (object_list (iri_reference) @object.iri))))
-(triple (subject (iri_reference) @subject.iri) (property_list (property (predicate) @predicate (object_list (prefixed_name) @object.text))))
-(triple (subject (iri_reference) @subject.iri) (property_list (property (predicate) @predicate (object_list (rdf_literal value: (string) @object.text)))))
-(triple (subject (prefixed_name) @subject.text) (property_list (property (predicate) @predicate (object_list (iri_reference) @object.iri))))
-(triple (subject (prefixed_name) @subject.text) (property_list (property (predicate) @predicate (object_list (prefixed_name) @object.text))))
-(triple (subject (prefixed_name) @subject.text) (property_list (property (predicate) @predicate (object_list (rdf_literal value: (string) @object.text)))))
+(triple (subject [(iri_reference) (prefixed_name)] @subject.term)
+  (property_list (property (predicate) @predicate.term (object_list [(iri_reference) (prefixed_name) (rdf_literal) (integer) (decimal) (double) (boolean_literal)] @object.term))))
 end
 
 claims
 pair
-enter 1500 250
 query
-(rdf_literal value: (string) @subject.text (lang_tag) @object.tag)
+(rdf_literal value: (string) @subject.term (lang_tag) @object.tag)
+(rdf_literal value: (string) @subject.term datatype: (_) @object.term)
 end

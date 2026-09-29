@@ -1,0 +1,15 @@
+name unicode-index
+# Index.txt, the index of character names. The file has no header. UAX #44:
+#   "Index.txt is another exception. It uses a tab-delimited format, with field 0"
+#   " consisting of an index entry string, and field 1 a code point."
+# What is recorded is the pair the row writes, in the row's order: the index entry and the character. The columns
+# are numbered here only to say where a part is; no name is recorded.
+match Index.txt
+grammar table
+separator tab
+columns 0 1
+
+claims
+pair
+subject in 0
+object in 1.cps

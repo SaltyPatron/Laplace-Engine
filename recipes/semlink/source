@@ -1,0 +1,7 @@
+name semlink
+# SemLink 2: the mappings between PropBank, VerbNet and FrameNet.
+witness SemLink
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/.refresh-*/SemLink/extracted/semlink-*
+after propbank verbnet

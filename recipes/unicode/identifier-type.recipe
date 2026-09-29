@@ -1,0 +1,17 @@
+name unicode-identifier-type
+# UTS #39 Identifier_Type. The header:
+#   "# Field 0: code point"
+#   "# Field 1: set of Identifier_Type values"
+# The values of a set are parted by spaces, and each is said of the code point. A row whose code point is a range
+# speaks of the range, recorded as the range it is: the path of its first and its last.
+match IdentifierType.txt
+grammar table
+separator ;
+comment #
+remark #
+columns "code point" Identifier_Type
+list Identifier_Type space
+
+claims
+subject in "code point".cps
+attest Identifier_Type

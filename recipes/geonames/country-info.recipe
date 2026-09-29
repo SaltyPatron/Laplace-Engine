@@ -1,0 +1,19 @@
+name geonames-country-info
+# readme.txt:
+#   "countryInfo.txt          : country information : iso codes, fips codes, languages, capital ,..."
+# The file begins with 49 lines of remarks, each beginning with #; its 50th line is its header row, and begins with #
+# too: "#ISO	ISO3	ISO-Numeric	fips	Country	..." So the lines before the header are skipped by their number, and no
+# comment character is named (one would take the header away with the remarks). The first column is read as the file
+# writes it, #ISO; it is the subject, so that name is not recorded.
+# countryInfo.txt, line 45: "# The column 'languages' lists the languages spoken in a country ordered by the number of speakers."
+# Languages and neighbours are written as several values with commas between them.
+match countryInfo.txt
+grammar table
+skip 49
+header
+list Languages ,
+list neighbours ,
+
+claims
+subject in "#ISO"
+attest *

@@ -1,0 +1,14 @@
+name atomic-10x-tuples
+# Every line is one object. Its members "head", "relation" and "tail" are the tuple, recorded in that order, each as
+# written: [head, relation, tail]. Its other members ("split", "rec_0.5" .. "rec_0.9", "p_valid_model") are said of
+# the tuple itself, under their own names. "p_valid_model" is a number between 0 and 1 that the set gives every tuple:
+# it is also the score the tuple is attested with.
+match ATOMIC10X.jsonl
+grammar json
+records
+
+claims
+subject in head
+predicate in relation
+object in tail
+score in p_valid_model

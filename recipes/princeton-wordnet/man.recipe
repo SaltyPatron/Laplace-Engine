@@ -1,0 +1,8 @@
+name wordnet-man
+# The manual pages, which document every file of the database and say what each pointer_symbol, ss_type, lex_filenum
+# and frame number stands for; the release's own README, licence, authors, change log and installation instructions;
+# the log grind wrote when it built the database (dict/log.grind.3.0); and the texts the browser shows
+# (lib/wnres). Read as text, every byte as written (the manual pages are written in troff, and their markup is
+# part of what is recorded). Nothing is attested from them.
+match *.1 *.3 *.5 *.7 *.man README LICENSE COPYING AUTHORS ChangeLog INSTALL license.txt log.grind.3.0
+grammar text

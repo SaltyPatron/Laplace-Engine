@@ -1,0 +1,10 @@
+name geonames-admin1-codes
+# readme.txt:
+#   "admin1CodesASCII.txt     : names in English for admin divisions. Columns: code, name, name ascii, geonameid"
+match admin1CodesASCII.txt
+grammar table
+columns code name "name ascii" geonameid
+
+claims
+subject in code
+attest *

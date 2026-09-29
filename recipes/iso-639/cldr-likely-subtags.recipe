@@ -1,0 +1,8 @@
+name cldr-likely-subtags
+# CLDR's likely subtags: each likelySubtag element says of what its from attribute names what its other attributes
+# hold, under the attribute's own name.
+match likelySubtags.xml
+grammar xml
+# "Copyright © 1991-2026 Unicode, Inc." and "CLDR data files are interpreted according to the LDML specification"
+witness CLDR
+identity likelySubtag from

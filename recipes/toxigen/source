@@ -1,0 +1,9 @@
+name toxigen
+# ToxiGen: machine-generated statements about groups, with labels. The dataset card's title: "Dataset Card for
+# ToxiGen"; pretty_name: ToxiGen.
+witness ToxiGen
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/.refresh-*/Safety/ToxiGen/toxigen-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+after unicode iso-639
+reads text

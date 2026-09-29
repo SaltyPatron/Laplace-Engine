@@ -1,0 +1,9 @@
+name atomic-2020
+# ATOMIC 2020: commonsense tuples, a head, a relation and a tail on every line, in three files.
+# The witness is named as the set's README.md titles itself: "# ATOMIC 2020 Knowledge Graph".
+witness ATOMIC 2020 Knowledge Graph
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/Atomic2020
+reads text
+after unicode iso-639

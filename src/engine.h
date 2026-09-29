@@ -156,6 +156,7 @@ typedef struct {
     char root[8][512]; int nroot;                     /* where it may be kept: the first that exists, newest of a pattern */
     char after[16][64]; int nafter;                   /* the sources it comes after */
     char except[8][128]; int nexcept;                 /* files of its roots that are not the source */
+    char files[8][512]; int nfiles;                   /* the files it is, by pattern, when it is not everything under a root */
     char reads[8][64]; int nreads;                    /* formats its files are read as (recipes that belong to no source) */
     char found[1024];                                 /* where it is */
 } Source;

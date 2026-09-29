@@ -1,0 +1,19 @@
+name wsd-evaluation-framework
+# The unified evaluation framework for word sense disambiguation of Raganato, Camacho-Collados and Navigli (2017):
+# SemCor, SemCor+OMSTI, the five evaluation datasets and their concatenation, every sense annotated with WordNet 3.0;
+# the answers of the systems the framework compared; and, beside the framework, tables made on this machine that map
+# the gold keys to synsets and to the Collaborative Interlingual Index.
+# Every dataset is its own witness, named as the framework names its directory (SemCor, senseval2, ALL ...): the
+# identifiers the data files write (d000, d000.s000, d000.s000.t000) begin again in every dataset.
+witness {dir}
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/WSD
+# Data_Validation/sample-dataset holds semeval2015.data.xml and semeval2015.gold.key.txt, byte for byte the files of
+# Evaluation_Datasets/semeval2015: they are read there, under that directory's name.
+except */sample-dataset/*
+# Training_Corpora/SemCor+OMSTI/semcor+omsti.data.xml is 1,300,362,941 bytes. The XML reader parses a file whole:
+# SemCor's 39 MB took 3.3 GB of memory, and at that rate this file takes more than this machine has. It is not read.
+# Its gold file is.
+except */semcor+omsti.data.xml
+after princeton-wordnet cili

@@ -1,0 +1,11 @@
+name geonames-time-zones
+# readme.txt:
+#   "timeZones.txt            : countryCode, timezoneId, gmt offset on 1st of January, dst offset to gmt on 1st of July (of the current year), rawOffset without DST"
+# The file has a header row of its own, and its names are the ones recorded, as the file writes them.
+match timeZones.txt
+grammar table
+header
+
+claims
+subject in TimeZoneId
+attest *

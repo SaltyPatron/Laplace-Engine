@@ -1,0 +1,9 @@
+name conceptnet
+# ConceptNet 5.7's assertions: one edge on every line.
+# The set has no README on this machine. The witness is named as the set's directory and the identifiers in the file
+# name it (/vault/Data/ConceptNet; "/d/conceptnet/4/en"); the file itself does not give its name or its version.
+witness ConceptNet
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/ConceptNet
+after unicode iso-639

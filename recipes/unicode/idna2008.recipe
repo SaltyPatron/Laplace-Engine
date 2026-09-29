@@ -1,0 +1,15 @@
+name unicode-idna2008
+# The IDNA2008_Category property (RFC 5892's derived property). The header:
+#   "# Field 0: Unicode code point value or range of code point values"
+#   "# Field 1: IDNA2008_Category, consisting of one of these values"
+# A row whose code point is a range speaks of the range, recorded as the range it is: the path of its first and its last.
+match Idna2008.txt
+grammar table
+separator ;
+comment #
+remark #
+columns "code point" IDNA2008_Category
+
+claims
+subject in "code point".cps
+attest IDNA2008_Category

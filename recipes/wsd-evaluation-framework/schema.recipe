@@ -1,0 +1,4 @@
+name wsd-schema
+# The schema of the data files (Data_Validation/schema.xsd), recorded as its syntax tree, every byte as written.
+match schema.xsd
+grammar xml

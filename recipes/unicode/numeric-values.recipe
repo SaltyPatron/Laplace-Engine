@@ -1,0 +1,28 @@
+name unicode-derived-numeric-values
+# extracted/DerivedNumericValues.txt. The header:
+#   "# Derived Property:   Numeric_Value"
+#   "#  Field 1:"
+#   "#    The values are based on field 8 of UnicodeData.txt, plus the fields"
+#   "#  Field 2:"
+#   "#    This field is empty; it used to be a copy of the numeric type."
+#   "#  Field 3:"
+#   "#    expressing the same numeric value either as a whole integer"
+#   "#    where possible, or as a rational fraction such as "1/6"."
+# Both writings of the value are said of the code point under the property's name. The XML gives the value once, as
+# nv, written as UnicodeData.txt writes it. A row whose code point is a range speaks of the range.
+match DerivedNumericValues.txt
+grammar table
+separator ;
+comment #
+remark #
+columns 0 1 2 3
+
+claims
+subject in 0.range
+predicate Numeric_Value
+object in 1
+
+claims
+subject in 0.range
+predicate Numeric_Value
+object in 3

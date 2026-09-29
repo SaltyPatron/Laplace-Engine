@@ -1,0 +1,15 @@
+name wsd-ili-mapped
+# NOT the framework's. The tables of ili_mapped/ were made on this machine, by tools/sensekey_to_ili.py, from a
+# dataset's gold file, WordNet 3.0's index.sense and the Collaborative Interlingual Index's ili-map-pwn30.tab.
+# Nothing in the set names their maker (PROVENANCE.md says only "plus ILI-mapped gold keys"): the witness is named
+# as the directory they are in is named, ili_mapped.
+# The script writes each line as  iid <TAB> k <TAB> off <TAB> ili  and gives the fields no names: each line is
+# recorded as the tuple of its four fields, in its own order.
+match *.gold.ili.tsv
+grammar table
+witness {dir}
+# Made by a script, reviewed by no one: an unrated witness plays at Glicko-2's stock deviation.
+deviation 350
+
+claims
+row tuple

@@ -1,0 +1,12 @@
+name geonames
+# The GeoNames gazetteer's extract files: the 'geoname' table, the alternate names, the hierarchy, and the tables of
+# the codes they are written with. readme.txt documents every file and names every column.
+# readme.txt's title: "Readme for GeoNames Gazetteer extract files"
+witness GeoNames Gazetteer
+# Entering unrated (Glicko-2's stock deviation, 350, trust 0.67), as tatoeba's source does for a source its users
+# write; the specification does not give one. readme.txt: "please do use the wiki-style edit interface on our website
+# https://www.geonames.org to correct inaccuracies and to add new records."
+trust 0.67
+root $LAPLACE_DATA/.refresh-*/GeoNames
+after unicode iso-639
+reads text

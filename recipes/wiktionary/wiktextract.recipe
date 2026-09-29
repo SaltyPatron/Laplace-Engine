@@ -1,0 +1,10 @@
+name wiktextract
+# A JSON object on every line. An object that holds "word" is the thing its "word" names: an entry, and inside it a
+# translation, a synonym, a derived term, a descendant. A redirect line holds "title" and "redirect" and no "word":
+# it is the thing its "title" names. Every other object (a sense, a form, a sound, a template) speaks of the thing
+# it is inside, by the path of its keys. Every key and value is recorded as written.
+match raw-wiktextract-data*.jsonl
+grammar json
+records
+identity * word
+identity * title

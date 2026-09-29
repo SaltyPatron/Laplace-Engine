@@ -1,0 +1,28 @@
+name verbatlas-preference-info
+# README.txt, PACKAGE CONTENTS, names the file VA_preference_info.tsv "(name, id, reference synset for each preference)".
+# README.txt, FORMAT, describes it under the name "5. VA_preference_ids.tsv":
+#   "Each line contains the ID of a VerbAtlas selectional preference, its reference
+#    BabelNet synset ID, and its name."
+# The predicates are the README's names for the second and third columns. The names after "columns" only point at a
+# position in the row and are never recorded, except "name", which "attest" records as the README writes it.
+# The file has a fourth column the README does not describe or name. It is recorded as a pair, the row's ID and the
+# field, in the row's own order.
+# The file's first line is a licence line ("VerbAtlas 1.1.0 - SapienzaNLP - LICENSE: ..."), not a row.
+match VA_preference_info.tsv
+grammar table
+comment V
+columns ID reference_BabelNet_synset_ID name fourth
+
+claims
+predicate reference BabelNet synset ID
+subject in ID
+object in reference_BabelNet_synset_ID
+
+claims
+subject in ID
+attest name
+
+claims
+pair
+subject in ID
+object in fourth

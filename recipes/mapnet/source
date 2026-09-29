@@ -1,0 +1,11 @@
+name mapnet
+# MapNet: FrameNet 1.3 frames and lexical units mapped to WordNet 1.6 synsets.
+# The witness is named as the README's title names it: "MAPNET v.0.1".
+witness MAPNET v.0.1
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+# The README says of the resource: "The resource was automatically generated." and "The evaluated precision of the
+# mapping 0.794." It gives no score to a row.
+deviation 90
+root $LAPLACE_DATA/MapNet-0.1
+after unicode iso-639
+reads text

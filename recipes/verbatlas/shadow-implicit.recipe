@@ -1,0 +1,17 @@
+name va-shadow-implicit
+# README, FORMAT 6 and 7: "Each line contains the shadow arguments, if any, for each BabelNet synset ID. A synset may
+# support multiple shadow arguments in different roles." "Each line contains the implicit arguments, if any, for each
+# BabelNet synset ID. ... A role may have multiple implicit arguments, separated by a pipe (|)."
+# After the synset, the fields come in pairs: a role, and its arguments. Which kind of argument they are is in the
+# file's name (VA_bn2shadow, VA_bn2implicit), so it is part of what is said: [synset, shadow, role, argument].
+match VA_bn2shadow.tsv VA_bn2implicit.tsv
+grammar table
+skip 1
+columns synset
+list * |
+
+claims
+together
+predicate-in-name 2 .
+subject in synset
+rest pairs

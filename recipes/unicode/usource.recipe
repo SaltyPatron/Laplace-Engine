@@ -1,0 +1,33 @@
+name unicode-usource-data
+# USourceData.txt, the U-source ideographs. The header:
+#   "# Field 0: U-source identifier"
+#   "# Field 1: Status"
+#   "# Field 2: The Unicode code point of this ideograph, if any; otherwise, the code point specifies the encoded
+#      ideograph to which this entry is related, generally as a variant"
+#   "# Field 3: kRSUnicode property value (see UAX #38)"
+#   "# Field 4: Virtual KangXi dictionary position"
+#   "# Field 5: Ideographic Description Sequence (IDS)"
+#   "# Field 6: Sources"
+#   "# Field 7: General comments"
+#   "# Field 8: kTotalStrokes property value (see UAX #38)"
+#   "# Field 9: First residual stroke"
+# Field 2 is described, not named: it is recorded as the pair of the identifier and the character, and the name
+# given to its column here only says where it is. Only a field 2 that is one code point (U+2B88A) is read: one that
+# writes several code points, or an identifier, or +2B756, is not. The sources of field 6 are written with * between
+# them, and each is said of the identifier.
+match USourceData.txt
+grammar table
+separator ;
+comment #
+columns "U-source identifier" Status 2 kRSUnicode "Virtual KangXi dictionary position" "Ideographic Description Sequence (IDS)" Sources "General comments" kTotalStrokes "First residual stroke"
+list Sources *
+
+claims
+subject in "U-source identifier"
+attest Status kRSUnicode "Virtual KangXi dictionary position" "Ideographic Description Sequence (IDS)" Sources "General comments" kTotalStrokes "First residual stroke"
+
+claims
+pair
+where 2 matches ^U\+[0-9A-F]+$
+subject in "U-source identifier"
+object in 2.cps

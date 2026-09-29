@@ -6,3 +6,5 @@ grammar fields
 record %%
 field :
 about Subtag Tag
+# The file does not name who publishes it; the directory it is kept in is named iana.
+witness {dir}

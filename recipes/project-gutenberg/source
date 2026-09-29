@@ -1,0 +1,5 @@
+name project-gutenberg
+# Books from Project Gutenberg, as plain text. Ordinary content: it is observed, and attests nothing.
+root $LAPLACE_DATA/ProjectGutenberg/text
+after unicode
+reads text

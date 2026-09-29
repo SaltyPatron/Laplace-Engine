@@ -1,69 +1,15 @@
 name wn-lmf
-# WN-LMF, the Global WordNet Association's XML for wordnets. What is recorded is what the wordnet says, between the
-# words and the identifiers it writes, every name and value as written:
-#   [lemma, partOfSpeech, n]                      a lexical entry's lemma and its part of speech
-#   [lemma, Sense, sense id]   [lemma, Form, form]   the lemma's senses, in the order given, and its other forms
-#   [id, attribute, value]                        every attribute of an element that has an id (a sense's synset, a
-#                                                 synset's ili, members, partOfSpeech, lexfile; the lexicon's language)
-#   [id, relType, target]                         relations between senses and between synsets
-#   [synset id, Definition | Example | ILIDefinition, text]
-# Patterns name a record's first part by position, so each is matched in time linear in the record.
+# WN-LMF, the Global WordNet Association's XML for wordnets, read as what it says.
+# A lexical entry is the word its Lemma writes: a wordnet does not own a word, it says things of it. Everything else
+# that carries an id (the lexicon, a sense, a synset, a syntactic behaviour) is the thing that id names, and what is
+# inside a thing is said of it: [lexicon, LexicalEntry, word], [word, partOfSpeech, n], [word, Sense, sense id],
+# [sense id, synset, synset id], [synset id, ili, i46360], [synset id, Definition, text].
+# A relation is written as its type and its target: [synset id, hypernym, synset id].
+# Every name and value is as the wordnet writes it.
 grammar xml
-
-claims
-enter 1500 250
-query
-([(EmptyElemTag (Name) @_n . (Attribute (Name) @_k (AttValue) @subject.xml) . (Attribute (Name) @predicate (AttValue) @object.xml))
-  (STag (Name) @_n . (Attribute (Name) @_k (AttValue) @subject.xml) . (Attribute (Name) @predicate (AttValue) @object.xml))]
- (#eq? @_n "Lemma") (#eq? @_k "writtenForm") (#eq? @predicate "partOfSpeech"))
-end
-
-claims
-enter 1500 350
-ordered
-query
-((element (STag (Name) @_le)
-   (content . (CharData)? .
-     (element [(STag (Name) @_l . (Attribute (Name) @_k (AttValue) @subject.xml))
-               (EmptyElemTag (Name) @_l . (Attribute (Name) @_k (AttValue) @subject.xml))])
-     (element [(STag (Name) @predicate . (Attribute (Name) @_y (AttValue) @object.xml))
-               (EmptyElemTag (Name) @predicate . (Attribute (Name) @_y (AttValue) @object.xml))])))
- (#eq? @_le "LexicalEntry") (#eq? @_l "Lemma") (#eq? @_k "writtenForm") (#eq? @predicate "Sense") (#eq? @_y "id"))
-end
-
-claims
-enter 1500 350
-query
-((element (STag (Name) @_le)
-   (content . (CharData)? .
-     (element [(STag (Name) @_l . (Attribute (Name) @_k (AttValue) @subject.xml))
-               (EmptyElemTag (Name) @_l . (Attribute (Name) @_k (AttValue) @subject.xml))])
-     (element (EmptyElemTag (Name) @predicate . (Attribute (Name) @_y (AttValue) @object.xml)))))
- (#eq? @_le "LexicalEntry") (#eq? @_l "Lemma") (#eq? @_k "writtenForm") (#eq? @predicate "Form") (#eq? @_y "writtenForm"))
-end
-
-claims
-enter 1500 250
-query
-([(STag (Name) . (Attribute (Name) @_i (AttValue) @subject.xml) (Attribute (Name) @predicate (AttValue) @object.xml))
-  (EmptyElemTag (Name) . (Attribute (Name) @_i (AttValue) @subject.xml) (Attribute (Name) @predicate (AttValue) @object.xml))]
- (#eq? @_i "id") (#not-eq? @object.xml "\"\""))
-end
-
-claims
-enter 1500 250
-query
-((element (STag (Name) . (Attribute (Name) @_i (AttValue) @subject.xml))
-   (content (element (EmptyElemTag (Name) .
-     (Attribute (Name) @_t (AttValue) @predicate.xml) .
-     (Attribute (Name) @_g (AttValue) @object.xml)))))
- (#eq? @_i "id") (#eq? @_t "relType") (#eq? @_g "target"))
-end
-
-claims
-enter 1500 250
-query
-((element (STag (Name) @_s . (Attribute (Name) @_i (AttValue) @subject.xml))
-   (content (element (STag (Name) @predicate) (content) @object.xml)))
- (#eq? @_s "Synset") (#eq? @_i "id"))
-end
+# every entry stands on lines of its own: a long file is read in parts, on every core
+records
+identity LexicalEntry >Lemma.writtenForm
+identity * id
+link SenseRelation relType target
+link SynsetRelation relType target

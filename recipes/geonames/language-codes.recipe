@@ -1,0 +1,12 @@
+name geonames-language-codes
+# readme.txt:
+#   "iso-languagecodes.txt    : iso 639 language codes, as used for alternate names in file alternateNames.zip"
+# The file has a header row: "ISO 639-3	ISO 639-2	ISO 639-1	Language Name". Language Name is the one column no row
+# leaves empty; every row says of it the codes the other columns hold.
+match iso-languagecodes.txt
+grammar table
+header
+
+claims
+subject in "Language Name"
+attest *

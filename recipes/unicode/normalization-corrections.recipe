@@ -1,0 +1,30 @@
+name unicode-normalization-corrections
+# NormalizationCorrections.txt. The header:
+#   "#   Field 0: Unicode code point"
+#   "#   Field 1: Original (erroneous) decomposition"
+#   "#   Field 2: Corrected decomposition"
+#   "#   Field 3: Version of Unicode for which the correction was"
+#   "#            entered into UnicodeData.txt, in n.n.n format."
+# The decompositions are recorded as the text they are. Field 3 is described by a sentence, not a name: it is
+# recorded as the pair of the code point and the version.
+match NormalizationCorrections.txt
+grammar table
+separator ;
+comment #
+remark #
+columns "Unicode code point" 1 2 3
+
+claims
+subject in "Unicode code point".cps
+predicate Original (erroneous) decomposition
+object in 1.cps
+
+claims
+subject in "Unicode code point".cps
+predicate Corrected decomposition
+object in 2.cps
+
+claims
+pair
+subject in "Unicode code point".cps
+object in 3

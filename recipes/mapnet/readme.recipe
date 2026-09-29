@@ -1,0 +1,4 @@
+name mapnet-readme
+# The README, which has no extension: ordinary text.
+match README
+like text

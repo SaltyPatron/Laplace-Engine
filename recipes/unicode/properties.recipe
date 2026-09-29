@@ -1,0 +1,26 @@
+name unicode-properties-not-in-xml
+# The properties that the property files give and the XML does not: Hyphen (PropList.txt), Grapheme_Link
+# (DerivedCoreProperties.txt), and Expands_On_NFC, Expands_On_NFD, Expands_On_NFKC, Expands_On_NFKD and FC_NFKC
+# (DerivedNormalizationProps.txt). Every other row of these files says what the XML says. A row of a binary
+# property writes the code point and the property: that pair is recorded. A row of FC_NFKC writes the code point,
+# the property and the mapping, which is recorded as the text it is. The files do not name their fields; the
+# columns are numbered here only to say where a part is. A row whose code point is a range speaks of the range,
+# recorded as the range it is: the path of its first and its last.
+match PropList.txt DerivedCoreProperties.txt DerivedNormalizationProps.txt
+grammar table
+separator ;
+comment #
+remark #
+columns 0 1 2
+
+claims
+pair
+where 1 matches ^ *(Hyphen|Grapheme_Link|Expands_On_NFC|Expands_On_NFD|Expands_On_NFKC|Expands_On_NFKD) *$
+subject in 0.range
+object in 1
+
+claims
+where 1 matches ^ *FC_NFKC *$
+subject in 0.range
+predicate in 1
+object in 2.cps

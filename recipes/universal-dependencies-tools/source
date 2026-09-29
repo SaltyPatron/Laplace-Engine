@@ -1,0 +1,9 @@
+name universal-dependencies-tools
+# The data of Universal Dependencies' validator: the tags, relations and features the project permits, language by
+# language, and its auxiliaries and tokens with spaces. The repository names itself "tools", of UniversalDependencies.
+witness UniversalDependencies tools
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/.refresh-*/UD-Tools/*/data
+after universal-dependencies
+reads text

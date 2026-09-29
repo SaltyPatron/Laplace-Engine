@@ -1,0 +1,9 @@
+name social-bias-frames
+# The README: "the data splits from v2 of Social Bias Frames / Social Bias Inference Corpus": posts, and what MTurk
+# workers said of each; and the same aggregated per post.
+witness Social Bias Frames
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/.refresh-*/Safety/SocialBiasFrames/extracted
+after unicode iso-639
+reads text

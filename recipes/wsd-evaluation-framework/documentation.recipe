@@ -1,0 +1,5 @@
+name wsd-documentation
+# The framework's README files, read as text; and PROVENANCE.md, which is not the framework's: it was written on
+# this machine, and says where the archive was fetched from.
+match README PROVENANCE.md
+grammar text

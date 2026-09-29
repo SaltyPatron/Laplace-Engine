@@ -1,0 +1,23 @@
+name social-chemistry-101-breakdowns
+# "The dataset is tab-separated with the following columns" (README), and its first row names them. A row is one
+# worker's breakdown of one rule of thumb: it is said of the row's rot-id ("ID of the rule of thumb"), and what the
+# row says it says together, so the worker (breakdown-worker-id) and the worker's answers stay in one record.
+# README: rot-categorization, rot-moral-foundations and characters are each a '"|" separated list'.
+# The file writes a field that holds a double quote between double quotes, with the quote doubled (4,927 rows).
+# The table reader does not read that notation, so those rows are left unread rather than recorded as written.
+match social-chem-101.v1.0.tsv
+grammar table
+header
+list rot-categorization |
+list rot-moral-foundations |
+list characters |
+
+claims
+together
+subject in rot-id
+attest *
+where situation matches ^($|[^"])
+where characters matches ^($|[^"])
+where rot matches ^($|[^"])
+where action matches ^($|[^"])
+where rot-judgment matches ^($|[^"])

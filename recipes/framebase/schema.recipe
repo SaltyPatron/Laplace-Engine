@@ -1,0 +1,4 @@
+name framebase-schema
+# FrameBase's three files: one statement on every line, every identifier written in full between angle brackets.
+match FrameBase_schema_*.ttl
+like turtle

@@ -1,0 +1,17 @@
+name unicode-emoji-sources
+# EmojiSources.txt. The header:
+#   "# Fields:"
+#   "# 0: Unicode code point or sequence"
+#   "# 1: DoCoMo Shift-JIS code"
+#   "# 2: KDDI Shift-JIS code"
+#   "# 3: SoftBank Shift-JIS code"
+match EmojiSources.txt
+grammar table
+separator ;
+comment #
+remark #
+columns "Unicode code point or sequence" "DoCoMo Shift-JIS code" "KDDI Shift-JIS code" "SoftBank Shift-JIS code"
+
+claims
+subject in "Unicode code point or sequence".cps
+attest "DoCoMo Shift-JIS code" "KDDI Shift-JIS code" "SoftBank Shift-JIS code"

@@ -1,0 +1,11 @@
+name princeton-wordnet
+# WordNet 3.0: Princeton University's database files (dict/) and the manual pages that document every one of them
+# (doc/man). The witness is named as the README names the release: "This is the README file for WordNet 3.0"; the
+# licence lines at the head of the database files say "WordNet 3.0 Copyright 2006 by Princeton University".
+witness WordNet 3.0
+lineage WordNet
+# The deviation is this recipe's choice (the one the other wordnets of this lineage were given); the specification
+# does not give one.
+deviation 35
+root $LAPLACE_DATA/Wordnet/WordNet-3.0
+after unicode

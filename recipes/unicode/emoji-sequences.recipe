@@ -1,0 +1,18 @@
+name unicode-emoji-sequences
+# UTS #51 emoji sequences: every row says of its code point or sequence its type_field and its description, under
+# the names the file's header gives its fields:
+#   "# Format:"
+#   "#   code_point(s) ; type_field ; description # comments"
+# (the header's list of fields calls the third "short name: CLDR short name of sequence").
+# The code points are recorded as the text they are. A row whose code_point(s) is a range (231A..231B) speaks
+# of the range, recorded as the range it is: the path of its first and its last.
+match emoji-sequences.txt emoji-zwj-sequences.txt
+grammar table
+separator ;
+comment #
+remark #
+columns code_point(s) type_field description
+
+claims
+subject in code_point(s).range
+attest type_field description

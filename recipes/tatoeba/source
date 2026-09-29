@@ -1,5 +1,10 @@
 name tatoeba
+# Tatoeba's exports: tables of tab-separated fields, without a header row. Sentences, and what the other exports say
+# of them by their numbers.
 witness Tatoeba
+# A witness entering unrated plays at Glicko-2's stock deviation (350, trust 0.67); its trust is then earned by its
+# agreement with higher-tier witnesses (Research: Trust).
+trust 0.67
 root $LAPLACE_DATA/.refresh-*/Tatoeba
 root $LAPLACE_DATA/Tatoeba
 after iso-639

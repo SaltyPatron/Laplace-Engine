@@ -1,0 +1,15 @@
+name unicode-emoji-test
+# UTS #51 emoji keyboard/display test data: every row says of its code points their status. The header:
+#   "# Format: code points; status # emoji name"
+# The emoji name is written after the #, where the file writes its comments, and is not read; nor are the
+# "# group:" and "# subgroup:" lines, which are comment lines that speak of the rows after them.
+match emoji-test.txt
+grammar table
+separator ;
+comment #
+remark #
+columns "code points" status
+
+claims
+subject in "code points".cps
+attest status

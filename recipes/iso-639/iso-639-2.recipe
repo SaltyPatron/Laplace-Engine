@@ -1,0 +1,31 @@
+name iso-639-2
+# The ISO 639-2 list as a table of five fields parted by |, without a header row. The file names none of its fields,
+# and no documentation of them is kept with it, so no field is given a name: each row says its first field and each of
+# its other fields side by side, in the row's own order, [first, other]. The numbers below only say where a field
+# stands in the row; they are not recorded.
+match ISO-639-2_utf-8.txt
+grammar table
+separator |
+columns 1 2 3 4 5
+# The file does not name who publishes it; the same list in loc/iso639-2.rdf is the Library of Congress's.
+witness Library of Congress
+
+claims
+pair
+subject in 1
+object in 2
+
+claims
+pair
+subject in 1
+object in 3
+
+claims
+pair
+subject in 1
+object in 4
+
+claims
+pair
+subject in 1
+object in 5

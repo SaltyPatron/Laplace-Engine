@@ -1,0 +1,9 @@
+name framebase
+# FrameBase 2.0: the schema (core), its lemon annotations, and its links to WordNet 3.0, in Turtle.
+# The set has no README on this machine. The name is the one its files carry (FrameBase_schema_*.ttl.gz) and the one
+# of the host of its identifiers (http://framebase.org/).
+witness FrameBase
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/.refresh-*/FrameBase-2.0
+after unicode iso-639

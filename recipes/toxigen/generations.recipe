@@ -1,0 +1,40 @@
+name toxigen-generations
+# The dataset card: "prompt is the prompt used for generation"; "generation is the TOXIGEN generated text";
+# "generation_method denotes whether or not ALICE was used to generate the corresponding generation";
+# "prompt_label is the binary value indicating whether or not the prompt is toxic"; "group indicates the target
+# group of the prompt"; "roberta_prediction is the probability predicted by our corresponding RoBERTa model for each
+# instance". So prompt, generation_method and roberta_prediction are said of the generation, and prompt_label and
+# group of the prompt, each under the name the first row gives it.
+# A field written with a doubled double quote is left unread rather than recorded with the doubling.
+match toxigen.csv
+grammar csv
+
+claims
+predicate prompt
+query
+(row . (field) @object.text . (field) @subject.text (#not-eq? @subject.text "generation") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate generation_method
+query
+(row . (field) . (field) @subject.text . (field) @object.text (#not-eq? @subject.text "generation") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate group
+query
+(row . (field) @subject.text . (field) . (field) . (field) @object.text (#not-eq? @subject.text "prompt") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate prompt_label
+query
+(row . (field) @subject.text . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "prompt") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate roberta_prediction
+query
+(row . (field) . (field) @subject.text . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "generation") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end

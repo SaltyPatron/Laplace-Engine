@@ -3,6 +3,8 @@ name iso-639-3
 match iso-639-3.tab iso-639-3_Name_Index.tab iso-639-3_Retirements.tab
 grammar table
 header
+# The tables do not name who publishes them; the pages kept beside them in sil/ are signed "Copyright © 2026 SIL Global".
+witness SIL Global
 
 claims
 subject in Id

@@ -1,0 +1,13 @@
+name wsd-gold-key
+# README: each line is an instance id followed by its gold key or keys, separated by spaces. The README names neither
+# field, so what is recorded is the pair of the two, the id within its data set (see data.recipe).
+match *.gold.key.txt
+grammar table
+separator space
+columns id
+
+claims
+pair
+subject in id
+subject-kind {dir}
+rest values

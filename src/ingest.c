@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <omp.h>
 #include <zlib.h>
+#include <glob.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -64,7 +65,10 @@ int cmd_ingest(int argc, char **argv){
         struct stat st; int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++;
         if (k < nsrc && stat(argv[i], &st)) {
             if (!src[k].found[0]) { fprintf(stderr, "source %s is not at any of its roots\n", src[k].name); return 1; }
-            const Source *was = walking; walking = &src[k]; nftw(src[k].found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL); walking = was;
+            const Source *was = walking; walking = &src[k];
+            if (src[k].nfiles) for (int z = 0; z < src[k].nfiles; z++) { glob_t g; if (!glob(src[k].files[z], 0, NULL, &g)) for (size_t y = 0; y < g.gl_pathc; y++) add_path(g.gl_pathv[y]); globfree(&g); }
+            else nftw(src[k].found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+            walking = was;
         }
         else if (!stat(argv[i], &st) && S_ISDIR(st.st_mode)) nftw(argv[i], walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
         else add_path(argv[i]);
@@ -112,6 +116,7 @@ int cmd_ingest(int argc, char **argv){
     t = now();
     #pragma omp parallel for schedule(dynamic)
     for (int i = 0; i < nfiles; i++) {
+        if (files[i].skipped) continue;                                          /* no recipe reads it: it is not read at all */
         FILE *f = fopen(files[i].path, "rb"); if (!f) { files[i].skipped = 1; continue; }
         blake3_hasher h; blake3_hasher_init(&h); uint8_t buf[1 << 16]; size_t k;
         while ((k = fread(buf, 1, sizeof buf, f))) blake3_hasher_update(&h, buf, k);

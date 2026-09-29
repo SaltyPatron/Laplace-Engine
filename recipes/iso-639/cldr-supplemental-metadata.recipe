@@ -1,0 +1,13 @@
+name cldr-supplemental-metadata
+# CLDR's supplemental metadata: the aliases. Each alias element says of what its type attribute names what its other
+# attributes hold (replacement, reason), under the attribute's own name.
+match supplementalMetadata.xml
+grammar xml
+# "Copyright © 1991-2026 Unicode, Inc." and "CLDR data files are interpreted according to the LDML specification"
+witness CLDR
+identity languageAlias type
+identity scriptAlias type
+identity territoryAlias type
+identity subdivisionAlias type
+identity variantAlias type
+identity zoneAlias type

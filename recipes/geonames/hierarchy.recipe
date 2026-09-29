@@ -1,0 +1,12 @@
+name geonames-hierarchy
+# readme.txt:
+#   "hierarchy.zip		: parentId, childId, type. The type 'ADM' stands for the admin hierarchy modeled by the admin1-4 codes. The other entries are entered with the user interface. The relation toponym-adm hierarchy is not included in the file, it can instead be built from the admincodes of the toponym."
+# A row has no identifier of its own: what it says of its parentId (the childId, and the type) it says together.
+match hierarchy.txt
+grammar table
+columns parentId childId type
+
+claims
+together
+subject in parentId
+attest childId type

@@ -8,7 +8,6 @@ remark #
 columns property short long
 
 claims
-enter 1500 350
 subject in property
 predicate in short
 object in long

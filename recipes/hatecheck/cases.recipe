@@ -1,0 +1,75 @@
+name hatecheck-cases
+# A test case on every row, named by its case_id (README: "The unique ID of the test case"). The first row names the
+# columns, and each is said of the case under that name. The first column has no name in the first row and the
+# README does not name it: it is not attested. Fields are written as CSV writes them, some between double quotes.
+# A field that holds a double quote is written with the quote doubled; no resolver reads that, so such a field is
+# left unread (#not-match? "") rather than recorded with the doubling.
+match all_cases.csv test_suite_cases.csv
+grammar csv
+records
+
+claims
+predicate functionality
+query
+(row . (field) . (field) @object.text . (field) @subject.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate test_case
+query
+(row . (field) . (field) . (field) @subject.text . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate label_gold
+query
+(row . (field) . (field) . (field) @subject.text . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate target_ident
+query
+(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate direction
+query
+(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate focus_words
+query
+(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate focus_lemma
+query
+(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate ref_case_id
+query
+(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate ref_templ_id
+query
+(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate templ_id
+query
+(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate case_templ
+query
+(row . (field) . (field) . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "case_id") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end

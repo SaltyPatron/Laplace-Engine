@@ -1,0 +1,20 @@
+name cldr-supplemental-data
+# CLDR's supplemental data. The elements that name one thing by one attribute are read: each says of that thing what
+# its other attributes hold, under the attribute's own name, and what the elements inside it say (a territory's
+# languagePopulation, a region's currency, a calendar's calendarSystem and era) is said of it, each such element
+# together as one record.
+match supplementalData.xml
+grammar xml
+# "Copyright © 1991-2026 Unicode, Inc." and "CLDR data files are interpreted according to the LDML specification"
+witness CLDR
+identity language type
+identity territory type
+identity group type
+identity region iso3166
+identity info iso4217
+identity territoryCodes type
+identity currencyCodes type
+identity calendar type
+identity scriptVariant id
+identity parentLocale parent
+identity reference type

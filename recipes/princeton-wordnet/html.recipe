@@ -1,0 +1,5 @@
+name wordnet-man-html
+# The manual pages as HTML (each says it was generated from the manual page's source by PolyglotMan). Recorded as
+# the file's syntax tree, every byte as written; nothing is attested from them.
+match *.html
+grammar html

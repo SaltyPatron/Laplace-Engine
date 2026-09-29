@@ -8,6 +8,7 @@
  *   trust T | deviation D         how far the witness is trusted
  *   root PATH                     where the source is kept ($NAME from the environment; * for the newest of several).
  *                                 Several roots may be given: the first that exists is the source
+ *   files PATTERN                 the files it is, when it is not everything under a root (several may be given)
  *   except PATTERN...             files under its root that are not the source
  *   after SOURCE...               the sources it comes after
  *   reads FORMAT...               its files are ordinary content, read as these formats
@@ -193,6 +194,7 @@ static void path_expand(const char *in, char *out, size_t cap){
         if (*c != '$') { out[k++] = *c++; continue; }
         char name[64]; size_t l = 0; c++; while ((*c == '_' || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9')) && l + 1 < sizeof name) name[l++] = *c++; name[l] = 0;
         const char *v = getenv(name); if (!v && !strcmp(name, "LAPLACE_DATA")) v = "/vault/Data";
+        if (!v && !strcmp(name, "LAPLACE_MODELS")) v = "/vault/models";
         if (v) k += (size_t)snprintf(out + k, cap - k, "%s", v);
     }
     out[k < cap ? k : cap - 1] = 0;
@@ -395,12 +397,14 @@ static int source_parse(const char *path, Source *s){
         else if (!strcmp(tok, "trust")) { tok = strtok(NULL, " \t\r\n"); if (tok) s->trust = atof(tok); }
         else if (!strcmp(tok, "deviation")) { tok = strtok(NULL, " \t\r\n"); if (tok) { double phi = atof(tok) / LP_GLICKO_SCALE; s->trust = 1.0 / sqrt(1.0 + 3.0 * phi * phi / (M_PI * M_PI)); } }
         else if (!strcmp(tok, "root")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nroot < 8) path_expand(tok, s->root[s->nroot++], 512); }
+        else if (!strcmp(tok, "files")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nfiles < 8) path_expand(tok, s->files[s->nfiles++], 512); }
         else if (!strcmp(tok, "after")) while ((tok = strtok(NULL, " \t\r\n")) && s->nafter < 16) snprintf(s->after[s->nafter++], 64, "%s", tok);
         else if (!strcmp(tok, "except")) while ((tok = strtok(NULL, " \t\r\n")) && s->nexcept < 8) snprintf(s->except[s->nexcept++], 128, "%s", tok);
         else if (!strcmp(tok, "reads")) while ((tok = strtok(NULL, " \t\r\n")) && s->nreads < 8) snprintf(s->reads[s->nreads++], 64, "%s", tok);
         else { fprintf(stderr, "%s: \"%s\" is not something a source says\n", path, tok); fclose(f); return 0; }
     }
     fclose(f);
+    if (s->nfiles) { glob_t g; if (!glob(s->files[0], 0, NULL, &g) && g.gl_pathc) snprintf(s->found, sizeof s->found, "%s", s->files[0]); globfree(&g); }
     for (int i = 0; i < s->nroot && !s->found[0]; i++) {                   /* the first root that exists; of a pattern, the newest */
         glob_t g; if (!glob(s->root[i], 0, NULL, &g) && g.gl_pathc) snprintf(s->found, sizeof s->found, "%s", g.gl_pathv[g.gl_pathc - 1]);
         globfree(&g);

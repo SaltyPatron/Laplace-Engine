@@ -1,0 +1,21 @@
+name unicode-uca-decomps
+# The decompositions used in generating the Default Unicode Collation Element Table. The header:
+#   "# Field 0: code point"
+#   "# Field 1: decomposition tag"
+#   "# Field 2: decomposition"
+# The decomposition is recorded as the text it is.
+match decomps.txt
+grammar table
+separator ;
+comment #
+remark #
+columns "code point" "decomposition tag" decomposition
+
+claims
+subject in "code point".cps
+attest "decomposition tag"
+
+claims
+subject in "code point".cps
+predicate decomposition
+object in decomposition.cps

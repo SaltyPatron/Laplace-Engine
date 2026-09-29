@@ -1,0 +1,16 @@
+name unicode-confusables
+# UTS #39 confusables and intentional confusables. Neither file names its fields, and UTS #39 is not on this
+# machine: what is recorded is the pair the row writes, in the row's order, each side as the text it is. The
+# columns are numbered here only to say where a part is; no name is recorded. The third field of confusables.txt
+# (always MA) is not read.
+match confusables.txt intentional.txt
+grammar table
+separator ;
+comment #
+remark #
+columns 0 1 2
+
+claims
+pair
+subject in 0.range
+object in 1.cps

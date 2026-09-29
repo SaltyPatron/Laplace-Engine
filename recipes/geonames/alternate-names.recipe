@@ -1,0 +1,28 @@
+name geonames-alternate-names
+# The table 'alternate names'. readme.txt:
+#   "alternateNamesV2.zip     : alternate names with language codes and geonameId, file with iso language codes, with new columns from and to"
+#   "The table 'alternate names' :"
+#   "alternateNameId   : the id of this alternate name, int"
+#   "geonameid         : geonameId referring to id in table 'geoname', int"
+#   "isolanguage       : iso 639 language code 2- or 3-characters, optionally followed by a hyphen and a countrycode for country specific variants (ex:zh-CN) or by a variant name (ex: zh-Hant); 4-characters 'post' for postal codes and 'iata','icao' and faac for airport codes, fr_1793 for French Revolution names,  abbr for abbreviation, link to a website (mostly to wikipedia), wkdt for the wikidataid, varchar(7)"
+#   "alternate name    : alternate name or name variant, varchar(400)"
+#   "isPreferredName   : '1', if this alternate name is an official/preferred name"
+#   "isShortName       : '1', if this is a short name like 'California' for 'State of California'"
+#   "isColloquial      : '1', if this alternate name is a colloquial or slang term. Example: 'Big Apple' for 'New York'."
+#   "isHistoric        : '1', if this alternate name is historic and was used in the past. Example 'Bombay' for 'Mumbai'."
+#   "from		  : from period when the name was used"
+#   "to		  : to period when the name was used"
+# Every row says of its alternateNameId what each other column holds, under the column's name as the readme writes it.
+match alternateNamesV2.txt
+grammar table
+columns alternateNameId geonameid isolanguage "alternate name" isPreferredName isShortName isColloquial isHistoric from to
+
+# The ids are numbers GeoNames gives its own records (readme: "geonameid : integer id of record in geonames database";
+# "geonameId referring to id in table 'geoname'"). A number names a record only as that kind of id, so each is
+# recorded as the path of the column's own name and the number.
+kind alternateNameId alternateNameId
+kind geonameid geonameid
+
+claims
+subject in alternateNameId
+attest *

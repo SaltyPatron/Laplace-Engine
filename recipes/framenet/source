@@ -1,0 +1,12 @@
+name framenet
+# FrameNet Release 1.7 (Berkeley FrameNet, ICSI), in the form NLTK redistributes: frames with their frame elements
+# and lexical units, the relations between frames, the semantic types, the lemma and lexeme tables, and the annotated
+# sentences of the lexical units and of the full texts.
+# README.txt: "Welcome to Release 1.7 of the FrameNet data!" ... "The FrameNet database in XML format"
+witness FrameNet
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/.refresh-*/FrameNet/framenet_v17
+root $LAPLACE_DATA/FrameNet/framenet_v17
+after unicode iso-639
+reads text

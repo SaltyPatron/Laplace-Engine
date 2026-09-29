@@ -1,0 +1,9 @@
+name social-chemistry-101
+# Rules-of-thumb written by workers about situations, and the breakdowns workers made of them. The README's title:
+# "Social-Chem-101 Dataset".
+witness Social-Chem-101 Dataset
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/.refresh-*/Safety/SocialChemistry101/extracted/social-chem-101
+after unicode iso-639
+reads text

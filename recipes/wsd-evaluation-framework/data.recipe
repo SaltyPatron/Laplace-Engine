@@ -1,0 +1,12 @@
+name wsd-data
+# A data set of the framework: texts of sentences, each sentence the words it is made of. The file does not write a
+# sentence as text: a sentence is the path of its words, in order. What is said of a word (its lemma, its pos, and for
+# an instance its id) is said of the word, within its sentence.
+# The ids are the data set's own: d000.s000.t000 is a different word in SemCor, in senseval2 and in semeval2013. An id
+# is therefore recorded within its data set, which is the directory the file is in, as the framework names it.
+match *.data.xml
+grammar xml
+identity text id kind {dir}
+identity sentence id kind {dir}
+refer instance.id {dir}
+words sentence wf instance

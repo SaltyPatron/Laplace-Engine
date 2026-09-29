@@ -1,0 +1,12 @@
+name wordnet-cntlist-rev
+# cntlist.5: "The cntlist.rev file contains the same fields described above, in the following order:
+#   sense_key  sense_number  tag_cnt"
+match cntlist.rev
+grammar table
+separator space
+columns sense_key sense_number tag_cnt
+
+claims
+together
+subject in sense_key
+attest sense_number tag_cnt

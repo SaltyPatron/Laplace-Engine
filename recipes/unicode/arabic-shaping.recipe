@@ -1,0 +1,19 @@
+name unicode-arabic-shaping
+# ArabicShaping.txt. The header:
+#   "# Field 0: the code point of a character, in hexadecimal form."
+#   "# Field 1: gives a short schematic name for that character."
+#   "#   Note that this schematic name is considered a comment,"
+#   "#   and does not constitute a formal property value."
+#   "# Field 2: defines the joining type (property name: Joining_Type)"
+#   "# Field 3: defines the joining group (property name: Joining_Group)"
+# Only the schematic name is read here: Joining_Type and Joining_Group are what the XML gives as jt and jg.
+match ArabicShaping.txt
+grammar table
+separator ;
+comment #
+remark #
+columns "code point" "schematic name" Joining_Type Joining_Group
+
+claims
+subject in "code point".cps
+attest "schematic name"

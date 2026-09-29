@@ -1,0 +1,33 @@
+name verbatlas-frame-info
+# README.txt, FORMAT, 1. VA_frame_info.tsv:
+#   "Each line contains the ID and the name of a VerbAtlas frame, separated by a tab.
+#    From VerbAtlas 1.1.0, we also provide a definition, a prototypical synset (i.e.,
+#    the synset that roughly represents the frame), the definition of the prototypical
+#    synset, and a "small definition" of the frame."
+# Every predicate below is one of those words, as the README writes it. The names after "columns" only point at a
+# position in the row: "columns" takes names of one word, so the ones the README writes in several words are joined
+# here and are never recorded; what is recorded is the "predicate" line.
+# The file's first line is a licence line ("VerbAtlas 1.1.0 - SapienzaNLP - LICENSE: ..."), not a row.
+match VA_frame_info.tsv
+grammar table
+comment V
+columns ID name definition prototypical_synset definition_of_the_prototypical_synset small_definition
+
+claims
+subject in ID
+attest name definition
+
+claims
+predicate prototypical synset
+subject in ID
+object in prototypical_synset
+
+claims
+predicate definition of the prototypical synset
+subject in ID
+object in definition_of_the_prototypical_synset
+
+claims
+predicate small definition
+subject in ID
+object in small_definition

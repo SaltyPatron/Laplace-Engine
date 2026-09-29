@@ -1,0 +1,86 @@
+name toxigen-annotated
+# The annotated statements, one on every row; the first row names the columns (the dataset card lists the same
+# names under config_name: annotated) and each is said of the text under that name. annotated_train.csv writes its
+# texts as b'...' and they are recorded as written. predicted_group is sometimes written as a list between square
+# brackets, which nothing reads: it is recorded as written, whole.
+# A field written with a doubled double quote is left unread rather than recorded with the doubling.
+match annotated_train.csv
+grammar csv
+
+claims
+predicate target_group
+query
+(row . (field) @subject.text . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate factual?
+query
+(row . (field) @subject.text . (field) . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate ingroup_effect
+query
+(row . (field) @subject.text . (field) . (field) . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate lewd
+query
+(row . (field) @subject.text . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate framing
+query
+(row . (field) @subject.text . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate predicted_group
+query
+(row . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate stereotyping
+query
+(row . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate intent
+query
+(row . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate toxicity_ai
+query
+(row . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate toxicity_human
+query
+(row . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate predicted_author
+query
+(row . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate label
+query
+(row . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end
+
+claims
+predicate actual_method
+query
+(row . (field) @subject.text . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) . (field) @object.text (#not-eq? @subject.text "text") (#not-match? @subject.text "\"\"") (#not-match? @object.text "\"\""))
+end

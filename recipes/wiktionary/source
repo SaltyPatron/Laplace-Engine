@@ -1,0 +1,12 @@
+name wiktionary
+# The English Wiktionary as extracted by the program wiktextract: a JSON object on every line, one for each entry
+# (a written word, in one language, as one part of speech). The file does not name itself inside; its name is
+# raw-wiktextract-data, and the program's own documentation is titled "Wiktextract" and says it is "for extracing
+# data from Wiktionary". The witness is the program's output; Wiktionary is what it derives from.
+witness Wiktextract
+lineage Wiktionary
+# Entering unrated, as tatoeba's recipe does for a source written by its users; the specification does not give one.
+trust 0.67
+root $LAPLACE_DATA/.refresh-*/Wiktionary
+root $LAPLACE_DATA/Wiktionary
+after unicode iso-639

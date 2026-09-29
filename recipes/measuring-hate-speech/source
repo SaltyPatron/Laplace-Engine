@@ -1,0 +1,9 @@
+name measuring-hate-speech
+# Comments, each annotated by several annotators. The dataset card's title: "Dataset card for Measuring Hate Speech".
+# Its data is in Parquet files only, which no recipe reads; the card itself is read as text.
+witness Measuring Hate Speech
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/.refresh-*/Safety/MeasuringHateSpeech/measuring-hate-speech-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+after unicode iso-639
+reads text

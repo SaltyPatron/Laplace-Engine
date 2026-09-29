@@ -1,0 +1,23 @@
+name wordnet-index
+# The database's index files, a word on every line. wndb.5: "All fields, unless otherwise noted, are separated by
+# one space character"; the lines that begin each file "all begin with two spaces and the line number": a line that
+# begins with a space is not a row. The format wndb.5 gives:
+#   "lemma  pos  synset_cnt  p_cnt  [ptr_symbol...]  sense_cnt  tagsense_cnt   synset_offset  [synset_offset...]"
+#
+# READ: synset_cnt and p_cnt, each said under its own name, together, as one record, of the path of the lemma and
+# its pos; wndb.5: "All remaining fields are with respect to senses of lemma in pos."
+#
+# NOT READ, because the table reader cannot say it (every line of these files holds parts that are not read):
+#   [ptr_symbol...]                     p_cnt of them, so nothing after p_cnt stands at a fixed place in the line
+#   sense_cnt  tagsense_cnt
+#   synset_offset  [synset_offset...]   synset_cnt of them, in the order of the lemma's senses
+match index.noun index.verb index.adj index.adv
+grammar table
+separator space
+comment   # the character after "comment " is a space
+columns lemma pos synset_cnt p_cnt
+
+claims
+together
+subject in lemma pos
+attest synset_cnt p_cnt
