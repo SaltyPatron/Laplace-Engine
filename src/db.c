@@ -35,11 +35,11 @@ static int64_t hsigned(uint64_t h){ return (int64_t)(h ^ 0x8000000000000000ull);
 /* Which of these IDs the database already records, at any tier. An ID's first hex digit says which sixteenth of every
  * tier it could be in, so each lookup goes to those partitions by name, and only to the ones that hold anything:
  * never to the partitioned table, which would probe every partition of every tier for every ID. */
-static char *probe_sql[16];
+static char *probe_sql[16]; static int probe_planned;
 static void probe_plan(PGconn *pg){
     PGresult *r = PQexec(pg, "SELECT c.relname FROM pg_class c WHERE c.relkind = 'r' AND c.relname ~ '^entity_t([0-9]+|x)_[0-9a-f]$' ORDER BY 1");
     if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "partitions: %s", PQerrorMessage(pg)); exit(1); }
-    size_t cap[16] = { 0 }, len[16] = { 0 };
+    size_t cap[16] = { 0 }, len[16] = { 0 }; for (int h = 0; h < 16; h++) { free(probe_sql[h]); probe_sql[h] = NULL; }
     for (int j = 0; j < PQntuples(r); j++) {
         const char *name = PQgetvalue(r, j, 0); char q[160]; snprintf(q, sizeof q, "SELECT 1 FROM %s LIMIT 1", name);
         PGresult *e = PQexec(pg, q); int holds = PQresultStatus(e) == PGRES_TUPLES_OK && PQntuples(e) > 0; PQclear(e);
@@ -53,7 +53,7 @@ static void probe_plan(PGconn *pg){
 }
 static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, uint64_t n){
     uint8_t *hit = calloc(n ? n : 1, 1); const uint64_t CH = 50000;
-    static int planned; if (!planned) { probe_plan(pg[0]); planned = 1; }
+    if (!probe_planned) { probe_plan(pg[0]); probe_planned = 1; }
     uint64_t cnt[17] = { 0 }; for (uint64_t i = 0; i < n; i++) cnt[(ids[i].b[0] >> 4) + 1]++;
     for (int h = 0; h < 16; h++) cnt[h + 1] += cnt[h];
     uint64_t *at = malloc(sizeof(uint64_t) * (n + 1)), fill[16]; memcpy(fill, cnt, sizeof fill);
@@ -151,6 +151,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         pg[i] = db_connect(conninfo);
         PQclear(PQexec(pg[i], "SET synchronous_commit = off"));
     }
+    probe_planned = 0;                                                       /* a partition empty at the last load may hold something now */
     PGresult *r = PQexec(pg[0], "SELECT count(*) FROM entity WHERE tier = 0");
     int atoms_needed = !(PQresultStatus(r) == PGRES_TUPLES_OK && atoll(PQgetvalue(r, 0, 0)) == (long long)LP_NCP); PQclear(r);
 
@@ -186,7 +187,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
                 (unsigned long long)st->new_nodes, (unsigned long long)st->found);
     }
     free(front); fputc('\n', stderr);
-    st->t_dedup = now() - t;
+    st->t_dedup += now() - t;
 
     /* ---- every leaf partition on its own connection; new nodes bucketed by partition once */
     t = now();
@@ -200,8 +201,8 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         if (!nbucket[p] && !(atoms_needed && p / 16 == 0)) continue;             /* nothing new for this partition */
         write_node_rows(pg[omp_get_thread_num()], p, &re[p], &rp[p], atoms_needed);
     }
-    for (int p = 0; p < NPART; p++) { st->ent_rows += re[p]; st->phy_rows += rp[p]; }
-    st->t_copy = now() - t;
+    for (int p = 0; p < NPART; p++) { st->ent_rows += re[p]; st->phy_rows += rp[p]; free(bucket[p]); bucket[p] = NULL; }
+    st->t_copy += now() - t;
 
     /* ---- semantics: witnesses, the ledger, and standings played in reading order */
     t = now(); uint64_t nev = 0; for (int fi = 0; fi < nfiles; fi++) nev += files[fi].ev.n;
@@ -356,12 +357,13 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             PQclear(u); for (int f = 0; f < 5; f++) free(arr[f]); st->std_upd += n;
         }
     }
-    st->t_sem = now() - t;
+    if (nev) { free(stand); free(smap); stand = NULL; smap = NULL; }
+    st->t_sem += now() - t;
 
     Copy c = { 0 };
     copy_begin(&c, pg[0], "COPY source (trunk, origin, format, bytes, content) FROM STDIN (FORMAT binary)");
     for (int fi = 0; fi < nfiles; fi++) {
-        if (files[fi].known || files[fi].skipped) continue;
+        if (files[fi].known || files[fi].skipped || files[fi].partial) continue;
         const char *fmt = files[fi].recipe ? files[fi].recipe->name : "text";
         c16(&c, 5); cfield(&c, files[fi].trunk.id.b, 16); cfield(&c, files[fi].path, (uint32_t)strlen(files[fi].path));
         cfield(&c, fmt, (uint32_t)strlen(fmt)); cf_i64(&c, (int64_t)files[fi].bytes); cfield(&c, files[fi].sha, 32);

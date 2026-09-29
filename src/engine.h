@@ -173,8 +173,14 @@ typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviat
 typedef struct { Event *e; uint64_t n, cap; } Events;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */
-typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; int has_lineage; uint64_t bytes, tokens, incomplete; uint8_t sha[32]; int exact, skipped, known; Events ev; } File;
+typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; int has_lineage; uint64_t bytes, tokens, incomplete; uint8_t sha[32]; int exact, skipped, known; Events ev;
+                 int partial;                          /* more of it is still to come: it is not yet a recorded source */
+                 void *columns; int ncolumns;          /* a table read a stretch at a time: its columns, from its head */
+                 uint64_t records; } File;             /* records read so far: a stretch's positions go on from the last */
 void decompose_file(Ctx *, File *);
+void decompose_bytes(Ctx *, File *, uint8_t *src, size_t n, int first);     /* a stretch of a file that is read a stretch at a time */
+int  reads_in_stretches(const Recipe *, char *boundary);                    /* whether a file of this recipe can be: 1 at a line's end, 2 at an empty line */
+void table_reset(void);                                                      /* what was decomposed is recorded: the table is emptied for what comes next */
 Ref  string_ref(const uint8_t *s, size_t n);                          /* text as its entity, remembered per thread */
 void ev_push(Events *, const Event *);
 void attest_records(const Recipe *, File *, const uint8_t *src, size_t n);      /* records.c */

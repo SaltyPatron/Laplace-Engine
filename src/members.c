@@ -211,8 +211,9 @@ void attest_members(const Recipe *r, File *f, const uint8_t *src, size_t n){
         }
         free(j.buf); free(j.claims.c);
     }
-    uint32_t ordinal = 0;
+    uint32_t ordinal = (uint32_t)f->records;
     for (size_t t = 0; t < k; t++) { for (uint64_t i = 0; i < pe[t].n; i++) { Event x; memcpy(&x, &pe[t].e[i], sizeof x); if (x.kind != EV_MEMBER) x.position = ++ordinal; ev_push(&f->ev, &x); } free(pe[t].e); }
+    f->records = ordinal;
     if (bad) { fprintf(stderr, "\n  %s: %llu values of %s are not JSON and say nothing\n", r->name, (unsigned long long)bad, f->path); f->incomplete += bad; }
     free(pe); free(cut);
 }

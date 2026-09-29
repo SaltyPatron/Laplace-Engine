@@ -502,10 +502,13 @@ int recipes_broken(const Recipe *r, int n, const Source *of){
 
 /* ---- strings to entities, decomposed once per thread */
 typedef struct { uint64_t h; Ref ref; uint32_t off, len; } SEnt;
-typedef struct { SEnt *t; uint64_t cap, n; char *pool; size_t pn, pcap; } SCache;
+typedef struct { SEnt *t; uint64_t cap, n; char *pool; size_t pn, pcap; uint64_t epoch; } SCache;
 static __thread SCache sc;
+static uint64_t strings_epoch;                                           /* raised when the node table is emptied: what was remembered is of the table before */
+void strings_forget(void){ __atomic_add_fetch(&strings_epoch, 1, __ATOMIC_RELAXED); }
 static uint64_t fnv(const uint8_t *s, size_t n){ uint64_t h = 1469598103934665603ull; for (size_t i = 0; i < n; i++) { h ^= s[i]; h *= 1099511628211ull; } return h ? h : 1; }
 Ref string_ref(const uint8_t *s, size_t n){
+    if (sc.epoch != strings_epoch) { free(sc.t); free(sc.pool); memset(&sc, 0, sizeof sc); sc.epoch = strings_epoch; }
     if ((sc.n + 1) * 2 > sc.cap) {
         uint64_t oc = sc.cap; SEnt *old = sc.t; sc.cap = oc ? oc * 2 : 4096; sc.t = calloc(sc.cap, sizeof(SEnt));
         for (uint64_t i = 0; i < oc; i++) if (old[i].h) { uint64_t k = old[i].h & (sc.cap - 1); while (sc.t[k].h) k = (k + 1) & (sc.cap - 1); sc.t[k] = old[i]; }
@@ -1008,7 +1011,7 @@ static size_t table_columns(const uint8_t *src, size_t n, char sep, char comment
     for (size_t i = at, f0 = at; i <= e && *nn < 64; i++) if (i == e || src[i] == (uint8_t)sep) { snprintf(name[(*nn)++], 64, "%.*s", (int)(i - f0 > 63 ? 63 : i - f0), src + f0); f0 = i + 1; }
     return next < n ? next : n;
 }
-static void attest_table(const Recipe *r, const char *path, const uint8_t *src, size_t n, Events *ev);
+static void attest_table(const Recipe *r, File *f, const uint8_t *src, size_t n, Events *ev);
 
 /* A map kept in another file, read once with that file's grammar. */
 static const Map *map_from(const Recipe *r, int k){
@@ -1054,7 +1057,8 @@ static void attest_tree(const Recipe *r, const char *path, TSNode root, const ui
     free(rd.map); free(rd.predicate); free(buf); ts_query_cursor_delete(qc);
 }
 
-static void attest_table(const Recipe *r, const char *path, const uint8_t *src, size_t n, Events *ev){
+static void attest_table(const Recipe *r, File *f, const uint8_t *src, size_t n, Events *ev){
+    const char *path = f->path;
     Reading rd = { r, calloc((size_t)(r->nblock ? r->nblock : 1), sizeof(Map)), calloc((size_t)(r->nblock ? r->nblock : 1), 64), "", "" }; int has_maps = 0;
     dir_of(path, rd.dir, sizeof rd.dir);
     { const char *bn = strrchr(path, '/'); bn = bn ? bn + 1 : path; const char *d = strchr(bn, '.'); snprintf(rd.name, sizeof rd.name, "%.*s", d && d > bn ? (int)(d - bn) : (int)strlen(bn), bn); }
@@ -1064,8 +1068,11 @@ static void attest_table(const Recipe *r, const char *path, const uint8_t *src, 
         if (b->name_after) { const char *x = b->name_after == '^' ? base - 1 : strrchr(base, b->name_after), *y = x ? strchr(x + 1, b->name_before) : NULL; if (x && y) snprintf(rd.predicate[k], 64, "%.*s", (int)(y - x - 1), x + 1); }
         if (b->is_map && b->from[0]) rd.map[k] = *map_from(r, k); else has_maps |= b->is_map;
     }
-    char name[64][64]; int nn; memset(name, 0, sizeof name); skip_lines = r->skip;
-    size_t at = table_columns(src, n, r->separator, r->comment, r->header, (char (*)[64])r->column, r->ncolumn, name, &nn); skip_lines = 0;
+    char name[64][64]; int nn; memset(name, 0, sizeof name); skip_lines = r->skip; size_t at = 0;
+    if (f->columns) { memcpy(name, f->columns, sizeof name); nn = f->ncolumns; }     /* a later stretch: the columns are the ones its head gave */
+    else { at = table_columns(src, n, r->separator, r->comment, r->header, (char (*)[64])r->column, r->ncolumn, name, &nn);
+           if (f->partial) { f->columns = malloc(sizeof name); memcpy(f->columns, name, sizeof name); f->ncolumns = nn; } }
+    skip_lines = 0;
     Cols *cols = cols_for(r, name, nn, -1);
     if (has_maps) table_rows(&rd, cols, name, 1, -1, r->separator, r->comment, src, at, n, NULL);
     int nt = omp_get_num_threads() * 8; if ((size_t)nt > (n - at) / 65536 + 1) nt = (int)((n - at) / 65536 + 1);
@@ -1116,12 +1123,21 @@ static void named_for(const char *name, const char *path, const uint8_t *src, si
     const char *e = strrchr(path, '/'), *s = e; while (s && s > path && s[-1] != '/') s--;
     snprintf(out, cap, "%.*s%.*s%s", (int)(at - name), name, e ? (int)(e - s) : 0, e ? s : "", at + 5);
 }
+int reads_in_stretches(const Recipe *r, char *boundary){
+    if (!r || !r->query) return 0;
+    if (!strcmp(r->grammar, "table") && r->word[0] && r->record_blank) { *boundary = 2; return 1; }
+    if (!strcmp(r->grammar, "table") && !r->word[0]) { for (int k = 0; k < r->nblock; k++) if (r->block[k].is_map && !r->block[k].from[0]) return 0; *boundary = 1; return 1; }
+    if (r->members && r->records) { *boundary = 1; return 1; }
+    return 0;
+}
 void decompose_file(Ctx *c, File *f){
-    size_t n; uint8_t *src0 = read_all(f->path, &n), *src = src0; if (!src) { f->skipped = 1; return; }
-    f->bytes = n;
+    size_t n; uint8_t *src0 = read_all(f->path, &n); if (!src0) { f->skipped = 1; return; }
+    f->bytes = n; decompose_bytes(c, f, src0, n, 1); free(src0);
+}
+void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
     const Recipe *r = f->recipe;
-    if (r && r->query && n >= 3 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF) { src += 3; n -= 3; }   /* a curated source's byte order mark is how it was written down, not what it says */
-    if (r && r->query) {                                                        /* the witness, named as content */
+    if (first && r && r->query && n >= 3 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF) { src += 3; n -= 3; }   /* a curated source's byte order mark is how it was written down, not what it says */
+    if (first && r && r->query) {                                               /* the witness, named as content */
         char w[512], l[512]; named_for(r->witness[0] ? r->witness : r->name, f->path, src, n, w, sizeof w); named_for(r->lineage, f->path, src, n, l, sizeof l);
         f->witness = text_ref(c, (const uint8_t *)w, strlen(w)); f->trunk = f->witness;
         if (l[0]) { f->lineage = text_ref(c, (const uint8_t *)l, strlen(l)); f->has_lineage = 1; }
@@ -1133,7 +1149,7 @@ void decompose_file(Ctx *c, File *f){
     else if (r && r->members) attest_members(r, f, src, n);
     else if (r && !strcmp(r->grammar, "fields")) attest_fields(r, f, src, n);
     else if (r && !strcmp(r->grammar, "table") && r->word[0]) attest_records(r, f, src, n);
-    else if (r && !strcmp(r->grammar, "table")) attest_table(r, f->path, src, n, &f->ev);
+    else if (r && !strcmp(r->grammar, "table")) attest_table(r, f, src, n, &f->ev);
     else if (!r || !r->lang) f->trunk = text_ref(c, src, n);
     else if (r->records && r->nidentity && n > (16u << 20)) attest_elements(r, f, NULL, src, n);
     else if (r->records && n > (64u << 20) && !getenv("LAPLACE_ONE_PARSE")) {
@@ -1184,7 +1200,6 @@ void decompose_file(Ctx *c, File *f){
         else attest_tree(r, f->path, root, src, n, &f->ev, &f->incomplete);                       /* a curated source: what it attests */
         ts_tree_delete(t); ts_parser_delete(ps);
     }
-    free(src0);
 }
 
 /* ---- laplace tree: a file's syntax tree as its recipe's grammar reads it, for writing recipes

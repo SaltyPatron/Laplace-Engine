@@ -239,13 +239,13 @@ void attest_records(const Recipe *r, File *f, const uint8_t *src, size_t n){
         free(rc.row); free(rc.part); free(rc.claim);
     }
     size_t tot = 0; for (size_t t = 0; t < k; t++) tot += piece[t].n;
-    Ref *all = malloc(sizeof(Ref) * (tot + 1)); size_t m = 0; uint32_t ordinal = 0;
+    Ref *all = malloc(sizeof(Ref) * (tot + 1)); size_t m = 0; uint32_t ordinal = (uint32_t)f->records;
     for (size_t t = 0; t < k; t++) {
         memcpy(all + m, piece[t].rec, sizeof(Ref) * piece[t].n); m += piece[t].n; free(piece[t].rec);
         for (uint64_t j = 0; j < piece[t].ev.n; j++) { Event x; memcpy(&x, &piece[t].ev.e[j], sizeof x); if (x.kind == EV_RECORD) x.position = ++ordinal; ev_push(&f->ev, &x); }
         free(piece[t].ev.e);
     }
-    (void)m;                                                                /* the order of the records is their position in the ledger */
+    f->records = ordinal; (void)m;                                          /* the order of the records is their position in the ledger */
     free(all); free(piece); free(cut);
 }
 

@@ -78,6 +78,16 @@ Ref notation_ref(Ctx *c, const uint8_t *b, size_t n){
     return out;
 }
 
+static uint64_t nodes_before, hits_before;
+void strings_forget(void);
+void table_reset(void){
+    strings_forget();
+    for (int i = 0; i < NSHARD; i++) { Shard *s = &shard[i]; nodes_before += s->n; hits_before += s->hits;
+        free(s->node); free(s->slot); free(s->vtx); s->node = NULL; s->slot = NULL; s->vtx = NULL; s->n = s->cap = s->scap = s->nv = s->vcap = s->hits = 0; }
+}
+uint64_t table_total(void){ uint64_t n = nodes_before; for (int i = 0; i < NSHARD; i++) n += shard[i].n; return n; }
+uint64_t table_hits(void){ uint64_t n = hits_before; for (int i = 0; i < NSHARD; i++) n += shard[i].hits; return n; }
+
 /* Lookups run after decomposition, when nothing inserts: no lock. */
 Node *table_find(const lp_id *id){
     Shard *s = &shard[id->b[0]]; if (!s->scap) return NULL;
