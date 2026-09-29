@@ -47,7 +47,8 @@ typedef lp_ref Ref;
 typedef struct { lp_id id; uint32_t run; } __attribute__((packed)) Vtx;      /* run: M as it is written: the run, and above it what the vertex is */
 #define VRUN(m) ((m) & ((1u << LP_M_RUN_BITS) - 1))
 static inline Ref said_claim(Ref r){ r.said = LP_SAID_CLAIM; return r; }
-static inline Ref said_record(Ref r){ if (r.said != LP_SAID_CLAIM) r.said = LP_SAID_RECORD; return r; }
+static inline Ref said_tuple(Ref r){ r.said = LP_SAID_TUPLE; return r; }
+static inline Ref said_record(Ref r){ if (r.said != LP_SAID_CLAIM && r.said != LP_SAID_TUPLE) r.said = LP_SAID_RECORD; return r; }
 typedef struct { lp_id id; int64_t m[4]; uint64_t voff; uint32_t nv, len; uint8_t tier, keep; } Node;
 typedef struct {
     pthread_mutex_t mu;
@@ -85,6 +86,10 @@ typedef struct {
     char predicate[64];                               /* the claims' predicate, when the source states it by position */
     float enter_rating, enter_deviation;             /* the stock default for this level of attestation */
     int ordered, distinct;                            /* record each claim's position in its record; subject and object differ */
+    char subj[8][96]; int nsubj;                      /* in a table: further columns of the subject, which is then the path of them all */
+    int rest;                                         /* in a table: the fields after the named columns: 1 pairs of predicate and object, 2 objects */
+    int row_tuple;                                    /* in a table: the row itself is the claim, the path of its fields in order */
+    char field_pair;                                  /* in a table: every field is written A, this character, B, and is the pair [A, B] */
     int together;                                     /* in a table: what a row says it says together: the row is one record */
     int pair;                                         /* the claims are pairs: the source writes no predicate between the two */
     char attest[64][64]; int nattest;                 /* in a table: columns that are each a predicate, by the name the table gives them */
@@ -105,12 +110,14 @@ typedef struct {
     int records;
     uint32_t unit;                                   /* queries run inside parts of the tree no larger than this */
     char itself;                                      /* a character that, in an object, stands for the subject's codepoint */
+    int skip;                                         /* a table: lines at its head that are not rows */
+    struct { char col[64], sep; } list[16]; int nlist;  /* a table: columns whose field is several values, and what parts them (* every column) */
     char remark;                                      /* in a table's row: what follows this character is not the row */
     char separator, comment; int header;              /* a table: what parts its fields, what begins a line that is not a row, whether its first row names its columns */
     char column[64][64]; int ncolumn;                 /* a table's columns, when no row names them */
     char predicate[64];
     char witness[128];                                /* the witness's name, recorded as content */
-    struct { char el[64], attr[64]; int res; } identity[32]; int nidentity;     /* XML: the elements that are things, and the attribute that names each (res: 1 a codepoint, 2 codepoints) */
+    struct { char el[64], attr[64]; int res, within, child; } identity[32]; int nidentity;   /* within: the name stands only within the thing it is inside; child: the name is the text of an element inside it */     /* XML: the elements that are things, and the attribute that names each (res: 1 a codepoint, 2 codepoints) */
     struct { char el[64], pred[64], obj[64]; } link[16]; int nlink;             /* XML: elements that are relations of what they are inside */
     char codepoints[32][32]; int ncodepoints;          /* XML: attributes whose values are codepoints written in hex */
     int keys_things, members;                          /* JSON: the keys of an object inside nothing are things; read natively (members.c) */

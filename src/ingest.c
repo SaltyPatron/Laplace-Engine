@@ -174,8 +174,12 @@ int cmd_ingest(int argc, char **argv){
         Node *c = table_find(&files[i].ev.e[e].claim); if (!c) continue;
         Shard *sh = &shard[c->id.b[0]]; int first = 1; putchar('[');
         for (uint32_t v = 0; v < c->nv; v++) for (uint32_t r = 0; r < VRUN(sh->vtx[c->voff + v].run); r++) {
-            Buf o = { 0 }; expand(&sh->vtx[c->voff + v].id, &o);
-            if (!first) printf(", "); first = 0; fwrite(o.b, 1, o.n, stdout); free(o.b);
+            if (!first) printf(", "); first = 0;
+            Node *tn = (sh->vtx[c->voff + v].run >> LP_M_RUN_BITS) == LP_SAID_TUPLE ? table_find(&sh->vtx[c->voff + v].id) : NULL;
+            if (tn) { Shard *ts = &shard[tn->id.b[0]]; putchar('[');                /* a tuple: its parts, apart */
+                for (uint32_t y = 0; y < tn->nv; y++) { Buf o = { 0 }; expand(&ts->vtx[tn->voff + y].id, &o); if (y) printf(", "); fwrite(o.b, 1, o.n, stdout); free(o.b); }
+                putchar(']'); continue; }
+            Buf o = { 0 }; expand(&sh->vtx[c->voff + v].id, &o); fwrite(o.b, 1, o.n, stdout); free(o.b);
         }
         printf("]\n");
     }

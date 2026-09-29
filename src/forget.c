@@ -55,11 +55,46 @@ static uint64_t over(PGconn **pg, int npg, const lp_id *ids, uint64_t n, const c
     }
     return rows;
 }
-static void each_id(PGresult *r, int j, void *into){ lp_id id; memcpy(id.b, PQgetvalue(r, j, 0), 16); set_add(into, &id); }
-/* The constituents of a fetched path that are not atoms. */
-static void each_part(PGresult *r, int j, void *into){
-    const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)PQgetvalue(r, j, 0), (size_t)PQgetlength(r, j, 0), &vx);
-    for (size_t i = 0; i < nv; i++) { double xyz[3]; memcpy(xyz, vx + 32 * i, 24); lp_id id; lp_xyz_to_id(xyz, &id); if (lp_tier0_codepoint(T0, &id) < 0) set_add(into, &id); }
+/* The partitions of a table that hold anything, by the first hex digit of the IDs they hold. An ID is looked for, or
+ * removed, in the partitions its first digit names, by name: never through the partitioned table, which would probe
+ * every partition of every tier for every ID. */
+typedef struct { char name[32][40]; int n; } Parts;
+static void parts_of(PGconn *pg, const char *table, Parts out[16]){
+    char q[256]; snprintf(q, sizeof q, "SELECT c.relname FROM pg_class c WHERE c.relkind = 'r' AND c.relname ~ '^%s_t([0-9]+|x)_[0-9a-f]$' ORDER BY 1", table);
+    PGresult *r = PQexec(pg, q); must(pg, r, PGRES_TUPLES_OK, "partitions"); memset(out, 0, sizeof(Parts) * 16);
+    for (int j = 0; j < PQntuples(r); j++) {
+        const char *name = PQgetvalue(r, j, 0); snprintf(q, sizeof q, "SELECT 1 FROM %s LIMIT 1", name);
+        PGresult *e = PQexec(pg, q); int holds = PQresultStatus(e) == PGRES_TUPLES_OK && PQntuples(e) > 0; PQclear(e); if (!holds) continue;
+        char hx = name[strlen(name) - 1]; int h = hx <= '9' ? hx - '0' : hx - 'a' + 10;
+        if (out[h].n < 32) snprintf(out[h].name[out[h].n++], 40, "%s", name);
+    }
+    PQclear(r);
+}
+/* One statement per partition over the IDs that partition could hold; %s in the statement is the partition. */
+static uint64_t over_parts(PGconn **pg, int npg, const Parts parts[16], const lp_id *ids, uint64_t n, const char *sql, Each each, void *into, const char *what){
+    uint64_t cnt[17] = { 0 }; for (uint64_t i = 0; i < n; i++) cnt[(ids[i].b[0] >> 4) + 1]++;
+    for (int h = 0; h < 16; h++) cnt[h + 1] += cnt[h];
+    lp_id *by = malloc(sizeof(lp_id) * (n + 1)); uint64_t fill[16]; memcpy(fill, cnt, sizeof fill); for (uint64_t i = 0; i < n; i++) by[fill[ids[i].b[0] >> 4]++] = ids[i];
+    typedef struct { int h, p; uint64_t lo, n; } Job; uint64_t nj = 0, cj = 0; Job *job = NULL;
+    for (int h = 0; h < 16; h++) for (uint64_t lo = cnt[h]; lo < cnt[h + 1]; lo += CHUNK) for (int p = 0; p < parts[h].n; p++) {
+        if (nj == cj) { cj = cj ? cj * 2 : 1024; job = xrealloc(job, cj * sizeof(Job)); }
+        job[nj++] = (Job){ h, p, lo, cnt[h + 1] - lo < CHUNK ? cnt[h + 1] - lo : CHUNK }; }
+    uint64_t rows = 0;
+    #pragma omp parallel for num_threads(npg) schedule(dynamic) reduction(+:rows)
+    for (uint64_t j = 0; j < nj; j++) {
+        uint32_t k = (uint32_t)job[j].n; uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t al = uuid_param(ab, by + job[j].lo, k);
+        char q[512]; snprintf(q, sizeof q, sql, parts[job[j].h].name[job[j].p]);
+        PGconn *c = pg[omp_get_thread_num()]; const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+        PGresult *r = PQexecParams(c, q, 1, NULL, v, l, f, 1); must(c, r, each ? PGRES_TUPLES_OK : PGRES_COMMAND_OK, what);
+        if (each) {
+            #pragma omp critical(forget_rows)
+            for (int x = 0; x < PQntuples(r); x++) each(r, x, into);
+            rows += (uint64_t)PQntuples(r);
+        } else rows += strtoull(PQcmdTuples(r), NULL, 10);
+        PQclear(r); free(ab);
+    }
+    free(by); free(job);
+    return rows;
 }
 
 /* ---- the sweep */
@@ -121,6 +156,7 @@ static void each_release(PGresult *r, int j, void *into){
 }
 static uint64_t sweep(PGconn **pg, int npg, int dry){
     double T = now(), t = now(); for (int i = 0; i < 256; i++) pthread_mutex_init(&cs[i].mu, NULL);
+    static Parts eparts[16], pparts[16]; parts_of(pg[0], "entity", eparts); parts_of(pg[0], "physicality", pparts);
     /* every partition of paths above tier 0, each on a connection */
     PGresult *r = PQexec(pg[0], "SELECT c.relname FROM pg_class c JOIN pg_inherits i ON i.inhrelid = c.oid WHERE c.relkind = 'r' "
                                 "AND c.relname ~ '^physicality_t([1-9][0-9]*|x)_[0-9a-f]$' ORDER BY c.reltuples DESC");
@@ -149,10 +185,10 @@ static uint64_t sweep(PGconn **pg, int npg, int dry){
             for (uint64_t i = 0; i < going.n && i < 12; i++) { char *tx = reader_text(rd, &going.id[i * (going.n / 12 ? going.n / 12 : 1) % going.n], 40); printf("%s \"%s\"", i ? "," : "", tx); free(tx); }
             printf("\n"); reader_free(rd);
         }
-        over(pg, npg, going.id, going.n, "SELECT path FROM physicality WHERE entity = ANY($1::uuid[])", each_release, &next, "what they held");
+        over_parts(pg, npg, pparts, going.id, going.n, "SELECT path FROM %s WHERE entity = ANY($1::uuid[])", each_release, &next, "what they held");
         if (!dry) { over(pg, npg, going.id, going.n, "DELETE FROM standing WHERE claim = ANY($1::uuid[])", NULL, NULL, "standings");
-                    over(pg, npg, going.id, going.n, "DELETE FROM physicality WHERE entity = ANY($1::uuid[])", NULL, NULL, "paths");
-                    over(pg, npg, going.id, going.n, "DELETE FROM entity WHERE id = ANY($1::uuid[])", NULL, NULL, "entities"); }
+                    over_parts(pg, npg, pparts, going.id, going.n, "DELETE FROM %s WHERE entity = ANY($1::uuid[])", NULL, NULL, "paths");
+                    over_parts(pg, npg, eparts, going.id, going.n, "DELETE FROM %s WHERE id = ANY($1::uuid[])", NULL, NULL, "entities"); }
         total += going.n;
         printf("  level %d: %'12llu held by nothing%s   (%.1f s)\n", level, (unsigned long long)going.n, dry ? "" : ", removed", now() - t); fflush(stdout);
         set_free(&going); going = next;

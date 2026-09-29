@@ -2,8 +2,9 @@
  *
  * The recipe names which elements are things, and by which attribute: identity ELEMENT ATTRIBUTE (* for any element
  * that carries the attribute). Everything else follows from how the source wrote it, every name and value as written:
- *   an element that is a thing X        [X, attribute, value] for each of its other attributes; and, inside a thing
- *                                       S, [S, ELEMENT, X]
+ *   an element that is a thing X        [X, attribute, value] for each of its other attributes, [X, ELEMENT, text] for
+ *                                       its own text, and, inside a thing S, [S, ELEMENT, X]: said together, one record.
+ *                                       The things inside it are records of their own
  *   any other element, inside a thing S  it speaks of S: [S, attribute, value] for each attribute, [S, ELEMENT, text]
  *                                       for its text. What it says it says together: the element is one record, the
  *                                       path of its name, its claims, and the records of the elements inside it.
@@ -63,12 +64,14 @@ static Ref claim3(Ref s, Ref p, Ref o){ Ref t[3] = { s, p, o }; return said_clai
 static void alone(const EW *w, Events *ev, Ref c){ Event x = { c.id, c.id, 1.0f, w->er, w->ed, 0, EV_CLAIM }; ev_push(ev, &x); }
 
 static void element(const EW *w, TSNode el, const Ref *S, long scp, Refs *rec, Ref *node, int *has_node, Events *ev);
+static __thread uint32_t skip_child = UINT32_MAX;                             /* the element whose text named the thing being read: said already */
 /* The elements inside a node, each read; many of them, on every core, their attestations joined in order. */
 static void inside(const EW *w, TSNode content, const Ref *S, long scp, Refs *rec, Refs *items, Events *ev){
     uint32_t nc = ts_node_child_count(content); if (!nc) return;
     TSNode *kid = malloc(sizeof(TSNode) * nc); uint32_t k = 0;
     TSTreeCursor cur = ts_tree_cursor_new(content);
-    if (ts_tree_cursor_goto_first_child(&cur)) do { TSNode c = ts_tree_cursor_current_node(&cur); if (is(c, "element")) kid[k++] = c; } while (ts_tree_cursor_goto_next_sibling(&cur));
+    uint32_t skip = skip_child; skip_child = UINT32_MAX;
+    if (ts_tree_cursor_goto_first_child(&cur)) do { TSNode c = ts_tree_cursor_current_node(&cur); if (is(c, "element") && ts_node_start_byte(c) != skip) kid[k++] = c; } while (ts_tree_cursor_goto_next_sibling(&cur));
     ts_tree_cursor_delete(&cur);
     if (!rec && k >= 256 && ts_node_end_byte(content) - ts_node_start_byte(content) > (1u << 20)) {
         int nt = omp_get_num_threads() * 8; if (nt > (int)k) nt = (int)k; Events *pe = calloc((size_t)nt, sizeof(Events));
@@ -94,26 +97,56 @@ static void element(const EW *w, TSNode el, const Ref *S, long scp, Refs *rec, R
     if (!has_name) return;
     Ref nref = string_ref(w->src + ts_node_start_byte(name), ts_node_end_byte(name) - ts_node_start_byte(name));
 
-    int idat = -1, idres = 0;                                                   /* is it a thing, and by which attribute */
-    for (int i = 0; i < r->nidentity && idat < 0; i++) {
+    /* is it a thing, and what names it: an attribute, or the text of an element inside it */
+    int idat = -1, idres = 0, idwithin = 0, have_x = 0; Ref X; long xcp = -1; TSNode idchild = { 0 }; int has_idchild = 0;
+    for (int i = 0; i < r->nidentity && !have_x; i++) {
         if (strcmp(r->identity[i].el, "*") && !named(w, name, r->identity[i].el)) continue;
-        for (int a = 0; a < na; a++) if (named(w, an[a], r->identity[i].attr)) { idat = a; idres = r->identity[i].res; break; }
+        if (r->identity[i].child) {
+            if (!has_content) continue; uint32_t nc = ts_node_child_count(content);
+            for (uint32_t c = 0; c < nc && !have_x; c++) { TSNode ch = ts_node_child(content, c); if (!is(ch, "element")) continue;
+                TSNode t2 = ts_node_child(ch, 0); if (ts_node_is_null(t2) || !is(t2, "STag")) continue; TSNode n2 = ts_node_named_child(t2, 0);
+                if (ts_node_is_null(n2) || !named(w, n2, r->identity[i].attr)) continue;
+                uint32_t n3 = ts_node_child_count(ch); for (uint32_t z = 1; z < n3; z++) { TSNode cc = ts_node_child(ch, z); if (is(cc, "content") && value_ref(w, cc, 0, scp, &X)) { have_x = 1; idchild = ch; has_idchild = 1; idwithin = r->identity[i].within; break; } } }
+            continue;
+        }
+        for (int a = 0; a < na && !have_x; a++) if (named(w, an[a], r->identity[i].attr)) {
+            idres = r->identity[i].res; int ok;
+            if (idres == 1) { const uint8_t *p = w->src + ts_node_start_byte(av[a]); size_t n = ts_node_end_byte(av[a]) - ts_node_start_byte(av[a]);
+                if (n >= 2 && (p[0] == '"' || p[0] == '\'')) { p++; n -= 2; } char h[16]; ok = n && n <= 8; if (ok) { memcpy(h, p, n); h[n] = 0; char *e; unsigned long cp = strtoul(h, &e, 16); ok = !*e && cp < LP_NCP; if (ok) { X = atom((uint32_t)cp); xcp = (long)cp; } } }
+            else ok = value_ref(w, av[a], idres == 2, scp, &X);
+            if (ok) { have_x = 1; idat = a; idwithin = r->identity[i].within; }
+        }
     }
-    Ref X; long xcp = -1;
-    if (idat >= 0) {
-        int ok;
-        if (idres == 1) { const uint8_t *p = w->src + ts_node_start_byte(av[idat]); size_t n = ts_node_end_byte(av[idat]) - ts_node_start_byte(av[idat]);
-            if (n >= 2 && (p[0] == '"' || p[0] == '\'')) { p++; n -= 2; } char h[16]; ok = n && n <= 8; if (ok) { memcpy(h, p, n); h[n] = 0; char *e; unsigned long cp = strtoul(h, &e, 16); ok = !*e && cp < LP_NCP; if (ok) { X = atom((uint32_t)cp); xcp = (long)cp; } } }
-        else ok = value_ref(w, av[idat], idres == 2, scp, &X);
-        if (!ok) idat = -1;
-    }
-    if (idat >= 0) {
-        if (S) { Ref c = claim3(*S, nref, X); if (rec) refs_push(rec, c); else alone(w, ev, c); }
-        for (int a = 0; a < na; a++) { if (a == idat) continue; Ref v;
-            if (!value_ref(w, av[a], listed((char (*)[32])r->codepoints, r->ncodepoints, w, an[a]), xcp, &v)) continue;
+    if (have_x && idwithin && S) { Ref in[2] = { *S, X }; in[0].said = 0; X = said_tuple(compose(in, 2, tier_of(in, 2))); xcp = -1; }     /* a name that stands only within what it is inside */
+    if (have_x) {
+        /* what it says itself it says together: its place in what it is inside, its attributes, its own text */
+        Refs own = { 0 };
+        if (S) refs_push(&own, claim3(*S, nref, X));
+        for (int a = 0; a < na; a++) { if (a == idat) continue;
+            Ref key = string_ref(w->src + ts_node_start_byte(an[a]), ts_node_end_byte(an[a]) - ts_node_start_byte(an[a]));
+            char ls = 0; for (int z = 0; z < r->nlist; z++) if (named(w, an[a], r->list[z].col)) ls = r->list[z].sep;
+            if (ls) { const uint8_t *p = w->src + ts_node_start_byte(av[a]), *e = w->src + ts_node_end_byte(av[a]); if (e - p >= 2 && (p[0] == '"' || p[0] == '\'')) { p++; e--; }
+                while (p < e) { const uint8_t *q = memchr(p, ls, (size_t)(e - p)); if (!q) q = e; const uint8_t *vp = p; size_t vn = (size_t)(q - p);
+                    while (vn && (vp[0] == ' ' || vp[0] == '\n' || vp[0] == '\t')) { vp++; vn--; } while (vn && (vp[vn - 1] == ' ' || vp[vn - 1] == '\n' || vp[vn - 1] == '\t')) vn--;
+                    if (vn) { uint8_t *ub = malloc(vn * 2 + 16); size_t ul = xml_unescape(vp, vn, ub); if (ul) refs_push(&own, claim3(X, key, string_ref(ub, ul))); free(ub); }
+                    p = q + 1; }
+                continue; }
+            Ref v; if (!value_ref(w, av[a], listed((char (*)[32])r->codepoints, r->ncodepoints, w, an[a]), xcp, &v)) continue;
             if (!memcmp(&v.id, &X.id, 16)) continue;                            /* what it says of itself is itself: nothing further */
-            alone(w, ev, claim3(X, string_ref(w->src + ts_node_start_byte(an[a]), ts_node_end_byte(an[a]) - ts_node_start_byte(an[a])), v)); }
-        if (has_content) inside(w, content, &X, xcp, NULL, NULL, ev);
+            refs_push(&own, claim3(X, key, v)); }
+        if (has_content) { int kids = 0; uint32_t nc = ts_node_child_count(content); for (uint32_t i = 0; i < nc && !kids; i++) kids = is(ts_node_child(content, i), "element");
+            if (!kids) { Ref v; if (value_ref(w, content, 0, xcp, &v) && memcmp(&v.id, &X.id, 16)) refs_push(&own, claim3(X, nref, v)); } }
+        if (rec) { for (int i = 0; i < own.n; i++) refs_push(rec, own.c[i]); }
+        else if (own.n == 1) alone(w, ev, own.c[0]);
+        else if (own.n > 1) {
+            Ref *path = malloc(sizeof(Ref) * (size_t)(own.n + 1)); path[0] = nref; memcpy(path + 1, own.c, sizeof(Ref) * (size_t)own.n);
+            Ref node_ = said_record(compose(path, (uint32_t)own.n + 1, tier_of(path, own.n + 1))); free(path);
+            Event x = { node_.id, node_.id, 1.0f, w->er, w->ed, 0, EV_RECORD }; ev_push(ev, &x);
+            for (int i = 0; i < own.n; i++) { int dup = 0; for (int j = 0; j < i && !dup; j++) dup = !memcmp(&own.c[j].id, &own.c[i].id, 16);
+                if (!dup) { Event m = { own.c[i].id, node_.id, 1.0f, w->er, w->ed, 0, EV_MEMBER }; ev_push(ev, &m); } }
+        }
+        free(own.c);
+        if (has_content) { skip_child = has_idchild ? ts_node_start_byte(idchild) : UINT32_MAX; inside(w, content, &X, xcp, NULL, NULL, ev); skip_child = UINT32_MAX; }
         *node = X; *has_node = 1; return;
     }
     if (!S) { if (has_content) inside(w, content, NULL, -1, NULL, NULL, ev); return; }   /* it speaks of nothing: what is inside it may */
@@ -128,9 +161,16 @@ static void element(const EW *w, TSNode el, const Ref *S, long scp, Refs *rec, R
         if (kids) { inside(w, content, S, scp, NULL, NULL, ev); return; }
     }
     Refs mine = { 0 }, items = { 0 }, *claims = rec ? rec : &mine; int before = claims->n;
-    for (int a = 0; a < na; a++) { Ref v;
+    for (int a = 0; a < na; a++) { Ref v; Ref key = string_ref(w->src + ts_node_start_byte(an[a]), ts_node_end_byte(an[a]) - ts_node_start_byte(an[a]));
+        char ls = 0; for (int z = 0; z < r->nlist; z++) if (named(w, an[a], r->list[z].col)) ls = r->list[z].sep;
+        if (ls) { const uint8_t *p = w->src + ts_node_start_byte(av[a]), *e = w->src + ts_node_end_byte(av[a]); if (e - p >= 2 && (p[0] == '"' || p[0] == '\'')) { p++; e--; }
+            while (p < e) { const uint8_t *q = memchr(p, ls, (size_t)(e - p)); if (!q) q = e; const uint8_t *vp = p; size_t vn = (size_t)(q - p);
+                while (vn && (vp[0] == ' ' || vp[0] == '\n' || vp[0] == '\t')) { vp++; vn--; } while (vn && (vp[vn - 1] == ' ' || vp[vn - 1] == '\n' || vp[vn - 1] == '\t')) vn--;
+                if (vn) { uint8_t *ub = malloc(vn * 2 + 16); size_t ul = xml_unescape(vp, vn, ub); if (ul) { Ref c = claim3(*S, key, string_ref(ub, ul)); refs_push(claims, c); refs_push(&items, c); } free(ub); }
+                p = q + 1; }
+            continue; }
         if (!value_ref(w, av[a], listed((char (*)[32])r->codepoints, r->ncodepoints, w, an[a]), scp, &v)) continue;
-        Ref c = claim3(*S, string_ref(w->src + ts_node_start_byte(an[a]), ts_node_end_byte(an[a]) - ts_node_start_byte(an[a])), v);
+        Ref c = claim3(*S, key, v);
         refs_push(claims, c); refs_push(&items, c); }
     if (has_content) {
         int kids = 0; uint32_t nc = ts_node_child_count(content); for (uint32_t i = 0; i < nc && !kids; i++) kids = is(ts_node_child(content, i), "element");
