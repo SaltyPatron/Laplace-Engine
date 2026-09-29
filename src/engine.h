@@ -19,6 +19,7 @@ const char *laplace_grammars(void);                  /* LAPLACE_GRAMMARS */
 const char *laplace_sql(void);                       /* LAPLACE_SQL: Laplace-postgres's sql directory */
 const char *laplace_ucd(void);                       /* LAPLACE_UCD */
 PGconn *db_connect(const char *conninfo);            /* exits with the server's message if it cannot */
+PGresult *db_ask(PGconn *, const char *sql, int n, const char *const *v, const int *l, const int *f);   /* planned once for the connection; sql: a literal */
 
 /* ---- commands */
 int cmd_ingest(int argc, char **argv);

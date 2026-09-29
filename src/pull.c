@@ -61,9 +61,9 @@ static Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fa
     lp_id keys[3]; uint32_t nk = 0; for (int i = 0; i < 3; i++) if (have[i]) keys[nk++] = part[i];
     uint8_t ab[80]; size_t al = uuid_param(ab, keys, nk); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
     const char *v[2] = { (const char *)ab, lim }; int l[2] = { (int)al, 0 }, f[2] = { 1, 0 };
-    PGresult *q = PQexecParams(pg,
+    PGresult *q = db_ask(pg,
         "SELECT p.entity, p.path, s.rating, s.deviation, s.volatility, s.matches FROM physicality p JOIN standing s ON s.claim = p.entity "
-        "WHERE p.path @> $1::uuid[] LIMIT $2::int", 2, NULL, v, l, f, 1);
+        "WHERE p.path @> $1::uuid[] LIMIT $2::int", 2, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
     int rows = PQntuples(q); *capped = rows > fan; if (rows > fan) rows = fan;
     Claim *c = malloc(sizeof(Claim) * (size_t)(rows ? rows : 1)); int m = 0;
@@ -100,7 +100,7 @@ static void positions_of(PGconn *pg, Claim *c, int n){
     lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) ids[i] = c[i].id;
     uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = uuid_param(ab, ids, (uint32_t)n);
     const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = PQexecParams(pg, "SELECT claim, position FROM attestation WHERE claim = ANY($1::uuid[]) AND position IS NOT NULL", 1, NULL, v, l, f, 1);
+    PGresult *q = db_ask(pg, "SELECT claim, position FROM attestation WHERE claim = ANY($1::uuid[]) AND position IS NOT NULL", 1, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "positions: %s", PQerrorMessage(pg)); exit(1); }
     for (int j = 0; j < PQntuples(q); j++) {
         uint32_t pb; memcpy(&pb, PQgetvalue(q, j, 1), 4); int pos = (int)ntohl(pb);
@@ -152,8 +152,8 @@ int cmd_hop(int argc, char **argv){
     /* observed: the content that holds it, which is not claims */
     t = now(); uint8_t ab[40]; size_t al = uuid_param(ab, &e.id, 1);
     const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = PQexecParams(pg, "SELECT p.tier FROM physicality p WHERE p.path @> $1::uuid[] "
-                                   "AND NOT EXISTS (SELECT 1 FROM standing s WHERE s.claim = p.entity)", 1, NULL, v, l, f, 1);
+    PGresult *q = db_ask(pg, "SELECT p.tier FROM physicality p WHERE p.path @> $1::uuid[] "
+                                   "AND NOT EXISTS (SELECT 1 FROM standing s WHERE s.claim = p.entity)", 1, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
     uint64_t by_tier[256] = { 0 }; int any = 0;
     for (int j = 0; j < PQntuples(q); j++) { uint16_t tb; memcpy(&tb, PQgetvalue(q, j, 0), 2); by_tier[ntohs(tb) & 255]++; any = 1; }
@@ -252,10 +252,10 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
     if (!m) { free(ids); free(who); return n; }
     uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = uuid_param(ab, ids, (uint32_t)m); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
     const char *v[2] = { (const char *)ab, lim }; int l[2] = { (int)al, 0 }, f[2] = { 1, 0 };
-    PGresult *q = PQexecParams(pg,
+    PGresult *q = db_ask(pg,
         "SELECT u.i, c.entity, c.path, c.rating, c.deviation, c.volatility FROM unnest($1::uuid[]) WITH ORDINALITY AS u(id, i) "
         "CROSS JOIN LATERAL (SELECT p.entity, p.path, s.rating, s.deviation, s.volatility FROM physicality p JOIN standing s ON s.claim = p.entity "
-        "WHERE p.path @> ARRAY[u.id] LIMIT $2::int) c", 2, NULL, v, l, f, 1);
+        "WHERE p.path @> ARRAY[u.id] LIMIT $2::int) c", 2, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
     w->trips++; w->expanded += (uint64_t)m;
     int rows = PQntuples(q), *held = calloc((size_t)m, sizeof(int));
@@ -281,7 +281,7 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
 /* The tie between two neighbours of a chain, as text: the claim's predicate, read from its subject to its object. */
 static void show_tie(PGconn *pg, Reader *rd, const lp_id *claim, const lp_id *left){
     uint8_t ab[40]; size_t al = uuid_param(ab, claim, 1); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, fm[1] = { 1 };
-    PGresult *q = PQexecParams(pg, "SELECT path FROM physicality WHERE entity = ANY($1::uuid[]) LIMIT 1", 1, NULL, v, l, fm, 1);
+    PGresult *q = db_ask(pg, "SELECT path FROM physicality WHERE entity = ANY($1::uuid[]) LIMIT 1", 1, v, l, fm);
     lp_id part[3]; int np = PQresultStatus(q) == PGRES_TUPLES_OK && PQntuples(q) ? decode_claim(PQgetvalue(q, 0, 0), PQgetlength(q, 0, 0), part) : 0;
     PQclear(q);
     char *pt = np == 3 ? reader_text(rd, &part[1], 32) : strdup("?");

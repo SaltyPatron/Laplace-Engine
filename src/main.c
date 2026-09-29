@@ -36,6 +36,25 @@ PGconn *db_connect(const char *conninfo){
     PQclear(PQexec(pg, "SET client_min_messages = warning"));
     return pg;
 }
+/* A query that is asked again and again is planned once for the connection: over the partitions of entity and
+ * physicality, planning a lookup takes several times what answering it does. Results come in binary. */
+PGresult *db_ask(PGconn *pg, const char *sql, int n, const char *const *v, const int *l, const int *f){
+    static struct { PGconn *pg; const char *sql; } known[64]; static int nknown; int k = 0;
+    #pragma omp critical(db_ask)
+    {
+        while (k < nknown && !(known[k].pg == pg && known[k].sql == sql)) k++;
+        if (k == nknown && nknown < 64) {
+            char name[16]; snprintf(name, sizeof name, "q%d", k);
+            if (!nknown || known[nknown - 1].pg != pg) { int had = 0; for (int i = 0; i < nknown; i++) had |= known[i].pg == pg; if (!had) PQclear(PQexec(pg, "SET plan_cache_mode = force_generic_plan")); }
+            PGresult *r = PQprepare(pg, name, sql, n, NULL);
+            if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "prepare: %s", PQerrorMessage(pg)); exit(1); }
+            PQclear(r); known[nknown].pg = pg; known[nknown++].sql = sql;
+        }
+    }
+    if (k >= 64) return PQexecParams(pg, sql, n, NULL, v, l, f, 1);
+    char name[16]; snprintf(name, sizeof name, "q%d", k);
+    return PQexecPrepared(pg, name, n, v, l, f, 1);
+}
 
 static const struct { const char *name; int (*run)(int, char **); const char *what; } CMD[] = {
     { "tier0",  cmd_tier0,  "generate tier 0 from the Unicode data" },
