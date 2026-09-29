@@ -1,0 +1,18 @@
+name conllu
+# CoNLL-U. A sentence is a record: its notes, then a row for every word. The columns are named as Universal
+# Dependencies' format names them; every value is recorded as the treebank writes it.
+match *.conllu
+grammar table
+columns ID FORM LEMMA UPOS XPOS FEATS HEAD DEPREL DEPS MISC
+comment #
+record blank
+empty _
+note =
+about text
+word FORM
+number ID -
+attest LEMMA UPOS XPOS
+pairs FEATS | = ,
+pairs MISC | =
+relation DEPREL to HEAD
+relations DEPS | :

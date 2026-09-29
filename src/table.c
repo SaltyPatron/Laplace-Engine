@@ -20,7 +20,7 @@ void tier0_open(const char *path){
     if (!T0) { fprintf(stderr, "cannot map tier 0 at %s (LAPLACE_TIER0; generate it with: laplace tier0)\n", path && *path ? path : lp_tier0_path()); exit(1); }
 }
 
-Ref atom(uint32_t cp){ return lp_ref_atom(T0, cp); }
+Ref atom(uint32_t cp){ Ref r = lp_ref_atom(T0, cp); r.said = 0; return r; }
 
 static uint64_t hkey(const lp_id *id){ uint64_t k; memcpy(&k, id->b + 1, 8); return k; }
 static void grow(Shard *s){
@@ -36,7 +36,7 @@ static void grow(Shard *s){
 /* A composition, recorded: Laplace-Native gives its ID and coordinate; the table keeps it, once, with its path. */
 Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     if (n == 1) return ch[0];
-    Ref r = lp_ref_compose(ch, n, tier);
+    Ref r = lp_ref_compose(ch, n, tier); r.said = 0;
     Shard *s = &shard[r.id.b[0]];
     pthread_mutex_lock(&s->mu);
     if ((s->n + 1) * 2 > s->scap) grow(s);
@@ -48,10 +48,12 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     }
     if (s->n == s->cap) { s->cap = s->cap ? s->cap * 2 : 4096; s->node = xrealloc(s->node, s->cap * sizeof(Node)); }
     Node *x = &s->node[s->n]; x->id = r.id; memcpy(x->m, r.c.m, 32); x->tier = tier; x->len = n; x->voff = s->nv; x->nv = 0; x->keep = 0;
-    for (uint32_t i = 0; i < n; i++) {                                                  /* runs of the same child */
-        if (x->nv && !memcmp(&s->vtx[s->nv - 1].id, &ch[i].id, 16)) { s->vtx[s->nv - 1].run++; continue; }
+    for (uint32_t i = 0; i < n; i++) {                                                  /* runs of the same child; what each is within this path, above the run */
+        uint32_t said = (uint32_t)(ch[i].said & 3u) << LP_M_RUN_BITS;
+        if (x->nv && !memcmp(&s->vtx[s->nv - 1].id, &ch[i].id, 16) && (s->vtx[s->nv - 1].run & (3u << LP_M_RUN_BITS)) == said
+                  && VRUN(s->vtx[s->nv - 1].run) < (1u << LP_M_RUN_BITS) - 1) { s->vtx[s->nv - 1].run++; continue; }
         if (s->nv == s->vcap) { s->vcap = s->vcap ? s->vcap * 2 : 16384; s->vtx = xrealloc(s->vtx, s->vcap * sizeof(Vtx)); }
-        s->vtx[s->nv].id = ch[i].id; s->vtx[s->nv].run = 1; s->nv++; x->nv++;
+        s->vtx[s->nv].id = ch[i].id; s->vtx[s->nv].run = 1u | said; s->nv++; x->nv++;
     }
     s->slot[k] = (uint32_t)++s->n;
     pthread_mutex_unlock(&s->mu);
@@ -65,7 +67,7 @@ void ctx_open(int threads){
     CTX = malloc(sizeof(Ctx *) * (size_t)threads);
     for (int i = 0; i < threads; i++) { CTX[i] = lp_text_new(T0); if (!CTX[i]) { fprintf(stderr, "cannot open ICU's break iterators\n"); exit(1); } }
 }
-Ref text_ref(Ctx *c, const uint8_t *s, size_t n){ return lp_text_decompose(c, s, n, compose_sink, NULL); }
+Ref text_ref(Ctx *c, const uint8_t *s, size_t n){ Ref r = lp_text_decompose(c, s, n, compose_sink, NULL); r.said = 0; return r; }
 
 /* Bytes that are not text by themselves: each byte as its notation, <0xAB>, composed. */
 Ref notation_ref(Ctx *c, const uint8_t *b, size_t n){

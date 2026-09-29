@@ -1,0 +1,10 @@
+name cili-changes
+# What changed between WordNet 3.0 and 3.1: every row says of its WordNet 3.1 synset what each column holds.
+match changes-in-wn31.csv
+grammar table
+separator ,
+header
+
+claims
+subject in WN31
+attest *

@@ -1,0 +1,14 @@
+name unicode-property-value-aliases
+# The standard's own list of what each property's values stand for: the property, the value's short name, its long name.
+match PropertyValueAliases.txt
+grammar table
+separator ;
+comment #
+remark #
+columns property short long
+
+claims
+enter 1500 350
+subject in property
+predicate in short
+object in long

@@ -71,7 +71,7 @@ static Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fa
         const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1), &vx);
         for (size_t i = 0; i < nv; i++) {
             double xyz[3], run; memcpy(xyz, vx + 32 * i, 24); memcpy(&run, vx + 32 * i + 24, 8); lp_id id; lp_xyz_to_id(xyz, &id);
-            for (int r = 0; r < (run < 1 ? 1 : (int)run) && x->np < 3; r++) x->part[x->np++] = id;
+            for (int r = 0; r < (int)lp_m_run(run) && x->np < 3; r++) x->part[x->np++] = id;
         }
         if (x->np != 3) continue;                                            /* a claim is subject, predicate, object */
         int fits = 1; for (int i = 0; i < 3; i++) if (have[i] > 1 && memcmp(&x->part[i], &part[i], 16)) fits = 0;   /* in its place */
@@ -207,7 +207,7 @@ static int decode_claim(const char *path, int len, lp_id part[3]){
     const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)path, (size_t)len, &vx); int np = 0;
     for (size_t i = 0; i < nv; i++) {
         double xyz[3], run; memcpy(xyz, vx + 32 * i, 24); memcpy(&run, vx + 32 * i + 24, 8); lp_id id; lp_xyz_to_id(xyz, &id);
-        for (int r = 0; r < (run < 1 ? 1 : (int)run); r++) { if (np < 3) part[np] = id; np++; }
+        for (int r = 0; r < (int)lp_m_run(run); r++) { if (np < 3) part[np] = id; np++; }
     }
     return np;
 }

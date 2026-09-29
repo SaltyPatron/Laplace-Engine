@@ -1,0 +1,7 @@
+name verbnet-classes
+# A class file. A class and a subclass are their IDs and a member its key; everything else speaks of the class it is inside.
+match *.xml
+grammar xml
+identity VNCLASS ID
+identity VNSUBCLASS ID
+identity MEMBER verbnet_key

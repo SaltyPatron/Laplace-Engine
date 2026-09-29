@@ -1,15 +1,16 @@
-/* laplace forget: what one witness attested, taken back out.
- *   laplace forget [-d conninfo] [-j connections] witness
- * The witness's rows leave the ledger. A claim no other witness attests goes with its standing; a claim others attest
- * stays (its standing is theirs to replay). Then, level by level down the DAG, whatever those claims related that
- * nothing holds any more goes too: an entity stays while any path holds it, or while it is a source's trunk or a
- * witness. Atoms always stay. SQL fetches and deletes sets of rows; what to delete is decided here.
+/* laplace forget: what witnesses attested, taken back out.
+ *   laplace forget [-d conninfo] [-j connections] witness...
+ *   laplace forget --except witness...        every witness but these
+ * Their rows leave the ledger. What no other witness witnessed goes, with its standing; what others witnessed stays
+ * (its standing is theirs to replay). Then, level by level down the DAG, whatever nothing holds any more goes too: an
+ * entity stays while any path holds it, or while it is a source's trunk, a witness, or witnessed. Atoms always stay.
+ * SQL fetches and deletes sets of rows; what to delete is decided here.
  *
  * laplace sweep: whatever nothing holds, removed.
  *   laplace sweep [-d conninfo] [-j connections] [--dry]
  * One pass over every path counts, for every entity, the places that hold it. An entity no path holds goes, unless it is
- * a source's trunk, a witness, or a claim with a standing; what it held is counted down, and goes in turn when its count
- * reaches nothing. */
+ * a source's trunk, a witness, or something the ledger says was witnessed; its standing, if it has one, goes with it.
+ * What it held is counted down, and goes in turn when its count reaches nothing. */
 #include "engine.h"
 #include <locale.h>
 #include <omp.h>
@@ -132,7 +133,7 @@ static uint64_t sweep(PGconn **pg, int npg, int dry){
     PQclear(r);
     printf("  %-52s %'12llu   (%.1f s)\n", "paths read, every holder counted", (unsigned long long)paths, now() - t); fflush(stdout);
     t = now(); { Batch b = { 0 };
-      stream(pg[0], "SELECT claim FROM standing", row_root, &b); stream(pg[0], "SELECT trunk FROM source", row_root, &b);
+      stream(pg[0], "SELECT claim FROM attestation", row_root, &b); stream(pg[0], "SELECT trunk FROM source", row_root, &b);
       stream(pg[0], "SELECT id, lineage FROM witness", row_root, &b); batch_done(&b); }
     Set going = { 0 }; uint64_t entities = 0, roots = 0;
     for (int sh = 0; sh < 256; sh++) for (uint64_t i = 0; i < cs[sh].n; i++) {
@@ -149,7 +150,8 @@ static uint64_t sweep(PGconn **pg, int npg, int dry){
             printf("\n"); reader_free(rd);
         }
         over(pg, npg, going.id, going.n, "SELECT path FROM physicality WHERE entity = ANY($1::uuid[])", each_release, &next, "what they held");
-        if (!dry) { over(pg, npg, going.id, going.n, "DELETE FROM physicality WHERE entity = ANY($1::uuid[])", NULL, NULL, "paths");
+        if (!dry) { over(pg, npg, going.id, going.n, "DELETE FROM standing WHERE claim = ANY($1::uuid[])", NULL, NULL, "standings");
+                    over(pg, npg, going.id, going.n, "DELETE FROM physicality WHERE entity = ANY($1::uuid[])", NULL, NULL, "paths");
                     over(pg, npg, going.id, going.n, "DELETE FROM entity WHERE id = ANY($1::uuid[])", NULL, NULL, "entities"); }
         total += going.n;
         printf("  level %d: %'12llu held by nothing%s   (%.1f s)\n", level, (unsigned long long)going.n, dry ? "" : ", removed", now() - t); fflush(stdout);
@@ -177,50 +179,39 @@ int cmd_sweep(int argc, char **argv){
 }
 
 int cmd_forget(int argc, char **argv){
-    const char *conninfo = laplace_db(); int npg = 0, a = 1;
-    for (; a < argc - 1 && argv[a][0] == '-'; a++) {
+    const char *conninfo = laplace_db(); int npg = 0, a = 1, except = 0;
+    for (; a < argc && argv[a][0] == '-'; a++) {
         if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
         else if (!strcmp(argv[a], "-j") && a + 1 < argc) npg = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "--except")) except = 1;
+        else break;
     }
-    if (a >= argc) { fprintf(stderr, "usage: laplace forget [-d conninfo] [-j connections] witness\n"); return 2; }
+    if (a >= argc && !except) { fprintf(stderr, "usage: laplace forget [-d conninfo] [-j connections] witness...\n       laplace forget --except witness...   (every witness but these)\n"); return 2; }
     if (npg <= 0) npg = omp_get_num_procs();
     setlocale(LC_NUMERIC, "en_US.UTF-8");
     double T = now(), t; tier0_open(NULL); Ctx *c = lp_text_new(T0);
-    lp_id wid = lp_text_decompose(c, (const uint8_t *)argv[a], strlen(argv[a]), NULL, NULL).id; char wt[37]; id_text(&wid, wt);
     PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) pg[i] = db_connect(conninfo);
-    printf("laplace forget   %s   witness %s   %s\n", PQdb(pg[0]), argv[a], wt);
-
-    /* what it attested */
-    t = now(); Set claims = { 0 }, shared = { 0 }, gone = { 0 }, parts = { 0 };
-    { const char *v[1] = { wt }; PGresult *r = PQexecParams(pg[0], "SELECT DISTINCT claim FROM attestation WHERE witness = $1::uuid", 1, NULL, v, NULL, NULL, 1);
-      must(pg[0], r, PGRES_TUPLES_OK, "its claims"); for (int j = 0; j < PQntuples(r); j++) each_id(r, j, &claims); PQclear(r); }
-    if (!claims.n) { printf("  it attested nothing here\n"); return 1; }
-    { char sql[256]; snprintf(sql, sizeof sql, "SELECT DISTINCT claim FROM attestation WHERE claim = ANY($1::uuid[]) AND witness <> '%s'::uuid", wt);
-      over(pg, npg, claims.id, claims.n, sql, each_id, &shared, "claims others attest"); }
-    for (uint64_t i = 0; i < claims.n; i++) {
-        uint64_t k = shared.scap ? key(&claims.id[i]) & (shared.scap - 1) : 0; int held = 0;
-        while (shared.scap && shared.slot[k]) { if (!memcmp(&shared.id[shared.slot[k] - 1], &claims.id[i], 16)) { held = 1; break; } k = (k + 1) & (shared.scap - 1); }
-        if (!held) set_add(&gone, &claims.id[i]);
+    Set named = { 0 }, going = { 0 };
+    for (int i = a; i < argc; i++) { lp_id id = lp_text_decompose(c, (const uint8_t *)argv[i], strlen(argv[i]), NULL, NULL).id; set_add(&named, &id); }
+    if (!except) going = named;
+    else {                                                                  /* every witness but the ones named */
+        PGresult *r = PQexecParams(pg[0], "SELECT id FROM witness", 0, NULL, NULL, NULL, NULL, 1); must(pg[0], r, PGRES_TUPLES_OK, "witnesses");
+        for (int j = 0; j < PQntuples(r); j++) { lp_id id; memcpy(id.b, PQgetvalue(r, j, 0), 16); int keep = 0;
+            for (uint64_t k = 0; k < named.n; k++) keep |= !memcmp(&named.id[k], &id, 16);
+            if (!keep) set_add(&going, &id); }
+        PQclear(r);
     }
-    printf("  %-52s %'12llu   (%.1f s)\n", "claims it attested", (unsigned long long)claims.n, now() - t);
-    printf("  %-52s %'12llu\n", "of them, attested by others too: they stay", (unsigned long long)shared.n);
+    printf("laplace forget   %s   %llu witness%s\n", PQdb(pg[0]), (unsigned long long)going.n, going.n == 1 ? "" : "es");
+    if (!going.n) { printf("  nothing to forget\n"); return 1; }
+    { Reader *rd = reader_new(pg[0]); for (uint64_t i = 0; i < going.n; i++) { char *tx = reader_text(rd, &going.id[i], 80); printf("  %s\n", tx); free(tx); } reader_free(rd); }
 
-    /* the ledger, the standings, and the claims themselves */
+    /* what they witnessed leaves the ledger; whatever nothing holds or witnesses any more goes with the sweep */
     t = now();
-    over(pg, npg, gone.id, gone.n, "SELECT path FROM physicality WHERE entity = ANY($1::uuid[])", each_part, &parts, "the claims' parts");
-    { const char *v[1] = { wt }; PGresult *r = PQexecParams(pg[0], "DELETE FROM attestation WHERE witness = $1::uuid", 1, NULL, v, NULL, NULL, 0);
-      must(pg[0], r, PGRES_COMMAND_OK, "the ledger"); printf("  %-52s %12s   ", "ledger rows", PQcmdTuples(r)); PQclear(r); }
-    uint64_t ns = over(pg, npg, gone.id, gone.n, "DELETE FROM standing WHERE claim = ANY($1::uuid[])", NULL, NULL, "standings");
-    uint64_t np = over(pg, npg, gone.id, gone.n, "DELETE FROM physicality WHERE entity = ANY($1::uuid[])", NULL, NULL, "claim paths");
-    uint64_t ne = over(pg, npg, gone.id, gone.n, "DELETE FROM entity WHERE id = ANY($1::uuid[])", NULL, NULL, "claim entities");
-    printf("(%.1f s)\n  %-52s %'12llu\n  %-52s %'12llu entities, %'llu paths\n", now() - t, "standings", (unsigned long long)ns, "claims", (unsigned long long)ne, (unsigned long long)np);
-    { const char *v[1] = { wt };
-      PGresult *r = PQexecParams(pg[0], "DELETE FROM source WHERE trunk = $1::uuid", 1, NULL, v, NULL, NULL, 0); must(pg[0], r, PGRES_COMMAND_OK, "its source"); PQclear(r);
-      r = PQexecParams(pg[0], "DELETE FROM witness WHERE id = $1::uuid", 1, NULL, v, NULL, NULL, 0); must(pg[0], r, PGRES_COMMAND_OK, "the witness"); PQclear(r); }
-    set_add(&parts, &wid);
-
-    set_free(&parts); set_free(&claims); set_free(&shared); set_free(&gone);
-    printf("\n"); sweep(pg, npg, 0);
+    uint64_t nl = over(pg, 1, going.id, going.n, "DELETE FROM attestation WHERE witness = ANY($1::uuid[])", NULL, NULL, "the ledger");
+    over(pg, 1, going.id, going.n, "DELETE FROM source WHERE trunk = ANY($1::uuid[])", NULL, NULL, "their files");
+    over(pg, 1, going.id, going.n, "DELETE FROM witness WHERE id = ANY($1::uuid[])", NULL, NULL, "the witnesses");
+    printf("  %-52s %'12llu   (%.1f s)\n\n", "ledger rows", (unsigned long long)nl, now() - t); fflush(stdout);
+    sweep(pg, npg, 0);
     printf("\n== total %.1f s\n", now() - T);
     for (int i = 0; i < npg; i++) PQfinish(pg[i]);
     return 0;

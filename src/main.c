@@ -45,6 +45,7 @@ static const struct { const char *name; int (*run)(int, char **); const char *wh
     { "ingest", cmd_ingest, "a source by its name, or files, through their recipes" },
     { "forget", cmd_forget, "what one witness attested, taken back out" },
     { "sweep",  cmd_sweep,  "whatever nothing holds, removed" },
+    { "replay", cmd_replay, "every standing, played again from the ledger in the order it was written" },
     { "index",  cmd_index,  "build the indexes after a bulk load" },
     { "tree",   cmd_tree,   "a file's syntax tree, as its recipe's grammar reads it" },
     { "text",   cmd_text,   "a text's ID, coordinate and constituents, computed here" },

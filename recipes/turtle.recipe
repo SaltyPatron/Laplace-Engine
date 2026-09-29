@@ -1,0 +1,23 @@
+name turtle
+# Turtle. Every statement is recorded as written: [subject, predicate, object]. An identifier between angle brackets
+# is recorded without them, and a quoted text without its quotes; a name written with a prefix keeps it.
+# A text that carries a language tag says so: [text, tag].
+grammar turtle
+
+claims
+enter 1500 250
+query
+(triple (subject (iri_reference) @subject.iri) (property_list (property (predicate) @predicate (object_list (iri_reference) @object.iri))))
+(triple (subject (iri_reference) @subject.iri) (property_list (property (predicate) @predicate (object_list (prefixed_name) @object.text))))
+(triple (subject (iri_reference) @subject.iri) (property_list (property (predicate) @predicate (object_list (rdf_literal value: (string) @object.text)))))
+(triple (subject (prefixed_name) @subject.text) (property_list (property (predicate) @predicate (object_list (iri_reference) @object.iri))))
+(triple (subject (prefixed_name) @subject.text) (property_list (property (predicate) @predicate (object_list (prefixed_name) @object.text))))
+(triple (subject (prefixed_name) @subject.text) (property_list (property (predicate) @predicate (object_list (rdf_literal value: (string) @object.text)))))
+end
+
+claims
+pair
+enter 1500 250
+query
+(rdf_literal value: (string) @subject.text (lang_tag) @object.tag)
+end

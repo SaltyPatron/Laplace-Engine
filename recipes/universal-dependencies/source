@@ -1,0 +1,9 @@
+name universal-dependencies
+# Universal Dependencies: treebanks of sentences, each with a row for every word and what the treebank says of it.
+# Every treebank is its own witness, named as its directory is named.
+witness {dir}
+# The deviation is this recipe's choice for a curated academic treebank; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/.refresh-*/UD-Treebanks/extracted/ud-treebanks-*
+root $LAPLACE_DATA/UD-Treebanks/ud-treebanks-*
+after unicode iso-639

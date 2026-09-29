@@ -1,31 +1,9 @@
 name iso-639-3
-# ISO 639-3's code table: one row per language. A curated source: each row attests what the standard says of the
-# language, named by its identifier. Scope and type are enumerated by the standard: they are flags, not claims.
-match iso-639-3.tab
+# ISO 639-3's tables: every row says of its identifier what each column holds, under the column's own name.
+match iso-639-3.tab iso-639-3_Name_Index.tab iso-639-3_Retirements.tab
 grammar table
 header
 
 claims
-predicate Reference Name
 subject in Id
-object in Ref_Name
-
-claims
-predicate Part 1
-subject in Id
-object in Part1
-
-claims
-predicate Part 2B
-subject in Id
-object in Part2b
-
-claims
-predicate Part 2T
-subject in Id
-object in Part2t
-
-claims
-predicate Comment
-subject in Id
-object in Comment
+attest *

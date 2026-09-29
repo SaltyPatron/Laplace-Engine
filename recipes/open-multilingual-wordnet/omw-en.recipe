@@ -1,0 +1,6 @@
+name omw-en
+# The English wordnet of Open Multilingual Wordnet is Princeton WordNet 3.0.
+match omw-en.xml
+lineage WordNet
+deviation 40
+like wn-lmf

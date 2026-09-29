@@ -63,12 +63,12 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
     Node *pn = table_find(&pr.id); lp_id *ph; int np;
     int ptier = pr.tier;                                                          /* containers sit above the phrase's parts */
     if (!pn) { ph = &pr.id; np = 1; }
-    else { Shard *s = &shard[pr.id.b[0]]; np = 0; for (uint32_t v = 0; v < pn->nv; v++) np += s->vtx[pn->voff + v].run;
+    else { Shard *s = &shard[pr.id.b[0]]; np = 0; for (uint32_t v = 0; v < pn->nv; v++) np += VRUN(s->vtx[pn->voff + v].run);
            ph = malloc(sizeof(lp_id) * np); int k = 0;
            ptier = 0;
            for (uint32_t v = 0; v < pn->nv; v++) {
                Node *cn2 = table_find(&s->vtx[pn->voff + v].id); int ct = cn2 ? cn2->tier : 0; if (ct > ptier) ptier = ct;
-               for (uint32_t r = 0; r < s->vtx[pn->voff + v].run; r++) ph[k++] = s->vtx[pn->voff + v].id; } }
+               for (uint32_t r = 0; r < VRUN(s->vtx[pn->voff + v].run); r++) ph[k++] = s->vtx[pn->voff + v].id; } }
 
     PGconn *pg = db_connect(conninfo);
     DNode *d = NULL; int nn = 0, cn = 0; IdMap map = { 0 };

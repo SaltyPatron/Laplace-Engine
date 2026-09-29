@@ -56,7 +56,7 @@ static size_t fetch(Reader *r){
         x->kid = malloc(sizeof(lp_id) * (nv ? nv : 1)); x->run = malloc(4 * (nv ? nv : 1)); x->nv = (uint32_t)nv; x->state = 1;
         for (size_t i = 0; i < nv; i++) {
             double xyz[3], m; memcpy(xyz, vx + 32 * i, 24); memcpy(&m, vx + 32 * i + 24, 8);
-            lp_xyz_to_id(xyz, &x->kid[i]); x->run[i] = m < 1 ? 1 : (uint32_t)m;
+            lp_xyz_to_id(xyz, &x->kid[i]); x->run[i] = lp_m_run(m);
         }
     }
     PQclear(q); free(ab); free(ids);

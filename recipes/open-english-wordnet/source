@@ -1,5 +1,6 @@
 name open-english-wordnet
-witness Open English WordNet 2025+
+# Open English WordNet. The witness is named as the lexicon names itself.
+witness {first label}
 lineage WordNet
 deviation 35
 root $LAPLACE_DATA/.refresh-*/OpenEnglishWordNet-2025-plus

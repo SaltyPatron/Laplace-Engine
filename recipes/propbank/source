@@ -1,0 +1,7 @@
+name propbank
+# PropBank's frame files: every predicate's rolesets, their roles, and their links to VerbNet and FrameNet.
+witness PropBank
+# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
+deviation 90
+root $LAPLACE_DATA/.refresh-*/PropBank/extracted/propbank-*/frames
+after unicode iso-639

@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 /* laplace ingest: files through their recipes.
- *   laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes/] [-j threads] [--no-load] [--plan] file...
+ *   laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes/] [-j threads] [-s source] [--no-load] [--plan] file...
  * Files already recorded byte for byte are skipped by one query over their BLAKE3-256 hashes. The rest decompose on
  * every core; each is recomposed from the node table and compared with its bytes; then new nodes, claims and
  * standings are written. Live counters go to stderr, phase times to stdout. */
@@ -26,7 +26,7 @@ static int expand(const lp_id *id, Buf *o){
     }
     Node *x = table_find(id); if (!x) return 0;
     Shard *s = &shard[id->b[0]];
-    for (uint32_t v = 0; v < x->nv; v++) for (uint32_t r = 0; r < s->vtx[x->voff + v].run; r++) if (!expand(&s->vtx[x->voff + v].id, o)) return 0;
+    for (uint32_t v = 0; v < x->nv; v++) for (uint32_t r = 0; r < VRUN(s->vtx[x->voff + v].run); r++) if (!expand(&s->vtx[x->voff + v].id, o)) return 0;
     return 1;
 }
 
@@ -45,28 +45,35 @@ static int walk_cb(const char *p, const struct stat *st, int type, struct FTW *f
 
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
-    int threads = 0, do_load = 1, a = 1, show_claims = 0;
+    int threads = 0, do_load = 1, a = 1, show_claims = 0; const char *of = NULL;
     for (; a < argc && argv[a][0] == '-'; a++) {
         if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
         else if (!strcmp(argv[a], "-t") && a + 1 < argc) t0p = argv[++a];
         else if (!strcmp(argv[a], "-r") && a + 1 < argc) rdir = argv[++a];
         else if (!strcmp(argv[a], "-j") && a + 1 < argc) threads = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-s") && a + 1 < argc) of = argv[++a];            /* the files named are this source's: a part of it at a time */
         else if (!strcmp(argv[a], "--no-load")) do_load = 0;
         else if (!strcmp(argv[a], "--plan")) do_load = -1;
         else if (!strcmp(argv[a], "--claims")) { show_claims = 1; do_load = 0; }     /* what the recipes attest, as text; nothing is loaded */
         else { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] file...\n"); return 2; }
     }
     Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec), nsrc; Source *src = sources_loaded(&nsrc);
+    if (of) { int k = 0; while (k < nsrc && strcmp(src[k].name, of)) k++; if (k == nsrc) { fprintf(stderr, "%s is not a source\n", of); return 2; } walking = &src[k]; }
     for (int i = a; i < argc; i++) {                                         /* a source by its name, or files and directories */
         struct stat st; int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++;
         if (k < nsrc && stat(argv[i], &st)) {
             if (!src[k].found[0]) { fprintf(stderr, "source %s is not at any of its roots\n", src[k].name); return 1; }
-            walking = &src[k]; nftw(src[k].found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL); walking = NULL;
+            const Source *was = walking; walking = &src[k]; nftw(src[k].found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL); walking = was;
         }
         else if (!stat(argv[i], &st) && S_ISDIR(st.st_mode)) nftw(argv[i], walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
         else add_path(argv[i]);
     }
     int nfiles = npaths; if (nfiles <= 0) { fprintf(stderr, "no files\n"); return 2; }
+    { int stop = 0, direct = 0; const Source *seen[64]; int ns = 0;          /* a recipe that did not load stops its own source only */
+      for (int i = 0; i < nfiles; i++) { if (!path_of[i]) { direct = 1; continue; } int k = 0; while (k < ns && seen[k] != path_of[i]) k++; if (k == ns && ns < 64) seen[ns++] = path_of[i]; }
+      for (int k = 0; k < ns; k++) stop += recipes_broken(rec, nrec, seen[k]);
+      if (direct) stop += recipes_broken(rec, nrec, NULL);
+      if (stop) return 2; }
     if (threads <= 0) threads = omp_get_num_procs();
     omp_set_num_threads(threads); omp_set_max_active_levels(1);
     setlocale(LC_NUMERIC, "en_US.UTF-8");
@@ -163,9 +170,10 @@ int cmd_ingest(int argc, char **argv){
     for (int i = 0; i < nfiles; i++) nev += files[i].ev.n;
     double t_rec = now() - t;
     if (show_claims) for (int i = 0; i < nfiles; i++) for (uint64_t e = 0; e < files[i].ev.n; e++) {
+        if (files[i].ev.e[e].kind == EV_RECORD) { printf("-- record %u\n", files[i].ev.e[e].position); continue; }
         Node *c = table_find(&files[i].ev.e[e].claim); if (!c) continue;
         Shard *sh = &shard[c->id.b[0]]; int first = 1; putchar('[');
-        for (uint32_t v = 0; v < c->nv; v++) for (uint32_t r = 0; r < sh->vtx[c->voff + v].run; r++) {
+        for (uint32_t v = 0; v < c->nv; v++) for (uint32_t r = 0; r < VRUN(sh->vtx[c->voff + v].run); r++) {
             Buf o = { 0 }; expand(&sh->vtx[c->voff + v].id, &o);
             if (!first) printf(", "); first = 0; fwrite(o.b, 1, o.n, stdout); free(o.b);
         }

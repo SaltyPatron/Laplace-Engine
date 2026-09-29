@@ -5,5 +5,5 @@ witness Collaborative Interlingual Index
 lineage WordNet
 deviation 35
 root $LAPLACE_DATA/.refresh-*/CILI/extracted
-root $LAPLACE_DATA/CILI
+
 after unicode iso-639

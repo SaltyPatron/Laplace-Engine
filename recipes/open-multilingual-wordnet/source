@@ -1,7 +1,6 @@
 name open-multilingual-wordnet
-# Open Multilingual Wordnet: wordnets of many languages aligned to Princeton WordNet 3.0's synsets, and through CILI
-# to concepts. These recipes read the 1.x tab files. OMW 2.0, in the refresh, is WN-LMF and has no recipe yet.
-# English is Princeton WordNet's own and is not read from here.
-root $LAPLACE_DATA/OMW/wns
-except */wns/eng/*
-after cili iso-639
+# Open Multilingual Wordnet 2.0: wordnets of many languages, each its own witness, named as its lexicon names itself.
+witness {first label}
+deviation 90
+root $LAPLACE_DATA/.refresh-*/OMW-2.0/extracted/omw-*
+after cili iso-639 open-english-wordnet

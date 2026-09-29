@@ -32,6 +32,7 @@ int cmd_deploy(int argc, char **argv);
 int cmd_index(int argc, char **argv);
 int cmd_forget(int argc, char **argv);
 int cmd_sweep(int argc, char **argv);
+int cmd_replay(int argc, char **argv);
 int cmd_status(int argc, char **argv);
 int cmd_sources(int argc, char **argv);
 int cmd_tier0(int argc, char **argv);
@@ -43,7 +44,10 @@ int cmd_model(int argc, char **argv);
 typedef lp_ref Ref;
 
 /* ---- the node table: compositions keyed by ID, sharded by the ID's first byte, each shard behind its own lock */
-typedef struct { lp_id id; uint32_t run; } __attribute__((packed)) Vtx;
+typedef struct { lp_id id; uint32_t run; } __attribute__((packed)) Vtx;      /* run: M as it is written: the run, and above it what the vertex is */
+#define VRUN(m) ((m) & ((1u << LP_M_RUN_BITS) - 1))
+static inline Ref said_claim(Ref r){ r.said = LP_SAID_CLAIM; return r; }
+static inline Ref said_record(Ref r){ if (r.said != LP_SAID_CLAIM) r.said = LP_SAID_RECORD; return r; }
 typedef struct { lp_id id; int64_t m[4]; uint64_t voff; uint32_t nv, len; uint8_t tier, keep; } Node;
 typedef struct {
     pthread_mutex_t mu;
@@ -74,7 +78,6 @@ Ref    vocabulary_ref(Ctx *, const uint8_t *src, size_t n, uint64_t *tokens, uin
 /* ---- recipes */
 typedef struct TSLanguage TSLanguage;
 typedef struct TSQuery TSQuery;
-typedef struct { uint8_t role; char from[64], to[64]; } Say;        /* a part's text as the source writes it, and as it is said */
 /* A block of a recipe's patterns: a map (key to value, read before anything is attested), or the claims one kind of
  * statement attests, with the stock default such claims enter at. */
 typedef struct {
@@ -82,13 +85,13 @@ typedef struct {
     char predicate[64];                               /* the claims' predicate, when the source states it by position */
     float enter_rating, enter_deviation;             /* the stock default for this level of attestation */
     int ordered, distinct;                            /* record each claim's position in its record; subject and object differ */
-    char spaces[5];                                   /* per part: a character the source writes for a space */
-    Say *say; int nsay;
-    Say *ending; int nending;                         /* per part: an ending the source writes, and the one it stands for */
+    int together;                                     /* in a table: what a row says it says together: the row is one record */
+    int pair;                                         /* the claims are pairs: the source writes no predicate between the two */
+    char attest[64][64]; int nattest;                 /* in a table: columns that are each a predicate, by the name the table gives them */
     char name_after, name_before;                     /* the predicate is in the file's name, between these two characters */
     char from[512]; const TSLanguage *lang;           /* a map read from another file, with that file's grammar */
     void *cache;                                      /* that map, read once */
-    char in[5][96];                                   /* in a table: the column each part is in (subject, predicate, object, key, value), with its resolvers */
+    char in[6][96];                                   /* in a table: the column each part is in (subject, predicate, object, key, value, score), with its resolvers */
     struct { char col[64]; int op; char val[128]; void *re; } where[8]; int nwhere;   /* in a table: the rows it speaks of */
     char column[64][64]; int ncolumn; char separator; /* a map kept in another table: its columns */
     char *query_src; TSQuery *query;
@@ -102,13 +105,32 @@ typedef struct {
     int records;
     uint32_t unit;                                   /* queries run inside parts of the tree no larger than this */
     char itself;                                      /* a character that, in an object, stands for the subject's codepoint */
+    char remark;                                      /* in a table's row: what follows this character is not the row */
     char separator, comment; int header;              /* a table: what parts its fields, what begins a line that is not a row, whether its first row names its columns */
     char column[64][64]; int ncolumn;                 /* a table's columns, when no row names them */
     char predicate[64];
     char witness[128];                                /* the witness's name, recorded as content */
+    struct { char el[64], attr[64]; int res; } identity[32]; int nidentity;     /* XML: the elements that are things, and the attribute that names each (res: 1 a codepoint, 2 codepoints) */
+    struct { char el[64], pred[64], obj[64]; } link[16]; int nlink;             /* XML: elements that are relations of what they are inside */
+    char codepoints[32][32]; int ncodepoints;          /* XML: attributes whose values are codepoints written in hex */
+    int keys_things, members;                          /* JSON: the keys of an object inside nothing are things; read natively (members.c) */
+    void *empty_like;                                 /* a table: a field that matches this is one the source leaves empty */
+    char like[64];                                    /* the recipe it reads as: that recipe's grammar and statements */
     char lineage[128];                                /* the witness this one derives from; copies of it are one consensus */
     char subject_attr[3][48];                         /* subject from a sibling attribute: codepoint, first, last */
+    /* a table whose rows come in records (a treebank's sentences): see records.c */
+    int record_blank;                                 /* rows up to an empty line are one record */
+    char record_line[16], field_is[8];                /* fields: the line that parts records; what parts a field's key from its value */
+    char empty[8];                                    /* what the source writes in a field it leaves empty */
+    char note_is[8];                                  /* what parts a note's key from its value (a comment line "KEY = VALUE") */
+    char about[64];                                   /* the note that holds what the record is about */
+    char word[64], number[64];                        /* the column that holds each row's word; the column that numbers the rows */
+    char span;                                        /* in the numbering column, what parts the first and last row of a span */
+    struct { char col[64], part, is, list; } pairs[8]; int npairs;          /* a field of KEY is VALUE parts */
+    struct { char rel[64], head[64]; } relation;      /* each row's relation to the row its head column numbers */
+    struct { char col[64], part, is; } relations[4]; int nrelations;       /* a field of HEAD is RELATION parts */
     int source;                                       /* the source it belongs to, or -1: a format any file may be read as */
+    int broken; char file[512];                       /* it did not load: it stops the source it belongs to, and no other */
     TSQuery *query;                                   /* set when the recipe attests: a curated source */
     Block *block; int nblock;
 } Recipe;
@@ -126,14 +148,25 @@ typedef struct {
 int     recipes_load(const char *dir, Recipe **out);
 Source *sources_loaded(int *n);                                       /* in the order they go in */
 Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of);   /* of: among that source's recipes only */
+int     recipes_broken(const Recipe *r, int n, const Source *of);             /* how many of a source's recipes (NULL: of the formats) did not load; each is said */
 
 /* ---- attestation events, in reading order within each file */
-typedef struct { lp_id claim; float score, enter_rating, enter_deviation; uint32_t position; } Event;
+/* What was witnessed is the claim with its specifics; the claim is its main components, and holds the standing. A
+ * statement that stands alone is both at once. A record (a sentence with what is said of it) is witnessed once, and
+ * every claim in it is witnessed in it. */
+enum { EV_CLAIM = 0, EV_RECORD = 1, EV_MEMBER = 2 };      /* a claim that is its own record; a record; a claim within the record before it */
+typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviation; uint32_t position; uint8_t kind; } Event;
 typedef struct { Event *e; uint64_t n, cap; } Events;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */
 typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; int has_lineage; uint64_t bytes, tokens, incomplete; uint8_t sha[32]; int exact, skipped, known; Events ev; } File;
 void decompose_file(Ctx *, File *);
+Ref  string_ref(const uint8_t *s, size_t n);                          /* text as its entity, remembered per thread */
+void ev_push(Events *, const Event *);
+void attest_records(const Recipe *, File *, const uint8_t *src, size_t n);      /* records.c */
+void attest_fields(const Recipe *, File *, const uint8_t *src, size_t n);
+void attest_members(const Recipe *, File *, const uint8_t *src, size_t n);       /* members.c */
+void attest_elements(const Recipe *, File *, void *root_node, const uint8_t *src, size_t n);      /* elements.c */
 
 typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, led, std_new, std_upd; double t_dedup, t_copy, t_sem; } LoadStats;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);

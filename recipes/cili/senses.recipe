@@ -1,0 +1,11 @@
+name cili-sense-mappings
+# Sense mappings: a synset, and a sense key it holds, in the wordnet the file's name gives.
+match pwn*.tab
+grammar table
+columns synset sense
+
+claims
+predicate-in-name ^ .
+enter 1500 250
+subject in synset
+object in sense

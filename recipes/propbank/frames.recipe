@@ -1,0 +1,6 @@
+name propbank-frames
+# A frame file. A predicate is its lemma and a roleset its id; everything else speaks of the roleset it is inside.
+match *.xml
+grammar xml
+identity predicate lemma
+identity roleset id
