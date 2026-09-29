@@ -100,6 +100,7 @@ typedef struct {
     char subject_kind[64];                            /* in a table: the subject's name stands only among things of this kind ({dir}: within the file's directory) */
     int together;                                     /* in a table: what a row says it says together: the row is one record */
     int pair;                                         /* the claims are pairs: the source writes no predicate between the two */
+    char voices[16][64]; int nvoices;                 /* in a table: columns that are each a witness, named by the column, saying its field of the subject */
     char attest[64][64]; int nattest;                 /* in a table: columns that are each a predicate, by the name the table gives them */
     char name_after, name_before;                     /* the predicate is in the file's name, between these two characters */
     char from[512]; const TSLanguage *lang;           /* a map read from another file, with that file's grammar */
@@ -135,6 +136,7 @@ typedef struct {
     char codepoints[32][32]; int ncodepoints;          /* XML: attributes whose values are codepoints written in hex */
     char about_line[512]; void *about_re;              /* grammar lines: the pattern of the line that names what the file is about */
     char named_key[64], named[8][64]; int nnamed;       /* JSON: an object that holds named_key is the thing these members name together, in this order */
+    int kinds_own, voices_file;                        /* a table: a kind stands within the source, [witness, kind, value]; a voice within the file */
     char escaped;                                      /* a table: the character after this one is itself, a line's end included */
     char path_sep, path_join;                          /* a value that begins with path_sep is a path of parts, a part's words joined by path_join */
     int specifics; char claims_under[8][64]; int nclaims_under;   /* what is held with a claim is its specifics: pairs, witnessed with it; but under these keys, claims of their own */
