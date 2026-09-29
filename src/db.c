@@ -1,7 +1,6 @@
 /* Writing to PostgreSQL: trunk-to-leaf deduplication, binary COPY straight into each leaf partition on its own
  * connection, and the semantics (witnesses, the ledger, standings). SQL only fetches and writes. */
 #include "engine.h"
-#include <libpq-fe.h>
 #include <arpa/inet.h>
 #include <omp.h>
 #include <stdio.h>
@@ -33,19 +32,13 @@ static void copy_end(Copy *c){
 }
 static int64_t hsigned(uint64_t h){ return (int64_t)(h ^ 0x8000000000000000ull); }      /* bigint order = Hilbert order */
 
-/* A binary uuid[] parameter. */
-static size_t uuid_array(uint8_t *out, const lp_id *ids, uint32_t n){
-    uint32_t hdr[5] = { htonl(1), htonl(0), htonl(2950), htonl(n), htonl(1) }; memcpy(out, hdr, 20); uint8_t *q = out + 20;
-    for (uint32_t i = 0; i < n; i++) { uint32_t l = htonl(16); memcpy(q, &l, 4); memcpy(q + 4, ids[i].b, 16); q += 20; }
-    return (size_t)(q - out);
-}
 /* Which of these IDs the database already records, at any tier: chunks queried on every connection at once. */
 static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, uint64_t n){
     uint8_t *hit = calloc(n ? n : 1, 1); const uint64_t CH = 100000;
     #pragma omp parallel for num_threads(npg) schedule(dynamic)
     for (uint64_t i0 = 0; i0 < n; i0 += CH) {
         uint32_t k = (uint32_t)(n - i0 < CH ? n - i0 : CH); uint8_t *ab = malloc(20 + 20 * (size_t)k);
-        size_t len = uuid_array(ab, ids + i0, k); PGconn *c = pg[omp_get_thread_num()];
+        size_t len = uuid_param(ab, ids + i0, k); PGconn *c = pg[omp_get_thread_num()];
         const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
         PGresult *r = PQexecParams(c, "SELECT u.i FROM unnest($1::uuid[]) WITH ORDINALITY AS u(id, i) WHERE EXISTS (SELECT 1 FROM entity e WHERE e.id = u.id)", 1, NULL, v, l, f, 0);
         if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "dedup: %s", PQerrorMessage(c)); exit(1); }
@@ -121,7 +114,7 @@ static Standing *stand_get(const lp_id *id, int add){
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     PGconn **pg = malloc(sizeof(PGconn *) * npg);
     for (int i = 0; i < npg; i++) {
-        pg[i] = PQconnectdb(conninfo); if (PQstatus(pg[i]) != CONNECTION_OK) { fprintf(stderr, "%s", PQerrorMessage(pg[i])); return 1; }
+        pg[i] = db_connect(conninfo);
         PQclear(PQexec(pg[i], "SET synchronous_commit = off"));
     }
     PGresult *r = PQexec(pg[0], "SELECT count(*) FROM entity WHERE tier = 0");
@@ -134,6 +127,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     for (int fi = 0; fi < nfiles; fi++) {
         if (files[fi].known || files[fi].skipped) continue;
         Node *x = table_find(&files[fi].trunk.id); if (x && !x->keep) { x->keep = 3; FPUSH(x->id); }
+        if (files[fi].has_lineage) { Node *lin = table_find(&files[fi].lineage.id); if (lin && !lin->keep) { lin->keep = 3; FPUSH(lin->id); } }
         for (uint64_t i = 0; i < files[fi].ev.n; i++) { Node *c = table_find(&files[fi].ev.e[i].claim); if (c && !c->keep) { c->keep = 3; FPUSH(c->id); } }
     }
     while (nf) {
@@ -184,7 +178,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         #pragma omp parallel for num_threads(npg) schedule(dynamic)
         for (uint64_t i0 = 0; i0 < nold; i0 += CH) {
             uint32_t k = (uint32_t)(nold - i0 < CH ? nold - i0 : CH); uint8_t *ab = malloc(20 + 20 * (size_t)k);
-            size_t len = uuid_array(ab, old + i0, k); PGconn *c = pg[omp_get_thread_num()];
+            size_t len = uuid_param(ab, old + i0, k); PGconn *c = pg[omp_get_thread_num()];
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
             PGresult *q = PQexecParams(c, "SELECT claim, rating, deviation, volatility, matches FROM standing WHERE claim = ANY($1::uuid[])", 1, NULL, v, l, f, 1);
             if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "standing: %s", PQerrorMessage(c)); exit(1); }
@@ -197,17 +191,54 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             }
             PQclear(q); free(ab);
         }
+        /* one matchup per claim per lineage, in reading order. A later copy of that lineage is ledger only. */
+        typedef struct { lp_id claim, lin; uint8_t used; } Seen;
+        uint64_t pcap = 1024; while (pcap < (nev + nold) * 8) pcap <<= 1; Seen *seen = calloc(pcap, sizeof(Seen));
+        #pragma omp parallel for num_threads(npg) schedule(dynamic)
+        for (uint64_t i0 = 0; i0 < nold; i0 += CH) {
+            uint32_t k = (uint32_t)(nold - i0 < CH ? nold - i0 : CH); uint8_t *ab = malloc(20 + 20 * (size_t)k);
+            size_t len = uuid_param(ab, old + i0, k); PGconn *c = pg[omp_get_thread_num()];
+            const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
+            PGresult *q = PQexecParams(c, "SELECT a.claim, w.id, w.lineage FROM attestation a JOIN witness w ON w.id = a.witness WHERE a.claim = ANY($1::uuid[])", 1, NULL, v, l, f, 1);
+            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "lineage: %s", PQerrorMessage(c)); exit(1); }
+            #pragma omp critical
+            for (int j = 0; j < PQntuples(q); j++) {
+                lp_id claim, wid, lin; memcpy(claim.b, PQgetvalue(q, j, 0), 16); memcpy(wid.b, PQgetvalue(q, j, 1), 16);
+                if (PQgetisnull(q, j, 2)) lin = wid; else memcpy(lin.b, PQgetvalue(q, j, 2), 16);
+                uint64_t h; memcpy(&h, claim.b, 8); uint64_t s = h & (pcap - 1);
+                while (seen[s].used) {
+                    if (!memcmp(seen[s].claim.b, claim.b, 16) && !memcmp(seen[s].lin.b, lin.b, 16)) break;
+                    s = (s + 1) & (pcap - 1);
+                }
+                if (!seen[s].used) { seen[s].used = 1; seen[s].claim = claim; seen[s].lin = lin; }
+            }
+            PQclear(q); free(ab);
+        }
         free(old);
-        for (int fi = 0; fi < nfiles; fi++) {                                    /* first in, first out */
+        for (int fi = 0; fi < nfiles; fi++) {
             const Recipe *rc = files[fi].recipe;
+            const lp_id *lin = files[fi].has_lineage ? &files[fi].lineage.id : &files[fi].witness.id;
             for (uint64_t i = 0; i < files[fi].ev.n; i++) {
-                Standing *s = stand_get(&files[fi].ev.e[i].claim, 0);
+                const lp_id *claim = &files[fi].ev.e[i].claim;
+                uint64_t h; memcpy(&h, claim->b, 8); uint64_t k = h & (pcap - 1); int played = 0;
+                while (seen[k].used) {
+                    if (!memcmp(seen[k].claim.b, claim->b, 16) && !memcmp(seen[k].lin.b, lin->b, 16)) { played = 1; break; }
+                    k = (k + 1) & (pcap - 1);
+                }
+                if (played) continue;
+                seen[k].used = 1; seen[k].claim = *claim; seen[k].lin = *lin;
+                Standing *s = stand_get(claim, 0);
                 lp_attest(&s->r, rc->trust, files[fi].ev.e[i].score, 1500.0, 0.5, 0.0); s->matches++;
             }
         }
+        free(seen);
         Copy c = { 0 };
         copy_begin(&c, pg[0], "COPY witness (id, lineage, trust) FROM STDIN (FORMAT binary)");
-        for (int fi = 0; fi < nfiles; fi++) if (files[fi].ev.n) { c16(&c, 3); cfield(&c, files[fi].witness.id.b, 16); c32(&c, 0xFFFFFFFFu); cf_f64(&c, files[fi].recipe->trust); }
+        for (int fi = 0; fi < nfiles; fi++) if (files[fi].ev.n) {
+            c16(&c, 3); cfield(&c, files[fi].witness.id.b, 16);
+            if (files[fi].has_lineage) cfield(&c, files[fi].lineage.id.b, 16); else c32(&c, 0xFFFFFFFFu);
+            cf_f64(&c, files[fi].recipe->trust);
+        }
         copy_end(&c);
         #pragma omp parallel for num_threads(npg) schedule(static, 1)
         for (int w = 0; w < npg; w++) {                                          /* the ledger, split across connections */

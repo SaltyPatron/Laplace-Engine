@@ -3,7 +3,10 @@
  * A recipe file:
  *   name NAME
  *   match GLOB...                 files it applies to (by file name)
- *   grammar text | NAME           UAX #29 text, or a tree-sitter grammar loaded from $LAPLACE_GRAMMARS
+ *   grammar text | vocabulary | NAME
+ *                                 UAX #29 text; a tokenizer's vocabulary (each token as the text it stands for, the
+ *                                 vocabulary the path of its tokens in index order); or a tree-sitter grammar loaded
+ *                                 from $LAPLACE_GRAMMARS
  *   trust T                       the source's trust as a witness, -1 .. 1
  *   query                         tree-sitter query patterns, up to a line "end"; every match attests one claim:
  *   ...                             @subject, @predicate, @object, each with a resolver suffix:
@@ -15,9 +18,14 @@
  *   witness NAME...               the source as witness, named as content. A recipe with a query is a curated source:
  *                                 what is recorded is what it attests — the claims and the entities they relate — never
  *                                 the file's own syntax (rows, tags, delimiters)
+ *   lineage NAME...               the witness this one derives from, named as content. Copies of one lineage play one
+ *                                 matchup per claim; each copy is still a row in the ledger.
  *   predicate TEXT                the claims' predicate, when the source states it by position rather than by name
  *   records                       the file is a flat sequence of line-terminated records: large files are split at
  *                                 line boundaries and the pieces parsed on every core, then joined under one root
+ *   unit BYTES                    queries run on the parts of the syntax tree no larger than this (default 65536), in
+ *                                 reading order: a pattern matches inside one record, never across a whole file,
+ *                                 so the work is bounded by the record however many records there are
  *   subject-attribute A [F L]     for @subject.attr: the subject is the codepoint in sibling attribute A of the captured
  *                                 node's parent, or, when the element carries F and L instead, the element itself
  *                                 (a range is attested at its element, never copied to each codepoint)
@@ -29,16 +37,16 @@
 #include <dlfcn.h>
 #include <fnmatch.h>
 #include <omp.h>
+#include <zlib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-extern Ctx **CTX;
 static Ctx *ctx_here(void){ return CTX[omp_get_thread_num()]; }
 
 /* ---- recipes */
 static const TSLanguage *grammar_load(const char *name){
-    const char *dir = getenv("LAPLACE_GRAMMARS"); if (!dir) dir = "/repos/build/grammars";
+    const char *dir = laplace_grammars();
     char p[1024], sym[128]; snprintf(p, sizeof p, "%s/libtree-sitter-%s.so", dir, name); snprintf(sym, sizeof sym, "tree_sitter_%s", name);
     void *h = dlopen(p, RTLD_NOW | RTLD_LOCAL); if (!h) { fprintf(stderr, "grammar %s: %s\n", name, dlerror()); return NULL; }
     const TSLanguage *(*f)(void) = (const TSLanguage *(*)(void))dlsym(h, sym);
@@ -60,13 +68,16 @@ static int recipe_parse(const char *path, Recipe *r){
         else if (!strcmp(tok, "trust")) { tok = strtok(NULL, " \t\r\n"); if (tok) r->trust = atof(tok); }
         else if (!strcmp(tok, "query")) inq = 1;
         else if (!strcmp(tok, "records")) r->records = 1;
+        else if (!strcmp(tok, "unit")) { tok = strtok(NULL, " \t\r\n"); if (tok) r->unit = (uint32_t)strtoul(tok, NULL, 10); }
         else if (!strcmp(tok, "witness")) { char *rest = strtok(NULL, "\r\n"); if (rest) { while (*rest == ' ' || *rest == '\t') rest++; snprintf(r->witness, sizeof r->witness, "%s", rest); } }
+        else if (!strcmp(tok, "lineage")) { char *rest = strtok(NULL, "\r\n"); if (rest) { while (*rest == ' ' || *rest == '\t') rest++; snprintf(r->lineage, sizeof r->lineage, "%s", rest); } }
         else if (!strcmp(tok, "predicate")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->predicate, sizeof r->predicate, "%s", tok); }
         else if (!strcmp(tok, "subject-attribute")) for (int k = 0; k < 3 && (tok = strtok(NULL, " \t\r\n")); k++) snprintf(r->subject_attr[k], 48, "%s", tok);
     }
     fclose(f);
     if (!r->grammar[0]) snprintf(r->grammar, sizeof r->grammar, "text");
-    if (strcmp(r->grammar, "text")) {
+    if (!r->unit) r->unit = 65536;
+    if (strcmp(r->grammar, "text") && strcmp(r->grammar, "vocabulary")) {
         r->lang = grammar_load(r->grammar); if (!r->lang) return 0;
         if (r->query_src) {
             uint32_t off; TSQueryError err;
@@ -83,15 +94,22 @@ int recipes_load(const char *dir, Recipe **out){
         size_t l = strlen(de->d_name); if (l < 8 || strcmp(de->d_name + l - 7, ".recipe")) continue;
         char p[2048]; snprintf(p, sizeof p, "%s/%s", dir, de->d_name);
         r = xrealloc(r, sizeof(Recipe) * (n + 1));
-        if (recipe_parse(p, &r[n])) n++; else fprintf(stderr, "recipe %s not loaded\n", p);
+        if (recipe_parse(p, &r[n])) n++;
+        else { fprintf(stderr, "recipe %s does not load; stopping rather than ingesting without it\n", p); exit(2); }
     }
     closedir(d); *out = r; return n;
 }
 Recipe *recipe_for(Recipe *r, int n, const char *path){
-    const char *base = strrchr(path, '/'); base = base ? base + 1 : path;
-    for (int pass = 0; pass < 2; pass++)                                    /* exact names before patterns */
-        for (int i = 0; i < n; i++) for (int j = 0; j < r[i].nmatch; j++)
-            if ((strpbrk(r[i].match[j], "*?[") != NULL) == pass && !fnmatch(r[i].match[j], base, 0)) return &r[i];
+    const char *b0 = strrchr(path, '/'); b0 = b0 ? b0 + 1 : path;
+    char base[1024]; snprintf(base, sizeof base, "%s", b0);
+    size_t bl = strlen(base); if (bl > 3 && !strcmp(base + bl - 3, ".gz")) base[bl - 3] = 0;   /* matched by what it holds */
+    Recipe *best = NULL; size_t best_lit = 0;                              /* the most specific pattern wins */
+    for (int i = 0; i < n; i++) for (int j = 0; j < r[i].nmatch; j++) {
+        if (fnmatch(r[i].match[j], base, 0)) continue;
+        size_t lit = 0; for (const char *c = r[i].match[j]; *c; c++) lit += !strchr("*?[]", *c);
+        if (!best || lit > best_lit) { best = &r[i]; best_lit = lit; }
+    }
+    if (best) return best;
     return NULL;
 }
 
@@ -153,10 +171,7 @@ static size_t xml_unescape(const uint8_t *s, size_t n, uint8_t *o){
         else if (el > 1 && e[0] == '#') cp = (uint32_t)(e[1] == 'x' ? strtoul(e + 2, NULL, 16) : strtoul(e + 1, NULL, 10));
         else ok = 0;
         if (!ok || cp >= LP_NCP) { o[k++] = s[i++]; continue; }
-        if (cp < 0x80) o[k++] = (uint8_t)cp;
-        else if (cp < 0x800) { o[k++] = 0xC0 | cp >> 6; o[k++] = 0x80 | (cp & 0x3F); }
-        else if (cp < 0x10000) { o[k++] = 0xE0 | cp >> 12; o[k++] = 0x80 | ((cp >> 6) & 0x3F); o[k++] = 0x80 | (cp & 0x3F); }
-        else { o[k++] = 0xF0 | cp >> 18; o[k++] = 0x80 | ((cp >> 12) & 0x3F); o[k++] = 0x80 | ((cp >> 6) & 0x3F); o[k++] = 0x80 | (cp & 0x3F); }
+        k += lp_utf8_put(cp, o + k);
         i = j + 1;
     }
     return k;
@@ -229,9 +244,9 @@ static int resolve(const char *suffix, TSNode nd, const uint8_t *src, uint8_t *b
     if (!strcmp(suffix, "xml")) { size_t l = xml_unescape(p, n, buf); if (!l) return 0; *out = string_ref(buf, l); return 1; }
     *out = string_ref(p, n); return 1;
 }
-static void attest_tree(const Recipe *r, TSNode root, const uint8_t *src, size_t n, Events *ev){
-    TSQueryCursor *qc = ts_query_cursor_new(); ts_query_cursor_exec(qc, r->query, root);
-    uint8_t *buf = malloc(n + 4); TSQueryMatch m;
+/* Every match of the recipe's query inside one node: each attests one claim. */
+static void attest_node(const Recipe *r, TSQueryCursor *qc, TSNode nd, const uint8_t *src, uint8_t *buf, Events *ev){
+    ts_query_cursor_exec(qc, r->query, nd); TSQueryMatch m;
     while (ts_query_cursor_next_match(qc, &m)) {
         if (!predicates_hold(r->query, &m, src)) continue;
         Ref part[3]; int have[3] = { 0, 0, 0 };
@@ -256,20 +271,65 @@ static void attest_tree(const Recipe *r, TSNode root, const uint8_t *src, size_t
         Ref claim = compose(part, 3, (uint8_t)(t + 1));
         ev_push(ev, claim.id, 1.0f);                                         /* the source asserts it: a win */
     }
+}
+/* The tree in reading order, down to the parts no larger than the recipe's unit; the query runs inside each. A query
+ * over a whole file would pair every record with every other before any predicate could tell them apart. */
+static void attest_units(const Recipe *r, TSQueryCursor *qc, TSNode nd, const uint8_t *src, uint8_t *buf, Events *ev, uint64_t *units){
+    if (ts_node_end_byte(nd) - ts_node_start_byte(nd) <= r->unit || ts_node_child_count(nd) == 0) {
+        double t = now(); attest_node(r, qc, nd, src, buf, ev); units[0]++; t = now() - t;
+        if (ts_query_cursor_did_exceed_match_limit(qc)) {                   /* matches were dropped: say so, never silently */
+            if (!units[1]++) fprintf(stderr, "\n  %s: a unit of %u bytes at byte %u (%s) holds more partial matches than a query keeps: a pattern pairs "
+                                             "siblings it should name by position; what it attests is incomplete\n", r->name,
+                                     ts_node_end_byte(nd) - ts_node_start_byte(nd), ts_node_start_byte(nd), ts_node_type(nd));
+        }
+        if (t > 0.25) fprintf(stderr, "\n  %s: a unit of %u bytes at byte %u (%s, %u children) took %.2f s\n", r->name, ts_node_end_byte(nd) - ts_node_start_byte(nd),
+                              ts_node_start_byte(nd), ts_node_type(nd), ts_node_child_count(nd), t);
+        return;
+    }
+    uint32_t nc = ts_node_child_count(nd); TSNode *kid = malloc(sizeof(TSNode) * nc); uint32_t k = 0;
+    TSTreeCursor cur = ts_tree_cursor_new(nd);
+    if (ts_tree_cursor_goto_first_child(&cur)) do kid[k++] = ts_tree_cursor_current_node(&cur); while (k < nc && ts_tree_cursor_goto_next_sibling(&cur));
+    ts_tree_cursor_delete(&cur);
+    for (uint32_t i = 0; i < k; i++) attest_units(r, qc, kid[i], src, buf, ev, units);
+    free(kid);
+}
+static void attest_tree(const Recipe *r, TSNode root, const uint8_t *src, size_t n, Events *ev, uint64_t *incomplete){
+    TSQueryCursor *qc = ts_query_cursor_new(); uint8_t *buf = malloc(n + 4); uint64_t units[2] = { 0, 0 };
+    ts_query_cursor_set_match_limit(qc, 1u << 14);
+    attest_units(r, qc, root, src, buf, ev, units);
+    #pragma omp atomic
+    *incomplete += units[1];
     free(buf); ts_query_cursor_delete(qc);
 }
 
 /* ---- one file */
+/* A file's bytes; gzip is read through zlib, so a recipe sees what the container holds. */
+static uint8_t *read_all(const char *path, size_t *n){
+    size_t l = strlen(path);
+    if (l > 3 && !strcmp(path + l - 3, ".gz")) {
+        gzFile g = gzopen(path, "rb"); if (!g) return NULL; gzbuffer(g, 1 << 20);
+        size_t cap = 1 << 24, k = 0; uint8_t *b = malloc(cap); int r;
+        while ((r = gzread(g, b + k, (unsigned)(cap - k))) > 0) { k += (size_t)r; if (k == cap) { cap *= 2; b = xrealloc(b, cap); } }
+        gzclose(g); if (r < 0) { free(b); return NULL; } *n = k; return b;
+    }
+    FILE *fp = fopen(path, "rb"); if (!fp) return NULL;
+    fseek(fp, 0, SEEK_END); size_t m = (size_t)ftell(fp); rewind(fp);
+    uint8_t *b = malloc(m + 1); if (fread(b, 1, m, fp) != m) { fclose(fp); free(b); return NULL; }
+    fclose(fp); *n = m; return b;
+}
 void decompose_file(Ctx *c, File *f){
-    FILE *fp = fopen(f->path, "rb"); if (!fp) { f->skipped = 1; return; }
-    fseek(fp, 0, SEEK_END); size_t n = (size_t)ftell(fp); rewind(fp);
-    uint8_t *src = malloc(n + 1); if (fread(src, 1, n, fp) != n) { fclose(fp); free(src); f->skipped = 1; return; }
-    fclose(fp); f->bytes = n;
+    size_t n; uint8_t *src = read_all(f->path, &n); if (!src) { f->skipped = 1; return; }
+    f->bytes = n;
     const Recipe *r = f->recipe;
     if (r && r->query) {                                                        /* the witness, named as content */
         const char *w = r->witness[0] ? r->witness : r->name; f->witness = text_ref(c, (const uint8_t *)w, strlen(w)); f->trunk = f->witness;
+        if (r->lineage[0]) { f->lineage = text_ref(c, (const uint8_t *)r->lineage, strlen(r->lineage)); f->has_lineage = 1; }
     }
-    if (!r || !r->lang) f->trunk = text_ref(c, src, n);
+    if (r && !strcmp(r->grammar, "vocabulary")) {
+        uint64_t nb; f->trunk = vocabulary_ref(c, src, n, &f->tokens, &nb);
+        if (!f->tokens) f->skipped = 1;                                          /* not a tokenizer's file after all */
+    }
+    else if (!r || !r->lang) f->trunk = text_ref(c, src, n);
     else if (r->records && n > (64u << 20) && !getenv("LAPLACE_ONE_PARSE")) {
         /* line records: split after a line break, parse the pieces on every core, and join their top-level children
          * (with the bytes between them) under one root, exactly as one parse of the whole file would give */
@@ -296,7 +356,7 @@ void decompose_file(Ctx *c, File *f){
             if (!r->query && len > at) v[m++] = string_ref(base + at, len - at);
             for (size_t j = 0; j < m; j++) if (v[j].tier > tm) tm = v[j].tier;
             part[i].v = v; part[i].n = m; part[i].t = tm;
-            if (r->query) attest_tree(r, root, base, len, &part[i].ev);         /* this piece's attestations, in order */
+            if (r->query) attest_tree(r, root, base, len, &part[i].ev, &f->incomplete);         /* this piece's attestations, in order */
             ts_tree_delete(t); ts_parser_delete(ps);
         }
         size_t tot = 0; uint8_t tm = 0; for (int i = 0; i < k; i++) { tot += part[i].n; if (part[i].t > tm) tm = part[i].t; }
@@ -314,8 +374,47 @@ void decompose_file(Ctx *c, File *f){
         TSTree *t = ts_parser_parse_string(ps, NULL, (const char *)src, (uint32_t)n);
         TSNode root = ts_tree_root_node(t);
         if (!r->query) f->trunk = ast_node(root, src, 0, (uint32_t)n, 0);   /* content: the file as itself */
-        else attest_tree(r, root, src, n, &f->ev);                       /* a curated source: what it attests */
+        else attest_tree(r, root, src, n, &f->ev, &f->incomplete);                       /* a curated source: what it attests */
         ts_tree_delete(t); ts_parser_delete(ps);
     }
     free(src);
+}
+
+/* ---- laplace tree: a file's syntax tree as its recipe's grammar reads it, for writing recipes
+ *   laplace tree [-r recipes] [-g grammar] [-n nodes] file */
+static void tree_print(TSTreeCursor *cur, const uint8_t *src, int depth, long *left){
+    do {
+        if (*left <= 0) return;
+        TSNode nd = ts_tree_cursor_current_node(cur); const char *field = ts_tree_cursor_current_field_name(cur);
+        uint32_t a = ts_node_start_byte(nd), b = ts_node_end_byte(nd);
+        if (ts_node_is_named(nd) || ts_node_child_count(nd)) {
+            (*left)--; printf("%*s", depth * 2, ""); if (field) printf("%s: ", field);
+            printf("(%s) [%u, %u]", ts_node_type(nd), a, b);
+            if (!ts_node_child_count(nd)) { printf("  "); fwrite(src + a, 1, b - a > 60 ? 60 : b - a, stdout); if (b - a > 60) printf("\xE2\x80\xA6"); }
+            putchar('\n');
+        }
+        if (ts_tree_cursor_goto_first_child(cur)) { tree_print(cur, src, depth + 1, left); ts_tree_cursor_goto_parent(cur); }
+    } while (ts_tree_cursor_goto_next_sibling(cur));
+}
+int cmd_tree(int argc, char **argv){
+    const char *rdir = laplace_recipes(), *grammar = NULL; long nodes = 400; int a = 1;
+    for (; a < argc - 1 && argv[a][0] == '-'; a++) {
+        if (!strcmp(argv[a], "-r") && a + 1 < argc) rdir = argv[++a];
+        else if (!strcmp(argv[a], "-g") && a + 1 < argc) grammar = argv[++a];
+        else if (!strcmp(argv[a], "-n") && a + 1 < argc) nodes = atol(argv[++a]);
+    }
+    if (a >= argc) { fprintf(stderr, "usage: laplace tree [-r recipes] [-g grammar] [-n nodes] file\n"); return 2; }
+    const TSLanguage *lang = NULL;
+    if (grammar) lang = grammar_load(grammar);
+    else { Recipe *rec = NULL; int n = recipes_load(rdir, &rec); Recipe *r = recipe_for(rec, n, argv[a]);
+           if (r) { lang = r->lang; printf("recipe %s, grammar %s\n", r->name, r->grammar); } }
+    if (!lang) { fprintf(stderr, "no tree-sitter grammar reads %s (name one with -g)\n", argv[a]); return 1; }
+    size_t n; uint8_t *src = read_all(argv[a], &n); if (!src) { perror(argv[a]); return 1; }
+    TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, lang);
+    TSTree *t = ts_parser_parse_string(ps, NULL, (const char *)src, (uint32_t)n);
+    TSTreeCursor cur = ts_tree_cursor_new(ts_tree_root_node(t));
+    tree_print(&cur, src, 0, &nodes);
+    if (nodes <= 0) printf("\xE2\x80\xA6 (more: -n)\n");
+    ts_tree_cursor_delete(&cur); ts_tree_delete(t); ts_parser_delete(ps); free(src);
+    return 0;
 }

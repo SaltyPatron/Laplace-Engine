@@ -1,0 +1,5 @@
+name vocabulary
+# A tokenizer's vocabulary (Hugging Face tokenizer.json): each token as the text it stands for, and the vocabulary as the
+# path of its tokens in index order.
+match tokenizer.json
+grammar vocabulary

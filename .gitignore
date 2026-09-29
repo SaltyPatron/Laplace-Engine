@@ -427,3 +427,6 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Laplace's environment is configuration, not secrets.
+!laplace.env

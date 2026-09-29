@@ -1,0 +1,6 @@
+/* Where things are when the environment does not say: what this engine was built with. */
+#define LAPLACE_CONNINFO_DEFAULT "@LAPLACE_CONNINFO@"
+#define LAPLACE_RECIPES_DEFAULT  "@LAPLACE_RECIPES@"
+#define LAPLACE_GRAMMARS_DEFAULT "@LAPLACE_GRAMMARS@"
+#define LAPLACE_SQL_DEFAULT      "@LAPLACE_SQL@"
+#define LAPLACE_UCD_DEFAULT      "@LAPLACE_UCD@"

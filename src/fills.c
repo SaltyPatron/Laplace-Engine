@@ -7,7 +7,6 @@
  *      the parent holds it, runs included; a sentence repeated in fifty books counts fifty times.
  *   5. Every continuation is weighted by the occurrences of the path it came from. */
 #include "engine.h"
-#include <libpq-fe.h>
 #include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,17 +38,25 @@ static double occ_of(DNode *d, int i){
     for (int k = 0; k < d[i].nup; k++) o += occ_of(d, d[i].up[k].parent) * d[i].up[k].times;
     d[i].occ = o; d[i].state = 2; return o;
 }
-static size_t uuid_param(uint8_t *out, const lp_id *ids, uint32_t n){
-    uint32_t hdr[5] = { htonl(1), htonl(0), htonl(2950), htonl(n), htonl(1) }; memcpy(out, hdr, 20); uint8_t *q = out + 20;
-    for (uint32_t i = 0; i < n; i++) { uint32_t l = htonl(16); memcpy(q, &l, 4); memcpy(q + 4, ids[i].b, 16); q += 20; }
-    return (size_t)(q - out);
-}
 /* EWKB of a path (PostGIS binary output) → its vertices. */
 static size_t vertices(const uint8_t *ewkb, size_t len, const uint8_t **v){ return lp_ewkb_vertices(ewkb, len, v); }
 
 typedef struct { lp_id id; double occ; uint64_t paths; } Acc;
 
-int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int limit){
+static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int limit);
+int cmd_fills(int argc, char **argv){
+    const char *conninfo = laplace_db(), *t0p = NULL; int limit = 12, a = 1;
+    for (; a < argc - 1 && argv[a][0] == '-'; a++) {
+        if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
+        else if (!strcmp(argv[a], "-n") && a + 1 < argc) limit = atoi(argv[++a]);
+        else if (!strcmp(argv[a], "-t") && a + 1 < argc) t0p = argv[++a];
+    }
+    if (a >= argc) { fprintf(stderr, "usage: laplace fills [-d conninfo] [-n N] phrase\n"); return 2; }
+    tier0_open(t0p); table_init(); ctx_open(1);
+    return fills(conninfo, CTX[0], argv[a], limit);
+}
+
+static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int limit){
     double T = now();
     /* 1. the phrase's constituents, computed on the client */
     Ref pr = text_ref(ctx, (const uint8_t *)phrase_text, strlen(phrase_text));
@@ -63,7 +70,7 @@ int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int limit){
                Node *cn2 = table_find(&s->vtx[pn->voff + v].id); int ct = cn2 ? cn2->tier : 0; if (ct > ptier) ptier = ct;
                for (uint32_t r = 0; r < s->vtx[pn->voff + v].run; r++) ph[k++] = s->vtx[pn->voff + v].id; } }
 
-    PGconn *pg = PQconnectdb(conninfo); if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "%s", PQerrorMessage(pg)); return 1; }
+    PGconn *pg = db_connect(conninfo);
     DNode *d = NULL; int nn = 0, cn = 0; IdMap map = { 0 };
     Acc *acc = NULL; uint64_t nacc = 0, cacc = 0; IdMap amap = { 0 }; DNode *adummy = NULL; int an = 0, ac = 0;
     typedef struct { int node; lp_id *f; size_t nf; } Cont; Cont *conts = NULL; int ncont = 0, ccont = 0;
@@ -140,15 +147,15 @@ int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int limit){
     for (uint64_t i = 1; i < nacc; i++) { Acc x = acc[i]; uint64_t j = i; while (j > 0 && acc[j - 1].occ < x.occ) { acc[j] = acc[j - 1]; j--; } acc[j] = x; }
     double t_w = now() - t;
 
-    /* the top continuations as text, fetched once each */
+    /* the top continuations as text: their paths fetched together, a level at a time */
+    Reader *rd = reader_new(pg);
+    for (uint64_t i = 0; i < nacc && (int)i < limit; i++) reader_want(rd, &acc[i].id);
     printf("%-24s %14s %10s\n", "follows", "occurrences", "paths");
     for (uint64_t i = 0; i < nacc && (int)i < limit; i++) {
-        char idt[40]; const uint8_t *b = acc[i].id.b;
-        snprintf(idt, sizeof idt, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7],b[8],b[9],b[10],b[11],b[12],b[13],b[14],b[15]);
-        const char *v[1] = { idt }; PGresult *q = PQexecParams(pg, "SELECT laplace_text($1::uuid)", 1, NULL, v, NULL, NULL, 0);
-        printf("%-24s %14.0f %10llu\n", PQresultStatus(q) == PGRES_TUPLES_OK ? PQgetvalue(q, 0, 0) : "?", acc[i].occ, (unsigned long long)acc[i].paths);
-        PQclear(q);
+        char *tx = reader_text(rd, &acc[i].id, 60);
+        printf("%-24s %14.0f %10llu\n", tx, acc[i].occ, (unsigned long long)acc[i].paths); free(tx);
     }
+    reader_free(rd);
     printf("\n%d paths hold the phrase; %d levels up to the trunks, %d nodes, %llu parent paths fetched\n", direct, levels, nn, (unsigned long long)fetched);
     printf("containers %.1f ms   leaf to trunk %.1f ms   weighting %.2f ms   total %.1f ms\n", t_cont * 1000, t_up * 1000, t_w * 1000, (now() - T) * 1000);
     PQfinish(pg); return 0;
