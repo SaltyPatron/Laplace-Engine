@@ -20,7 +20,6 @@ else()
   set(LAPLACE_CONNINFO "host=/tmp port=5432 user=laplace dbname=laplace_engine" CACHE STRING "the database, as a libpq connection string")
 endif()
 laplace_path(LAPLACE_RECIPES "${CMAKE_CURRENT_SOURCE_DIR}/recipes" "recipes")
-laplace_path(LAPLACE_SQL "${CMAKE_CURRENT_SOURCE_DIR}/../Laplace-postgres/sql" "Laplace-postgres's sql directory")
 
 add_library(ts_runtime STATIC ${LAPLACE_TREESITTER}/lib/src/lib.c)
 target_include_directories(ts_runtime PUBLIC ${LAPLACE_TREESITTER}/lib/include PRIVATE ${LAPLACE_TREESITTER}/lib/src ${LAPLACE_TREESITTER}/lib/src/wasm)

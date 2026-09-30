@@ -81,7 +81,7 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
     if (!nk) { memcpy(keys, ph, sizeof(lp_id) * np); nk = np; }
     uint8_t *ab = malloc(20 + 20 * (size_t)nk); size_t al = ids_param(ab, keys, (uint32_t)nk);
     const char *v1[1] = { (const char *)ab }; int l1[1] = { (int)al }, f1[1] = { 1 };
-    PGresult *r = PQexecParams(pg, "SELECT entity, path, tier FROM laplace_containers($1::blake3[])", 1, NULL, v1, l1, f1, 1);
+    PGresult *r = PQexecParams(pg, "SELECT entity, path, tier FROM laplace_containers($1::blake3[], '{}'::smallint[])", 1, NULL, v1, l1, f1, 1);
     if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
     lp_id *front = malloc(sizeof(lp_id) * (PQntuples(r) + 1)); int nf = 0;
     for (int i = 0; i < PQntuples(r); i++) {

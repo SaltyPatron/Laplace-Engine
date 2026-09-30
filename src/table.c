@@ -47,7 +47,7 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
         k = (k + 1) & (s->scap - 1);
     }
     if (s->n == s->cap) { s->cap = s->cap ? s->cap * 2 : 4096; s->node = xrealloc(s->node, s->cap * sizeof(Node)); }
-    Node *x = &s->node[s->n]; x->id = r.id; memcpy(x->m, r.c.m, 32); x->tier = tier; x->len = n; x->voff = s->nv; x->nv = 0; x->keep = 0;
+    Node *x = &s->node[s->n]; x->id = r.id; memcpy(x->m, r.c.m, 32); x->tier = tier; x->len = n; x->voff = s->nv; x->nv = 0; x->keep = 0; x->kind = 0;
     for (uint32_t i = 0; i < n; i++) {                                                  /* runs of the same child; what each is within this path, above the run */
         uint64_t said = (uint64_t)(ch[i].said & LP_M_SAID_MASK) << LP_M_RUN_BITS;
         if (x->nv && !memcmp(&s->vtx[s->nv - 1].id, &ch[i].id, 16) && (s->vtx[s->nv - 1].m & (LP_M_SAID_MASK << LP_M_RUN_BITS)) == said
@@ -57,13 +57,18 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     }
     s->slot[k] = (uint32_t)++s->n;
     pthread_mutex_unlock(&s->mu);
+    /* what each child is said to be here, kept on the child: a claim, a record, a tuple, a file's metadata (its trunk is a file) */
+    for (uint32_t i = 0; i < n; i++) if (ch[i].said) { Node *c = table_find(&ch[i].id); uint8_t bit = ch[i].said == LP_SAID_CLAIM ? LP_KIND_CLAIM : ch[i].said == LP_SAID_RECORD ? LP_KIND_RECORD : ch[i].said == LP_SAID_TUPLE ? LP_KIND_TUPLE : 255;
+        if (c && bit != 255) __atomic_fetch_or(&c->kind, (uint8_t)(1u << bit), __ATOMIC_RELAXED);
+        if (ch[i].said == LP_SAID_METADATA) { Node *me = table_find(&r.id); if (me) __atomic_fetch_or(&me->kind, (uint8_t)(1u << LP_KIND_FILE), __ATOMIC_RELAXED); } }
     return r;
 }
 static lp_ref compose_sink(void *sink, const lp_ref *ch, uint32_t n, uint8_t tier){ (void)sink; return compose(ch, n, tier); }
 
 /* Text, decomposed by Laplace-Native and recorded here. */
-Ctx **CTX;
+Ctx **CTX; const lp_highway *HW;
 void ctx_open(int threads){
+    if (!HW) HW = lp_highway_map(NULL);                                    /* the types' mask bits, when the highway is there */
     CTX = malloc(sizeof(Ctx *) * (size_t)threads);
     for (int i = 0; i < threads; i++) { CTX[i] = lp_text_new(T0); if (!CTX[i]) { fprintf(stderr, "cannot open ICU's break iterators\n"); exit(1); } }
 }

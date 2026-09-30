@@ -20,19 +20,6 @@ static int run(PGconn *pg, const char *sql, const char *what){
     if (!ok) fprintf(stderr, "%s: %s", what, PQerrorMessage(pg)); else printf("  %-52s %9.1f ms\n", what, (now() - t) * 1000);
     PQclear(r); fflush(stdout); return ok;
 }
-/* A file of SQL, without psql's own commands (lines that start with a backslash) and without comment lines. */
-static char *sql_file(const char *name){
-    char p[4096]; snprintf(p, sizeof p, "%s/%s", laplace_sql(), name);
-    FILE *f = fopen(p, "r"); if (!f) { perror(p); fprintf(stderr, "LAPLACE_SQL is where Laplace-postgres's sql directory is\n"); exit(1); }
-    size_t cap = 1 << 16, n = 0; char *b = malloc(cap), line[8192];
-    while (fgets(line, sizeof line, f)) {
-        const char *c = line; while (*c == ' ' || *c == '\t') c++;
-        if (line[0] == '\\' || (c[0] == '-' && c[1] == '-')) continue;
-        size_t l = strlen(line); if (n + l + 1 > cap) { cap = (n + l + 1) * 2; b = xrealloc(b, cap); }
-        memcpy(b + n, line, l); n += l;
-    }
-    fclose(f); b[n] = 0; return b;
-}
 static char *one(PGconn *pg, const char *sql){
     PGresult *r = PQexec(pg, sql); char *v = NULL;
     if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !PQgetisnull(r, 0, 0)) v = strdup(PQgetvalue(r, 0, 0));
@@ -70,13 +57,15 @@ int cmd_deploy(int argc, char **argv){
       PQfreemem(esc); esc = PQescapeLiteral(pg, lp_highway_path(), strlen(lp_highway_path()));
       snprintf(q, sizeof q, "ALTER DATABASE %s SET laplace.highway = %s", db, esc); if (!run(pg, q, "the highway: the types, and the mappings between them")) return 1;
       PQfreemem(esc); PQfreemem(db); }
-    char *have = one(pg, "SELECT 1 FROM pg_class WHERE relname = 'entity' AND relkind = 'p'");
-    if (have) printf("  %-52s %9s\n", "content schema", "present"); else { char *s = sql_file("schema.sql"); if (!run(pg, s, "content schema: entity, physicality")) return 1; free(s); }
-    free(have);
-    { char *s = sql_file("semantics.sql"); if (!run(pg, s, "semantics: witness, attestation, consensus")) return 1; free(s); }
-    { char *s = sql_file("lookup.sql"); if (!run(pg, s, "lookups ingestion needs: IDs")) return 1; free(s); }
-    /* every index, from the start: a deployed database answers from its first row, and every load keeps them */
-    { char *s = sql_file("indexes.sql"); if (!run(pg, s, "containers (GIN), 4D (GiST), Hilbert, the ledger")) return 1; free(s); }
+    /* the schema is the extension's: the five tables, their partitions and every index, from CREATE EXTENSION. A
+     * database that had them before the extension owned them keeps them, and they are made the extension's here. */
+    { PGresult *r = PQexec(pg, "SELECT c.oid::regclass::text FROM pg_class c WHERE c.relkind IN ('r', 'p') AND (c.relname ~ '^(entity|physicality)(_t[0-9a-fx]+(_[0-9a-f])?)?$' OR c.relname IN ('witness', 'attestation', 'consensus')) "
+                               "AND NOT EXISTS (SELECT 1 FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND e.extname = 'laplace')");
+      int n = PQresultStatus(r) == PGRES_TUPLES_OK ? PQntuples(r) : 0;
+      for (int i = 0; i < n; i++) { char q[256]; snprintf(q, sizeof q, "ALTER EXTENSION laplace ADD TABLE %s", PQgetvalue(r, i, 0)); PGresult *a = PQexec(pg, q); PQclear(a); }
+      if (n) printf("  %-52s %9d\n", "tables from before the extension owned them, adopted", n); PQclear(r); }
+    if (!run(pg, "SELECT laplace_schema_indexes()", "every index, made where one is missing")) return 1;
+    { char *db = PQescapeIdentifier(pg, PQdb(pg), strlen(PQdb(pg))), q[256]; snprintf(q, sizeof q, "ALTER DATABASE %s SET enable_parallel_append = off", db); PQclear(PQexec(pg, q)); PQfreemem(db); }
     PQfinish(pg);
     return cmd_status(argc, argv);
 }
@@ -84,14 +73,8 @@ int cmd_deploy(int argc, char **argv){
 int cmd_index(int argc, char **argv){
     PGconn *pg = db_connect(conn_arg(argc, argv));
     printf("laplace index   %s\n", PQdb(pg));
-    char *s = sql_file("indexes.sql"), *p = s; int ok = 1;
-    while (ok && *p) {                                                     /* statement by statement, each timed */
-        char *e = strchr(p, ';'); if (!e) break; *e = 0;
-        while (*p == '\n' || *p == ' ') p++;
-        if (*p) { char what[64]; snprintf(what, sizeof what, "%.60s", p); for (char *c = what; *c; c++) if (*c == '\n') *c = ' '; ok = run(pg, p, what); }
-        p = e + 1;
-    }
-    free(s); PQfinish(pg); return !ok;
+    int ok = run(pg, "SET maintenance_work_mem = '8GB'", "maintenance memory") && run(pg, "SELECT laplace_schema_indexes()", "every index, made where one is missing") && run(pg, "ANALYZE", "statistics");
+    PQfinish(pg); return !ok;
 }
 
 int cmd_status(int argc, char **argv){

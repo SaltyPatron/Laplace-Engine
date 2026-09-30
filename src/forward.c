@@ -95,7 +95,7 @@ int cmd_pull(int argc, char **argv){
             if (!nk) { memcpy(keys, ph, sizeof(lp_id) * (size_t)np); nk = np; }
             uint8_t *ab = malloc(20 + 20 * (size_t)nk); size_t al = ids_param(ab, keys, (uint32_t)nk);
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-            PGresult *q = db_ask(pg, "SELECT entity, path FROM laplace_containers($1::blake3[])", 1, v, l, f);
+            PGresult *q = db_ask(pg, "SELECT entity, path FROM laplace_containers($1::blake3[], '{}'::smallint[])", 1, v, l, f);
             if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
             typedef struct { lp_id *id; int n; lp_id in; } Rest; Rest *rest = malloc(sizeof(Rest) * (size_t)(PQntuples(q) + 1)); int nrest = 0, holders = 0;
             for (int j = 0; j < PQntuples(q); j++) {

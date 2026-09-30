@@ -16,7 +16,6 @@
 const char *laplace_db(void);                        /* LAPLACE_CONNINFO: a libpq connection string */
 const char *laplace_recipes(void);                   /* LAPLACE_RECIPES */
 const char *laplace_grammars(void);                  /* LAPLACE_GRAMMARS */
-const char *laplace_sql(void);                       /* LAPLACE_SQL: Laplace-postgres's sql directory */
 const char *laplace_ucd(void);                       /* LAPLACE_UCD */
 PGconn *db_connect(const char *conninfo);            /* exits with the server's message if it cannot */
 PGresult *db_ask(PGconn *, const char *sql, int n, const char *const *v, const int *l, const int *f);   /* planned once for the connection; sql: a literal */
@@ -73,6 +72,8 @@ int cmd_highway(int argc, char **argv);
 int cmd_bench(int argc, char **argv);
 int cmd_model(int argc, char **argv);
 
+/* ---- the bits a row must have (physicality.mask): what it is, by LP_KIND_*; as the text of a smallint[] parameter */
+#define CLAIM_BITS "{0}"
 /* ---- references: an entity's ID, its real coordinate, and its tier */
 typedef lp_ref Ref;
 
@@ -84,7 +85,7 @@ static inline Ref said_claim(Ref r){ r.said = LP_SAID_CLAIM; return r; }
 static inline Ref said_tuple(Ref r){ r.said = LP_SAID_TUPLE; return r; }
 static inline Ref said_metadata(Ref r){ r.said = LP_SAID_METADATA; return r; }
 static inline Ref said_record(Ref r){ if (r.said != LP_SAID_CLAIM && r.said != LP_SAID_TUPLE) r.said = LP_SAID_RECORD; return r; }
-typedef struct { lp_id id; int64_t m[4]; uint64_t voff; uint32_t nv, len; uint8_t tier, keep; } Node;
+typedef struct { lp_id id; int64_t m[4]; uint64_t voff; uint32_t nv, len; uint8_t tier, keep, kind; } Node;   /* kind: bits of what it is said to be (LP_KIND_*), by whatever holds it */
 typedef struct {
     pthread_mutex_t mu;
     Node *node; uint64_t n, cap;
@@ -95,6 +96,7 @@ typedef struct {
 #define NSHARD 256
 extern Shard shard[NSHARD];
 extern const lp_tier0_record *T0;
+extern const lp_highway *HW;                                          /* the highway, when it is there: types and their mask bits */
 
 void   tier0_open(const char *path);                                  /* maps tier 0 or exits */
 void   table_init(void);

@@ -28,7 +28,6 @@ static const char *env_or(const char *name, const char *dflt){ const char *v = g
 const char *laplace_db(void){ return env_or("LAPLACE_CONNINFO", LAPLACE_CONNINFO_DEFAULT); }
 const char *laplace_recipes(void){ return env_or("LAPLACE_RECIPES", LAPLACE_RECIPES_DEFAULT); }
 const char *laplace_grammars(void){ return env_or("LAPLACE_GRAMMARS", LAPLACE_GRAMMARS_DEFAULT); }
-const char *laplace_sql(void){ return env_or("LAPLACE_SQL", LAPLACE_SQL_DEFAULT); }
 const char *laplace_ucd(void){ return env_or("LAPLACE_UCD", LAPLACE_UCD_DEFAULT); }
 
 uint32_t id_oid;

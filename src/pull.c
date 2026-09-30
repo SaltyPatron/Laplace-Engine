@@ -61,9 +61,9 @@ int claim_by_conf(const void *a, const void *b){ double x = ((const Claim *)a)->
 Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, double k, int *n, int *capped){
     lp_id keys[3]; uint32_t nk = 0; for (int i = 0; i < 3; i++) if (have[i]) keys[nk++] = part[i];
     uint8_t ab[80]; size_t al = ids_param(ab, keys, nk); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
-    const char *v[2] = { (const char *)ab, lim }; int l[2] = { (int)al, 0 }, f[2] = { 1, 0 };
+    const char *v[3] = { (const char *)ab, lim, CLAIM_BITS }; int l[3] = { (int)al, 0, 0 }, f[3] = { 1, 0, 0 };
     PGresult *q = db_ask(pg,
-        "SELECT entity, path, rating, deviation, volatility, matches FROM laplace_claims($1::blake3[], $2::bigint)", 2, v, l, f);
+        "SELECT entity, path, rating, deviation, volatility, matches FROM laplace_claims($1::blake3[], $2::bigint, $3::smallint[])", 3, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
     int rows = PQntuples(q); *capped = rows > fan; if (rows > fan) rows = fan;
     Claim *c = malloc(sizeof(Claim) * (size_t)(rows ? rows : 1)); int m = 0;
@@ -181,7 +181,7 @@ int cmd_hop(int argc, char **argv){
     /* observed: the content that holds it, which is not claims */
     t = now(); uint8_t ab[40]; size_t al = ids_param(ab, &e.id, 1);
     const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = db_ask(pg, "SELECT tier FROM laplace_containers($1::blake3[]) WHERE NOT attested", 1, v, l, f);
+    PGresult *q = db_ask(pg, "SELECT tier FROM laplace_containers($1::blake3[], '{}'::smallint[]) WHERE NOT (mask ? 0::smallint)", 1, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
     uint64_t by_tier[256] = { 0 }; int any = 0;
     for (int j = 0; j < PQntuples(q); j++) { uint16_t tb; memcpy(&tb, PQgetvalue(q, j, 0), 2); by_tier[ntohs(tb) & 255]++; any = 1; }
@@ -282,9 +282,9 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
     for (int i = 0; i < n; i++) if ((int)closed[i].hops < hops) { ids[m] = closed[i].id; who[m++] = i; }
     if (!m) { free(ids); free(who); return n; }
     uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(ab, ids, (uint32_t)m); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
-    const char *v[2] = { (const char *)ab, lim }; int l[2] = { (int)al, 0 }, f[2] = { 1, 0 };
+    const char *v[3] = { (const char *)ab, lim, CLAIM_BITS }; int l[3] = { (int)al, 0, 0 }, f[3] = { 1, 0, 0 };
     PGresult *q = db_ask(pg,
-        "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint)", 2, v, l, f);
+        "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[])", 3, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
     w->trips++; w->expanded += (uint64_t)m;
     int rows = PQntuples(q), *held = calloc((size_t)m, sizeof(int));

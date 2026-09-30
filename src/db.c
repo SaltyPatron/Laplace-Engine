@@ -116,13 +116,14 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
         c16(&c, 4); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(lp_hilbert4(&co))); c.rows++;
     }
     copy_end(&c); *rows_e = c.rows;
-    part_name(p, "physicality", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY %s (entity, tier, hilbert, path) FROM STDIN (FORMAT binary)", tn);
+    part_name(p, "physicality", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY %s (entity, tier, hilbert, path, mask) FROM STDIN (FORMAT binary)", tn);
+    uint8_t mask[4 + 32]; { uint32_t bl = htonl(256); memcpy(mask, &bl, 4); }         /* bit varying, binary: its length in bits, then its bytes, first bit first */
     copy_begin(&c, pg, sql);
     if (atoms_needed && p / 16 == 0)
         for (uint32_t cp = 0; cp < LP_NCP; cp++) {
             if (part_of(&T0[cp].id, 0) != p) continue;
-            uint64_t one = 1; size_t gl = lp_ewkb_runs(&T0[cp].id, &one, 1, geo, sizeof geo);
-            c16(&c, 4); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cf_i64(&c, hsigned(T0[cp].hilbert)); cfield(&c, geo, (uint32_t)gl); c.rows++;
+            uint64_t one = 1; size_t gl = lp_ewkb_runs(&T0[cp].id, &one, 1, geo, sizeof geo); memset(mask + 4, 0, 32);
+            c16(&c, 5); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cf_i64(&c, hsigned(T0[cp].hilbert)); cfield(&c, geo, (uint32_t)gl); cfield(&c, mask, 36); c.rows++;
         }
     for (uint64_t b = 0; b < nbucket[p]; b++) {
         int s = (int)bucket[p][b].shard; Node *x = &shard[s].node[bucket[p][b].idx];
@@ -131,7 +132,10 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
         size_t gl = lp_ewkb_runs(ids, runs, x->nv, NULL, 0); uint8_t *gp = gl > sizeof geo ? malloc(gl) : geo;
         lp_ewkb_runs(ids, runs, x->nv, gp, gl);
         lp_coord co; memcpy(co.m, x->m, 32);
-        c16(&c, 4); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cf_i64(&c, hsigned(lp_hilbert4(&co))); cfield(&c, gp, (uint32_t)gl); c.rows++;
+        /* the mask: what the row is, and the types it holds (each constituent that is a type of a mask field) */
+        memset(mask + 4, 0, 32); for (int b = 0; b < 8; b++) if (x->kind & (1u << b)) mask[4 + (b >> 3)] |= (uint8_t)(0x80 >> (b & 7));
+        if (HW) for (uint32_t v = 0; v < x->nv; v++) { int32_t b = lp_highway_mask_bit(HW, &ids[v]); if (b >= 0 && b < 256) mask[4 + (b >> 3)] |= (uint8_t)(0x80 >> (b & 7)); }
+        c16(&c, 5); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cf_i64(&c, hsigned(lp_hilbert4(&co))); cfield(&c, gp, (uint32_t)gl); cfield(&c, mask, 36); c.rows++;
         if (gp != geo) free(gp);
     }
     copy_end(&c); *rows_p = c.rows;
