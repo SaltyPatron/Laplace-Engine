@@ -12,9 +12,9 @@
 # its builds are under build/; the database, the dependencies and the data are the machine's, through the shared
 # group setup.sh gives them. Registration needs a token from GitHub for each repository: gh, logged in as someone who
 # administers them, fetches it; or LAPLACE_AGENT_TOKEN_<REPO with - as _>. Laplace-postgres and Laplace-Engine check
-# out Laplace-Native (and Laplace-postgres) beside themselves, which are private: LAPLACE_CHECKOUT_TOKEN, a token that
-# reads them, is put in those repositories as the secret LAPLACE_CHECKOUT when given. What was done is kept under
-# $LAPLACE_WORK/logs/root.
+# out Laplace-Native (and Laplace-postgres) beside themselves; a workflow's own token reads only its repository, so
+# the operator's gh credential (or LAPLACE_CHECKOUT_TOKEN) is put in those two as the secret LAPLACE_CHECKOUT. What was
+# done is kept under $LAPLACE_WORK/logs/root.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd); . "$here/laplace.env"
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
@@ -81,8 +81,9 @@ EOF
   # the secret that reads the private repositories it checks out beside itself
   case $repo in Laplace-postgres|Laplace-Engine)
     if gh_op "secret list -R $owner/$repo" 2>/dev/null | grep -q "^LAPLACE_CHECKOUT"; then say "secret LAPLACE_CHECKOUT" "set"
-    elif [ -n "${LAPLACE_CHECKOUT_TOKEN:-}" ]; then as_op "gh secret set LAPLACE_CHECKOUT -R $owner/$repo -b '$LAPLACE_CHECKOUT_TOKEN'" >/dev/null && say "secret LAPLACE_CHECKOUT" "set"
-    else say "secret LAPLACE_CHECKOUT" "NOT SET: LAPLACE_CHECKOUT_TOKEN=<token that reads $owner/Laplace-Native and Laplace-postgres> sudo -E ./agents.sh $repo"; fi ;;
+    else tok=${LAPLACE_CHECKOUT_TOKEN:-$(gh_op "auth token" 2>/dev/null || true)}              # the operator's own gh credential reads them
+      if [ -n "$tok" ]; then as_op "gh secret set LAPLACE_CHECKOUT -R $owner/$repo -b '$tok'" >/dev/null && say "secret LAPLACE_CHECKOUT" "set from the operator's gh login"
+      else say "secret LAPLACE_CHECKOUT" "NOT SET: gh auth login, and run again"; fi; unset tok; fi ;;
   esac
 }
 status(){ part status
