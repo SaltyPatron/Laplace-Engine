@@ -27,51 +27,21 @@ Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github
 
 `laplace ingest --plan` shows which recipe takes which file; `--claims` prints what the recipes attest, as text, and loads nothing.
 
-## From an empty server to loaded content
+## The machine, the deployment, the build
+
+Setting up the machine, building, deploying from an empty server, and the repositories' agents are Laplace-Operations
+(`setup.sh`, `build.sh`, `deploy.sh`, `agents.sh`, and `laplace.env`, the one definition of where everything is). The
+engine alone builds with CMake as any of the three code repositories does:
 
 ```sh
-./deploy.sh                                        # the database laplace.env names
-LAPLACE_CONNINFO="host=/tmp port=5432 user=laplace dbname=NAME" ./deploy.sh
+source ../Laplace-Operations/laplace.env
+cmake -S . -B "$LAPLACE_BUILD/Laplace-Engine/icx-release" -G Ninja -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
 ```
-
-`deploy.sh` runs the five steps of Deployment in order: build and install, tier 0 and its flags, the grammars, `laplace deploy`, `laplace ingest`, then `laplace status` and `laplace bench`. It can be run again: what is built is not rebuilt, what is recorded is passed over by its bytes, and a run that was cut off is taken up where it stopped. Each step's output is kept under `$LAPLACE_WORK/logs/deploy`, and each source's under `$LAPLACE_WORK/logs/ingest`.
-
-A source is not begun when the database's volume has not the room the source was measured to take (`room` in its `source` file); that is said, and the run goes on to the next.
-
-## The machine
-
-```sh
-sudo ./setup.sh                                    # once per machine: volumes, packages, kernel, dependencies, cluster, settings, access
-sudo ./setup.sh settings                           # one part again, after changing its declaration
-```
-
-`setup.sh` is the one step that needs root. It is not a sequence of patches: the top of the file declares the machine as sets — the volumes Laplace keeps apart (heap, WAL, temporary files, repositories, data), the packages, the dependencies built from `$LAPLACE_SRC`, the server's settings from Operations: Database, who may connect and how (the operator over the socket; `laplace` from `$LAPLACE_LAN` with scram over TLS; nothing else) — and each part compares its set with the machine and makes only what is missing. Run again on a finished machine it changes nothing and reports. What it did is kept under `$LAPLACE_WORK/logs/root`; the role's password is in the operator's `~/.pgpass`. Then `./deploy.sh`.
-
-Every name of the machine's is a variable of `laplace.env` with this installation's value as its default: the paths (`LAPLACE_PREFIX`, `LAPLACE_PG_DIR`, `LAPLACE_PGDATA`, `LAPLACE_PGWAL`, `LAPLACE_PGTEMP`), the users and groups (`LAPLACE_PGUSER`, `LAPLACE_ROLE`, `LAPLACE_GROUP`, `LAPLACE_PG_GROUP`), the service (`LAPLACE_PGSERVICE`), the volumes (`LAPLACE_VOLUMES`), the network (`LAPLACE_LAN`) and the agent. Another machine sets its own before running `setup.sh`.
-
-### The agents
-
-```sh
-sudo ./agents.sh                                   # one GitHub Actions runner per repository of $LAPLACE_REPOS, as laplace-runner
-sudo ./agents.sh status                            # each, as this machine and as GitHub see it
-sudo ./agents.sh remove Laplace-Wiki               # unregister and remove one (or all)
-```
-
-`agents.sh` gives every repository its own runner on this machine, all as `$LAPLACE_AGENT_USER` (default `laplace-runner`) under `$LAPLACE_AGENT_HOME/<repo>`: its own directory, environment (`runner/.env`: its builds and work under its directory; the machine's dependencies, data and database), registration (named `<host>-<repo>`, labelled `laplace,<repo>`), service, and rights — the Engine's runner alone may run `setup.sh` of its checkout as root and restart the server; the others have nothing beyond the shared group. Registration takes a token per repository: `gh` logged in as an administrator, or `LAPLACE_AGENT_TOKEN_<REPO>`. Laplace-postgres and Laplace-Engine check out Laplace-Native (and Laplace-postgres) beside themselves; they are private and a workflow's own token reads only its repository, so `agents.sh` puts the operator's `gh` credential (or `LAPLACE_CHECKOUT_TOKEN`) in those two as the secret `LAPLACE_CHECKOUT`. Each repository's `.github/workflows/laplace.yml` is its job on its runner: Native builds with icx and gcc and runs its tests under both; postgres builds, installs into the extension directories by rename (no root: the group's right) and updates the extension in the database; Engine runs `setup.sh` and `deploy.sh`; Wiki builds the site. The operator and the agent share `$LAPLACE_GROUP`: every shared tree is that group's, set-group-id and group-writable, so neither meets a permission.
 
 ## Firmware
 
 How a pull reads the records is not in the program and not in the records: it is a firmware, a file of decisions, one for each human being. `firmware/program.firmware` is the program's own and says what a firmware can decide; `$LAPLACE_FIRMWARE`, or `--firmware FILE` on `pull`, `hop`, `translate` and `degrees`, names another. The same records pulled under another firmware give another selection, and no standing changes.
-
-## Build
-
-```sh
-source laplace.env        # the one definition of where everything is
-./build.sh                # the extension and the engine, each with Laplace-Native built as part of it
-./build.sh install        # also installs the extension into PostgreSQL's directories
-```
-
-The three repositories sit side by side under one source root. Build trees go to `$LAPLACE_BUILD`.
 
 ## Recipes
 

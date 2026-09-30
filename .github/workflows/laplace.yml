@@ -1,25 +1,29 @@
-# Laplace-Engine on its runner: the machine declared and converged (setup.sh, as root: the one right this runner has),
-# then from an empty server to loaded, indexed and measured content (deploy.sh). Its checkouts are this workspace;
-# its builds and work are its own (runner/.env); the database is the machine's. Laplace-Native and Laplace-postgres
-# are checked out beside it (private: the secret LAPLACE_CHECKOUT).
+# Laplace-Engine on its runner: the engine built with icx, with Laplace-Native as part of it (checked out beside it;
+# private: the secret LAPLACE_CHECKOUT), and its own checks: the program answers, and every native operation is
+# measured on this machine when its tier 0 is there. The runner's environment (runner/.env, from agents.sh) names its
+# build root and the machine's dependencies, tier 0 and grammars.
 name: Laplace-Engine
 on:
   workflow_dispatch:
   push:
     branches: [main]
+  pull_request:
 jobs:
-  laplace:
+  engine:
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
       - uses: actions/checkout@v4
         with: { path: Laplace-Engine }
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Native", path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
-      - uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/Laplace-postgres", path: Laplace-postgres, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
-      - name: the machine
-        run: sudo -n --preserve-env=LAPLACE_SRC,LAPLACE_BUILD,LAPLACE_WORK,LAPLACE_DEPSRC "$GITHUB_WORKSPACE/Laplace-Engine/setup.sh"
-        env: { LAPLACE_SRC: "${{ github.workspace }}" }
-      - name: from an empty server to measured content
-        run: ./Laplace-Engine/deploy.sh
-        env: { LAPLACE_SRC: "${{ github.workspace }}" }
+      - name: build
+        run: |
+          . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
+          export LAPLACE_SRC=$GITHUB_WORKSPACE LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native OMP_NUM_THREADS=$(nproc) MKL_NUM_THREADS=$(nproc)
+          cmake -S Laplace-Engine -B "$LAPLACE_BUILD/Laplace-Engine/icx-release" -G Ninja -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
+      - name: checks
+        run: |
+          L=$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace
+          "$L" 2>&1 | head -5
+          [ -s "$LAPLACE_TIER0" ] && "$L" bench || echo "no tier 0 at $LAPLACE_TIER0 yet: the Operations deploy makes it"
