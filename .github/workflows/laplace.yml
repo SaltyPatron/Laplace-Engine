@@ -1,0 +1,29 @@
+# Laplace on the agent: the machine declared and converged (setup.sh, as root), then from an empty server to loaded,
+# indexed and measured content (deploy.sh). Runs on the runner setup.sh registered (labels: laplace). Its checkouts are
+# this workspace; its builds and work are under its home (~/.laplace.env); the database is the machine's.
+# Laplace-Native and Laplace-postgres are private: LAPLACE_CHECKOUT is a token that reads them.
+name: Laplace
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  laplace:
+    runs-on: [self-hosted, laplace]
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: Laplace-Engine }
+      - uses: actions/checkout@v4
+        with: { repository: ${{ github.repository_owner }}/Laplace-Native, path: Laplace-Native, token: ${{ secrets.LAPLACE_CHECKOUT }} }
+      - uses: actions/checkout@v4
+        with: { repository: ${{ github.repository_owner }}/Laplace-postgres, path: Laplace-postgres, token: ${{ secrets.LAPLACE_CHECKOUT }} }
+      - name: the machine
+        run: |
+          . ~/.laplace.env
+          sudo -n --preserve-env=LAPLACE_SRC,LAPLACE_BUILD,LAPLACE_WORK ./Laplace-Engine/setup.sh
+        env: { LAPLACE_SRC: "${{ github.workspace }}" }
+      - name: from an empty server to measured content
+        run: |
+          . ~/.laplace.env
+          ./Laplace-Engine/deploy.sh
+        env: { LAPLACE_SRC: "${{ github.workspace }}" }

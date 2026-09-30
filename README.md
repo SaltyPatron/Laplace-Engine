@@ -38,13 +38,20 @@ LAPLACE_CONNINFO="host=/tmp port=5432 user=laplace dbname=NAME" ./deploy.sh
 
 A source is not begun when the database's volume has not the room the source was measured to take (`room` in its `source` file); that is said, and the run goes on to the next.
 
-## On the local network
+## The machine
 
 ```sh
-sudo ./lan.sh                                      # once: the server reachable from the LAN as laplace, scram over TLS
+sudo ./setup.sh                                    # once per machine: volumes, packages, kernel, dependencies, cluster, settings, access
+sudo ./setup.sh settings                           # one part again, after changing its declaration
 ```
 
-`lan.sh` is the one step that needs root, because `pg_hba.conf` and the certificate are in postgres's data directory: it adds the rule for `$LAPLACE_LAN` (default 192.168.1.0/24), makes the certificate, turns `ssl` on, restarts the server so `listen_addresses = '*'` takes effect, and then connects over TCP with the password the way a client on the network would. Its output is kept under `$LAPLACE_WORK/logs/root`. The role's password is in the operator's `~/.pgpass`.
+`setup.sh` is the one step that needs root. It is not a sequence of patches: the top of the file declares the machine as sets — the volumes Laplace keeps apart (heap, WAL, temporary files, repositories, data), the packages, the dependencies built from `$LAPLACE_SRC`, the server's settings from Operations: Database, who may connect and how (the operator over the socket; `laplace` from `$LAPLACE_LAN` with scram over TLS; nothing else) — and each part compares its set with the machine and makes only what is missing. Run again on a finished machine it changes nothing and reports. What it did is kept under `$LAPLACE_WORK/logs/root`; the role's password is in the operator's `~/.pgpass`. Then `./deploy.sh`.
+
+Every name of the machine's is a variable of `laplace.env` with this installation's value as its default: the paths (`LAPLACE_PREFIX`, `LAPLACE_PG_DIR`, `LAPLACE_PGDATA`, `LAPLACE_PGWAL`, `LAPLACE_PGTEMP`), the users and groups (`LAPLACE_PGUSER`, `LAPLACE_ROLE`, `LAPLACE_GROUP`, `LAPLACE_PG_GROUP`), the service (`LAPLACE_PGSERVICE`), the volumes (`LAPLACE_VOLUMES`), the network (`LAPLACE_LAN`) and the agent. Another machine sets its own before running `setup.sh`.
+
+### The agent
+
+`setup.sh agent` registers this machine as a GitHub Actions runner for `$LAPLACE_GITHUB/$LAPLACE_AGENT_REPO`, as `$LAPLACE_AGENT_USER` (default `laplace-runner`) under `$LAPLACE_AGENT_HOME`, with the one right it needs: `setup.sh` of a checkout it made, as root, and restarting the server. Registration takes a token: `gh` logged in as an administrator of the repository, or `LAPLACE_AGENT_TOKEN`. The workflow `.github/workflows/laplace.yml` then runs `setup.sh` and `deploy.sh` on it, on a push to `main` or by hand; its checkouts are the workflow's workspace, its builds and work are under its home, the database is the machine's. Laplace-Native and Laplace-postgres are private: the repository secret `LAPLACE_CHECKOUT` is a token that reads them. The operator and the agent share `$LAPLACE_GROUP`: every shared tree is that group's, set-group-id and group-writable, so neither meets a permission.
 
 ## Firmware
 
