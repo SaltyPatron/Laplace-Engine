@@ -61,14 +61,11 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
     /* 1. the phrase's constituents, computed on the client */
     Ref pr = text_ref(ctx, (const uint8_t *)phrase_text, strlen(phrase_text));
     Node *pn = table_find(&pr.id); lp_id *ph; int np;
-    int ptier = pr.tier;                                                          /* containers sit above the phrase's parts */
     if (!pn) { ph = &pr.id; np = 1; }
     else { Shard *s = &shard[pr.id.b[0]]; np = 0; for (uint32_t v = 0; v < pn->nv; v++) np += VRUN(s->vtx[pn->voff + v].run);
            ph = malloc(sizeof(lp_id) * np); int k = 0;
-           ptier = 0;
-           for (uint32_t v = 0; v < pn->nv; v++) {
-               Node *cn2 = table_find(&s->vtx[pn->voff + v].id); int ct = cn2 ? cn2->tier : 0; if (ct > ptier) ptier = ct;
-               for (uint32_t r = 0; r < VRUN(s->vtx[pn->voff + v].run); r++) ph[k++] = s->vtx[pn->voff + v].id; } }
+           for (uint32_t v = 0; v < pn->nv; v++)
+               for (uint32_t r = 0; r < VRUN(s->vtx[pn->voff + v].run); r++) ph[k++] = s->vtx[pn->voff + v].id; }
 
     PGconn *pg = db_connect(conninfo);
     DNode *d = NULL; int nn = 0, cn = 0; IdMap map = { 0 };
@@ -83,11 +80,10 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
     for (int i = 0; i < np; i++) if (table_find(&ph[i])) keys[nk++] = ph[i];
     if (!nk) { memcpy(keys, ph, sizeof(lp_id) * np); nk = np; }
     uint8_t *ab = malloc(20 + 20 * (size_t)nk); size_t al = ids_param(ab, keys, (uint32_t)nk);
-    char pt[16]; snprintf(pt, sizeof pt, "%d", ptier);
-    const char *v1[2] = { (const char *)ab, pt }; int l1[2] = { (int)al, 0 }, f1[2] = { 1, 0 };
-    PGresult *r = PQexecParams(pg, "SELECT entity, path, tier FROM physicality WHERE tier > $2::smallint AND path @> $1::blake3[]", 2, NULL, v1, l1, f1, 1);
+    const char *v1[1] = { (const char *)ab }; int l1[1] = { (int)al }, f1[1] = { 1 };
+    PGresult *r = PQexecParams(pg, "SELECT entity, path, tier FROM laplace_containers($1::blake3[])", 1, NULL, v1, l1, f1, 1);
     if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
-    lp_id *front = malloc(sizeof(lp_id) * (PQntuples(r) + 1)); int nf = 0, ftier = 1 << 30;
+    lp_id *front = malloc(sizeof(lp_id) * (PQntuples(r) + 1)); int nf = 0;
     for (int i = 0; i < PQntuples(r); i++) {
         const uint8_t *e = (const uint8_t *)PQgetvalue(r, i, 1); size_t el = (size_t)PQgetlength(r, i, 1);
         const uint8_t *vx; size_t nv = vertices(e, el, &vx); size_t cap = nv * 4 + 16; lp_id *out = malloc(sizeof(lp_id) * cap);
@@ -97,27 +93,25 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
         int idx = map_get(&map, &eid, 1, &d, &nn, &cn);
         if (ncont == ccont) { ccont = ccont ? ccont * 2 : 256; conts = xrealloc(conts, sizeof(Cont) * ccont); }
         conts[ncont++] = (Cont){ idx, out, k < cap ? k : cap }; front[nf++] = eid;
-        uint16_t tb; memcpy(&tb, PQgetvalue(r, i, 2), 2); int tr = ntohs(tb); if (tr < ftier) ftier = tr;
     }
     int direct = ncont; PQclear(r); double t_cont = now() - t;
 
     /* 3. leaf to trunk */
     t = now(); int levels = 0; uint64_t fetched = 0;
     while (nf) {
-        levels++; lp_id *next = malloc(sizeof(lp_id) * 1024); int nx = 0, cx = 1024, ntier = 1 << 30;
+        levels++; lp_id *next = malloc(sizeof(lp_id) * 1024); int nx = 0, cx = 1024;
         for (int i0 = 0; i0 < nf; i0 += 20000) {
             int k = nf - i0 < 20000 ? nf - i0 : 20000;
             uint8_t *pb = malloc(20 + 20 * (size_t)k); size_t pl = ids_param(pb, front + i0, (uint32_t)k);
-            char tt[16]; snprintf(tt, sizeof tt, "%d", ftier);                    /* a container sits above its constituents */
-            const char *v[2] = { (const char *)pb, tt }; int l[2] = { (int)pl, 0 }, f[2] = { 1, 0 };
-            PGresult *q = PQexecParams(pg, "SELECT p.entity, t.id, t.times, p.tier FROM physicality p, laplace_path_times(p.path, $1::blake3[]) t WHERE p.tier > $2::smallint AND p.path && $1::blake3[]", 2, NULL, v, l, f, 1);
+            const char *v[1] = { (const char *)pb }; int l[1] = { (int)pl }, f[1] = { 1 };
+            PGresult *q = PQexecParams(pg, "SELECT entity, id, times, tier FROM laplace_fills($1::blake3[])", 1, NULL, v, l, f, 1);
             if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "parents: %s", PQerrorMessage(pg)); return 1; }
             fetched += (uint64_t)PQntuples(q);
             for (int j = 0; j < PQntuples(q); j++) {
                 lp_id pid; memcpy(pid.b, PQgetvalue(q, j, 0), 16);
                 int known = map_get(&map, &pid, 0, &d, &nn, &cn) >= 0, pidx = map_get(&map, &pid, 1, &d, &nn, &cn);
                 if (!known) { if (nx == cx) { cx *= 2; next = xrealloc(next, sizeof(lp_id) * cx); } next[nx++] = pid;
-                              uint16_t tb; memcpy(&tb, PQgetvalue(q, j, 3), 2); int tr = ntohs(tb); if (tr < ntier) ntier = tr; }
+ }
                 lp_id cid; memcpy(cid.b, PQgetvalue(q, j, 1), 16);                /* the child it holds, and how often */
                 uint64_t tbe; memcpy(&tbe, PQgetvalue(q, j, 2), 8); uint32_t times = (uint32_t)__builtin_bswap64(tbe);
                 int ci = map_get(&map, &cid, 0, &d, &nn, &cn); if (ci < 0 || ci == pidx) continue;
@@ -128,7 +122,7 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
             PQclear(q); free(pb);
         }
         fprintf(stderr, "  level %d: %d nodes looked up, %d new parents, %.1f ms\n", levels, nf, nx, (now() - t) * 1000);
-        free(front); front = next; nf = nx; ftier = ntier;
+        free(front); front = next; nf = nx;
     }
     double t_up = now() - t;
 

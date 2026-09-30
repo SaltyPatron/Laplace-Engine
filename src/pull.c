@@ -63,8 +63,7 @@ Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, doub
     uint8_t ab[80]; size_t al = ids_param(ab, keys, nk); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
     const char *v[2] = { (const char *)ab, lim }; int l[2] = { (int)al, 0 }, f[2] = { 1, 0 };
     PGresult *q = db_ask(pg,
-        "SELECT p.entity, p.path, s.rating, s.deviation, s.volatility, s.matches FROM physicality p JOIN consensus s ON s.claim = p.entity "
-        "WHERE p.path @> $1::blake3[] LIMIT $2::int", 2, v, l, f);
+        "SELECT entity, path, rating, deviation, volatility, matches FROM laplace_claims($1::blake3[], $2::bigint)", 2, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
     int rows = PQntuples(q); *capped = rows > fan; if (rows > fan) rows = fan;
     Claim *c = malloc(sizeof(Claim) * (size_t)(rows ? rows : 1)); int m = 0;
@@ -101,7 +100,7 @@ void positions_of(PGconn *pg, Claim *c, int n){
     lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) ids[i] = c[i].id;
     uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n);
     const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = db_ask(pg, "SELECT claim, position FROM attestation WHERE claim = ANY($1::blake3[]) AND position IS NOT NULL", 1, v, l, f);
+    PGresult *q = db_ask(pg, "SELECT claim, position FROM laplace_attested($1::blake3[]) WHERE position IS NOT NULL", 1, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "positions: %s", PQerrorMessage(pg)); exit(1); }
     for (int j = 0; j < PQntuples(q); j++) {
         uint32_t pb; memcpy(&pb, PQgetvalue(q, j, 1), 4); int pos = (int)ntohl(pb);
@@ -129,7 +128,7 @@ int refused(PGconn *pg, Ctx *c, const Firmware *fw, Claim *cl, int n){
         lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) ids[i] = cl[i].id;
         uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n);
         const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-        PGresult *q = db_ask(pg, "SELECT claim, witness FROM attestation WHERE claim = ANY($1::blake3[])", 1, v, l, f);
+        PGresult *q = db_ask(pg, "SELECT claim, witness FROM laplace_attested($1::blake3[])", 1, v, l, f);
         if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg)); exit(1); }
         uint8_t *other = calloc((size_t)n, 1), *theirs = calloc((size_t)n, 1);
         for (int j = 0; j < PQntuples(q); j++) { int is = 0; for (int z = 0; z < fw->nrefuse_witness; z++) is |= !memcmp(PQgetvalue(q, j, 1), wit[z].b, 16);
@@ -182,8 +181,7 @@ int cmd_hop(int argc, char **argv){
     /* observed: the content that holds it, which is not claims */
     t = now(); uint8_t ab[40]; size_t al = ids_param(ab, &e.id, 1);
     const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = db_ask(pg, "SELECT p.tier FROM physicality p WHERE p.path @> $1::blake3[] "
-                                   "AND NOT EXISTS (SELECT 1 FROM consensus s WHERE s.claim = p.entity)", 1, v, l, f);
+    PGresult *q = db_ask(pg, "SELECT tier FROM laplace_containers($1::blake3[]) WHERE NOT attested", 1, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
     uint64_t by_tier[256] = { 0 }; int any = 0;
     for (int j = 0; j < PQntuples(q); j++) { uint16_t tb; memcpy(&tb, PQgetvalue(q, j, 0), 2); by_tier[ntohs(tb) & 255]++; any = 1; }
@@ -286,9 +284,7 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
     uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(ab, ids, (uint32_t)m); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
     const char *v[2] = { (const char *)ab, lim }; int l[2] = { (int)al, 0 }, f[2] = { 1, 0 };
     PGresult *q = db_ask(pg,
-        "SELECT u.i, c.entity, c.path, c.rating, c.deviation, c.volatility FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) "
-        "CROSS JOIN LATERAL (SELECT p.entity, p.path, s.rating, s.deviation, s.volatility FROM physicality p JOIN consensus s ON s.claim = p.entity "
-        "WHERE p.path @> ARRAY[u.id] LIMIT $2::int) c", 2, v, l, f);
+        "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint)", 2, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
     w->trips++; w->expanded += (uint64_t)m;
     int rows = PQntuples(q), *held = calloc((size_t)m, sizeof(int));
@@ -314,7 +310,7 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
 /* The tie between two neighbours of a chain, as text: the claim's predicate, read from its subject to its object. */
 static void show_tie(PGconn *pg, Reader *rd, const lp_id *claim, const lp_id *left){
     uint8_t ab[40]; size_t al = ids_param(ab, claim, 1); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, fm[1] = { 1 };
-    PGresult *q = db_ask(pg, "SELECT path FROM physicality WHERE entity = ANY($1::blake3[]) LIMIT 1", 1, v, l, fm);
+    PGresult *q = db_ask(pg, "SELECT path FROM laplace_paths($1::blake3[]) LIMIT 1", 1, v, l, fm);
     lp_id part[3]; int np = PQresultStatus(q) == PGRES_TUPLES_OK && PQntuples(q) ? decode_claim(PQgetvalue(q, 0, 0), PQgetlength(q, 0, 0), part) : 0;
     PQclear(q);
     char *pt = np == 3 ? reader_text(rd, &part[1], 32) : strdup("?");

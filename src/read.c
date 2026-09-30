@@ -47,7 +47,7 @@ static size_t fetch(Reader *r){
     for (size_t i = 0; i < r->n; i++) if (r->e[i].state == 0) { ids[k++] = r->e[i].id; r->e[i].state = 2; }
     uint8_t *ab = malloc(20 + 20 * nw); size_t al = ids_param(ab, ids, (uint32_t)nw);
     const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = db_ask(r->pg, "SELECT entity, path FROM physicality WHERE entity = ANY($1::blake3[])", 1, v, l, f);
+    PGresult *q = db_ask(r->pg, "SELECT entity, path FROM laplace_paths($1::blake3[])", 1, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "paths: %s", PQerrorMessage(r->pg)); exit(1); }
     r->trips++;
     for (int j = 0; j < PQntuples(q); j++) {

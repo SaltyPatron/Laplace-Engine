@@ -52,12 +52,12 @@ int cmd_pull(int argc, char **argv){
 
     /* ---- the prompt: broken down, and its trunk */
     Ref pr = text_ref(CTX[0], (const uint8_t *)prompt, strlen(prompt));
-    Node *pn = table_find(&pr.id); lp_id *ph; int np = 0, ptier = 0;
-    if (!pn || pr.tier <= 2) { ph = malloc(sizeof(lp_id)); ph[0] = pr.id; np = 1; ptier = pr.tier; }      /* a word is one constituent of what holds it: itself */
+    Node *pn = table_find(&pr.id); lp_id *ph; int np = 0;
+    if (!pn || pr.tier <= 2) { ph = malloc(sizeof(lp_id)); ph[0] = pr.id; np = 1; }      /* a word is one constituent of what holds it: itself */
     else { Shard *s = &shard[pr.id.b[0]]; for (uint32_t v = 0; v < pn->nv; v++) np += (int)VRUN(s->vtx[pn->voff + v].run);
            ph = malloc(sizeof(lp_id) * (size_t)np); int k = 0;
-           for (uint32_t v = 0; v < pn->nv; v++) { Node *cn = table_find(&s->vtx[pn->voff + v].id); int ct = cn ? cn->tier : 0; if (ct > ptier) ptier = ct;
-               for (uint32_t r = 0; r < VRUN(s->vtx[pn->voff + v].run); r++) ph[k++] = s->vtx[pn->voff + v].id; } }
+           for (uint32_t v = 0; v < pn->nv; v++)
+               for (uint32_t r = 0; r < VRUN(s->vtx[pn->voff + v].run); r++) ph[k++] = s->vtx[pn->voff + v].id; }
     char idt[33]; id_text(&pr.id, idt);
     firmware_say(&fw, FW_PULL);
     printf("prompt     %s   tier %d   %d constituent%s", idt, pr.tier, np, np == 1 ? "" : "s");
@@ -76,7 +76,7 @@ int cmd_pull(int argc, char **argv){
             lp_id *ids = malloc(sizeof(lp_id) * (size_t)nmine); for (int i = 0; i < nmine; i++) ids[i] = mine[i].id;
             uint8_t *ab = malloc(20 + 20 * (size_t)nmine); size_t al = ids_param(ab, ids, (uint32_t)nmine);
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-            PGresult *q = db_ask(pg, "SELECT a.claim, w.trust FROM attestation a JOIN witness w ON w.id = a.witness WHERE a.claim = ANY($1::blake3[])", 1, v, l, f);
+            PGresult *q = db_ask(pg, "SELECT claim, trust FROM laplace_attested($1::blake3[])", 1, v, l, f);
             if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg)); return 1; }
             int best = -1; double bt = -2;
             for (int j = 0; j < PQntuples(q); j++) { uint64_t u = 0; const uint8_t *b = (const uint8_t *)PQgetvalue(q, j, 1); for (int y = 0; y < 8; y++) u = u << 8 | b[y]; double tr; memcpy(&tr, &u, 8);
@@ -94,9 +94,8 @@ int cmd_pull(int argc, char **argv){
             for (int i = 0; i < np; i++) if (table_find(&ph[i])) keys[nk++] = ph[i];
             if (!nk) { memcpy(keys, ph, sizeof(lp_id) * (size_t)np); nk = np; }
             uint8_t *ab = malloc(20 + 20 * (size_t)nk); size_t al = ids_param(ab, keys, (uint32_t)nk);
-            char pt[16]; snprintf(pt, sizeof pt, "%d", ptier);
-            const char *v[2] = { (const char *)ab, pt }; int l[2] = { (int)al, 0 }, f[2] = { 1, 0 };
-            PGresult *q = db_ask(pg, "SELECT entity, path FROM physicality WHERE tier > $2::smallint AND path @> $1::blake3[]", 2, v, l, f);
+            const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+            PGresult *q = db_ask(pg, "SELECT entity, path FROM laplace_containers($1::blake3[])", 1, v, l, f);
             if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
             typedef struct { lp_id *id; int n; lp_id in; } Rest; Rest *rest = malloc(sizeof(Rest) * (size_t)(PQntuples(q) + 1)); int nrest = 0, holders = 0;
             for (int j = 0; j < PQntuples(q); j++) {
