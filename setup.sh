@@ -2,13 +2,14 @@
 # The machine Laplace runs on, declared once and converged: the one step that needs root (Operations: Setup, Database).
 #
 #   sudo ./setup.sh            everything below, in order; each part looks at the state and makes only what is missing
-#   sudo ./setup.sh access     one part, or several: volumes | packages | kernel | deps | cluster | settings | access | agent | report
+#   sudo ./setup.sh access     one part, or several: volumes | packages | kernel | deps | cluster | settings | access | report
 #
 # Nothing here is a sequence of patches. Each part is a set: the volumes there are to be, the packages, the settings,
 # the access rules; the part compares the set with the machine and closes the difference. Running it again on a
 # finished machine changes nothing and reports. What it did is kept under $LAPLACE_WORK/logs/root. Then, as the
-# operator: ./deploy.sh. Every name of this machine's (paths, users, volumes, the service, the network, the agent)
-# is a variable of laplace.env, so another machine declares its own.
+# operator: ./deploy.sh; and for the repositories' agents on this machine: sudo ./agents.sh. Every name of this
+# machine's (paths, users, groups, volumes, the service, the network) is a variable of laplace.env, so another machine
+# declares its own.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd); . "$here/laplace.env"
 [ "$(id -u)" = 0 ] || { echo "run with sudo"; exit 1; }
@@ -39,6 +40,9 @@ gdal        $PREFIX/bin/gdal-config             cmake      https://github.com/OS
 spectra     $PREFIX/include/Spectra/SymEigsSolver.h   headers   https://github.com/yixuan/spectra.git      master
 postgresql  $PGBIN/postgres                     configure  https://git.postgresql.org/git/postgresql.git    REL_18_STABLE
 postgis     $LAPLACE_PG_DIR/share/extension/postgis.control   postgis   https://git.osgeo.org/gitea/postgis/postgis.git   master
+blake3      $LAPLACE_DEPSRC/blake3/c/blake3.h   source     https://github.com/BLAKE3-team/BLAKE3.git        master
+core-math   $LAPLACE_DEPSRC/core-math/src       source     https://gitlab.inria.fr/core-math/core-math.git  master
+tree-sitter $LAPLACE_DEPSRC/tree-sitter/lib/src/lib.c   source   https://github.com/tree-sitter/tree-sitter.git   master
 "
 # The server's settings (Database.md), as ALTER SYSTEM makes them. Memory follows the machine.
 ram_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo); cores=$(nproc)
@@ -143,11 +147,12 @@ deps(){ part dependencies
   set +u; . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true; set -u
   [ -d "$LAPLACE_ICU_DIR/lib" ] && say "ICU 78 (Unicode 17)" "$LAPLACE_ICU_DIR" || say "ICU 78" "MISSING: unpack the release into $LAPLACE_ICU_DIR (lib, include); tier 0 is Unicode 17"
   echo "$DEPS" | while read -r name proof how origin branch; do [ -n "$name" ] || continue
-    src=$LAPLACE_SRC/$name; b=$LAPLACE_WORK/$name
+    src=$LAPLACE_DEPSRC/$name; b=$LAPLACE_WORK/$name
     if [ -e "$proof" ]; then say "$name" "installed"; continue; fi
     [ -d "$src" ] || { su "$op" -c "git clone -q --depth 1 -b $branch $origin $src" || { say "$name" "could not clone $origin"; continue; }; }
     case $how in
       cmake)     cmake -S "$src" -B "$b" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=$PREFIX -DBUILD_TESTING=OFF >/dev/null; cmake --build "$b" >/dev/null; cmake --install "$b" >/dev/null; ldconfig ;;
+      source)    ;;                                                        # built into Laplace by its own CMake
       headers)   install -d "$PREFIX/include/Spectra"; cp -a "$src/include/Spectra/." "$PREFIX/include/Spectra/" ;;
       configure) mkdir -p "$b"; ( cd "$b"; [ -f config.status ] || CC=icx CXX=icpx "$src/configure" --prefix="$LAPLACE_PG_DIR" --with-icu --with-ssl=openssl --with-lz4 --with-zstd --with-liburing \
                    ICU_CFLAGS="-I$LAPLACE_ICU_DIR/include" ICU_LIBS="-L$LAPLACE_ICU_DIR/lib -licui18n -licuuc -licudata" >/dev/null
@@ -233,39 +238,6 @@ access(){ part access
   if command -v ufw >/dev/null && ufw status | grep -q "^Status: active"; then ufw status | grep -q "5432/tcp.*$LAPLACE_LAN" || { ufw allow from "$LAPLACE_LAN" to any port 5432 proto tcp >/dev/null; say "ufw" "5432/tcp from $LAPLACE_LAN"; }; fi
   q "SELECT '  '||rpad(type, 10)||rpad(array_to_string(user_name, ','), 10)||rpad(coalesce(address, 'socket'), 18)||auth_method||coalesce('   '||error, '') FROM pg_hba_file_rules ORDER BY rule_number"
 }
-agent(){ part agent
-  # A GitHub Actions runner for $LAPLACE_GITHUB/$LAPLACE_AGENT_REPO, as $LAPLACE_AGENT_USER under $LAPLACE_AGENT_HOME:
-  # its own sources, builds and work (laplace.env's roots, under its home), the database shared. Registration needs a
-  # token from GitHub: gh (logged in as someone who administers the repository) fetches one; or LAPLACE_AGENT_TOKEN.
-  home=$LAPLACE_AGENT_HOME; user=$LAPLACE_AGENT_USER; as_agent(){ su -s /bin/bash "$user" -c "$*" </dev/null; }
-  install -d -o "$user" -g "$LAPLACE_GROUP" -m 2775 "$home" "$home/build" "$home/work"
-  cat > "$home/.laplace.env" <<EOF
-# the agent's roots: its checkouts are the workflow's workspace; its builds and work are its own; the database,
-# dependencies and data are the machine's
-export LAPLACE_BUILD=$home/build LAPLACE_WORK=$home/work
-EOF
-  chown "$user:$LAPLACE_GROUP" "$home/.laplace.env"
-  # the one right it needs: setup.sh of the checkout a workflow made, as root; and to restart the server
-  cat > /etc/sudoers.d/laplace-agent <<EOF
-$user ALL=(root) NOPASSWD:SETENV: $home/work/runner/*/*/*/setup.sh, /bin/systemctl restart $SERVICE.service
-EOF
-  chmod 440 /etc/sudoers.d/laplace-agent; visudo -cq -f /etc/sudoers.d/laplace-agent || { rm -f /etc/sudoers.d/laplace-agent; say "sudoers" "REFUSED"; }
-  say "sudo" "$user: setup.sh of a checkout under $home/work/runner, systemctl restart $SERVICE.service"
-  runner=$home/runner
-  if [ ! -x "$runner/config.sh" ]; then
-    ver=$(curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
-    install -d -o "$user" -g "$LAPLACE_GROUP" "$runner"
-    curl -fsSL "https://github.com/actions/runner/releases/download/v$ver/actions-runner-linux-x64-$ver.tar.gz" | as_agent "tar xz -C $runner"
-    say "runner" "$ver unpacked in $runner"
-  fi
-  if [ ! -f "$runner/.runner" ]; then
-    token=${LAPLACE_AGENT_TOKEN:-$(su "$op" -c "gh api -X POST repos/$LAPLACE_GITHUB/$LAPLACE_AGENT_REPO/actions/runners/registration-token --jq .token" 2>/dev/null || true)}
-    if [ -z "$token" ]; then say "registration" "NO TOKEN: gh auth login as an administrator of $LAPLACE_GITHUB/$LAPLACE_AGENT_REPO, or LAPLACE_AGENT_TOKEN=..., and run setup.sh agent again"; return; fi
-    as_agent "cd $runner && ./config.sh --unattended --url https://github.com/$LAPLACE_GITHUB/$LAPLACE_AGENT_REPO --token $token --name $(hostname) --labels $LAPLACE_AGENT_LABELS --work $home/work/runner --replace" >/dev/null
-    ( cd "$runner" && ./svc.sh install "$user" >/dev/null && ./svc.sh start >/dev/null ); say "registration" "$(hostname) on $LAPLACE_GITHUB/$LAPLACE_AGENT_REPO, labels $LAPLACE_AGENT_LABELS"
-  else say "registration" "$(sed -n 's/.*"agentName": *"\([^"]*\)".*/\1/p' "$runner/.runner") on $LAPLACE_GITHUB/$LAPLACE_AGENT_REPO"; fi
-  say "service" "$(cd "$runner" && ./svc.sh status 2>/dev/null | grep -o 'active ([a-z]*)' | head -1)"
-}
 report(){ part report
   say "server" "$($PGBIN/postgres --version)   $(systemctl is-active "$SERVICE.service")"
   say "PostGIS" "$(q "SELECT default_version FROM pg_available_extensions WHERE name = 'postgis'")"
@@ -273,12 +245,12 @@ report(){ part report
   addr=$(ip -4 -o addr | awk -v lan="$LAPLACE_LAN" '{split(lan, a, "."); if ($4 ~ "^"a[1]"\\."a[2]"\\."a[3]"\\.") {print $4; exit}}' | cut -d/ -f1)
   say "from the network, as $op" "$(su "$op" -c "$PGBIN/psql -X 'host=$addr port=5432 user=$LAPLACE_ROLE dbname=postgres sslmode=require' -Atc \"SELECT 'connected, TLS '||coalesce((SELECT version FROM pg_stat_ssl WHERE pid = pg_backend_pid()), 'off')\"" 2>&1 | tail -1)"
   say "over the socket, as $op" "$(su "$op" -c "$PGBIN/psql -X 'host=/tmp port=5432 user=$LAPLACE_ROLE dbname=postgres' -Atc \"SELECT 'connected as '||current_user\"" 2>&1 | tail -1)"
-  echo; echo "next, as $op: ./deploy.sh"
+  echo; echo "next, as $op: ./deploy.sh;   the repositories' agents: sudo ./agents.sh"
 }
 
 case ${1:-all} in
-  all) volumes; packages; kernel; deps; cluster; settings; access; agent; report ;;
-  volumes|packages|kernel|deps|cluster|settings|access|agent|report) for p in "$@"; do "$p"; done ;;
-  *) echo "setup.sh [volumes|packages|kernel|deps|cluster|settings|access|agent|report]"; exit 2 ;;
+  all) volumes; packages; kernel; deps; cluster; settings; access; report ;;
+  volumes|packages|kernel|deps|cluster|settings|access|report) for p in "$@"; do "$p"; done ;;
+  *) echo "setup.sh [volumes|packages|kernel|deps|cluster|settings|access|report]"; exit 2 ;;
 esac
 echo; echo "=== done   $(date -u +%H:%M:%S)   $log"

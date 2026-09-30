@@ -34,7 +34,7 @@ Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github
 LAPLACE_CONNINFO="host=/tmp port=5432 user=laplace dbname=NAME" ./deploy.sh
 ```
 
-`deploy.sh` runs the five steps of Deployment in order: build and install, tier 0 and its flags, `laplace deploy`, `laplace ingest`, then `laplace status` and `laplace bench`. It can be run again: what is built is not rebuilt, what is recorded is passed over by its bytes, and a run that was cut off is taken up where it stopped. Each step's output is kept under `$LAPLACE_WORK/logs/deploy`, and each source's under `$LAPLACE_WORK/logs/ingest`.
+`deploy.sh` runs the five steps of Deployment in order: build and install, tier 0 and its flags, the grammars, `laplace deploy`, `laplace ingest`, then `laplace status` and `laplace bench`. It can be run again: what is built is not rebuilt, what is recorded is passed over by its bytes, and a run that was cut off is taken up where it stopped. Each step's output is kept under `$LAPLACE_WORK/logs/deploy`, and each source's under `$LAPLACE_WORK/logs/ingest`.
 
 A source is not begun when the database's volume has not the room the source was measured to take (`room` in its `source` file); that is said, and the run goes on to the next.
 
@@ -49,9 +49,15 @@ sudo ./setup.sh settings                           # one part again, after chang
 
 Every name of the machine's is a variable of `laplace.env` with this installation's value as its default: the paths (`LAPLACE_PREFIX`, `LAPLACE_PG_DIR`, `LAPLACE_PGDATA`, `LAPLACE_PGWAL`, `LAPLACE_PGTEMP`), the users and groups (`LAPLACE_PGUSER`, `LAPLACE_ROLE`, `LAPLACE_GROUP`, `LAPLACE_PG_GROUP`), the service (`LAPLACE_PGSERVICE`), the volumes (`LAPLACE_VOLUMES`), the network (`LAPLACE_LAN`) and the agent. Another machine sets its own before running `setup.sh`.
 
-### The agent
+### The agents
 
-`setup.sh agent` registers this machine as a GitHub Actions runner for `$LAPLACE_GITHUB/$LAPLACE_AGENT_REPO`, as `$LAPLACE_AGENT_USER` (default `laplace-runner`) under `$LAPLACE_AGENT_HOME`, with the one right it needs: `setup.sh` of a checkout it made, as root, and restarting the server. Registration takes a token: `gh` logged in as an administrator of the repository, or `LAPLACE_AGENT_TOKEN`. The workflow `.github/workflows/laplace.yml` then runs `setup.sh` and `deploy.sh` on it, on a push to `main` or by hand; its checkouts are the workflow's workspace, its builds and work are under its home, the database is the machine's. Laplace-Native and Laplace-postgres are private: the repository secret `LAPLACE_CHECKOUT` is a token that reads them. The operator and the agent share `$LAPLACE_GROUP`: every shared tree is that group's, set-group-id and group-writable, so neither meets a permission.
+```sh
+sudo ./agents.sh                                   # one GitHub Actions runner per repository of $LAPLACE_REPOS, as laplace-runner
+sudo ./agents.sh status                            # each, as this machine and as GitHub see it
+sudo ./agents.sh remove Laplace-Wiki               # unregister and remove one (or all)
+```
+
+`agents.sh` gives every repository its own runner on this machine, all as `$LAPLACE_AGENT_USER` (default `laplace-runner`) under `$LAPLACE_AGENT_HOME/<repo>`: its own directory, environment (`runner/.env`: its builds and work under its directory; the machine's dependencies, data and database), registration (named `<host>-<repo>`, labelled `laplace,<repo>`), service, and rights — the Engine's runner alone may run `setup.sh` of its checkout as root and restart the server; the others have nothing beyond the shared group. Registration takes a token per repository: `gh` logged in as an administrator, or `LAPLACE_AGENT_TOKEN_<REPO>`. Laplace-postgres and Laplace-Engine check out Laplace-Native (and Laplace-postgres) beside themselves; they are private, so those repositories need the secret `LAPLACE_CHECKOUT`, which `agents.sh` sets from `LAPLACE_CHECKOUT_TOKEN` when given. Each repository's `.github/workflows/laplace.yml` is its job on its runner: Native builds with icx and gcc and runs its tests under both; postgres builds, installs into the extension directories by rename (no root: the group's right) and updates the extension in the database; Engine runs `setup.sh` and `deploy.sh`; Wiki builds the site. The operator and the agent share `$LAPLACE_GROUP`: every shared tree is that group's, set-group-id and group-writable, so neither meets a permission.
 
 ## Firmware
 

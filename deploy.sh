@@ -19,6 +19,7 @@ step(){ name=$1; shift; echo; echo "=== $name   $(date -u +%H:%M:%S)"
 step build      "$here/build.sh" install
 [ -s "$LAPLACE_TIER0" ] || step tier0 laplace tier0
 [ -s "${LAPLACE_TIER0%.bin}.flags" ] || step flags laplace flags
+[ -n "$(ls "$LAPLACE_GRAMMARS" 2>/dev/null)" ] || step grammars "$here/tools/build_grammars.sh" "$LAPLACE_GRAMMAR_SRC" "$LAPLACE_GRAMMARS"
 step deploy     laplace deploy
 step ingest     laplace ingest
 step status     laplace status
