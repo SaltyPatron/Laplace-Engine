@@ -99,7 +99,7 @@ typedef struct { uint32_t shard; uint32_t idx; } NRef;
 static NRef *bucket[NPART]; static uint64_t nbucket[NPART];
 static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_p, int atoms_needed){
     char tn[64]; Copy c = { 0 }; char sql[160]; uint8_t geo[64 * 1024];
-    lp_id *ids = NULL; uint32_t *runs = NULL; size_t idc = 0;
+    lp_id *ids = NULL; uint64_t *runs = NULL; size_t idc = 0;
     part_name(p, "entity", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY %s (id, tier, coord, hilbert) FROM STDIN (FORMAT binary)", tn);
     copy_begin(&c, pg, sql);
     if (atoms_needed && p / 16 == 0)
@@ -121,13 +121,13 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
     if (atoms_needed && p / 16 == 0)
         for (uint32_t cp = 0; cp < LP_NCP; cp++) {
             if (part_of(&T0[cp].id, 0) != p) continue;
-            uint32_t one = 1; size_t gl = lp_ewkb_runs(&T0[cp].id, &one, 1, geo, sizeof geo);
+            uint64_t one = 1; size_t gl = lp_ewkb_runs(&T0[cp].id, &one, 1, geo, sizeof geo);
             c16(&c, 4); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cf_i64(&c, hsigned(T0[cp].hilbert)); cfield(&c, geo, (uint32_t)gl); c.rows++;
         }
     for (uint64_t b = 0; b < nbucket[p]; b++) {
         int s = (int)bucket[p][b].shard; Node *x = &shard[s].node[bucket[p][b].idx];
-        if (x->nv > idc) { idc = x->nv * 2; ids = xrealloc(ids, idc * sizeof(lp_id)); runs = xrealloc(runs, idc * 4); }
-        for (uint32_t v = 0; v < x->nv; v++) { ids[v] = shard[s].vtx[x->voff + v].id; runs[v] = shard[s].vtx[x->voff + v].run; }
+        if (x->nv > idc) { idc = x->nv * 2; ids = xrealloc(ids, idc * sizeof(lp_id)); runs = xrealloc(runs, idc * 8); }
+        for (uint32_t v = 0; v < x->nv; v++) { ids[v] = shard[s].vtx[x->voff + v].id; runs[v] = shard[s].vtx[x->voff + v].m; }
         size_t gl = lp_ewkb_runs(ids, runs, x->nv, NULL, 0); uint8_t *gp = gl > sizeof geo ? malloc(gl) : geo;
         lp_ewkb_runs(ids, runs, x->nv, gp, gl);
         lp_coord co; memcpy(co.m, x->m, 32);

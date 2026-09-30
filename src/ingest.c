@@ -28,7 +28,7 @@ static int expand(const lp_id *id, Buf *o){
     }
     Node *x = table_find(id); if (!x) return 0;
     Shard *s = &shard[id->b[0]];
-    for (uint32_t v = 0; v < x->nv; v++) for (uint32_t r = 0; r < VRUN(s->vtx[x->voff + v].run); r++) if (!expand(&s->vtx[x->voff + v].id, o)) return 0;
+    for (uint32_t v = 0; v < x->nv; v++) for (uint32_t r = 0; r < VRUN(s->vtx[x->voff + v].m); r++) if (!expand(&s->vtx[x->voff + v].id, o)) return 0;
     return 1;
 }
 
@@ -49,16 +49,16 @@ static int walk_cb(const char *p, const struct stat *st, int type, struct FTW *f
 static void show_tuple(const lp_id *id){
     Node *c = table_find(id); if (!c) { Buf o = { 0 }; expand(id, &o); fwrite(o.b, 1, o.n, stdout); free(o.b); return; }
     Shard *sh = &shard[c->id.b[0]]; int first = 1; putchar('[');
-    for (uint32_t v = 0; v < c->nv; v++) for (uint32_t r = 0; r < VRUN(sh->vtx[c->voff + v].run); r++) {
+    for (uint32_t v = 0; v < c->nv; v++) for (uint32_t r = 0; r < VRUN(sh->vtx[c->voff + v].m); r++) {
         if (!first) printf(", "); first = 0;
-        if ((sh->vtx[c->voff + v].run >> LP_M_RUN_BITS) == LP_SAID_TUPLE && table_find(&sh->vtx[c->voff + v].id)) show_tuple(&sh->vtx[c->voff + v].id);
+        if (VSAID(sh->vtx[c->voff + v].m) == LP_SAID_TUPLE && table_find(&sh->vtx[c->voff + v].id)) show_tuple(&sh->vtx[c->voff + v].id);
         else { Buf o = { 0 }; expand(&sh->vtx[c->voff + v].id, &o); fwrite(o.b, 1, o.n, stdout); free(o.b); } }
     putchar(']');
 }
 /* What a record holds besides its claims: the things and specifics said with them, and the records inside it. */
 static void show_held(const lp_id *id, int depth){
     Node *c = table_find(id); if (!c || depth > 6) return; Shard *sh = &shard[c->id.b[0]];
-    for (uint32_t v = 0; v < c->nv; v++) { uint64_t said = sh->vtx[c->voff + v].run >> LP_M_RUN_BITS;
+    for (uint32_t v = 0; v < c->nv; v++) { uint64_t said = VSAID(sh->vtx[c->voff + v].m);
         if (said == LP_SAID_TUPLE) { printf("%*s+ ", depth * 2 + 2, ""); show_tuple(&sh->vtx[c->voff + v].id); putchar('\n'); }
         else if (said == LP_SAID_RECORD) { printf("%*s(\n", depth * 2 + 2, ""); show_held(&sh->vtx[c->voff + v].id, depth + 1); printf("%*s)\n", depth * 2 + 2, ""); } }
 }

@@ -76,8 +76,9 @@ int cmd_model(int argc, char **argv);
 typedef lp_ref Ref;
 
 /* ---- the node table: compositions keyed by ID, sharded by the ID's first byte, each shard behind its own lock */
-typedef struct { lp_id id; uint32_t run; } __attribute__((packed)) Vtx;      /* run: M as it is written: the run, and above it what the vertex is */
-#define VRUN(m) ((m) & ((1u << LP_M_RUN_BITS) - 1))
+typedef struct { lp_id id; uint64_t m; } __attribute__((packed)) Vtx;        /* m: M as it is written: the run, and above it what the vertex is (lp_m_of) */
+#define VRUN(m) ((uint32_t)((m) & ((1ull << LP_M_RUN_BITS) - 1)))
+#define VSAID(m) ((uint32_t)(((m) >> LP_M_RUN_BITS) & LP_M_SAID_MASK))
 static inline Ref said_claim(Ref r){ r.said = LP_SAID_CLAIM; return r; }
 static inline Ref said_tuple(Ref r){ r.said = LP_SAID_TUPLE; return r; }
 static inline Ref said_metadata(Ref r){ r.said = LP_SAID_METADATA; return r; }

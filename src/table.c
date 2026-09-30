@@ -49,11 +49,11 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     if (s->n == s->cap) { s->cap = s->cap ? s->cap * 2 : 4096; s->node = xrealloc(s->node, s->cap * sizeof(Node)); }
     Node *x = &s->node[s->n]; x->id = r.id; memcpy(x->m, r.c.m, 32); x->tier = tier; x->len = n; x->voff = s->nv; x->nv = 0; x->keep = 0;
     for (uint32_t i = 0; i < n; i++) {                                                  /* runs of the same child; what each is within this path, above the run */
-        uint32_t said = (uint32_t)(ch[i].said & 3u) << LP_M_RUN_BITS;
-        if (x->nv && !memcmp(&s->vtx[s->nv - 1].id, &ch[i].id, 16) && (s->vtx[s->nv - 1].run & (3u << LP_M_RUN_BITS)) == said
-                  && VRUN(s->vtx[s->nv - 1].run) < (1u << LP_M_RUN_BITS) - 1) { s->vtx[s->nv - 1].run++; continue; }
+        uint64_t said = (uint64_t)(ch[i].said & LP_M_SAID_MASK) << LP_M_RUN_BITS;
+        if (x->nv && !memcmp(&s->vtx[s->nv - 1].id, &ch[i].id, 16) && (s->vtx[s->nv - 1].m & (LP_M_SAID_MASK << LP_M_RUN_BITS)) == said
+                  && VRUN(s->vtx[s->nv - 1].m) < (1u << LP_M_RUN_BITS) - 1) { s->vtx[s->nv - 1].m++; continue; }
         if (s->nv == s->vcap) { s->vcap = s->vcap ? s->vcap * 2 : 16384; s->vtx = xrealloc(s->vtx, s->vcap * sizeof(Vtx)); }
-        s->vtx[s->nv].id = ch[i].id; s->vtx[s->nv].run = 1u | said; s->nv++; x->nv++;
+        s->vtx[s->nv].id = ch[i].id; s->vtx[s->nv].m = 1ull | said; s->nv++; x->nv++;
     }
     s->slot[k] = (uint32_t)++s->n;
     pthread_mutex_unlock(&s->mu);

@@ -62,10 +62,10 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
     Ref pr = text_ref(ctx, (const uint8_t *)phrase_text, strlen(phrase_text));
     Node *pn = table_find(&pr.id); lp_id *ph; int np;
     if (!pn) { ph = &pr.id; np = 1; }
-    else { Shard *s = &shard[pr.id.b[0]]; np = 0; for (uint32_t v = 0; v < pn->nv; v++) np += VRUN(s->vtx[pn->voff + v].run);
+    else { Shard *s = &shard[pr.id.b[0]]; np = 0; for (uint32_t v = 0; v < pn->nv; v++) np += VRUN(s->vtx[pn->voff + v].m);
            ph = malloc(sizeof(lp_id) * np); int k = 0;
            for (uint32_t v = 0; v < pn->nv; v++)
-               for (uint32_t r = 0; r < VRUN(s->vtx[pn->voff + v].run); r++) ph[k++] = s->vtx[pn->voff + v].id; }
+               for (uint32_t r = 0; r < VRUN(s->vtx[pn->voff + v].m); r++) ph[k++] = s->vtx[pn->voff + v].id; }
 
     PGconn *pg = db_connect(conninfo);
     DNode *d = NULL; int nn = 0, cn = 0; IdMap map = { 0 };

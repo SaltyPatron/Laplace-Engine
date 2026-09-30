@@ -54,10 +54,10 @@ int cmd_pull(int argc, char **argv){
     Ref pr = text_ref(CTX[0], (const uint8_t *)prompt, strlen(prompt));
     Node *pn = table_find(&pr.id); lp_id *ph; int np = 0;
     if (!pn || pr.tier <= 2) { ph = malloc(sizeof(lp_id)); ph[0] = pr.id; np = 1; }      /* a word is one constituent of what holds it: itself */
-    else { Shard *s = &shard[pr.id.b[0]]; for (uint32_t v = 0; v < pn->nv; v++) np += (int)VRUN(s->vtx[pn->voff + v].run);
+    else { Shard *s = &shard[pr.id.b[0]]; for (uint32_t v = 0; v < pn->nv; v++) np += (int)VRUN(s->vtx[pn->voff + v].m);
            ph = malloc(sizeof(lp_id) * (size_t)np); int k = 0;
            for (uint32_t v = 0; v < pn->nv; v++)
-               for (uint32_t r = 0; r < VRUN(s->vtx[pn->voff + v].run); r++) ph[k++] = s->vtx[pn->voff + v].id; }
+               for (uint32_t r = 0; r < VRUN(s->vtx[pn->voff + v].m); r++) ph[k++] = s->vtx[pn->voff + v].id; }
     char idt[33]; id_text(&pr.id, idt);
     firmware_say(&fw, FW_PULL);
     printf("prompt     %s   tier %d   %d constituent%s", idt, pr.tier, np, np == 1 ? "" : "s");
