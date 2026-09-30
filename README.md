@@ -7,6 +7,7 @@ Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github
 | Command | What it does |
 | --- | --- |
 | `laplace tier0` | generates tier 0 from the Unicode data and prints its fingerprint |
+| `laplace highway` | generates the highway: the types the resources list (parts of speech, relations, concepts, classes, frames, rolesets) and the mappings between them, a perf-cache beside tier 0 |
 | `laplace deploy` | makes a database a Laplace database: the database itself if the server does not have it, extensions, content schema, semantics, its tier 0 |
 | `laplace ingest` | every source, in the order `recipes/order` gives, each with its own log; what is recorded already is passed over |
 | `laplace ingest source \| file...` | a source by its name, or files, through their recipes: decompose on every core, deduplicate trunk to leaf, record, attest |

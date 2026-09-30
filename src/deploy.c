@@ -67,6 +67,8 @@ int cmd_deploy(int argc, char **argv){
       snprintf(q, sizeof q, "SET laplace.tier0 = %s", esc); PQclear(PQexec(pg, q)); PQfreemem(esc);
       esc = PQescapeLiteral(pg, lp_flags_path(), strlen(lp_flags_path()));
       snprintf(q, sizeof q, "ALTER DATABASE %s SET laplace.flags = %s", db, esc); if (!run(pg, q, "the flags that go with it")) return 1;
+      PQfreemem(esc); esc = PQescapeLiteral(pg, lp_highway_path(), strlen(lp_highway_path()));
+      snprintf(q, sizeof q, "ALTER DATABASE %s SET laplace.highway = %s", db, esc); if (!run(pg, q, "the highway: the types, and the mappings between them")) return 1;
       PQfreemem(esc); PQfreemem(db); }
     char *have = one(pg, "SELECT 1 FROM pg_class WHERE relname = 'entity' AND relkind = 'p'");
     if (have) printf("  %-52s %9s\n", "content schema", "present"); else { char *s = sql_file("schema.sql"); if (!run(pg, s, "content schema: entity, physicality")) return 1; free(s); }
@@ -102,6 +104,11 @@ int cmd_status(int argc, char **argv){
     const lp_tier0_record *mine = lp_tier0_map(NULL);
     if (mine && fp) { uint8_t h[32]; char hex[65]; lp_tier0_fingerprint(mine, h); for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", h[i]);
                       printf("           %s\n", strcmp(hex, fp) ? "DIFFERS from this engine's tier 0: the two would give the same content different coordinates" : "the same as this engine's"); }
+    { char *hw = one(pg, "SELECT current_setting('laplace.highway', true)"), *hfp = one(pg, "SELECT laplace_highway_fingerprint()"); const lp_highway *h = lp_highway_map(NULL);
+      printf("highway    %s\n           %s\n", hw && *hw ? hw : "(the extension's default)", hfp ? hfp : "(not generated: laplace highway)");
+      if (h && hfp) { uint8_t b[32]; char hex[65]; lp_highway_fingerprint(h, b); for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", b[i]);
+                      printf("           %s\n", strcmp(hex, hfp) ? "DIFFERS from this engine's highway: the two would give a type different slots" : "the same as this engine's"); }
+      free(hw); free(hfp); }
 
     PGresult *r = PQexec(pg, "SELECT p.tier, sum(c.reltuples)::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))) "
                              "FROM pg_class c JOIN LATERAL (SELECT (regexp_match(c.relname, '^entity_t([0-9]+|x)(_[0-9a-f])?$'))[1] AS tier) p ON p.tier IS NOT NULL "
