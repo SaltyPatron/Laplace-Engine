@@ -69,6 +69,7 @@ int cmd_status(int argc, char **argv);
 int cmd_sources(int argc, char **argv);
 int cmd_tier0(int argc, char **argv);
 int cmd_flags(int argc, char **argv);
+int cmd_highway(int argc, char **argv);
 int cmd_bench(int argc, char **argv);
 int cmd_model(int argc, char **argv);
 

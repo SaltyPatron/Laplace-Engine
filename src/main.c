@@ -1,6 +1,7 @@
 /* laplace: Laplace itself, one program.
  *
  *   laplace tier0   generate tier 0 from the Unicode data, and print its fingerprint
+ *   laplace highway generate the highway: the types the resources list, and the mappings between them
  *   laplace deploy  make a database a Laplace database: extensions, schema, semantics, settings
  *   laplace ingest  files through their recipes: decompose, deduplicate trunk to leaf, record, attest
  *   laplace forget  what one witness attested, taken back out
@@ -62,6 +63,7 @@ PGresult *db_ask(PGconn *pg, const char *sql, int n, const char *const *v, const
 static const struct { const char *name; int (*run)(int, char **); const char *what; } CMD[] = {
     { "tier0",  cmd_tier0,  "generate tier 0 from the Unicode data" },
     { "flags",  cmd_flags,  "generate the flags that go with tier 0, from the standard's own lists" },
+    { "highway", cmd_highway, "generate the highway: the types, from the resources that list them, and the mappings between them" },
     { "deploy", cmd_deploy, "make a database a Laplace database" },
     { "sources", cmd_sources, "the sources there are recipes for, in the order they go in" },
     { "ingest", cmd_ingest, "a source by its name, or files, through their recipes" },
