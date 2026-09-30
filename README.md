@@ -38,6 +38,14 @@ LAPLACE_CONNINFO="host=/tmp port=5432 user=laplace dbname=NAME" ./deploy.sh
 
 A source is not begun when the database's volume has not the room the source was measured to take (`room` in its `source` file); that is said, and the run goes on to the next.
 
+## On the local network
+
+```sh
+sudo ./lan.sh                                      # once: the server reachable from the LAN as laplace, scram over TLS
+```
+
+`lan.sh` is the one step that needs root, because `pg_hba.conf` and the certificate are in postgres's data directory: it adds the rule for `$LAPLACE_LAN` (default 192.168.1.0/24), makes the certificate, turns `ssl` on, restarts the server so `listen_addresses = '*'` takes effect, and then connects over TCP with the password the way a client on the network would. Its output is kept under `$LAPLACE_WORK/logs/root`. The role's password is in the operator's `~/.pgpass`.
+
 ## Firmware
 
 How a pull reads the records is not in the program and not in the records: it is a firmware, a file of decisions, one for each human being. `firmware/program.firmware` is the program's own and says what a firmware can decide; `$LAPLACE_FIRMWARE`, or `--firmware FILE` on `pull`, `hop`, `translate` and `degrees`, names another. The same records pulled under another firmware give another selection, and no standing changes.

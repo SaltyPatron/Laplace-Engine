@@ -23,4 +23,6 @@ step deploy     laplace deploy
 step ingest     laplace ingest
 step status     laplace status
 step bench      laplace bench
+ss -ltn 2>/dev/null | grep -q "0.0.0.0:5432\|\*:5432" || echo "
+The server listens on localhost only: sudo ./lan.sh makes it reachable on $LAPLACE_LAN (the one step that needs root)."
 echo; echo "=== done   $(date -u +%H:%M:%S)   $log"
