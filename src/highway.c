@@ -80,7 +80,7 @@ static int attr(const char *el, const char *name, char *out, size_t cap){
 static uint64_t nslots_of(const char *name){ List *l = list_named(name); return l ? l->count : 0; }
 
 /* ---- WordNet 3.0's sense keys and offsets, resolved to ILI through CILI's map: a resolution table, never recorded */
-typedef struct { char key[64]; int64_t ili; } Sense;
+typedef struct { char key[64]; int64_t ili; } Sense;              /* a resource's key, and the slot it points at (the list is the key's prefix) */
 static Sense *senses; static size_t nsenses, csenses; static uint32_t *sense_map; static size_t sense_cap;
 static uint64_t skey(const char *s){ uint64_t h = 1469598103934665603ull; for (; *s; s++) h = (h ^ (uint8_t)*s) * 1099511628211ull; return h; }
 static void sense_put(const char *key, int64_t ili){
@@ -269,8 +269,15 @@ int cmd_highway(int argc, char **argv){
     int bit = 8; fprintf(o, "mask\tkind\t0\t8\n");
     for (int i = 0; i < nlists; i++) if (lists[i].count && lists[i].count <= 64 && bit + (int)lists[i].count <= 256) { fprintf(o, "mask\t%s\t%d\t%u\n", lists[i].name, bit, lists[i].count); bit += (int)lists[i].count; }
     fclose(o);
+    /* the keys the resources point at their types with, beside the highway: resolved by readers, recorded nowhere */
+    static const struct { const char *prefix, *list; } K[] = { { "ili:", "ili" }, { "vn:", "vnclass" }, { "fn:", "fnframe" }, { "pb:", "pbroleset" }, { "va:", "vaframe" } };
+    snprintf(lay, sizeof lay, "%s.keys", outp); o = fopen(lay, "w"); if (!o) { perror(lay); return 1; } size_t nkeys = 0;
+    fprintf(o, "# The keys the resources point at their types with: list, the key as the resource writes it, the slot. Resolved by readers, recorded nowhere.\n");
+    for (size_t i = 0; i < nsenses; i++) for (size_t j = 0; j < sizeof K / sizeof *K; j++) { size_t pl = strlen(K[j].prefix);
+        if (!strncmp(senses[i].key, K[j].prefix, pl) && senses[i].ili >= 0) { fprintf(o, "%s\t%s\t%lld\n", K[j].list, senses[i].key + pl, (long long)senses[i].ili); nkeys++; } }
+    fclose(o);
     uint8_t fp[32]; blake3_hasher hs; blake3_hasher_init(&hs); blake3_hasher_update(&hs, rec, nrec * sizeof(lp_tier0_record)); for (size_t i = 0; i < nedges; i++) { uint32_t pr[2] = { edges[i].from, edges[i].to }; blake3_hasher_update(&hs, pr, 8); } blake3_hasher_finalize(&hs, fp, 32);
-    printf("\n%s: %'zu types in %d lists, %'zu edges; layout %s; %d of 256 mask bits   (%.1f s)\nfingerprint ", outp, nrec, nlists, nedges, lay, bit, now() - T);
+    printf("\n%s: %'zu types in %d lists, %'zu edges, %'zu keys beside them; %d of 256 mask bits   (%.1f s)\nfingerprint ", outp, nrec, nlists, nedges, nkeys, bit, now() - T);
     for (int i = 0; i < 32; i++) printf("%02x", fp[i]); printf("\n");
     (void)nslots_of;
     return 0;

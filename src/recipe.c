@@ -83,8 +83,14 @@
  *                                 the name stands only among things of its kind: the thing is the path of the kind
  *                                 (the element's name, unless the source writes the kind under another name, KIND)
  *                                 and the name. NAME written . is the element's own text
- *   refer [ELEMENT.]ATTRIBUTE KIND
- *                                 the attribute's value names a thing of that kind, and is recorded as that thing
+ *   key ATTRIBUTE...              attributes that are the source's keys: how it points at its things (id unless said).
+ *                                 A key resolves to the thing; it is content of nothing and is never recorded
+ *   type ATTRIBUTE LIST           the attribute's value is the source's key of a type in the highway's LIST (an ILI
+ *                                 number): it is read as that type's content, never as the key
+ *   refer [ELEMENT.]ATTRIBUTE ELEMENT [within]
+ *                                 the attribute's values are keys of things of ELEMENT: each is read as that thing
+ *                                 (within: as the thing that element is inside). An identity over such an attribute
+ *                                 is the composition of the things it refers to, in the order written
  *   words RECORD WORD...          an element RECORD is a record of words (a sentence): the text of each element WORD
  *                                 inside it is a word, and that element's attributes are said of the word, within the
  *                                 record. What the record is about is the path of its words, in order
@@ -393,9 +399,14 @@ static int recipe_parse(const char *path, Recipe *r){
         }
         else if (!strcmp(tok, "subject-kind") && b) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(b->subject_kind, 64, "%s", tok); }
         else if (!strcmp(tok, "refer") && r->nrefer < 48) {
-            char *at = strtok(NULL, " \t\r\n"), *kd = strtok(NULL, " \t\r\n"); if (!at || !kd) { fprintf(stderr, "%s: refer [ELEMENT.]ATTRIBUTE KIND\n", path); fclose(f); return 0; }
+            char *at = strtok(NULL, " \t\r\n"), *kd = strtok(NULL, " \t\r\n"), *wi = strtok(NULL, " \t\r\n"); if (!at || !kd) { fprintf(stderr, "%s: refer [ELEMENT.]ATTRIBUTE ELEMENT [within]\n", path); fclose(f); return 0; }
             char *dot = strchr(at, '.'); r->refer[r->nrefer].el[0] = 0; if (dot) { *dot = 0; snprintf(r->refer[r->nrefer].el, 64, "%s", at); at = dot + 1; }
-            snprintf(r->refer[r->nrefer].attr, 64, "%s", at); snprintf(r->refer[r->nrefer++].kind, 64, "%s", kd);
+            snprintf(r->refer[r->nrefer].attr, 64, "%s", at); snprintf(r->refer[r->nrefer].kind, 64, "%s", kd); r->refer[r->nrefer++].within = wi && !strcmp(wi, "within");
+        }
+        else if (!strcmp(tok, "key")) { while ((tok = strtok(NULL, " \t\r\n")) && r->nkey < 16) snprintf(r->key[r->nkey++], 64, "%s", tok); }
+        else if (!strcmp(tok, "type") && r->ntype < 16) {
+            char *at = strtok(NULL, " \t\r\n"), *ls = strtok(NULL, " \t\r\n"); if (!at || !ls) { fprintf(stderr, "%s: type ATTRIBUTE LIST\n", path); fclose(f); return 0; }
+            snprintf(r->type[r->ntype].attr, 64, "%s", at); snprintf(r->type[r->ntype++].list, 32, "%s", ls);
         }
         else if (!strcmp(tok, "span") && r->nstretch < 8) {
             char *el = strtok(NULL, " \t\r\n"), *a = strtok(NULL, " \t\r\n"), *b2 = strtok(NULL, " \t\r\n"), *tx = strtok(NULL, " \t\r\n"), *inc = strtok(NULL, " \t\r\n");
