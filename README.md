@@ -10,7 +10,7 @@ Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github
 | `laplace deploy` | makes a database a Laplace database: the database itself if the server does not have it, extensions, content schema, semantics, its tier 0 |
 | `laplace ingest` | every source, in the order `recipes/order` gives, each with its own log; what is recorded already is passed over |
 | `laplace ingest source \| file...` | a source by its name, or files, through their recipes: decompose on every core, deduplicate trunk to leaf, record, attest |
-| `laplace index` | builds the container (GIN) and 4D (GiST) indexes after a bulk load |
+| `laplace index` | the indexes again, if one was dropped; `laplace deploy` makes them all from the start |
 | `laplace text text` | a text's ID, tier, coordinate and constituents, computed here without the database |
 | `laplace pull prompt` | the forward pass: the prompt broken down, and the segments and strands its firmware takes |
 | `laplace hop text` | everything attested about an entity, by how hard each strand tugs back, and the content that holds it |
@@ -34,7 +34,7 @@ Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github
 LAPLACE_CONNINFO="host=/tmp port=5432 user=laplace dbname=NAME" ./deploy.sh
 ```
 
-`deploy.sh` runs the five steps of Deployment in order: build and install, tier 0 and its flags, `laplace deploy`, `laplace ingest`, `laplace index`, then `laplace status` and `laplace bench`. It can be run again: what is built is not rebuilt, what is recorded is passed over by its bytes, and a run that was cut off is taken up where it stopped. Each step's output is kept under `$LAPLACE_WORK/logs/deploy`, and each source's under `$LAPLACE_WORK/logs/ingest`.
+`deploy.sh` runs the five steps of Deployment in order: build and install, tier 0 and its flags, `laplace deploy`, `laplace ingest`, then `laplace status` and `laplace bench`. It can be run again: what is built is not rebuilt, what is recorded is passed over by its bytes, and a run that was cut off is taken up where it stopped. Each step's output is kept under `$LAPLACE_WORK/logs/deploy`, and each source's under `$LAPLACE_WORK/logs/ingest`.
 
 A source is not begun when the database's volume has not the room the source was measured to take (`room` in its `source` file); that is said, and the run goes on to the next.
 

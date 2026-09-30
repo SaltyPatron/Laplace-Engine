@@ -21,7 +21,6 @@ step build      "$here/build.sh" install
 [ -s "${LAPLACE_TIER0%.bin}.flags" ] || step flags laplace flags
 step deploy     laplace deploy
 step ingest     laplace ingest
-step index      laplace index
 step status     laplace status
 step bench      laplace bench
 echo; echo "=== done   $(date -u +%H:%M:%S)   $log"

@@ -2,7 +2,7 @@
  * it, so there is one way to stand a database up and one place that says what it holds.
  *
  *   laplace deploy [-d conninfo]     the database if it is not there, extensions, content schema, semantics, its tier 0
- *   laplace index  [-d conninfo]     the indexes, after a bulk load
+ *   laplace index  [-d conninfo]     the indexes again, after one was dropped
  *   laplace status [-d conninfo]     what it holds */
 #include "engine.h"
 #include <locale.h>
@@ -73,6 +73,8 @@ int cmd_deploy(int argc, char **argv){
     free(have);
     { char *s = sql_file("semantics.sql"); if (!run(pg, s, "semantics: witness, attestation, consensus")) return 1; free(s); }
     { char *s = sql_file("lookup.sql"); if (!run(pg, s, "lookups ingestion needs: IDs")) return 1; free(s); }
+    /* every index, from the start: a deployed database answers from its first row, and every load keeps them */
+    { char *s = sql_file("indexes.sql"); if (!run(pg, s, "containers (GIN), 4D (GiST), Hilbert, the ledger")) return 1; free(s); }
     PQfinish(pg);
     return cmd_status(argc, argv);
 }

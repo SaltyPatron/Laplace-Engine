@@ -67,7 +67,7 @@ static const struct { const char *name; int (*run)(int, char **); const char *wh
     { "ingest", cmd_ingest, "a source by its name, or files, through their recipes" },
     { "forget", cmd_forget, "what one witness attested, taken back out" },
     { "sweep",  cmd_sweep,  "whatever nothing holds, removed" },
-    { "index",  cmd_index,  "build the indexes after a bulk load" },
+    { "index",  cmd_index,  "the indexes, if one was dropped: deploy makes them" },
     { "tree",   cmd_tree,   "a file's syntax tree, as its recipe's grammar reads it" },
     { "text",   cmd_text,   "a text's ID, coordinate and constituents, computed here" },
     { "pull",   cmd_pull,   "the forward pass: a prompt, and the segments and strands its firmware takes" },
