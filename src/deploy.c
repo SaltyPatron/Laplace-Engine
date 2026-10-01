@@ -6,6 +6,7 @@
  *   laplace status [-d conninfo]     what it holds */
 #include "engine.h"
 #include <locale.h>
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,6 +66,26 @@ int cmd_deploy(int argc, char **argv){
       for (int i = 0; i < n; i++) { char q[256]; snprintf(q, sizeof q, "ALTER EXTENSION laplace ADD TABLE %s", PQgetvalue(r, i, 0)); PGresult *a = PQexec(pg, q); PQclear(a); }
       if (n) printf("  %-52s %9d\n", "tables from before the extension owned them, adopted", n); PQclear(r); }
     if (!run(pg, "SELECT laplace_schema_indexes()", "every index, made where one is missing")) return 1;
+    PQfinish(pg);
+    /* the highway's contents as entities: a type's content (a definition, a frame's name, a lemma and a roleset's name)
+     * is what a claim that holds the type renders and pulls through, whether or not any file wrote it as content */
+    { char tp[4300]; snprintf(tp, sizeof tp, "%s.texts", lp_highway_path()); FILE *f = fopen(tp, "r");
+      if (!f) printf("  %-52s %s\n", "the highway's contents", "not beside the highway: laplace highway writes them");
+      else { double t = now(); int threads = omp_get_num_procs(); table_init(); ctx_open(threads); Ctx *cx = CTX[0]; char *line = NULL; size_t cap = 0; uint64_t n = 0, wrong = 0; const lp_highway *h = lp_highway_map(NULL);
+        while (getline(&line, &cap, f) > 0) { if (line[0] == '#') continue; char *save = NULL, *ln = strtok_r(line, "\t", &save), *sl = strtok_r(NULL, "\t", &save), *rest = save; if (!ln || !sl || !rest) continue;
+            size_t L = strlen(rest); while (L && (rest[L - 1] == '\n' || rest[L - 1] == '\r')) rest[--L] = 0;
+            char *fld[3]; int nf = 0; int is_pair = !strncmp(rest, "P\t", 2); char *p = is_pair ? rest + 2 : rest;
+            for (char *q = p; nf < 3; ) { fld[nf++] = q; char *tab = NULL; for (char *z = q; *z; z++) { if (*z == '\\' && z[1]) { z++; continue; } if (*z == '\t') { tab = z; break; } } if (!tab) break; *tab = 0; q = tab + 1; }
+            for (int i = 0; i < nf; i++) { char *w = fld[i]; for (char *z = fld[i]; *z; z++) { if (*z == '\\' && z[1]) { z++; *w++ = *z == 't' ? '\t' : *z == 'n' ? '\n' : *z == 'r' ? '\r' : *z; } else *w++ = *z; } *w = 0; }
+            Ref r; if (!is_pair) r = text_ref(cx, (const uint8_t *)fld[0], strlen(fld[0]));
+            else { if (nf < 2) continue; Ref two[2] = { text_ref(cx, (const uint8_t *)fld[0], strlen(fld[0])), text_ref(cx, (const uint8_t *)fld[1], strlen(fld[1])) }; r = compose(two, 2, (uint8_t)((two[0].tier > two[1].tier ? two[0].tier : two[1].tier) + 1)); }
+            const lp_list *l = h ? lp_highway_list(h, ln) : NULL; const lp_tier0_record *x = l ? lp_highway_at(h, l, (uint32_t)strtoul(sl, NULL, 10)) : NULL; if (!x || memcmp(&x->id, &r.id, 16)) wrong++; n++; }
+        free(line); fclose(f);
+        extern int load_whole; load_whole = 1; File one = { 0 }; one.path = "the highway's contents"; LoadStats st = { 0 };
+        if (load(conn_arg(argc, argv), threads, &one, 1, &st)) return 1;
+        printf("  %-52s %'llu types, %'llu entities new, %'llu of them not the highway's ID   %.1f s\n", "the highway's contents, as entities", (unsigned long long)n, (unsigned long long)st.ent_rows, (unsigned long long)wrong, now() - t); }
+    }
+    pg = db_connect(conn_arg(argc, argv));
     { char *db = PQescapeIdentifier(pg, PQdb(pg), strlen(PQdb(pg))), q[256]; snprintf(q, sizeof q, "ALTER DATABASE %s SET enable_parallel_append = off", db); PQclear(PQexec(pg, q)); PQfreemem(db); }
     PQfinish(pg);
     return cmd_status(argc, argv);

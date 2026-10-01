@@ -133,7 +133,7 @@ static void record_of(const EW *w, Events *ev, Ref node, const Ref *claim, int n
  * whichever part of the file asks first: a synset is what its members are, a sense is the word it is inside with its
  * synset, and the keys themselves are recorded nowhere. */
 #include <pthread.h>
-typedef struct { uint64_t h; uint32_t el, start, end, parent; int state, owner; Ref X; } KeyEnt;     /* state: 0 not yet, 1 resolving (by the thread owner), 2 resolved (X valid), 3 nothing */
+typedef struct { uint64_t h; uint32_t el, start, end; uint64_t parent; int state, owner; Ref X; } KeyEnt;     /* parent: the key hash of the keyed element it is inside, 0 for none (the table grows, so never a position); state: 0 not yet, 1 resolving (by the thread owner), 2 resolved (X valid), 3 nothing */
 struct KeyIndex { KeyEnt *t; size_t cap, n; char (*elname)[64]; int nel; const uint8_t *src; size_t n_src; pthread_mutex_t mu; pthread_cond_t cv; };
 static uint64_t kfnv(const uint8_t *s, size_t n, uint32_t el){ uint64_t h = 1469598103934665603ull ^ ((uint64_t)el << 40); for (size_t i = 0; i < n; i++) h = (h ^ s[i]) * 1099511628211ull; return h | 1; }
 static int omitted(const EW *w, TSNode nm){ const Recipe *r = w->r; for (int i = 0; i < r->nomit; i++) if (named(w, nm, r->omit[i])) return 1; return 0; }
@@ -149,7 +149,7 @@ static int elname_index(KeyIndex *k, const uint8_t *nm, size_t nl){
     for (int i = 0; i < k->nel; i++) if (strlen(k->elname[i]) == nl && !memcmp(k->elname[i], nm, nl)) return i;
     if (k->nel == 256 || nl >= 64) return -1; k->elname = xrealloc(k->elname, sizeof(*k->elname) * (size_t)(k->nel + 1)); memcpy(k->elname[k->nel], nm, nl); k->elname[k->nel][nl] = 0; return k->nel++;
 }
-static void key_put(KeyIndex *k, uint64_t h, uint32_t el, uint32_t start, uint32_t parent){
+static void key_put(KeyIndex *k, uint64_t h, uint32_t el, uint32_t start, uint64_t parent){
     if ((k->n + 1) * 2 > k->cap) { size_t nc = k->cap ? k->cap * 2 : 1 << 16; KeyEnt *t = calloc(nc, sizeof(KeyEnt)); for (size_t i = 0; i < k->cap; i++) if (k->t[i].h) { size_t x = k->t[i].h & (nc - 1); while (t[x].h) x = (x + 1) & (nc - 1); t[x] = k->t[i]; } free(k->t); k->t = t; k->cap = nc; }
     size_t x = h & (k->cap - 1); while (k->t[x].h) { if (k->t[x].h == h) return; x = (x + 1) & (k->cap - 1); }           /* the first stands */
     k->t[x] = (KeyEnt){ h, el, start, 0, parent, 0, { 0 } }; k->n++;
@@ -159,7 +159,7 @@ static KeyEnt *key_find(const KeyIndex *k, uint64_t h){ if (!k || !k->cap) retur
 static KeyIndex *keys_index(const Recipe *r, const uint8_t *src, size_t n){
     if (!r->nidentity && !r->nrefer) return NULL;
     KeyIndex *k = calloc(1, sizeof *k); k->src = src; k->n_src = n; pthread_mutex_init(&k->mu, NULL); pthread_cond_init(&k->cv, NULL);
-    typedef struct { uint32_t ent; int keyed; } Open; Open *stack = malloc(sizeof(Open) * 4096); int depth = 0, scap = 4096;
+    typedef struct { uint64_t h; int keyed; } Open; Open *stack = malloc(sizeof(Open) * 4096); int depth = 0, scap = 4096;
     for (size_t i = 0; i < n; ) {
         const uint8_t *lt = memchr(src + i, '<', n - i); if (!lt) break; size_t at = (size_t)(lt - src);
         if (at + 1 >= n) break;
@@ -168,7 +168,7 @@ static KeyIndex *keys_index(const Recipe *r, const uint8_t *src, size_t n){
                                    const uint8_t *e = memchr(src + at, '>', n - at); i = e ? (size_t)(e - src) + 1 : n; continue; }
         if (src[at + 1] == '?') { const uint8_t *e = memmem(src + at + 2, n - at - 2, "?>", 2); i = e ? (size_t)(e - src) + 2 : n; continue; }
         if (src[at + 1] == '/') { const uint8_t *e = memchr(src + at, '>', n - at); size_t end = e ? (size_t)(e - src) + 1 : n;
-            if (depth) { depth--; if (stack[depth].keyed) k->t[stack[depth].ent].end = (uint32_t)end; } i = end; continue; }
+            if (depth) { depth--; if (stack[depth].keyed) { KeyEnt *ce = key_find(k, stack[depth].h); if (ce) ce->end = (uint32_t)end; } } i = end; continue; }
         /* a start tag: its name, its attributes up to '>' (quotes respected), whether it closes itself */
         size_t p = at + 1, n0 = p; while (p < n && src[p] != ' ' && src[p] != '\t' && src[p] != '\n' && src[p] != '\r' && src[p] != '>' && src[p] != '/') p++;
         size_t nl = p - n0; const uint8_t *kv = NULL; size_t kn = 0; int self = 0;
@@ -179,12 +179,12 @@ static KeyIndex *keys_index(const Recipe *r, const uint8_t *src, size_t n){
             if (p < n && src[p] == '=') { p++; if (p < n && (src[p] == '"' || src[p] == '\'')) { uint8_t q = src[p++]; size_t v0 = p; while (p < n && src[p] != q) p++; if (!kv && key_attr_bytes(r, src + a0, al)) { kv = src + v0; kn = p - v0; } if (p < n) p++; } }
         }
         size_t end = p < n ? p + 1 : n;
-        int keyed = 0; uint32_t ent = 0;
+        int keyed = 0; uint64_t ent = 0;
         if (kv && kn) { int el = elname_index(k, src + n0, nl);
-            if (el >= 0) { uint32_t parent = UINT32_MAX; for (int d = depth - 1; d >= 0 && parent == UINT32_MAX; d--) if (stack[d].keyed) parent = stack[d].ent;
+            if (el >= 0) { uint64_t parent = 0; for (int d = depth - 1; d >= 0 && !parent; d--) if (stack[d].keyed) parent = stack[d].h;
                 uint64_t h = kfnv(kv, kn, (uint32_t)el); KeyEnt *have = key_find(k, h);
                 if (!have) { key_put(k, h, (uint32_t)el, (uint32_t)at, parent); have = key_find(k, h); }
-                if (have) { keyed = 1; ent = (uint32_t)(have - k->t); if (self) have->end = (uint32_t)end; } } }
+                if (have) { keyed = 1; ent = h; if (self) have->end = (uint32_t)end; } } }
         if (!self) { if (depth == scap) { scap *= 2; stack = xrealloc(stack, sizeof(Open) * (size_t)scap); } stack[depth++] = (Open){ ent, keyed }; }
         i = end;
     }
@@ -208,8 +208,8 @@ static Ref key_thing(const EW *w, KeyIndex *k, uint32_t el, const uint8_t *kv, s
 static Ref referred(const EW *w, KeyIndex *k, int z, const uint8_t *kv, size_t kn, int *has){
     const Recipe *r = w->r; *has = 0; int el = -1; for (int i = 0; i < k->nel; i++) if (!strcmp(k->elname[i], r->refer[z].kind)) el = i; if (el < 0) return (Ref){ 0 };
     if (!r->refer[z].within) return key_thing(w, k, (uint32_t)el, kv, kn, has);
-    KeyEnt *e = key_find(k, kfnv(kv, kn, (uint32_t)el)); if (!e || e->parent == UINT32_MAX) return (Ref){ 0 };
-    KeyEnt *pe = &k->t[e->parent]; const uint8_t *pk; size_t pkn; if (!tag_attr(k->src, k->n_src, pe->start, r->nkey ? r->key[0] : "id", &pk, &pkn)) return (Ref){ 0 };
+    KeyEnt *e = key_find(k, kfnv(kv, kn, (uint32_t)el)); if (!e || !e->parent) return (Ref){ 0 };
+    KeyEnt *pe = key_find(k, e->parent); if (!pe) return (Ref){ 0 }; const uint8_t *pk; size_t pkn; if (!tag_attr(k->src, k->n_src, pe->start, r->nkey ? r->key[0] : "id", &pk, &pkn)) return (Ref){ 0 };
     return key_thing(w, k, pe->el, pk, pkn, has);
 }
 /* A type by the source's key of it: the highway's record, as a reference, from the first of the attribute's lists that knows the key. */
@@ -249,8 +249,8 @@ static Ref key_thing(const EW *w, KeyIndex *k, uint32_t el, const uint8_t *kv, s
         else if (r->identity[i].res == 1) { char h[16]; if (vn <= 8) { memcpy(h, v, vn); h[vn] = 0; char *en; unsigned long cp = strtoul(h, &en, 16); if (!*en && cp < LP_NCP) { X = atom((uint32_t)cp); found = 1; } } }
         else { X = text_bytes(v, vn); found = 1; }
         if (found && r->identity[i].kind) { X = pair_of(r->identity[i].as[0] ? kind_of(w, r->identity[i].as) : string_ref((const uint8_t *)elname, strlen(elname)), X); }
-        else if (found && r->identity[i].within && e->parent != UINT32_MAX) {
-            KeyEnt *pe = &k->t[e->parent]; const uint8_t *pk; size_t pkn; int h2 = 0; Ref P = { 0 };
+        else if (found && r->identity[i].within && e->parent && key_find(k, e->parent)) {
+            KeyEnt *pe = key_find(k, e->parent); const uint8_t *pk; size_t pkn; int h2 = 0; Ref P = { 0 };
             if (tag_attr(src, n, pe->start, r->nkey ? r->key[0] : "id", &pk, &pkn)) P = key_thing(w, k, pe->el, pk, pkn, &h2);
             if (h2) X = pair_of(P, X); }
     }

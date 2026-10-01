@@ -45,8 +45,14 @@ static int64_t slot_of(Ref r){
     slot_map[k] = (uint32_t)nrec + 1; nrec++; cur->count++;
     return (int64_t)x->rank;
 }
-static Ref text(const char *s, size_t n){ return lp_text_decompose(ctx, (const uint8_t *)s, n, NULL, NULL); }
-static Ref pair(Ref a, Ref b){ Ref t[2] = { a, b }; return lp_ref_compose(t, 2, (uint8_t)((a.tier > b.tier ? a.tier : b.tier) + 1)); }
+/* The content of every type, by its ID: the text it is, or the two texts a pair is. Written beside the highway for
+ * laplace deploy to record as entities: a claim that holds a type renders and pulls through the type's content. */
+typedef struct { lp_id id; char *t; lp_id a, b; int is_pair; } Content; static Content *contents; static size_t ncontents, ccontents;
+static Content *content_of(const lp_id *id){ for (size_t i = ncontents; i-- > 0; ) if (!memcmp(&contents[i].id, id, 16)) return &contents[i]; return NULL; }
+static void content_put(Content c){ if (ncontents == ccontents) { ccontents = ccontents ? ccontents * 2 : 4096; contents = xrealloc(contents, ccontents * sizeof(Content)); } contents[ncontents++] = c; }
+static Ref text(const char *s, size_t n){ Ref r = lp_text_decompose(ctx, (const uint8_t *)s, n, NULL, NULL); Content c = { r.id, strndup(s, n), { { 0 } }, { { 0 } }, 0 }; content_put(c); return r; }
+static Ref pair(Ref a, Ref b){ Ref t[2] = { a, b }; Ref r = lp_ref_compose(t, 2, (uint8_t)((a.tier > b.tier ? a.tier : b.tier) + 1)); Content c = { r.id, NULL, a.id, b.id, 1 }; content_put(c); return r; }
+static void content_write(FILE *o, const char *s){ for (; *s; s++) { if (*s == '\\' || *s == '\t' || *s == '\n' || *s == '\r') { fputc('\\', o); fputc(*s == '\\' ? '\\' : *s == '\t' ? 't' : *s == '\n' ? 'n' : 'r', o); } else fputc(*s, o); } }
 static List *list_begin(const char *name, const char *say){
     lists = xrealloc(lists, sizeof(List) * (size_t)(nlists + 1)); cur = &lists[nlists++]; memset(cur, 0, sizeof *cur);
     snprintf(cur->name, sizeof cur->name, "%s", name); snprintf(cur->say, sizeof cur->say, "%s", say); cur->first = (uint32_t)nrec; return cur;
@@ -282,6 +288,21 @@ int cmd_highway(int argc, char **argv){
         if (!strncmp(senses[i].key, K[j].prefix, pl) && senses[i].ili >= 0) { if (!K[j].as_written || K[j].both) { fprintf(o, "%s\t%s\t%lld\n", K[j].list, senses[i].key + pl, (long long)senses[i].ili); nkeys++; }
             if (K[j].as_written || K[j].both) { fprintf(o, "%s\t%s\t%lld\n", K[j].list, senses[i].key, (long long)senses[i].ili); nkeys++; } } }
     fclose(o);
+    /* the contents beside the highway: list, slot, the text (a pair: its two texts), escaped; one line per record */
+    { snprintf(lay, sizeof lay, "%s.texts", outp); o = fopen(lay, "w"); if (!o) { perror(lay); return 1; } size_t missing = 0;
+      /* the contents are found by ID; a hash over them, since 155,000 records against 300,000 contents is not a scan */
+      size_t hc = 1; while (hc < ncontents * 2) hc *= 2; uint32_t *hm = calloc(hc, 4);
+      for (size_t i = 0; i < ncontents; i++) { uint64_t k = hkey(&contents[i].id) & (hc - 1); while (hm[k]) k = (k + 1) & (hc - 1); hm[k] = (uint32_t)i + 1; }
+      #define CONTENT(idp) ({ Content *c_ = NULL; uint64_t k_ = hkey(idp) & (hc - 1); while (hm[k_]) { Content *x_ = &contents[hm[k_] - 1]; if (!memcmp(&x_->id, (idp), 16)) { c_ = x_; break; } k_ = (k_ + 1) & (hc - 1); } c_; })
+      fprintf(o, "# The content of every type: list, slot, the text it is, or the two texts a pair is (tab, newline and backslash escaped). Recorded as entities by laplace deploy.\n");
+      for (int l = 0; l < nlists; l++) for (uint32_t s2 = 0; s2 < lists[l].count; s2++) { const lp_tier0_record *x = &rec[lists[l].first + s2]; Content *c = CONTENT(&x->id);
+          if (!c) { missing++; continue; }
+          fprintf(o, "%s\t%u\t", lists[l].name, s2);
+          if (!c->is_pair) content_write(o, c->t);
+          else { Content *a = CONTENT(&c->a), *b = CONTENT(&c->b); fprintf(o, "P\t"); if (a && a->t) content_write(o, a->t); fputc('\t', o); if (b && b->t) content_write(o, b->t); }
+          fputc('\n', o); }
+      #undef CONTENT
+      free(hm); fclose(o); if (missing) printf("  %zu types whose content was not kept\n", missing); }
     uint8_t fp[32]; blake3_hasher hs; blake3_hasher_init(&hs); blake3_hasher_update(&hs, rec, nrec * sizeof(lp_tier0_record)); for (size_t i = 0; i < nedges; i++) { uint32_t pr[2] = { edges[i].from, edges[i].to }; blake3_hasher_update(&hs, pr, 8); } blake3_hasher_finalize(&hs, fp, 32);
     printf("\n%s: %'zu types in %d lists, %'zu edges, %'zu keys beside them; %d of 256 mask bits   (%.1f s)\nfingerprint ", outp, nrec, nlists, nedges, nkeys, bit, now() - T);
     for (int i = 0; i < 32; i++) printf("%02x", fp[i]); printf("\n");
