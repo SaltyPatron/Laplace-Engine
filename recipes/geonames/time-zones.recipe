@@ -8,4 +8,4 @@ header
 
 claims
 subject in TimeZoneId
-attest *
+attest CountryCode "GMT offset*" "DST offset*" "rawOffset*"

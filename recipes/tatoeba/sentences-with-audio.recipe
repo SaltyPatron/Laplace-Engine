@@ -16,4 +16,4 @@ kind Username Username
 
 claims
 subject in "Sentence id"
-attest Username License "Attribution URL"
+attest Username

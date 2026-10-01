@@ -24,4 +24,4 @@ refer geonameid geonames-geoname
 
 claims
 subject in geonameid
-attest *
+attest isolanguage "alternate name" isPreferredName isShortName isColloquial isHistoric

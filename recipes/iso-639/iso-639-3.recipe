@@ -8,4 +8,4 @@ witness SIL Global
 
 claims
 subject in Id
-attest *
+attest Part2B Part2T Part1 Scope Language_Type Ref_Name

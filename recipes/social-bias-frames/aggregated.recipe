@@ -15,4 +15,4 @@ list targetStereotype json
 claims
 together
 subject in post
-attest *
+attest targetMinority targetCategory targetStereotype whoTarget intentYN sexYN offensiveYN dataSource hasBiasedImplication

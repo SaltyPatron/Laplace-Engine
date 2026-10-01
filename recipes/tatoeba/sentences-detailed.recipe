@@ -15,5 +15,5 @@ kind Username Username
 
 claims
 subject in Text
-attest Lang "Date added" "Date last modified"
+attest Lang
 witness in Username

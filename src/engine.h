@@ -167,6 +167,7 @@ typedef struct {
     char witness[128];                                /* the witness's name, recorded as content */
     struct { char el[64], attr[64], as[64]; int res, within, child, kind, own; } identity[48]; int nidentity;   /* within: the name stands only within the thing it is inside; child: the name is the text of an element inside it */     /* XML: the elements that are things, and the attribute that names each (res: 1 a codepoint, 2 codepoints) */
     struct { char el[64], attr[64], kind[64]; int within; } refer[48]; int nrefer;      /* XML: attributes whose values are keys of things of element KIND: each resolves to that thing (within: to the thing it is inside) */
+    char omit[48][64]; int nomit;                                                        /* XML attributes and elements, JSON members, that are a file's bookkeeping (dates, colours, versions, licences): not testimony, read by nothing */
     char key[16][64]; int nkey;                                                          /* XML attributes, JSON members, that are a source's keys: how it points at its things; resolved, never recorded */
     struct { char el[64], attr[64], list[32]; } type[16]; int ntype;                     /* XML attributes, table columns, whose value is a source's key of a type in a highway list: read as the type */
     struct { char el[64], start[32], end[32], text[64]; int inclusive; } stretch[8]; int nstretch;   /* XML: elements that speak of a stretch of a text */

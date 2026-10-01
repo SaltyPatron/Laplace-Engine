@@ -8,4 +8,3 @@ deviation 90
 root $LAPLACE_DATA/.refresh-*/Safety/SGHateCheck/extracted/sghatecheck-*
 except */code/* *.png
 after unicode iso-639 hatecheck
-reads text

@@ -7,6 +7,8 @@ name verbnet-classes
 match *.xml
 grammar xml
 key verbnet_key
+# bookkeeping, read by nothing
+omit xtag descriptionNumber
 identity VNCLASS ID
 identity VNSUBCLASS ID
 identity THEMROLE type

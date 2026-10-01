@@ -23,5 +23,5 @@ score in Review from -1 to 1
 
 claims
 subject in Username "Sentence id"
-attest Review "Date added" "Date last modified"
+attest Review
 witness in Username

@@ -18,4 +18,4 @@ refer geonameid geonames-geoname
 
 claims
 subject in "#ISO"
-attest *
+attest ISO3 ISO-Numeric fips Country Capital "Area(in sq km)" Population Continent tld CurrencyCode CurrencyName Phone Languages geonameid neighbours

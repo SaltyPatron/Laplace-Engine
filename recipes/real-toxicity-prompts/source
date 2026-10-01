@@ -8,4 +8,3 @@ lineage Perspective API
 deviation 90
 root $LAPLACE_DATA/.refresh-*/Safety/RealToxicityPrompts/real-toxicity-prompts-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
 after unicode iso-639
-reads text

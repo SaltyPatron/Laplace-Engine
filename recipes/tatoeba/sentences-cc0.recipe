@@ -8,8 +8,9 @@ escaped \\
 # "\\N: Unknown (rare)."
 empty-matches ^\\\\N$
 columns "Sentence id" Lang Text "Date last modified"
+# the date is bookkeeping, read by nothing
 key "Sentence id"
 
 claims
 subject in Text
-attest Lang "Date last modified"
+attest Lang

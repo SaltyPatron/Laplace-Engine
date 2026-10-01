@@ -8,4 +8,3 @@ deviation 90
 root $LAPLACE_DATA/.refresh-*/Safety/XSTest/extracted/xstest-*
 except */evaluation/* *.gitignore
 after unicode iso-639
-reads text

@@ -8,4 +8,3 @@ root $LAPLACE_DATA/.refresh-*/Safety/MeasuringHateSpeech/measuring-hate-speech-*
 # The files are Parquet, read as they are written out in extracted/.
 except *.parquet */extracted/measuring-hate-speech.tsv
 after unicode iso-639
-reads text

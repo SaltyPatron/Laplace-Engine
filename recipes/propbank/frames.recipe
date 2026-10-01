@@ -6,6 +6,8 @@ name propbank-frames
 match *.xml
 grammar xml
 key id
+# bookkeeping, read by nothing: which releases a roleset is in use in, a link's version, confidence and how it was made
+omit usagenotes version confidence src
 identity predicate lemma
 identity roleset id
 type roleset.id pbroleset

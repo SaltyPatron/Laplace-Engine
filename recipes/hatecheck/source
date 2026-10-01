@@ -6,4 +6,3 @@ witness HateCheck
 deviation 90
 root $LAPLACE_DATA/.refresh-*/Safety/HateCheck/extracted/hatecheck-*
 after unicode iso-639
-reads text

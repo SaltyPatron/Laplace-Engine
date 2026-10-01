@@ -9,6 +9,8 @@ grammar json
 records
 named word by lang_code word pos
 key etymology_number id senseid wikidata
+# the extract's machinery, read by nothing: the templates and categories the page was rendered from, disambiguation weights
+omit head_templates etymology_templates inflection_templates categories _dis _dis1 topics source
 identity * title
 identity senses glosses
 identity forms form

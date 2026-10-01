@@ -11,4 +11,5 @@ quoted
 claims
 together
 subject in prompt
-attest *
+# id and note are the set's bookkeeping, read by nothing
+attest type label focus

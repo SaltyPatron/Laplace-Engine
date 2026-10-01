@@ -10,4 +10,3 @@ root $LAPLACE_DATA/MapNet-0.1
 # Measured when it was loaded: 21,646 compositions from 0.3 MB, at 750 bytes each with their indexes and standings.
 room 55
 after unicode iso-639
-reads text

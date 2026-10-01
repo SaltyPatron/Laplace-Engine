@@ -37,4 +37,4 @@ key geonameid
 
 claims
 subject in name latitude longitude
-attest *
+attest asciiname alternatenames "feature class" "feature code" "country code" "admin1 code" "admin2 code" "admin3 code" "admin4 code" population elevation timezone

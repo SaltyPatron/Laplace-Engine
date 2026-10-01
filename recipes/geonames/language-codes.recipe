@@ -9,4 +9,4 @@ header
 
 claims
 subject in "Language Name"
-attest *
+attest "ISO 639-3" "ISO 639-2" "ISO 639-1"

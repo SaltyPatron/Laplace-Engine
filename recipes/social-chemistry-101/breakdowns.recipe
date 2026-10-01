@@ -14,8 +14,11 @@ list characters |
 
 claims
 together
-subject in rot-id
-attest *
+# A rule of thumb is its text; its situation is the text it was written for. The ids, worker ids, split and counts are
+# the set's bookkeeping, read by nothing.
+key rot-id situation-short-id rot-worker-id breakdown-worker-id
+subject in rot
+attest situation area rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-bad rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical characters
 where situation matches ^($|[^"])
 where characters matches ^($|[^"])
 where rot matches ^($|[^"])

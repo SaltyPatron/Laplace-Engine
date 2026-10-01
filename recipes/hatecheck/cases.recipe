@@ -19,4 +19,4 @@ refer ref_case_id hatecheck-cases
 claims
 together
 subject in test_case
-attest *
+attest functionality label_gold target_ident direction focus_words focus_lemma ref_case_id case_templ

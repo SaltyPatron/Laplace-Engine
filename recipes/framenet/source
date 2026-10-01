@@ -11,4 +11,3 @@ root $LAPLACE_DATA/FrameNet/framenet_v17
 # Measured when it was loaded: 15,952,613 compositions from 854 MB, at 750 bytes each with their indexes and standings.
 room 14
 after unicode iso-639
-reads text

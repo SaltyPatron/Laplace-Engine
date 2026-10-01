@@ -52,7 +52,8 @@ static Ref text_of(JP *j, const uint8_t *s, size_t n){ if (j->r->path_sep && n >
 static void skip(JP *j);
 static void value(JP *j, Ref *path, int np, Refs *items);
 /* A member that is a source's key: how it points at its things (an entry's number, a sense's id). Never recorded. */
-static int is_key(const JP *j, const uint8_t *k, size_t kn){ for (int i = 0; i < j->r->nkey; i++) if (strlen(j->r->key[i]) == kn && !memcmp(j->r->key[i], k, kn)) return 1; return 0; }
+static int is_key(const JP *j, const uint8_t *k, size_t kn){ for (int i = 0; i < j->r->nkey; i++) if (strlen(j->r->key[i]) == kn && !memcmp(j->r->key[i], k, kn)) return 1;
+    for (int i = 0; i < j->r->nomit; i++) if (strlen(j->r->omit[i]) == kn && !memcmp(j->r->omit[i], k, kn)) return 1; return 0; }     /* a key, or bookkeeping (omit): read by nothing */
 
 /* What an object is: the thing the members the recipe names say it is. The cursor is on its opening brace, and
  * stays. Gives which identity named it (-2: the members that name it together), or -1 when nothing does. */

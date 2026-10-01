@@ -16,6 +16,9 @@ grammar xml
 # every entry stands on lines of its own: a long file is read in parts, on every core
 records
 key id
+# the file's bookkeeping, read by nothing: where a row came from, its status, confidence and notes, the lexicon's version,
+# licence, contact and citation
+omit dc:source dc:type dc:contributor dc:creator dc:identifier dc:publisher dc:relation dc:rights dc:subject dc:title status note confidenceScore version url email license citation logo
 identity Lexicon label
 identity LexicalEntry >Lemma.writtenForm
 identity Synset members

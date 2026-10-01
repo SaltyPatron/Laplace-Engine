@@ -9,4 +9,3 @@ witness GeoNames Gazetteer
 trust 0.67
 root $LAPLACE_DATA/.refresh-*/GeoNames
 after unicode iso-639
-reads text

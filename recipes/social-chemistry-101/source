@@ -6,4 +6,3 @@ witness Social-Chem-101 Dataset
 deviation 90
 root $LAPLACE_DATA/.refresh-*/Safety/SocialChemistry101/extracted/social-chem-101
 after unicode iso-639
-reads text

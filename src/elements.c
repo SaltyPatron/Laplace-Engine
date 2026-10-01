@@ -136,6 +136,7 @@ static void record_of(const EW *w, Events *ev, Ref node, const Ref *claim, int n
 typedef struct { uint64_t h; uint32_t el, start, end, parent; int state, owner; Ref X; } KeyEnt;     /* state: 0 not yet, 1 resolving (by the thread owner), 2 resolved (X valid), 3 nothing */
 struct KeyIndex { KeyEnt *t; size_t cap, n; char (*elname)[64]; int nel; const uint8_t *src; size_t n_src; pthread_mutex_t mu; pthread_cond_t cv; };
 static uint64_t kfnv(const uint8_t *s, size_t n, uint32_t el){ uint64_t h = 1469598103934665603ull ^ ((uint64_t)el << 40); for (size_t i = 0; i < n; i++) h = (h ^ s[i]) * 1099511628211ull; return h | 1; }
+static int omitted(const EW *w, TSNode nm){ const Recipe *r = w->r; for (int i = 0; i < r->nomit; i++) if (named(w, nm, r->omit[i])) return 1; return 0; }
 static int key_attr(const EW *w, TSNode an){ const Recipe *r = w->r; if (!r->nkey) return named(w, an, "id"); for (int i = 0; i < r->nkey; i++) if (named(w, an, r->key[i])) return 1; return 0; }
 static int key_attr_bytes(const Recipe *r, const uint8_t *a, size_t n){ if (!r->nkey) return n == 2 && !memcmp(a, "id", 2); for (int i = 0; i < r->nkey; i++) if (strlen(r->key[i]) == n && !memcmp(r->key[i], a, n)) return 1; return 0; }
 static int refer_next(const EW *w, TSNode elname, TSNode an, int from){ const Recipe *r = w->r; for (int z = from; z < r->nrefer; z++) if (named(w, an, r->refer[z].attr) && (!r->refer[z].el[0] || named(w, elname, r->refer[z].el))) return z; return -1; }
@@ -314,6 +315,7 @@ static int thing_of(const EW *w, const Tag *t, const Ref *S, long scp, Thing *th
 static void said_by(const EW *w, const Tag *t, int a, Ref of, long scp, Refs *into, Refs *also){
     const Recipe *r = w->r; Ref key = name_of(w, t->an[a]); char ls = 0;
     if ((w->ki || r->nkey) && key_attr(w, t->an[a])) return;                 /* a key: how the source points at things, recorded nowhere */
+    if (omitted(w, t->an[a])) return;                                        /* the file's bookkeeping: not testimony */
     { const uint8_t *an = w->src + ts_node_start_byte(t->an[a]); uint32_t al = ts_node_end_byte(t->an[a]) - ts_node_start_byte(t->an[a]);      /* XML's own plumbing: namespaces and schema locations say nothing of the thing */
       if ((al >= 5 && !memcmp(an, "xmlns", 5) && (al == 5 || an[5] == ':')) || (al >= 4 && !memcmp(an, "xsi:", 4))) return; }
     int rz = w->ki ? refer_of(w, t->name, t->an[a]) : -1, tz = type_next(w, t->name, t->an[a], 0);
@@ -380,6 +382,7 @@ static void inside(const EW *w, TSNode content, const Ref *S, long scp, const Tx
 }
 static void element(const EW *w, TSNode el, const Ref *S, long scp, const Txt *tx, Refs *rec, Ref *node, int *has_node, Events *ev){
     const Recipe *r = w->r; *has_node = 0; Tag t; if (!tag_of(el, &t)) return;
+    if (omitted(w, t.name)) return;                                          /* an element that is bookkeeping, with everything inside it */
     Ref nref = name_of(w, t.name); Thing th;
     for (int i = 0; i < r->nwords; i++) if (named(w, t.name, r->words[i].rec) && t.has_content) {
         /* a record of words: what it is about is the path of its words; what is said of a word is said within it */

@@ -9,4 +9,3 @@ root $LAPLACE_DATA/.refresh-*/Safety/ToxiGen/toxigen-*[0-9a-f][0-9a-f][0-9a-f][0
 # CSV files beside them.
 except *.csv *.parquet
 after unicode iso-639
-reads text

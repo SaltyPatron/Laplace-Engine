@@ -12,4 +12,4 @@ quoted
 claims
 together
 subject in c_testcase
-attest *
+attest p_label p_value p_target t_function t_gold t_direction

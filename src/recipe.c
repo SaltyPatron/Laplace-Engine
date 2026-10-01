@@ -91,6 +91,9 @@
  *                                 the name stands only among things of its kind: the thing is the path of the kind
  *                                 (the element's name, unless the source writes the kind under another name, KIND)
  *                                 and the name. NAME written . is the element's own text
+ *   omit NAME...                  attributes and elements (JSON: members) that are the file's bookkeeping, not what the
+ *                                 witness says of content: dates an entry was made, colours, versions, licences,
+ *                                 usage notes, who edited a row. Read by nothing
  *   key ATTRIBUTE...              attributes (JSON: members) that are the source's keys: how it points at its things
  *                                 (XML: id unless said). A key resolves to the thing; it is content of nothing and
  *                                 is never recorded
@@ -417,6 +420,7 @@ static int recipe_parse(const char *path, Recipe *r){
             snprintf(r->refer[r->nrefer].attr, 64, "%s", at); snprintf(r->refer[r->nrefer].kind, 64, "%s", kd); r->refer[r->nrefer++].within = wi && !strcmp(wi, "within");
         }
         else if (!strcmp(tok, "key")) { char *at = strtok(NULL, "\r\n"), nm[64]; while (r->nkey < 16 && name_next(&at, nm, sizeof nm)) snprintf(r->key[r->nkey++], 64, "%s", nm); }
+        else if (!strcmp(tok, "omit")) { char *at = strtok(NULL, "\r\n"), nm[64]; while (r->nomit < 48 && name_next(&at, nm, sizeof nm)) snprintf(r->omit[r->nomit++], 64, "%s", nm); }
         else if (!strcmp(tok, "type") && r->ntype < 16) {
             char *at = strtok(NULL, "\r\n"), nm[64], ls[32]; if (!name_next(&at, nm, sizeof nm) || !name_next(&at, ls, sizeof ls)) { fprintf(stderr, "%s: type [ELEMENT.]ATTRIBUTE LIST | type COLUMN LIST\n", path); fclose(f); return 0; }
             char *dot = strcmp(r->grammar, "table") ? strchr(nm, '.') : NULL; r->type[r->ntype].el[0] = 0; char *an = nm; if (dot) { *dot = 0; snprintf(r->type[r->ntype].el, 64, "%s", nm); an = dot + 1; }

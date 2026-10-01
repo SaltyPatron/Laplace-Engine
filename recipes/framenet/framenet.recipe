@@ -9,6 +9,9 @@ name framenet
 match *.xml
 grammar xml
 key ID id corpID docID lemmaID cBy
+# the file's bookkeeping, read by nothing: when an entry was made, display colours, annotation status and counts, where a
+# sentence sat in its corpus, the schema declaration
+omit cDate mDate bgColor fgColor status totalAnnotated numAnnotInstances hasAnnotation XMLCreated sentNo paragNo aPos sentenceCount header
 
 # the things, and what names each
 identity frame name
