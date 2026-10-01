@@ -1,15 +1,30 @@
 name wn-lmf
-# WN-LMF, the Global WordNet Association's XML for wordnets, read as what it says.
-# A lexical entry is the word its Lemma writes: a wordnet does not own a word, it says things of it. Everything else
-# that carries an id (the lexicon, a sense, a synset, a syntactic behaviour) is the thing that id names, and what is
-# inside a thing is said of it: [lexicon, LexicalEntry, word], [word, partOfSpeech, n], [word, Sense, sense id],
-# [sense id, synset, synset id], [synset id, ili, i46360], [synset id, Definition, text].
-# A relation is written as its type and its target: [synset id, hypernym, synset id].
-# Every name and value is as the wordnet writes it.
+# WN-LMF, the Global WordNet Association's XML for wordnets, read as what it says. A wordnet does not own a word: it
+# says things of it. Its identifiers are its keys: how the file points at its entries, senses and synsets; they
+# resolve to the things and are recorded nowhere (Semantics: Claims; Storage: Identity).
+#   a lexical entry   is the word its Lemma writes
+#   a synset          is the composition of the words its members are, in the order it lists them: every wordnet that
+#                     lists the same words has the same synset, and their attestations meet there
+#   a sense           is the word it is inside, with its synset
+#   the lexicon       is named as it names itself (its label)
+#   ili               is a type of the highway's interlingual index: read as the concept's content, never as i46360
+# What is inside a thing is said of it, every name and value as the wordnet writes it: [word, partOfSpeech, n],
+# [synset, Definition, text], [synset, partOfSpeech, n], [synset, lexfile, noun.animal], [synset, ili, concept],
+# [word, Sense, sense], [sense, synset, synset]; a relation is its type and what it targets: [synset, hypernym, synset].
 grammar xml
 # every entry stands on lines of its own: a long file is read in parts, on every core
 records
+key id
+identity Lexicon label
 identity LexicalEntry >Lemma.writtenForm
-identity * id
+identity Synset members
+identity Sense synset within
+identity SyntacticBehaviour subcategorizationFrame
+refer members Sense within
+refer synset Synset
+refer SynsetRelation.target Synset
+refer SenseRelation.target Sense
+refer SyntacticBehaviour.senses Sense
+type ili ili
 link SenseRelation relType target
 link SynsetRelation relType target

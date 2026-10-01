@@ -40,7 +40,7 @@ static int64_t slot_of(Ref r){
     uint64_t k = hkey(&r.id) & (slot_cap - 1);
     while (slot_map[k]) { size_t i = slot_map[k] - 1; if (!memcmp(&rec[i].id, &r.id, 16)) return i >= cur->first ? (int64_t)(i - cur->first) : -1; k = (k + 1) & (slot_cap - 1); }
     if (nrec == crec) { crec = crec ? crec * 2 : 4096; rec = xrealloc(rec, crec * sizeof(lp_tier0_record)); }
-    lp_tier0_record *x = &rec[nrec]; memset(x, 0, sizeof *x); x->id = r.id; memcpy(x->m, r.c.m, 32); x->hilbert = lp_hilbert4(&r.c); x->rank = (uint32_t)(nrec - cur->first);
+    lp_tier0_record *x = &rec[nrec]; memset(x, 0, sizeof *x); x->id = r.id; memcpy(x->m, r.c.m, 32); x->hilbert = lp_hilbert4(&r.c); x->rank = (uint32_t)(nrec - cur->first); x->pad = r.tier;
     slot_map[k] = (uint32_t)nrec + 1; nrec++; cur->count++;
     return (int64_t)x->rank;
 }

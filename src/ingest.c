@@ -52,7 +52,11 @@ static void show_tuple(const lp_id *id){
     for (uint32_t v = 0; v < c->nv; v++) for (uint32_t r = 0; r < VRUN(sh->vtx[c->voff + v].m); r++) {
         if (!first) printf(", "); first = 0;
         if (VSAID(sh->vtx[c->voff + v].m) == LP_SAID_TUPLE && table_find(&sh->vtx[c->voff + v].id)) show_tuple(&sh->vtx[c->voff + v].id);
-        else { Buf o = { 0 }; expand(&sh->vtx[c->voff + v].id, &o); fwrite(o.b, 1, o.n, stdout); free(o.b); } }
+        else { Buf o = { 0 }; expand(&sh->vtx[c->voff + v].id, &o);
+               if (!o.n && HW) { int64_t at = lp_highway_slot(HW, NULL, &sh->vtx[c->voff + v].id); const char *ln = "type";
+                   if (at >= 0) for (size_t i = 0; i < HW->nlists; i++) if ((size_t)at >= HW->list[i].first && (size_t)at < (size_t)HW->list[i].first + HW->list[i].count) ln = HW->list[i].name;
+                   printf("<%s>", ln); }
+               else fwrite(o.b, 1, o.n, stdout); free(o.b); } }
     putchar(']');
 }
 /* What a record holds besides its claims: the things and specifics said with them, and the records inside it. */
