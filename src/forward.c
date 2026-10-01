@@ -16,6 +16,7 @@
 
 typedef struct { lp_id *id; int n; } Run;                                    /* a trajectory's constituents in order, runs written out */
 
+static double be_f64(const char *p){ uint64_t u = 0; for (int i = 0; i < 8; i++) u = u << 8 | (uint8_t)p[i]; double d; memcpy(&d, &u, 8); return d; }
 static Run run_of(const uint8_t *ewkb, size_t len){
     const uint8_t *vx; size_t nv = lp_ewkb_vertices(ewkb, len, &vx); int n = 0;
     for (size_t i = 0; i < nv; i++) { double m; memcpy(&m, vx + 32 * i + 24, 8); n += (int)lp_m_run(m); }
@@ -86,6 +87,40 @@ int cmd_pull(int argc, char **argv){
               lp_id x; memcpy(x.b, PQgetvalue(q, z, 4), 16); char *tx = reader_text(rd, &x, 0); printf("%s %s×%ld", shownext ? "" : "  then", strcmp(tx, " ") ? tx : "␠", times); free(tx); shownext++; }
           printf("\n"); }
       printf("%-10s %d segments observed of %d   (%.1f ms)\n", "", segments, np * (np + 1) / 2, (now() - t) * 1000);
+      /* the fold: every observation that holds a run of two or more of the prompt's words is tugged at once. The claims
+       * those observations sit in are the strands; the entity at the other end of each strand (the subject when the
+       * observation is the object, the object when it is the subject, never the predicate) pulls back as hard as the
+       * strand's standing, summed over every strand that reaches it. What pulls back hardest is what the prompt is about. */
+      t = now(); lp_id *obs = NULL; int nobs = 0, cobs = 0;
+      for (int r = 0; r < nr; ) { int i = (int)BE(PQgetvalue(q, r, 0), 4), j = (int)BE(PQgetvalue(q, r, 1), 4); long runs = (long)BE(PQgetvalue(q, r, 3), 8);
+          while (r < nr && (int)BE(PQgetvalue(q, r, 0), 4) == i && (int)BE(PQgetvalue(q, r, 1), 4) == j) r++;
+          int words = 0; for (int k = i - 1; k < j; k++) words += table_find(&ph[k]) != NULL; if (words < 2 || !runs || nobs >= 2048) continue;
+          uint8_t *sb = malloc(20 + 20 * (size_t)(j - i + 1)); size_t sl = ids_param(sb, ph + i - 1, (uint32_t)(j - i + 1)); const char *sv[1] = { (const char *)sb }; int sll[1] = { (int)sl }, sf[1] = { 1 };
+          PGresult *o = db_ask(pg, "SELECT entity FROM laplace_containers($1::blake3[], '{}'::smallint[]) WHERE NOT (mask ? 0::smallint) LIMIT 128", 1, sv, sll, sf);
+          if (PQresultStatus(o) == PGRES_TUPLES_OK) for (int z = 0; z < PQntuples(o); z++) { lp_id ob; memcpy(ob.b, PQgetvalue(o, z, 0), 16); int dup = 0;
+              for (int u = 0; u < nobs && !dup; u++) dup = !memcmp(&obs[u], &ob, 16); if (dup) continue;
+              if (nobs == cobs) { cobs = cobs ? cobs * 2 : 256; obs = xrealloc(obs, sizeof(lp_id) * (size_t)cobs); } obs[nobs++] = ob; }
+          PQclear(o); free(sb); }
+      typedef struct { lp_id id; double pull; int strands; } Tug; Tug *tug = NULL; int ntug = 0, ctug = 0, nstr = 0;
+      if (nobs) { uint8_t *ob = malloc(20 + 20 * (size_t)nobs); size_t ol = ids_param(ob, obs, (uint32_t)nobs); char fan2[24]; snprintf(fan2, sizeof fan2, "%d", 64);
+          const char *ov[2] = { (const char *)ob, fan2 }; int oll[2] = { (int)ol, (int)strlen(fan2) }, of_[2] = { 1, 0 };
+          PGresult *o = db_ask(pg, "SELECT i, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, '{0}'::smallint[])", 2, ov, oll, of_);     /* one call: every strand of every observation */
+          if (PQresultStatus(o) != PGRES_TUPLES_OK) { fprintf(stderr, "fold: %s", PQerrorMessage(pg)); return 1; }
+          for (int z = 0; z < PQntuples(o); z++) { int oi = (int)BE(PQgetvalue(o, z, 0), 8) - 1; if (oi < 0 || oi >= nobs) continue;
+              Run rn = run_of((const uint8_t *)PQgetvalue(o, z, 1), (size_t)PQgetlength(o, z, 1)); lp_rating rt = { be_f64(PQgetvalue(o, z, 2)), be_f64(PQgetvalue(o, z, 3)), be_f64(PQgetvalue(o, z, 4)) };
+              int at = -1; for (int k = 0; k < rn.n && at < 0; k++) if (!memcmp(&rn.id[k], &obs[oi], 16)) at = k;
+              int other = rn.n == 2 ? 1 - at : rn.n >= 3 && at == 0 ? rn.n - 1 : rn.n >= 3 && at == rn.n - 1 ? 0 : -1;        /* the other end; an observation that is the predicate pulls nothing */
+              if (at >= 0 && other >= 0) { nstr++; double c_ = lp_confidence(&rt, fw.k); int found = -1; for (int u = 0; u < ntug; u++) if (!memcmp(&tug[u].id, &rn.id[other], 16)) { found = u; break; }
+                  if (found < 0) { if (ntug == ctug) { ctug = ctug ? ctug * 2 : 256; tug = xrealloc(tug, sizeof(Tug) * (size_t)ctug); } tug[ntug] = (Tug){ rn.id[other], 0, 0 }; found = ntug++; }
+                  tug[found].pull += c_; tug[found].strands++; }
+              free(rn.id); }
+          PQclear(o); free(ob); }
+      for (int u = 0; u < ntug; u++) for (int k = 0; k < np; k++) if (!memcmp(&tug[u].id, &ph[k], 16)) tug[u].pull = 0;     /* the prompt's own words pull on nothing */
+      for (int u = 1; u < ntug; u++) { Tug x = tug[u]; int y = u; while (y > 0 && tug[y - 1].pull < x.pull) { tug[y] = tug[y - 1]; y--; } tug[y] = x; }
+      for (int u = 0; u < ntug && u < 12; u++) reader_want(rd, &tug[u].id);
+      printf("\npulls back %d strands of %d observations, through what holds the prompt's runs   (%.1f ms)\n", nstr, nobs, (now() - t) * 1000);
+      for (int u = 0; u < ntug && u < 12 && tug[u].pull > 0; u++) { char *tx = reader_text(rd, &tug[u].id, 110); printf("%10.2f %8d   %s\n", tug[u].pull, tug[u].strands, tx); free(tx); }
+      free(tug); free(obs);
       #undef BE
       PQclear(q); free(ab); }
     Claim *mine = NULL; int nmine = -1, capped = 0;                           /* what is attested of the prompt itself, fetched once */
