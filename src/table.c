@@ -39,7 +39,6 @@ static Node *find_in(Shard *s, const lp_id *id){
     while (s->slot[k]) { Node *x = &s->node[s->slot[k] - 1]; if (!memcmp(&x->id, id, 16)) return x; k = (k + 1) & (s->scap - 1); }
     return NULL;
 }
-static void kind_or(const lp_id *id, uint8_t bits){ Shard *s = &shard[id->b[0]]; pthread_mutex_lock(&s->mu); Node *x = find_in(s, id); if (x) x->kind |= bits; pthread_mutex_unlock(&s->mu); }
 /* A composition, recorded: Laplace-Native gives its ID and coordinate; the table keeps it, once, with its path. */
 Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     if (n == 1) return ch[0];
@@ -64,12 +63,18 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     }
     s->slot[k] = (uint32_t)++s->n;
     pthread_mutex_unlock(&s->mu);
-    /* what each child is said to be here, kept on the child: a claim, a record, a tuple, a file's metadata (its trunk is a
-     * file). Other threads insert and grow the shards meanwhile: each child is found under its shard's lock. */
-    for (uint32_t i = 0; i < n; i++) if (ch[i].said) { uint8_t bit = ch[i].said == LP_SAID_CLAIM ? LP_KIND_CLAIM : ch[i].said == LP_SAID_RECORD ? LP_KIND_RECORD : ch[i].said == LP_SAID_TUPLE ? LP_KIND_TUPLE : 255;
-        if (bit != 255) kind_or(&ch[i].id, (uint8_t)(1u << bit));
-        if (ch[i].said == LP_SAID_METADATA) kind_or(&r.id, (uint8_t)(1u << LP_KIND_FILE)); }
     return r;
+}
+/* What each child of every node is said to be, kept on the child: a claim, a record, a tuple, a file's metadata (its
+ * holder is a file). Read off the vertices' M after the decomposition, when nothing inserts and nothing grows: one
+ * pass over the shards, no lock (a lookup per child under the shard's lock during composition was 29% of decomposition). */
+void table_kinds(void){
+    #pragma omp parallel for schedule(dynamic)
+    for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) { Node *x = &shard[s].node[i];
+        for (uint32_t v = 0; v < x->nv; v++) { uint64_t said = VSAID(shard[s].vtx[x->voff + v].m); if (!said) continue;
+            uint8_t bit = said == LP_SAID_CLAIM ? LP_KIND_CLAIM : said == LP_SAID_RECORD ? LP_KIND_RECORD : said == LP_SAID_TUPLE ? LP_KIND_TUPLE : 255;
+            if (bit != 255) { Node *c = find_in(&shard[shard[s].vtx[x->voff + v].id.b[0]], &shard[s].vtx[x->voff + v].id); if (c) __atomic_fetch_or(&c->kind, (uint8_t)(1u << bit), __ATOMIC_RELAXED); }
+            if (said == LP_SAID_METADATA) __atomic_fetch_or(&x->kind, (uint8_t)(1u << LP_KIND_FILE), __ATOMIC_RELAXED); } }
 }
 static lp_ref compose_sink(void *sink, const lp_ref *ch, uint32_t n, uint8_t tier){ (void)sink; return compose(ch, n, tier); }
 

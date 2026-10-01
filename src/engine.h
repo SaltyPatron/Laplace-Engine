@@ -101,6 +101,7 @@ Ref    highway_typed(const char *list, const uint8_t *key, size_t n, int *has); 
 
 void   tier0_open(const char *path);                                  /* maps tier 0 or exits */
 void   table_init(void);
+void   table_kinds(void);                                             /* after a decomposition: what each child is said to be, on the child */
 Ref    atom(uint32_t cp);
 Ref    compose(const Ref *ch, uint32_t n, uint8_t tier);             /* one child is that child */
 Node  *table_find(const lp_id *id);                                   /* NULL for atoms and unknown IDs */

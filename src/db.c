@@ -163,6 +163,7 @@ static Standing *stand_get(const lp_id *id, const Event *add, double trust){
 
 int load_whole;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
+    table_kinds();                                                           /* what each child is said to be: on the child, for its mask */
     PGconn **pg = malloc(sizeof(PGconn *) * npg);
     for (int i = 0; i < npg; i++) {
         pg[i] = db_connect(conninfo);
