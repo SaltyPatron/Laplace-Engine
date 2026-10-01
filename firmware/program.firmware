@@ -43,6 +43,9 @@ for translate
 
 for pull
   fan 4096
+  # strands of a kind the pull does not navigate (Sequence: Web 15.x): a sentence's tag layers and an example's marked
+  # arguments pull back their tags, not what the sentence is about. A default to be ruled on; the firmware is the inventor's.
+  refuse predicate BNC PENN GF PT NER WSL Target Other Sent Verb Noun Adj Prep Adv UPOS XPOS DEPREL FEATS MISC LEMMA type n f itype
   take segment
   take attestations 3
   take constituents 1
