@@ -53,15 +53,28 @@ Firmware firmware_for(const char *path, int op){
             if (v && !strcmp(v, "predicate")) names(&fw, fw.refuse_predicate, &fw.nrefuse_predicate, FW_NAMES, fw.path, line);
             else if (v && !strcmp(v, "witness")) names(&fw, fw.refuse_witness, &fw.nrefuse_witness, FW_NAMES, fw.path, line);
             else { fprintf(stderr, "%s:%d: refuse predicate NAME... | witness NAME...\n", fw.path, line); exit(2); } }
+        else if (!strcmp(tok, "weigh")) { double w = NUMBER(); char *nm; int any = 0;                 /* weigh N KIND...: strands of these kinds pull N as hard */
+            if (w < 0 || w > 1) { fprintf(stderr, "%s:%d: a weight is between 0 and 1\n", fw.path, line); exit(2); }
+            while ((nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') { if (fw.nweigh >= FW_WEIGHS) { fprintf(stderr, "%s:%d: more weights than a firmware holds (%d)\n", fw.path, line, FW_WEIGHS); exit(2); }
+                snprintf(fw.weigh_name[fw.nweigh], 96, "%s", nm); fw.weigh[fw.nweigh++] = w; any = 1; }
+            if (!any) { fprintf(stderr, "%s:%d: weigh N KIND...\n", fw.path, line); exit(2); } }
+        else if (!strcmp(tok, "role")) { v = strtok(NULL, " \t\r\n");                               /* role by KIND | role N VALUE...: how hard a word of that kind pulls */
+            if (v && !strcmp(v, "by")) { v = strtok(NULL, " \t\r\n"); if (!v) { fprintf(stderr, "%s:%d: role by KIND\n", fw.path, line); exit(2); } snprintf(fw.role_by, sizeof fw.role_by, "%s", v); }
+            else { char *e_; double w = v ? strtod(v, &e_) : -1; char *nm; if (!v || *e_ || w < 0 || w > 1) { fprintf(stderr, "%s:%d: role by KIND | role N VALUE... (N between 0 and 1)\n", fw.path, line); exit(2); }
+                while ((nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') { if (fw.nrole >= FW_WEIGHS) { fprintf(stderr, "%s:%d: more roles than a firmware holds\n", fw.path, line); exit(2); }
+                    snprintf(fw.role_name[fw.nrole], 96, "%s", nm); fw.role[fw.nrole++] = w; } } }
         else if (!strcmp(tok, "shape")) { v = strtok(NULL, " \t\r\n");
             if (v && !strcmp(v, "frechet")) fw.shape = FW_FRECHET; else if (v && !strcmp(v, "dtw")) fw.shape = FW_DTW;
             else if (v && !strcmp(v, "outliers")) { fw.shape = FW_OUTLIERS; fw.shape_n = NUMBER(); }
             else if (v && !strcmp(v, "edr")) { fw.shape = FW_EDR; fw.shape_n = NUMBER(); }
             else { fprintf(stderr, "%s:%d: shape frechet | outliers N | dtw | edr N\n", fw.path, line); exit(2); } }
         else if (!strcmp(tok, "take") && in == FW_PULL) { v = strtok(NULL, " \t\r\n"); if (fw.ntake >= FW_TAKES) { fprintf(stderr, "%s:%d: more steps than a pull takes (%d)\n", fw.path, line, FW_TAKES); exit(2); }
-            int what = v && !strcmp(v, "fact") ? FW_TAKE_FACT : v && !strcmp(v, "segment") ? FW_TAKE_SEGMENT : v && !strcmp(v, "attestations") ? FW_TAKE_ATTESTATIONS : v && !strcmp(v, "constituents") ? FW_TAKE_CONSTITUENTS : -1;
-            if (what < 0) { fprintf(stderr, "%s:%d: take fact | segment | attestations N | constituents N\n", fw.path, line); exit(2); }
-            fw.take[fw.ntake].what = what; fw.take[fw.ntake].n = what == FW_TAKE_ATTESTATIONS || what == FW_TAKE_CONSTITUENTS ? (int)NUMBER() : 1; fw.ntake++; }
+            int what = v && !strcmp(v, "chain") ? FW_TAKE_CHAIN : v && !strcmp(v, "fact") ? FW_TAKE_FACT : v && !strcmp(v, "segment") ? FW_TAKE_SEGMENT : v && !strcmp(v, "attestations") ? FW_TAKE_ATTESTATIONS : v && !strcmp(v, "constituents") ? FW_TAKE_CONSTITUENTS : -1;
+            if (what < 0) { fprintf(stderr, "%s:%d: take fact | segment | attestations N | constituents N | chain N RELATION...\n", fw.path, line); exit(2); }
+            fw.take[fw.ntake].what = what; fw.take[fw.ntake].n = what == FW_TAKE_ATTESTATIONS || what == FW_TAKE_CONSTITUENTS || what == FW_TAKE_CHAIN ? (int)NUMBER() : 1; fw.ntake++;
+            if (what == FW_TAKE_CHAIN) { char *nm; fw.nalt = 1; memset(fw.nchain, 0, sizeof fw.nchain);                 /* RELATION... | RELATION...: the first chain that reaches its end */
+                while ((nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') { if (!strcmp(nm, "|")) { if (fw.nalt < FW_ALTS) fw.nalt++; continue; } int a_ = fw.nalt - 1; if (fw.nchain[a_] < FW_CHAIN) snprintf(fw.chain[a_][fw.nchain[a_]++], 96, "%s", nm); }
+                if (!fw.nchain[0]) { fprintf(stderr, "%s:%d: take chain N RELATION...\n", fw.path, line); exit(2); } } }
         else { fprintf(stderr, "%s:%d: %s is not a decision a firmware makes\n", fw.path, line, tok); exit(2); }
         #undef NUMBER
     }
@@ -73,6 +86,7 @@ void firmware_say(const Firmware *fw, int op){
     if (fw->top_within > 0) printf(" %g", fw->top_within);
     if (fw->fact <= 1.0) printf(", a fact at trust %g", fw->fact);
     if (fw->nrefuse_predicate) { printf(", refuses"); for (int i = 0; i < fw->nrefuse_predicate; i++) printf(" %s", fw->refuse_predicate[i]); }
+    if (fw->nweigh) printf(", weighs %d kinds of strand", fw->nweigh);
     if (fw->nrefuse_witness) { printf(", refuses what is witnessed by"); for (int i = 0; i < fw->nrefuse_witness; i++) printf(" %s", fw->refuse_witness[i]); }
     printf("\n");
 }

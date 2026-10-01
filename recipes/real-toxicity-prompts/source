@@ -4,7 +4,6 @@ name real-toxicity-prompts
 witness RealToxicityPrompts
 # The dataset card: "The scores accompanying the prompt and the continuation are generated using the Perspective API".
 lineage Perspective API
-# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
-deviation 90
+class AIModelProbe
 root $LAPLACE_DATA/.refresh-*/Safety/RealToxicityPrompts/real-toxicity-prompts-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
 after unicode iso-639

@@ -2,7 +2,6 @@ name hatecheck
 # The data of the paper "HateCheck: Functional Tests for Hate Speech Detection Models": test cases, and the labels
 # ten annotators gave them. The README names it by that title.
 witness HateCheck
-# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
-deviation 90
+class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/Safety/HateCheck/extracted/hatecheck-*
 after unicode iso-639

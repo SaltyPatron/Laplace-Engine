@@ -26,7 +26,7 @@ static uint8_t above(const Ref *r, uint64_t n){ uint8_t t = 0; for (uint64_t i =
  * read. Called for every stretch of a file, while what the stretch decomposed to is still at hand. */
 void file_take(File *f){
     for (uint64_t i = 0; i < f->ev.n; i++) {
-        const Event *e = &f->ev.e[i]; if (e->kind == EV_MEMBER) continue;      /* within its record, which holds it */
+        const Event *e = &f->ev.e[i]; if (e->kind == EV_MEMBER || e->inner) continue;      /* within its record, or held by what it is inside: the tree above holds it */
         Node *x = table_find(&e->witnessed); if (!x) continue;
         if (f->nsaid == f->csaid) { f->csaid = f->csaid ? f->csaid * 2 : 1024; f->said = xrealloc(f->said, f->csaid * sizeof(Ref)); }
         Ref *r = &f->said[f->nsaid++]; memset(r, 0, sizeof *r); r->id = x->id; memcpy(r->c.m, x->m, sizeof r->c.m); r->tier = x->tier;

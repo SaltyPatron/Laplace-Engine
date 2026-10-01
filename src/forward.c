@@ -102,6 +102,7 @@ int cmd_pull(int argc, char **argv){
               if (nobs == cobs) { cobs = cobs ? cobs * 2 : 256; obs = xrealloc(obs, sizeof(lp_id) * (size_t)cobs); } obs[nobs++] = ob; }
           PQclear(o); free(sb); }
       typedef struct { lp_id id; double pull; int strands; } Tug; Tug *tug = NULL; int ntug = 0, ctug = 0, nstr = 0, nref = 0; double t_obs = now() - t; t = now();
+      lp_id wids[FW_WEIGHS]; weights_named(c, &fw, wids);
       lp_id refuse[FW_NAMES]; for (int z = 0; z < fw.nrefuse_predicate; z++) refuse[z] = entity_named(c, fw.refuse_predicate[z], NULL, 0, NULL).id;     /* the firmware's refusals: strands of a kind it does not navigate */
       if (nobs) { uint8_t *ob = malloc(20 + 20 * (size_t)nobs); size_t ol = ids_param(ob, obs, (uint32_t)nobs); char fan2[24]; snprintf(fan2, sizeof fan2, "%d", 64);
           const char *ov[2] = { (const char *)ob, fan2 }; int oll[2] = { (int)ol, (int)strlen(fan2) }, of_[2] = { 1, 0 };
@@ -113,7 +114,7 @@ int cmd_pull(int argc, char **argv){
               int other = rn.n == 2 ? 1 - at : rn.n >= 3 && at == 0 ? rn.n - 1 : rn.n >= 3 && at == rn.n - 1 ? 0 : -1;        /* the other end; an observation that is the predicate pulls nothing */
               int refused_ = 0; for (int k = 1; k + 1 < rn.n && !refused_; k++) for (int z = 0; z < fw.nrefuse_predicate; z++) if (!memcmp(&rn.id[k], &refuse[z], 16)) refused_ = 1;
               if (refused_) { nref++; other = -1; }
-              if (at >= 0 && other >= 0) { nstr++; double c_ = lp_confidence(&rt, fw.k); int found = -1; for (int u = 0; u < ntug; u++) if (!memcmp(&tug[u].id, &rn.id[other], 16)) { found = u; break; }
+              if (at >= 0 && other >= 0) { nstr++; double c_ = lp_confidence(&rt, fw.k) * strand_weight(&fw, wids, rn.id, rn.n); int found = -1; for (int u = 0; u < ntug; u++) if (!memcmp(&tug[u].id, &rn.id[other], 16)) { found = u; break; }
                   if (found < 0) { if (ntug == ctug) { ctug = ctug ? ctug * 2 : 256; tug = xrealloc(tug, sizeof(Tug) * (size_t)ctug); } tug[ntug] = (Tug){ rn.id[other], 0, 0 }; found = ntug++; }
                   tug[found].pull += c_; tug[found].strands++; }
               free(rn.id); }
@@ -127,7 +128,7 @@ int cmd_pull(int argc, char **argv){
       #undef BE
       PQclear(q); free(ab); }
     Claim *mine = NULL; int nmine = -1, capped = 0;                           /* what is attested of the prompt itself, fetched once */
-    #define MINE() do { if (nmine < 0) { mine = claims_of(pg, &pr.id, fw.fan, fw.k, &nmine, &capped); nmine = refused(pg, c, &fw, mine, nmine); } } while (0)
+    #define MINE() do { if (nmine < 0) { mine = claims_of(pg, &pr.id, fw.fan, fw.k, &nmine, &capped); nmine = refused(pg, c, &fw, mine, nmine); weighed(c, &fw, mine, nmine); } } while (0)
     int held_back = 0, took = 0;
 
     for (int s = 0; s < fw.ntake && !held_back; s++) {
@@ -202,13 +203,66 @@ int cmd_pull(int argc, char **argv){
             for (int i = 0; i < np && nseen < 256; i++) {
                 if (!table_find(&ph[i]) || !memcmp(&ph[i], &pr.id, 16)) continue;                  /* a composition, and not the prompt over again */
                 int dup = 0; for (int z = 0; z < nseen; z++) dup |= !memcmp(&seen[z], &ph[i], 16); if (dup) continue; seen[nseen++] = ph[i];
-                int n, cap2; Claim *cl = claims_of(pg, &ph[i], fw.fan, fw.k, &n, &cap2); n = refused(pg, c, &fw, cl, n); take_top(cl, n, fw.take[s].n, &fw, &seed);
+                int n, cap2; Claim *cl = claims_of(pg, &ph[i], fw.fan, fw.k, &n, &cap2); n = refused(pg, c, &fw, cl, n); weighed(c, &fw, cl, n); take_top(cl, n, fw.take[s].n, &fw, &seed);
                 if (!head) { printf("\nattested   of its constituents\n%10s %8s %6s %8s   %s\n", "confidence", "rating", "dev", "matches", "claim"); head = 1; }
                 if (!n) { char *tx = reader_text(rd, &ph[i], 48); printf("%10s %8s %6s %8s   %s: nothing is attested of it\n", "", "", "", "", tx); free(tx); }
                 for (int k = 0; k < n && k < fw.take[s].n; k++) { show_claim(rd, &cl[k], ""); took++; }
                 free(cl);
             }
             if (head) printf("           (%.1f ms)\n", (now() - t) * 1000);
+        }
+        else if (fw.take[s].what == FW_TAKE_CHAIN) {
+            /* The word that pulls hardest, and the relations followed from it. How hard a word pulls is its role: what is
+             * attested of it under the firmware's role kind (its part of speech), read through the firmware's weights, so
+             * "dog" carries "What is a dog?" and "What", "is" and "a" do not. From that word each relation of the chain is
+             * followed in turn: the claims that hold where the pull stands (or, past the first step, one of the things it
+             * is made of), in the order their witness gave them, then by standing; the top is taken, and the pull stands
+             * at what that claim says. Where it ends is what is returned. */
+            typedef struct { lp_id id; double w; int at; } Puller; Puller pl[64]; int npl = 0;
+            lp_id by; memset(&by, 0, sizeof by); if (fw.role_by[0]) by = entity_named(c, fw.role_by, NULL, 0, NULL).id;
+            lp_id rid[FW_WEIGHS]; for (int z = 0; z < fw.nrole; z++) rid[z] = entity_named(c, fw.role_name[z], NULL, 0, NULL).id;
+            for (int i = 0; i < np && npl < 64; i++) {
+                if (!table_find(&ph[i]) || (np > 1 && !memcmp(&ph[i], &pr.id, 16))) continue;
+                int dup = 0; for (int z = 0; z < npl; z++) dup |= !memcmp(&pl[z].id, &ph[i], 16); if (dup) continue;
+                double w = fw.role_by[0] ? 0.5 : 1.0;                                     /* a word nothing says the role of pulls half */
+                if (fw.role_by[0]) { lp_id part[3] = { ph[i], by, by }; int have[3] = { 2, 2, 0 }, n, cap2; Claim *cl = claims_like(pg, part, have, fw.fan, fw.k, &n, &cap2);
+                    for (int q = 0; q < n; q++) { int hit = 0; for (int z = 0; z < fw.nrole && !hit; z++) if (!memcmp(&cl[q].part[cl[q].np - 1], &rid[z], 16)) { w = fw.role[z]; hit = 1; } if (hit) break; }
+                    free(cl); }
+                pl[npl++] = (Puller){ ph[i], w, i };
+            }
+            for (int a_ = 1; a_ < npl; a_++) { Puller x = pl[a_]; int b_ = a_; while (b_ > 0 && pl[b_ - 1].w < x.w) { pl[b_] = pl[b_ - 1]; b_--; } pl[b_] = x; }
+            for (int u = 0; u < npl && u < fw.take[s].n; u++) {
+                if (pl[u].w <= 0) break;
+                lp_id cur = pl[u].id; Claim kept[FW_CHAIN]; int nk = 0, alt = 0;
+                for (alt = 0; alt < fw.nalt; alt++) { cur = pl[u].id; nk = 0;                /* each chain the firmware names, until one reaches its end */
+                for (int z = 0; z < fw.nchain[alt]; z++) {
+                    lp_id pred = entity_named(c, fw.chain[alt][z], NULL, 0, NULL).id, tryv[66]; int nt = 0; tryv[nt++] = cur;
+                    if (z > 0 && lp_tier0_codepoint(T0, &cur) < 0) {                       /* what it is made of, the last first, the puller itself left out */
+                        uint8_t ab[40]; size_t al = ids_param(ab, &cur, 1); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+                        PGresult *q = db_ask(pg, "SELECT path FROM laplace_paths($1::blake3[]) LIMIT 1", 1, v, l, f);
+                        if (PQresultStatus(q) == PGRES_TUPLES_OK && PQntuples(q)) { Run rn = run_of((const uint8_t *)PQgetvalue(q, 0, 0), (size_t)PQgetlength(q, 0, 0));
+                            for (int k = rn.n - 1; k >= 0 && nt < 66; k--) if (lp_tier0_codepoint(T0, &rn.id[k]) < 0 && memcmp(&rn.id[k], &pl[u].id, 16)) tryv[nt++] = rn.id[k];
+                            free(rn.id); }
+                        PQclear(q);
+                        if (nt < 66) tryv[nt++] = pl[u].id; }                                    /* a synset of one member is that word: what is said of it is said of the word */
+                    Claim *cl = NULL; int n = 0, cap2;
+                    for (int t2 = 0; t2 < nt && !n; t2++) { lp_id part[3] = { tryv[t2], pred, pred }; int have[3] = { 2, 2, 0 };
+                        cl = claims_like(pg, part, have, fw.fan, fw.k, &n, &cap2); if (!n) { free(cl); cl = NULL; } }     /* a relation the firmware names to follow is not one it refuses */
+                    if (!n) break;
+                    positions_of(pg, cl, n); if (fw.order_witness) qsort(cl, (size_t)n, sizeof(Claim), claim_by_position);
+                    take_top(cl, n, 1, &fw, &seed);
+                    kept[nk++] = cl[0]; cur = cl[0].part[cl[0].np - 1]; free(cl);
+                }
+                if (nk == fw.nchain[alt]) break; }
+                if (alt == fw.nalt) alt = fw.nalt - 1;
+                char *who = reader_text(rd, &pl[u].id, 64);
+                if (nk == fw.nchain[alt]) { char *tx = reader_text(rd, &cur, 600);
+                    printf("\nanswer     %s: %s\n", who, tx); free(tx);
+                    printf("           through"); for (int z = 0; z < nk; z++) printf(" %s", fw.chain[alt][z]); printf(", %s pulling at %.2f", who, pl[u].w);
+                    printf("; standing of the last strand %.0f +/- %.0f, %d matches   (%.1f ms)\n", kept[nk - 1].r.rating, kept[nk - 1].r.deviation, kept[nk - 1].matches, (now() - t) * 1000); took++; }
+                else printf("\nanswer     %s: the chain stops after %d of %d relations: nothing is attested there   (%.1f ms)\n", who, nk, fw.nchain[alt], (now() - t) * 1000);
+                free(who);
+            }
         }
     }
     printf("\n%d taken in %d step%s   %llu round trips for text   total %.1f ms\n", took, fw.ntake, fw.ntake == 1 ? "" : "s", (unsigned long long)reader_trips(rd), (now() - T) * 1000);

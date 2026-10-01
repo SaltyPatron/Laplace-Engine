@@ -377,14 +377,16 @@ static void inside(const EW *w, TSNode content, const Ref *S, long scp, const Tx
     if (ts_tree_cursor_goto_first_child(&cur)) do { TSNode c = ts_tree_cursor_current_node(&cur); if (is(c, "element") && ts_node_start_byte(c) != skip) kid[k++] = c; } while (ts_tree_cursor_goto_next_sibling(&cur));
     ts_tree_cursor_delete(&cur);
     if (!rec && k >= 256 && ts_node_end_byte(content) - ts_node_start_byte(content) > (1u << 20)) {
-        int nt = omp_get_num_threads() * 8; if (nt > (int)k) nt = (int)k; Events *pe = calloc((size_t)nt, sizeof(Events));
+        int nt = omp_get_num_threads() * 8; if (nt > (int)k) nt = (int)k; Events *pe = calloc((size_t)nt, sizeof(Events)); Refs *pn = calloc((size_t)nt, sizeof(Refs));
         #pragma omp taskloop grainsize(1)
         for (int t = 0; t < nt; t++)
-            for (uint32_t i = (uint32_t)((uint64_t)k * t / nt); i < (uint32_t)((uint64_t)k * (t + 1) / nt); i++) { Ref n_; int h_; element(w, kid[i], S, scp, tx, NULL, &n_, &h_, &pe[t]); }
-        for (int t = 0; t < nt; t++) { for (uint64_t j = 0; j < pe[t].n; j++) ev_push(ev, &pe[t].e[j]); free(pe[t].e); }
-        free(pe); free(kid); return;
+            for (uint32_t i = (uint32_t)((uint64_t)k * t / nt); i < (uint32_t)((uint64_t)k * (t + 1) / nt); i++) { Ref n_; int h_ = 0; uint64_t from = pe[t].n; element(w, kid[i], S, scp, tx, NULL, &n_, &h_, &pe[t]);
+                if (h_ && items) { refs_push(&pn[t], n_); for (uint64_t j = from; j < pe[t].n; j++) if (pe[t].e[j].kind != EV_MEMBER && !memcmp(&pe[t].e[j].witnessed, &n_.id, 16)) pe[t].e[j].inner = 1; } }
+        for (int t = 0; t < nt; t++) { for (uint64_t j = 0; j < pe[t].n; j++) ev_push(ev, &pe[t].e[j]); free(pe[t].e); for (int j = 0; items && j < pn[t].n; j++) refs_push(items, pn[t].c[j]); free(pn[t].c); }
+        free(pe); free(pn); free(kid); return;
     }
-    for (uint32_t i = 0; i < k; i++) { Ref n_; int h_ = 0; element(w, kid[i], S, scp, tx, rec, &n_, &h_, ev); if (h_ && items) refs_push(items, n_); }
+    for (uint32_t i = 0; i < k; i++) { Ref n_; int h_ = 0; uint64_t from = ev->n; element(w, kid[i], S, scp, tx, rec, &n_, &h_, ev);
+        if (h_ && items) { refs_push(items, n_); for (uint64_t j = from; j < ev->n; j++) if (ev->e[j].kind != EV_MEMBER && !memcmp(&ev->e[j].witnessed, &n_.id, 16)) ev->e[j].inner = 1; } }
     free(kid);
 }
 static void element(const EW *w, TSNode el, const Ref *S, long scp, const Txt *tx, Refs *rec, Ref *node, int *has_node, Events *ev){
@@ -413,20 +415,24 @@ static void element(const EW *w, TSNode el, const Ref *S, long scp, const Txt *t
         free(word.c); free(nodes.c); free(claims.c); return;
     }
     if (thing_of(w, &t, S, scp, &th)) {
-        /* what it says itself it says together: its place in what it is inside, its attributes, its own text */
-        Refs own = { 0 }; Ref place; int has_place = 0;
-        if (S) { place = claim3(*S, nref, th.X); has_place = 1; if (!rec) refs_push(&own, place); }
+        /* A thing is one node of the file's own tree: itself, what it says (its place in what it is inside, its
+         * attributes, its own text), and the things inside it, in the order the file gives them. The file's content is
+         * that tree, tier over tier as the file has them, the way a text is paragraphs over sentences; nothing in it is
+         * a block cut by position. What it says is witnessed in it; the things inside it are nodes of their own. */
+        Refs own = { 0 }, kids = { 0 }; int has_place = 0;
+        if (S) { refs_push(&own, claim3(*S, nref, th.X)); has_place = 1; }
         for (int a = 0; a < t.na; a++) if (a != th.attr && a != th.attr2) said_by(w, &t, a, th.X, th.cp, &own, NULL);
         if (th.attr != -2 && t.has_content && !holds_elements(t.content)) { Ref v; if (value_ref(w, t.content, 0, is_span_text(w, t.name), th.cp, &v)) refs_push(&own, claim3(th.X, nref, v)); }
-        if (own.n == 1) alone(w, ev, own.c[0]);
-        else if (own.n > 1) {
-            Ref *path = malloc(sizeof(Ref) * (size_t)(own.n + 1)); path[0] = nref; memcpy(path + 1, own.c, sizeof(Ref) * (size_t)own.n);
-            record_of(w, ev, said_record(compose(path, (uint32_t)own.n + 1, tier_of(path, own.n + 1))), own.c, own.n); free(path);
-        }
-        free(own.c);
         if (t.has_content && holds_elements(t.content)) { Txt mine; int has = text_in(w, &t, &mine);
-            inside(w, t.content, &th.X, th.cp, has ? &mine : tx, th.child, NULL, NULL, ev); if (has) free(mine.p); }
-        if (rec && has_place) { refs_push(rec, place); *node = place; *has_node = 1; }   /* inside a record: its place there is what the record says of it */
+            inside(w, t.content, &th.X, th.cp, has ? &mine : tx, th.child, NULL, &kids, ev); if (has) free(mine.p); }
+        if (own.n == 1 && !kids.n) { alone(w, ev, own.c[0]); *node = own.c[0]; *has_node = 1; }
+        else if (own.n + kids.n > 0) {
+            Ref *path = malloc(sizeof(Ref) * (size_t)(own.n + kids.n + 1)); path[0] = th.X; path[0].said = 0;
+            memcpy(path + 1, own.c, sizeof(Ref) * (size_t)own.n); memcpy(path + 1 + own.n, kids.c, sizeof(Ref) * (size_t)kids.n);
+            Ref rn = said_record(compose(path, (uint32_t)(own.n + kids.n + 1), tier_of(path, own.n + kids.n + 1))); free(path);
+            record_of(w, ev, rn, own.c, own.n); *node = rn; *has_node = 1;
+        }
+        (void)has_place; (void)rec; free(own.c); free(kids.c);
         return;
     }
     if (meant_thing(w, t.name)) return;                                      /* a thing that resolved to none: it says nothing */

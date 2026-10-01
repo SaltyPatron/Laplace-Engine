@@ -2,25 +2,26 @@ name conceptnet-assertions
 # One edge on every line, five fields parted by tabs, no header row. ConceptNet's documentation (Downloads):
 #   "The five fields of each line are: The URI of the whole edge; The relation expressed by the edge; The node at the
 #    start of the edge; The node at the end of the edge; A JSON structure of additional information about the edge"
-# and (Edges) names the fields: uri, rel, start, end, and in the JSON weight, sources, license, dataset, surfaceText.
-# The edge is its start, its relation and its end. Its uri and everything in the JSON are said of the edge itself.
+# The edge is its start, its relation and its end.
 #
 # (URI hierarchy) "Every object in ConceptNet has a URI that is structured like a path"; "Concept URIs contain the
 # text of the concept, with spaces replaced by underscores"; a concept has "the initial /c", "a part that indicates
-# its language", "a part with the concept text", and "an optional fourth component gives the part of speech". So
-#   /c/en/ice_cream/n   is   [c, en, [ice, cream], n]
-# and an assertion's URI, "in a bracketed list", /a/[/r/IsA/,/c/en/dog/,/c/en/animal/], is
-#   [a, [[r, IsA], [c, en, dog], [c, en, animal]]]
+# its language", "a part with the concept text", and "an optional fourth component gives the part of speech". A URI
+# is ConceptNet's address for a term, a key: the term is the text itself, the word any other witness speaks of, and
+# what the address says of it (its language, its part of speech) is said of the term. /c/en/ice_cream/n is the
+# term "ice cream", of which ConceptNet says en and n. A relation's URI, /r/IsA, is the relation IsA.
+# The edge's own URI, and the dataset, licence and process the JSON names, are ConceptNet's bookkeeping.
 #
 # (Edges) "sources: the sources that, when combined, say that this assertion should be true": each "contributor"
 # among them is a witness of its own and attests the edge. An edge that names no contributor is attested by ConceptNet.
-# (Edges) "weight: the strength with which this edge expresses this assertion. A typical weight is 1, but weights can
-# be higher or lower. All weights are positive." It gives no scale, so the weight is recorded as what is said of the
-# edge and is not taken for a score.
 match assertions.csv
 grammar table
 columns uri rel start end json
 paths / _
+address start 3 says 2 4
+address end 3 says 2 4
+address rel 2
+omit dataset license process
 specifics
 
 claims
@@ -29,4 +30,3 @@ predicate in rel
 object in end
 json json
 witnesses sources contributor
-

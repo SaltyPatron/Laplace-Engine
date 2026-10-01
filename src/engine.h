@@ -23,9 +23,12 @@ PGresult *db_ask(PGconn *, const char *sql, int n, const char *const *v, const i
 /* ---- the personality firmware: a pull's decisions, read from a file, never from the records (firmware.c) */
 enum { FW_HOP, FW_SEARCH, FW_TRANSLATE, FW_FOLLOWS, FW_PULL, FW_OPS };
 enum { FW_FRECHET, FW_OUTLIERS, FW_DTW, FW_EDR };
-enum { FW_TAKE_FACT, FW_TAKE_SEGMENT, FW_TAKE_ATTESTATIONS, FW_TAKE_CONSTITUENTS };
+enum { FW_TAKE_FACT, FW_TAKE_SEGMENT, FW_TAKE_ATTESTATIONS, FW_TAKE_CONSTITUENTS, FW_TAKE_CHAIN };
+#define FW_CHAIN 8
+#define FW_ALTS 4
 #define FW_NAMES 32
 #define FW_TAKES 16
+#define FW_WEIGHS 128
 typedef struct {
     char path[4200];
     double k, lambda;                                 /* how far below its rating a standing must hold; the tax on a hop */
@@ -36,6 +39,9 @@ typedef struct {
     int shape; double shape_n;
     char refuse_predicate[FW_NAMES][96], refuse_witness[FW_NAMES][96]; int nrefuse_predicate, nrefuse_witness;
     struct { int what, n; } take[FW_TAKES]; int ntake; /* a pull's steps, in order */
+    char weigh_name[FW_WEIGHS][96]; double weigh[FW_WEIGHS]; int nweigh;
+    char role_by[96], role_name[FW_WEIGHS][96]; double role[FW_WEIGHS]; int nrole;      /* how hard a word pulls, by what is attested of it under role_by (its part of speech) */
+    char chain[FW_ALTS][FW_CHAIN][96]; int nchain[FW_ALTS], nalt;                                             /* the relations a pull follows from the word that pulls hardest, in order */   /* role weights: how hard a strand of a kind is allowed to pull, 1 unless said */
 } Firmware;
 /* ---- the lookups the forward pass is made of (pull.c) */
 #define MAXPARTS 12
@@ -49,7 +55,10 @@ Claim *claims_of(PGconn *, const lp_id *e, int fan, double k, int *n, int *cappe
 void   positions_of(PGconn *, Claim *, int n);
 int    claim_by_position(const void *, const void *);
 int    claim_by_conf(const void *, const void *);
-int    refused(PGconn *, lp_text *, const Firmware *, Claim *, int n);                  /* what the firmware refuses, taken out */
+int    refused(PGconn *, lp_text *, const Firmware *, Claim *, int n);
+void   weights_named(lp_text *, const Firmware *, lp_id *ids);                           /* the kinds a firmware weighs, as entities */
+double strand_weight(const Firmware *, const lp_id *ids, const lp_id *part, int np);     /* how hard a claim of these parts is allowed to pull */
+void   weighed(lp_text *, const Firmware *, Claim *, int n);                             /* each claim's confidence by its weight, and the set in that order */                  /* what the firmware refuses, taken out */
 
 /* ---- commands */
 int cmd_ingest(int argc, char **argv);
@@ -179,6 +188,7 @@ typedef struct {
     char named_key[64], named[8][64]; int nnamed;       /* JSON: an object that holds named_key is the thing these members name together, in this order */
     int kinds_own, voices_file;                        /* a table: a kind stands within the source, [witness, kind, value]; a voice within the file */
     char escaped;                                      /* a table: the character after this one is itself, a line's end included */
+    struct { char col[64]; int thing, says[4], nsays; } address[8]; int naddress;   /* a column of the source's addresses: which part is the thing, which parts are said of it; the rest are keys */
     char path_sep, path_join;                          /* a value that begins with path_sep is a path of parts, a part's words joined by path_join */
     int specifics; char claims_under[8][64]; int nclaims_under;   /* what is held with a claim is its specifics: pairs, witnessed with it; but under these keys, claims of their own */
     int linkage, tuples;                               /* JSON: what a thing inside another says, it says of being there; a list of values inside a list is one tuple */
@@ -226,7 +236,7 @@ int     recipes_broken(const Recipe *r, int n, const Source *of);             /*
  * statement that stands alone is both at once. A record (a sentence with what is said of it) is witnessed once, and
  * every claim in it is witnessed in it. */
 enum { EV_CLAIM = 0, EV_RECORD = 1, EV_MEMBER = 2 };      /* a claim that is its own record; a record; a claim within the record before it */
-typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviation; uint32_t position; uint8_t kind, own_witness; lp_id witness; } Event;   /* witness: who witnessed it, when the source names one for this statement and not for the whole file */
+typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviation; uint32_t position; uint8_t kind, own_witness; lp_id witness; uint8_t inner; } Event;   /* witness: who witnessed it, when the source names one for this statement and not for the whole file */
 typedef struct { Event *e; uint64_t n, cap; } Events;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */

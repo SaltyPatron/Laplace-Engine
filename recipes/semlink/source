@@ -1,8 +1,7 @@
 name semlink
 # SemLink 2: the mappings between PropBank, VerbNet and FrameNet.
 witness SemLink
-# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
-deviation 90
+class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/SemLink/extracted/semlink-*
 # Measured when it was loaded: 34,623 compositions from 0.5 MB, at 750 bytes each with their indexes and standings.
 room 52

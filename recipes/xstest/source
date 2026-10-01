@@ -3,8 +3,7 @@ name xstest
 # with their annotations. The readme's title: "XSTest: A Test Suite for Identifying Exaggerated Safety Behaviours in
 # Large Language Models".
 witness XSTest
-# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
-deviation 90
+class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/Safety/XSTest/extracted/xstest-*
 except */evaluation/* *.gitignore
 after unicode iso-639

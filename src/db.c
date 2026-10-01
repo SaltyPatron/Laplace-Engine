@@ -1,5 +1,6 @@
 /* Writing to PostgreSQL: trunk-to-leaf deduplication, binary COPY straight into each leaf partition on its own
  * connection, and the semantics (witnesses, the ledger, the consensus). SQL only fetches and writes. */
+#define _GNU_SOURCE
 #include "engine.h"
 #include <arpa/inet.h>
 #include <omp.h>
@@ -32,51 +33,6 @@ static void copy_end(Copy *c){
 }
 static int64_t hsigned(uint64_t h){ return (int64_t)(h ^ 0x8000000000000000ull); }      /* bigint order = Hilbert order */
 
-/* Which of these IDs the database already records, at any tier. An ID's first hex digit says which sixteenth of every
- * tier it could be in, so each lookup goes to those partitions by name, and only to the ones that hold anything:
- * never to the partitioned table, which would probe every partition of every tier for every ID. */
-static char *probe_sql[16]; static int probe_planned;
-static void probe_plan(PGconn *pg){
-    PGresult *r = PQexec(pg, "SELECT c.relname FROM pg_class c WHERE c.relkind = 'r' AND c.relname ~ '^entity_t([0-9]+|x)(_[0-9a-f])?$' ORDER BY 1");
-    if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "partitions: %s", PQerrorMessage(pg)); exit(1); }
-    size_t cap[16] = { 0 }, len[16] = { 0 }; for (int h = 0; h < 16; h++) { free(probe_sql[h]); probe_sql[h] = NULL; }
-    for (int j = 0; j < PQntuples(r); j++) {
-        const char *name = PQgetvalue(r, j, 0); char q[160]; snprintf(q, sizeof q, "SELECT 1 FROM %s LIMIT 1", name);
-        PGresult *e = PQexec(pg, q); int holds = PQresultStatus(e) == PGRES_TUPLES_OK && PQntuples(e) > 0; PQclear(e);
-        if (!holds) continue;
-        size_t nl = strlen(name); int whole = !(nl > 2 && name[nl - 2] == '_');        /* a tier that is one partition holds IDs of every first digit */
-        char hx = name[nl - 1]; int only = hx <= '9' ? hx - '0' : hx - 'a' + 10;
-        for (int h = whole ? 0 : only; h < (whole ? 16 : only + 1); h++) {
-            if (len[h] + 256 > cap[h]) { cap[h] = cap[h] * 2 + 4096; probe_sql[h] = xrealloc(probe_sql[h], cap[h]); }
-            len[h] += (size_t)snprintf(probe_sql[h] + len[h], cap[h] - len[h], "%s EXISTS (SELECT 1 FROM %s e WHERE e.id = u.id)",
-                                       len[h] ? " OR" : "SELECT u.i FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) WHERE", name);
-        }
-    }
-    PQclear(r);
-}
-static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, uint64_t n){
-    uint8_t *hit = calloc(n ? n : 1, 1); const uint64_t CH = 50000;
-    if (!probe_planned) { probe_plan(pg[0]); probe_planned = 1; }
-    uint64_t cnt[17] = { 0 }; for (uint64_t i = 0; i < n; i++) cnt[(ids[i].b[0] >> 4) + 1]++;
-    for (int h = 0; h < 16; h++) cnt[h + 1] += cnt[h];
-    uint64_t *at = malloc(sizeof(uint64_t) * (n + 1)), fill[16]; memcpy(fill, cnt, sizeof fill);
-    for (uint64_t i = 0; i < n; i++) at[fill[ids[i].b[0] >> 4]++] = i;                 /* the IDs, by their first hex digit */
-    typedef struct { int h; uint64_t lo, n; } Job; Job *job = malloc(sizeof(Job) * (n / CH + 17)); uint64_t nj = 0;
-    for (int h = 0; h < 16; h++) { if (!probe_sql[h]) continue; for (uint64_t lo = cnt[h]; lo < cnt[h + 1]; lo += CH) job[nj++] = (Job){ h, lo, cnt[h + 1] - lo < CH ? cnt[h + 1] - lo : CH }; }
-    #pragma omp parallel for num_threads(npg) schedule(dynamic)
-    for (uint64_t j = 0; j < nj; j++) {
-        uint32_t k = (uint32_t)job[j].n; lp_id *part = malloc(sizeof(lp_id) * k); for (uint32_t i = 0; i < k; i++) part[i] = ids[at[job[j].lo + i]];
-        uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t len = ids_param(ab, part, k); PGconn *c = pg[omp_get_thread_num()];
-        const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
-        PGresult *r = PQexecParams(c, probe_sql[job[j].h], 1, NULL, v, l, f, 0);
-        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "dedup: %s", PQerrorMessage(c)); exit(1); }
-        for (int x = 0; x < PQntuples(r); x++) hit[at[job[j].lo + (uint64_t)atoll(PQgetvalue(r, x, 0)) - 1]] = 1;
-        PQclear(r); free(ab); free(part);
-    }
-    free(at); free(job);
-    return hit;
-}
-
 /* ---- partitions: a tier each, tiers deeper than 15 in the default; the largest tiers split again 16 ways by the
  * ID's first hex digit. Which tiers are split is the schema's to say: it is read from the database, never assumed. */
 static uint8_t split[17];
@@ -94,6 +50,41 @@ static void part_name(int p, const char *table, char *out, size_t cap){
 }
 #define NPART (17 * 16)
 
+/* "I have these IDs: which do you already have?" The client composed every node, so it knows each ID's tier; an ID's
+ * tier and first hex digit name the one partition it can be in. The IDs of a partition go to that partition as one
+ * sorted set and come back as the ones it holds: a set question answered from the ID index, never a search of the
+ * tiers. What comes back is left out of what is written, with everything under it (Ingestion: Deduplication). */
+static int by_id(const void *a, const void *b, void *ids){ return memcmp(&((const lp_id *)ids)[*(const uint64_t *)a], &((const lp_id *)ids)[*(const uint64_t *)b], 16); }
+static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, const uint8_t *tiers, uint64_t n){
+    uint8_t *hit = calloc(n ? n : 1, 1); const uint64_t CH = 500000;
+    uint64_t *cnt = calloc(NPART + 1, 8); for (uint64_t i = 0; i < n; i++) cnt[part_of(&ids[i], tiers[i]) + 1]++;
+    for (int p = 0; p < NPART; p++) cnt[p + 1] += cnt[p];
+    uint64_t *at = malloc(sizeof(uint64_t) * (n + 1)), *fill = malloc(sizeof(uint64_t) * NPART); memcpy(fill, cnt, sizeof(uint64_t) * NPART);
+    for (uint64_t i = 0; i < n; i++) at[fill[part_of(&ids[i], tiers[i])]++] = i;       /* the IDs, by the partition each can be in */
+    typedef struct { int p; uint64_t lo, n; } Job; Job *job = malloc(sizeof(Job) * (n / CH + NPART + 1)); uint64_t nj = 0;
+    for (int p = 0; p < NPART; p++) { if (cnt[p + 1] == cnt[p]) continue;
+        qsort_r(at + cnt[p], cnt[p + 1] - cnt[p], sizeof(uint64_t), by_id, (void *)ids);                    /* in ID order: the index is read along, not hopped across */
+        for (uint64_t lo = cnt[p]; lo < cnt[p + 1]; lo += CH) job[nj++] = (Job){ p, lo, cnt[p + 1] - lo < CH ? cnt[p + 1] - lo : CH }; }
+    #pragma omp parallel for num_threads(npg) schedule(dynamic)
+    for (uint64_t j = 0; j < nj; j++) {
+        uint32_t k = (uint32_t)job[j].n; lp_id *part = malloc(sizeof(lp_id) * k); for (uint32_t i = 0; i < k; i++) part[i] = ids[at[job[j].lo + i]];
+        uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t len = ids_param(ab, part, k); PGconn *c = pg[omp_get_thread_num()];
+        char tn[64], sql[256]; part_name(job[j].p, "entity", tn, sizeof tn);
+        snprintf(sql, sizeof sql, "SELECT u.i FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) WHERE EXISTS (SELECT 1 FROM %s e WHERE e.id = u.id)", tn);
+        const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
+        PGresult *r = PQexecParams(c, sql, 1, NULL, v, l, f, 0);
+        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "dedup: %s", PQerrorMessage(c)); exit(1); }
+        for (int x = 0; x < PQntuples(r); x++) hit[at[job[j].lo + (uint64_t)atoll(PQgetvalue(r, x, 0)) - 1]] = 1;
+        PQclear(r); free(ab); free(part);
+    }
+    free(at); free(job); free(cnt); free(fill);
+    return hit;
+}
+static uint8_t *tiers_of(const lp_id *ids, uint64_t n){                       /* the tier the client composed each of them at */
+    uint8_t *t = malloc(n ? n : 1); for (uint64_t i = 0; i < n; i++) { Node *x = table_find(&ids[i]); t[i] = x ? x->tier : 0; } return t;
+}
+
+
 
 typedef struct { uint32_t shard; uint32_t idx; uint64_t h; } NRef;        /* h: the node's Hilbert value, computed once */
 static NRef *bucket[NPART]; static uint64_t nbucket[NPART];
@@ -102,10 +93,14 @@ static int by_hilbert(const void *a, const void *b){ uint64_t x = ((const NRef *
 /* A partition's new rows go in Hilbert order (Atoms: the Hilbert value is for locality, partitioning, and ordering):
  * rows near each other in the 4-ball are written together, so the coordinate and Hilbert indexes take a run of
  * neighbours on the same pages instead of one row per page in hash order. */
-static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_p, int atoms_needed){
+static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_p, int atoms_needed, int own_txn){
     char tn[64]; Copy c = { 0 }; char sql[160]; uint8_t geo[64 * 1024];
     lp_id *ids = NULL; uint64_t *runs = NULL; size_t idc = 0;
     qsort(bucket[p], nbucket[p], sizeof(NRef), by_hilbert);
+    /* a partition's entities and their paths are one transaction: a load cut off between the two leaves no entity
+     * without a physicality (Physicality: the counts match, or the system is wrong). The file trunks are written
+     * inside the transaction that holds what they attested, which is already open: that one is not begun or ended here. */
+    if (own_txn) { PGresult *b = PQexec(pg, "BEGIN"); if (PQresultStatus(b) != PGRES_COMMAND_OK) { fprintf(stderr, "begin: %s", PQerrorMessage(pg)); exit(1); } PQclear(b); }
     part_name(p, "entity", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY %s (id, tier, coord, hilbert) FROM STDIN (FORMAT binary)", tn);
     copy_begin(&c, pg, sql);
     if (atoms_needed && p / 16 == 0)
@@ -144,6 +139,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
         if (gp != geo) free(gp);
     }
     copy_end(&c); *rows_p = c.rows;
+    if (own_txn) { PGresult *e = PQexec(pg, "COMMIT"); if (PQresultStatus(e) != PGRES_COMMAND_OK) { fprintf(stderr, "commit: %s", PQerrorMessage(pg)); exit(1); } PQclear(e); }
     free(c.b); free(ids); free(runs);
 }
 
@@ -174,7 +170,6 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         pg[i] = db_connect(conninfo);
         PQclear(PQexec(pg[i], "SET synchronous_commit = off"));
     }
-    probe_planned = 0;                                                       /* a partition empty at the last load may hold something now */
     parts_plan(pg[0]);
     PGresult *r = PQexec(pg[0], "SELECT count(*) FROM entity WHERE tier = 0");
     int atoms_needed = !(PQresultStatus(r) == PGRES_TUPLES_OK && atoll(PQgetvalue(r, 0, 0)) == (long long)LP_NCP); PQclear(r);
@@ -189,7 +184,8 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
      * everything it attested, and nothing of it is looked for, played or written again. */
     { lp_id *trunk = malloc(sizeof(lp_id) * (size_t)(nfiles + 1)); int *of = malloc(sizeof(int) * (size_t)(nfiles + 1)); uint64_t nt = 0;
       for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { of[nt] = fi; trunk[nt++] = files[fi].file.id; }
-      if (nt) { uint8_t *hit = recorded(pg, npg, trunk, nt); st->checked += nt;
+      if (nt) { uint8_t *tt = malloc(nt); for (uint64_t i = 0; i < nt; i++) { Node *x = table_find(&trunk[i]); tt[i] = x ? x->tier : files[of[i]].file.tier; }
+                uint8_t *hit = recorded(pg, npg, trunk, tt, nt); free(tt); st->checked += nt;
                 for (uint64_t i = 0; i < nt; i++) if (hit[i]) { files[of[i]].known = 1; st->known++; st->found++; Node *x = table_find(&trunk[i]); if (x) x->keep = 2; }
                 free(hit); }
       free(trunk); free(of); }
@@ -205,7 +201,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     }
     while (nf) {
         st->rounds++; st->checked += nf;
-        uint8_t *hit = recorded(pg, npg, front, nf);
+        uint8_t *ft = tiers_of(front, nf); uint8_t *hit = recorded(pg, npg, front, ft, nf); free(ft);
         uint64_t nn = 0; lp_id *next = malloc((nf + 1) * sizeof(lp_id)); uint64_t ncap = nf + 1;
         for (uint64_t i = 0; i < nf; i++) {
             Node *x = table_find(&front[i]);
@@ -241,7 +237,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         #pragma omp parallel for num_threads(npg) schedule(dynamic)
         for (int p = tier * 16; p < tier * 16 + 16; p++) {
             if (!nbucket[p] && !(atoms_needed && p / 16 == 0)) continue;         /* nothing new for this partition */
-            write_node_rows(pg[omp_get_thread_num()], p, &re[p], &rp[p], atoms_needed);
+            write_node_rows(pg[omp_get_thread_num()], p, &re[p], &rp[p], atoms_needed, 1);
         }
     }
     for (int p = 0; p < NPART; p++) { st->ent_rows += re[p]; st->phy_rows += rp[p]; free(bucket[p]); bucket[p] = NULL; }
@@ -421,7 +417,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         for (int p = 0; p < NPART; p++) { bucket[p] = malloc(sizeof(NRef) * (cnt[p] + 1)); nbucket[p] = 0; }
         for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (!x || x->keep != 5) continue;
             int p = part_of(&x->id, x->tier), sh = x->id.b[0]; bucket[p][nbucket[p]++] = nref((uint32_t)sh, (uint32_t)(x - shard[sh].node)); x->keep = 1; }
-        for (int p = 0; p < NPART; p++) { uint64_t e = 0, ph = 0; if (nbucket[p]) { write_node_rows(pg[0], p, &e, &ph, 0); st->ent_rows += e; st->phy_rows += ph; } free(bucket[p]); bucket[p] = NULL; }
+        for (int p = 0; p < NPART; p++) { uint64_t e = 0, ph = 0; if (nbucket[p]) { write_node_rows(pg[0], p, &e, &ph, 0, 0); st->ent_rows += e; st->phy_rows += ph; } free(bucket[p]); bucket[p] = NULL; }
     }
     { PGresult *e = PQexec(pg[0], "COMMIT"); if (PQresultStatus(e) != PGRES_COMMAND_OK) { fprintf(stderr, "commit: %s", PQerrorMessage(pg[0])); return 1; } PQclear(e); }
     for (int i = 0; i < npg; i++) PQfinish(pg[i]);

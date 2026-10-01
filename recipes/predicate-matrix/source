@@ -2,8 +2,7 @@ name predicate-matrix
 # The Predicate Matrix v1.3: a role of a predicate, mapped over VerbNet, WordNet, the MCR, FrameNet, PropBank and ESO.
 # The witness is named as the README's title names it: "Predicate Matrix v1.3".
 witness Predicate Matrix v1.3
-# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
-deviation 90
+class AcademicCurated
 root $LAPLACE_DATA/PredicateMatrix.v1.3
 # Measured when it was loaded: 2,758,677 compositions from 141 MB, at 750 bytes each with their indexes and standings.
 room 15

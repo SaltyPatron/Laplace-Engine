@@ -6,9 +6,7 @@ name tatoeba
 # What Tatoeba says is of whole sentences: a sentence, its language, who wrote it, which sentences translate it, its
 # tags, lists, audio and reviews. It says nothing of a sentence's words one by one.
 witness Tatoeba
-# A witness entering unrated plays at Glicko-2's stock deviation (350, trust 0.67); its trust is then earned by its
-# agreement with higher-tier witnesses (Research: Trust).
-trust 0.67
+class UserCuratedResource
 root $LAPLACE_DATA/.refresh-*/Tatoeba
 # Measured, not loaded: 294,452,005 compositions from 3,191 MB, at 750 bytes each with their indexes and standings.
 room 69

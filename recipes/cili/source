@@ -3,7 +3,7 @@ name cili
 # to the wordnets. The definitions are Princeton WordNet's.
 witness Collaborative Interlingual Index
 lineage WordNet
-deviation 35
+class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/CILI/extracted
 
 # Measured when it was loaded: 6,055,916 compositions from 100 MB, at 750 bytes each with their indexes and standings.

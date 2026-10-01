@@ -98,8 +98,8 @@ A `source` file:
 name my-source
 # one or two lines: what it is
 witness The Name The Source Gives Itself
-# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
-deviation 90
+# its trust class, one of Laplace-Native/manifest/trust_classes.toml, as the wiki (Sequence: Sources, the estate) gives it for the source
+class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/Set/extracted
 root $LAPLACE_DATA/Set
 after unicode iso-639

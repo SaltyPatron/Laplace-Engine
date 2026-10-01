@@ -2,7 +2,7 @@ name unicode
 # The Unicode Standard's data: the character database, the collation table, the emoji data. The floor of everything.
 witness Unicode Character Database
 # The standard that defines these properties.
-trust 1.0
+class StandardsDerived
 root $LAPLACE_DATA/UCD/Public/UCD/latest
 # Measured when it was loaded: 20,147,624 compositions from 239 MB, at 750 bytes each with their indexes and standings.
 room 64

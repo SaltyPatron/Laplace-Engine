@@ -4,8 +4,7 @@ name framenet
 # sentences of the lexical units and of the full texts.
 # README.txt: "Welcome to Release 1.7 of the FrameNet data!" ... "The FrameNet database in XML format"
 witness FrameNet
-# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
-deviation 90
+class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/FrameNet/framenet_v17
 root $LAPLACE_DATA/FrameNet/framenet_v17
 # Measured when it was loaded: 15,952,613 compositions from 854 MB, at 750 bytes each with their indexes and standings.

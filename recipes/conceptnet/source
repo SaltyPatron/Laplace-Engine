@@ -2,8 +2,7 @@ name conceptnet
 # ConceptNet 5.7's assertions: one edge on every line. ConceptNet's own documentation of the file (Downloads, Edges,
 # URI hierarchy, Relations) is beside it, in "documentation", and is read as the text it is.
 witness ConceptNet
-# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
-deviation 90
+class UserCuratedResource
 root $LAPLACE_DATA/ConceptNet
 # Measured, not loaded: 254,147,905 compositions from 10,157 MB, at 750 bytes each with their indexes and standings.
 room 19

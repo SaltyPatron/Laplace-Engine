@@ -1,8 +1,7 @@
 name verbnet
 # VerbNet's classes: their members, thematic roles and frames.
 witness VerbNet
-# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
-deviation 90
+class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/VerbNet/extracted/verbnet-*/verbnet3.4
 # Measured when it was loaded: 96,668 compositions from 3.2 MB, at 750 bytes each with their indexes and standings.
 room 23

@@ -16,6 +16,10 @@
 #   fact N                     a member of the set curated by a witness of at least this trust is returned as one
 #                              fact, the rest of the set held back; without the line, no such branch fires
 #   order witness | standing   on a claim with a part left open: the witness's own order before the standing, or not
+#   weigh N KIND...            role weights: strands of these kinds pull N as hard (0 to 1; 1 unless said). A weight is
+#                              the firmware's reading, never a change to a standing
+#   role by KIND               how hard a word pulls is read from what is attested of it under KIND (its part of speech)
+#   role N VALUE...            a word of that VALUE pulls N as hard (0 to 1)
 #   shape frechet | outliers N | dtw | edr N
 #                              which shape of the tree to favor, and how many variable vertices a match may skip
 #
@@ -26,11 +30,44 @@
 #   take segment               the rest of the branch the prompt is a run of, followed along what was observed
 #   take attestations N        the N strongest strands of the prompt itself
 #   take constituents N        the N strongest strands of each of its constituents
+#   take chain N RELATION...   from each of the N words that pull hardest, the relations followed in order, each by its
+#                              witness's order then its standing: where the chain ends is the answer. Chains
+#                              parted by | are tried in turn until one reaches its end (a form through its lemma)
 k 2
 lambda 0.05
 hops 8
 top always
 order witness
+
+# Role weights, as drafted by hand (Semantics: Personality firmware, "Weights that are not standings"; Research: Trust):
+# the relations that carry what a sentence is about pull hardest, and the function-word relations a fraction as hard,
+# so filler does not drown everything.
+weigh 0.9 nsubj obj
+weigh 0.8 iobj csubj ccomp compound flat
+weigh 0.7 obl nmod appos
+weigh 0.6 amod conj
+weigh 0.5 advmod
+weigh 0.2 aux cop discourse
+weigh 0.15 case mark
+weigh 0.1 det cc
+weigh 0.05 punct
+# What a treebank says of a word's form (its tags, lemma and morphological features) is grammar, not what the word
+# is about: weighed with the function-word relations. The program's default; another firmware weighs otherwise.
+weigh 0.1 UPOS XPOS LEMMA FEATS MISC SpaceAfter Number Tense PronType Mood VerbForm Person Case Gender Definite Degree Poss Reflex NumType Voice Aspect Polarity Abbr Foreign Typo Animacy
+
+# How hard a word pulls, by its part of speech, as drafted by hand (Research: Trust, role trust): a name or a noun
+# carries what a sentence is about; a determiner, an auxiliary or a pronoun a fraction of it.
+role by UPOS
+role 1 PROPN
+role 0.9 NOUN
+role 0.8 VERB
+role 0.7 ADJ NUM
+role 0.5 ADV
+role 0.3 PRON INTJ SYM
+role 0.2 AUX SCONJ X
+role 0.15 ADP
+role 0.1 DET CCONJ PART
+role 0.05 PUNCT
 
 for hop
   fan 4096
@@ -46,6 +83,7 @@ for pull
   # strands of a kind the pull does not navigate (Sequence: Web 15.x): a sentence's tag layers and an example's marked
   # arguments pull back their tags, not what the sentence is about. A default to be ruled on; the firmware is the inventor's.
   refuse predicate BNC PENN GF PT NER WSL Target Other Sent Verb Noun Adj Prep Adv UPOS XPOS DEPREL FEATS MISC LEMMA type n f itype
+  take chain 1 Sense Definition | LEMMA Sense Definition
   take segment
   take attestations 3
   take constituents 1

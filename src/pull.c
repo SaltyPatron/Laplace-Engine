@@ -106,7 +106,27 @@ void positions_of(PGconn *pg, Claim *c, int n){
         uint32_t pb; memcpy(&pb, PQgetvalue(q, j, 1), 4); int pos = (int)ntohl(pb);
         for (int i = 0; i < n; i++) if (!memcmp(c[i].id.b, PQgetvalue(q, j, 0), 16)) { if (!c[i].position || pos < c[i].position) c[i].position = pos; break; }
     }
-    PQclear(q); free(ab); free(ids);
+    PQclear(q);
+    /* A claim said within a record has its place in the record's own trajectory (Physicality: the trajectory records
+     * the order of the constituents, so no ordinal is needed): the entry lists its senses in the order its witness
+     * gave them. For the claims the ledger gave no place, the records that hold each are fetched as one set, and the
+     * claim's place is where it stands in the path, the least when several records hold it. */
+    int need = 0; for (int i = 0; i < n; i++) need += !c[i].position;
+    if (need) {
+        const char *v2[1] = { (const char *)ab }; int l2[1] = { (int)al }, f2[1] = { 1 };
+        PGresult *r = db_ask(pg, "SELECT u.i, k.path FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i), LATERAL laplace_containers(ARRAY[u.id], '{1}'::smallint[]) k", 1, v2, l2, f2);
+        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "records: %s", PQerrorMessage(pg)); exit(1); }
+        for (int j = 0; j < PQntuples(r); j++) {
+            uint64_t o; memcpy(&o, PQgetvalue(r, j, 0), 8); int i = (int)(__builtin_bswap64(o) - 1); if (i < 0 || i >= n || (c[i].position && c[i].position < (1 << 20))) { if (i < 0 || i >= n) continue; }
+            const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)PQgetvalue(r, j, 1), (size_t)PQgetlength(r, j, 1), &vx); int at = 0, place = 0;
+            { double h3[3]; lp_id head; if (!nv) continue; memcpy(h3, vx, 24); lp_xyz_to_id(h3, &head); if (memcmp(&head, &c[i].part[0], 16)) continue; }   /* the trajectory under the claim's own subject: the order its witness gave */
+            for (size_t z = 0; z < nv && !place; z++) { double xyz[3], run; memcpy(xyz, vx + 32 * z, 24); memcpy(&run, vx + 32 * z + 24, 8); lp_id id; lp_xyz_to_id(xyz, &id);
+                if (!memcmp(&id, &c[i].id, 16)) place = at + 1; at += (int)lp_m_run(run); }
+            if (place && (!c[i].position || place < c[i].position)) c[i].position = place;
+        }
+        PQclear(r);
+    }
+    free(ab); free(ids);
 }
 /* As given first, then by how hard the strand tugs back. */
 int claim_by_position(const void *a, const void *b){
@@ -139,6 +159,21 @@ int refused(PGconn *pg, Ctx *c, const Firmware *fw, Claim *cl, int n){
     int m = 0; for (int i = 0; i < n; i++) if (!out[i]) cl[m++] = cl[i];
     free(out); return m;
 }
+/* Role weights (Semantics: Personality firmware, "Weights that are not standings"): a weight on which kind of strand is
+ * allowed to pull. It is the firmware's, never a column of the claim: the standing is read as it is, and the reading is
+ * multiplied by the weight the firmware gives the claim's kind (what stands between its first part and its last). */
+void weights_named(Ctx *c, const Firmware *fw, lp_id *ids){ for (int i = 0; i < fw->nweigh; i++) ids[i] = entity_named(c, fw->weigh_name[i], NULL, 0, NULL).id; }
+double strand_weight(const Firmware *fw, const lp_id *ids, const lp_id *part, int np){
+    double w = 1.0;
+    for (int p = 1; p < np - 1; p++) for (int z = 0; z < fw->nweigh; z++) if (!memcmp(&part[p], &ids[z], 16) && fw->weigh[z] < w) w = fw->weigh[z];
+    return w;
+}
+void weighed(Ctx *c, const Firmware *fw, Claim *cl, int n){
+    if (!n || !fw->nweigh) return;
+    lp_id ids[FW_WEIGHS]; weights_named(c, fw, ids);
+    for (int i = 0; i < n; i++) cl[i].conf *= strand_weight(fw, ids, cl[i].part, cl[i].np);
+    qsort(cl, (size_t)n, sizeof(Claim), claim_by_conf);
+}
 int cmd_hop(int argc, char **argv){
     const char *conninfo = laplace_db(), *fwp = NULL; int limit = 24, fan = -1, a = 1; double k = -1;
     for (; a < argc - 1 && argv[a][0] == '-' && argv[a][1]; a++) {
@@ -162,7 +197,7 @@ int cmd_hop(int argc, char **argv){
         t = now(); cl = claims_like(pg, part, have, fan, k, &n, &capped);
     }
     double t_claims = (now() - t) * 1000;
-    n = refused(pg, c, &fw, cl, n);
+    n = refused(pg, c, &fw, cl, n); weighed(c, &fw, cl, n);
     positions_of(pg, cl, n); if (!whole && fw.order_witness) qsort(cl, (size_t)n, sizeof(Claim), claim_by_position);
     Reader *rd = reader_new(pg);
     for (int i = 0; i < n && i < limit; i++) for (int p = 0; p < cl[i].np; p++) reader_want(rd, &cl[i].part[p]);
@@ -275,7 +310,7 @@ static int decode_claim(const char *path, int len, lp_id part[3]){
 
 /* Close up to batch of the side's nearest open entities and reach across their claims. Returns how many it closed;
  * closed[] receives them. */
-static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, double per_hop, lp_reached *closed, uint8_t *hub, Work *w){
+static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, double per_hop, lp_reached *closed, uint8_t *hub, Work *w, const Firmware *way, const lp_id *wids){
     int n = 0; const lp_reached *x;
     while (n < batch && (x = lp_frontier_next(sd->f))) { hub[n] = 0; closed[n++] = *x; }
     lp_id *ids = malloc(sizeof(lp_id) * (size_t)(n ? n : 1)); int *who = malloc(sizeof(int) * (size_t)(n ? n : 1)), m = 0;
@@ -300,7 +335,8 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
         if (!memcmp(other, &at->id, 16)) continue;
         lp_rating r = { be_f64(PQgetvalue(q, j, 3)), be_f64(PQgetvalue(q, j, 4)), be_f64(PQgetvalue(q, j, 5)) };
         memcpy(claim.b, PQgetvalue(q, j, 1), 16); w->claims++;
-        lp_frontier_reach(sd->f, other, &at->id, &claim, at->cost + lp_cost(&r, k, per_hop), 0, at->hops + 1);
+        double sw = strand_weight(way, wids, part, 3); if (sw <= 0) continue;                 /* a kind weighed at nothing is not crossed */
+        lp_frontier_reach(sd->f, other, &at->id, &claim, at->cost + lp_cost(&r, k, per_hop) - log(sw), 0, at->hops + 1);
     }
     for (int e = 0; e < m; e++) if (held[e] > fan && memcmp(&ids[e], &sd->origin, 16)) { w->hubs++; hub[who[e]] = 1; }
     PQclear(q); free(ab); free(ids); free(who); free(held);
@@ -354,6 +390,7 @@ int cmd_degrees(int argc, char **argv){
     firmware_say(&way, FW_SEARCH);
     double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0);
     lp_ref from = entity_named(c, argv[a], NULL, 0, NULL), to; int goal = a + 1 < argc;
+    lp_id wids[FW_WEIGHS]; weights_named(c, &way, wids);
     show_ref("from", &from); if (goal) { to = entity_named(c, argv[a + 1], NULL, 0, NULL); show_ref("to", &to); }
     PGconn *pg = db_connect(conninfo); Reader *rd = reader_new(pg); Work w = { 0 };
     lp_reached *closed = malloc(sizeof(lp_reached) * (size_t)batch); uint8_t *hub = malloc((size_t)batch);
@@ -366,7 +403,7 @@ int cmd_degrees(int argc, char **argv){
                 qsort(near, nn, sizeof *near, by_cost);
                 if (lp_frontier_least(fw.f) >= near[limit - 1].cost) break;
             }
-            int n = expand(pg, &fw, batch, fan, hops, k, per_hop, closed, hub, &w); if (!n) break;
+            int n = expand(pg, &fw, batch, fan, hops, k, per_hop, closed, hub, &w, &way, wids); if (!n) break;
             for (int i = 0; i < n; i++) if (memcmp(&closed[i].id, &from.id, 16)) {
                 if (nn == cn) { cn = cn ? cn * 2 : 256; near = xrealloc(near, cn * sizeof *near); } near[nn++] = closed[i]; }
         }
@@ -384,7 +421,7 @@ int cmd_degrees(int argc, char **argv){
             double lf = lp_frontier_least(fw.f), lb = lp_frontier_least(bw.f);
             if (lf + lb >= best || (isinf(lf) && isinf(lb))) break;           /* no open strand can beat the chain found */
             Side *sd = lf <= lb ? &fw : &bw, *ot = sd == &fw ? &bw : &fw;
-            int n = expand(pg, sd, batch, fan, (hops + 1) / 2, k, per_hop, closed, hub, &w); if (!n) break;
+            int n = expand(pg, sd, batch, fan, (hops + 1) / 2, k, per_hop, closed, hub, &w, &way, wids); if (!n) break;
             for (int i = 0; i < n; i++) {                                     /* where the two sides meet; never at a hub */
                 if (hub[i]) continue;
                 const lp_reached *o = lp_frontier_find(ot->f, &closed[i].id);

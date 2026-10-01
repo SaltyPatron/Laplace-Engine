@@ -5,7 +5,9 @@
  *   name NAME
  *   witness NAME...               who testifies when this source attests, named as content
  *   lineage NAME...               the witness it derives from
- *   trust T | deviation D         how far the witness is trusted
+ *   class NAME                    the witness's trust class, one the registry declares (Laplace-Native's
+ *                                 manifest/trust_classes.toml): its prior is the trust the witness's claims play at.
+ *                                 A trust written as a number is refused
  *   root PATH                     where the source is kept ($NAME from the environment; * for the newest of several).
  *                                 Several roots may be given: the first that exists is the source
  *   files PATTERN                 the files it is, when it is not everything under a root (several may be given)
@@ -141,6 +143,10 @@
  *   A table's empty fields: empty TEXT, or empty-matches PATTERN (a field so written is one the source leaves empty).
  *     json COLUMN                 the column holds a JSON object that speaks of the row's claim; "attest COLUMN..."
  *                                 then names columns that speak of the claim too, each by its name
+ *   address COLUMN PART [says PART...]
+ *                                 the column holds the source's addresses for things (/c/en/ice_cream/n, parted by the
+ *                                 paths character): part PART is the thing, as the text it is; each part after says is
+ *                                 said of the thing, as the pair of the two; the other parts are keys, recorded nowhere
  *   paths CHAR [CHAR]             a value that begins with CHAR is a path, the tuple of its parts: /c/en/dog is [c, en, dog];
  *                                 with a second CHAR, a part's words are joined by it: ice_cream is [ice, cream]
  *   grammar lines: a text whose lines, where they match a pattern, say something (a documentation page):
@@ -155,8 +161,7 @@
  *   about KEY...                  the record is about the value of the first of these keys it holds; every other
  *                                 field is said of it, under the field's key
  *   Nothing is renamed: every name and value is recorded as the source writes it.
- *   trust T                       the source's trust as a witness, -1 .. 1
- *   deviation D                   the same, given as the deviation the witness plays with (trust is g of it)
+ *   class NAME                    this recipe's witness's trust class, when it is not the source's
  *   map NAME [from FILE GRAMMAR]  patterns up to "end", read over the whole file (or over FILE, by its own grammar)
  *   ...                             before anything is attested: each match binds @key to @value, so a part
  *   end                             written as one identifier can be recorded as what that identifier stands for
@@ -240,6 +245,17 @@
 #include <string.h>
 
 static Ctx *ctx_here(void){ return CTX[omp_get_thread_num()]; }
+
+/* A witness's trust is its class's prior (Sequence 6.5): the class is the only statement of it. A label the registry
+ * does not declare, or a trust written as a number, stops the load: nothing is trusted by a figure someone typed. */
+static double class_trust(const char *path, const char *label){
+    const lp_trust_class *c = lp_trust_class_named(label);
+    if (!c) { fprintf(stderr, "%s: class %s is not a trust class the registry declares (Laplace-Native/manifest/trust_classes.toml)\n", path, label ? label : "(none)"); exit(2); }
+    return c->prior;
+}
+static void trust_by_number(const char *path, const char *directive){
+    fprintf(stderr, "%s: %s: a witness's trust is its class's (class NAME, from Laplace-Native/manifest/trust_classes.toml), never a number\n", path, directive); exit(2);
+}
 
 /* ---- recipes */
 static const TSLanguage *grammar_load(const char *name){
@@ -334,8 +350,8 @@ static int recipe_parse(const char *path, Recipe *r){
         if (!strcmp(tok, "name")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->name, sizeof r->name, "%s", tok); }
         else if (!strcmp(tok, "match")) while ((tok = strtok(NULL, " \t\r\n")) && r->nmatch < 16) snprintf(r->match[r->nmatch++], 128, "%s", tok);
         else if (!strcmp(tok, "grammar")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->grammar, sizeof r->grammar, "%s", tok); }
-        else if (!strcmp(tok, "trust")) { tok = strtok(NULL, " \t\r\n"); if (tok) r->trust = atof(tok); }
-        else if (!strcmp(tok, "deviation")) { tok = strtok(NULL, " \t\r\n"); if (tok) { double phi = atof(tok) / LP_GLICKO_SCALE; r->trust = 1.0 / sqrt(1.0 + 3.0 * phi * phi / (M_PI * M_PI)); } }
+        else if (!strcmp(tok, "class")) r->trust = class_trust(path, strtok(NULL, " \t\r\n"));
+        else if (!strcmp(tok, "trust") || !strcmp(tok, "deviation")) trust_by_number(path, tok);
         else if (!strcmp(tok, "map")) {
             tok = strtok(NULL, " \t\r\n"); b = block_new(r, 1); if (tok) snprintf(b->name, sizeof b->name, "%s", tok); inq = 1; ql = 0;
             char *from = strtok(NULL, " \t\r\n"), *file = from && !strcmp(from, "from") ? strtok(NULL, " \t\r\n") : NULL, *gr = file ? strtok(NULL, " \t\r\n") : NULL;
@@ -414,6 +430,13 @@ static int recipe_parse(const char *path, Recipe *r){
             r->nwords++;
         }
         else if (!strcmp(tok, "subject-kind") && b) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(b->subject_kind, 64, "%s", tok); }
+        else if (!strcmp(tok, "address") && r->naddress < 8) {
+            char *at = strtok(NULL, "\r\n"), nm[64], w[64];
+            if (!name_next(&at, nm, sizeof nm) || !name_next(&at, w, sizeof w) || atoi(w) < 1) { fprintf(stderr, "%s: address COLUMN PART [says PART...]\n", path); fclose(f); return 0; }
+            snprintf(r->address[r->naddress].col, 64, "%s", nm); r->address[r->naddress].thing = atoi(w); r->address[r->naddress].nsays = 0;
+            if (name_next(&at, w, sizeof w)) { if (strcmp(w, "says")) { fprintf(stderr, "%s: address COLUMN PART [says PART...]\n", path); fclose(f); return 0; }
+                while (r->address[r->naddress].nsays < 4 && name_next(&at, w, sizeof w)) r->address[r->naddress].says[r->address[r->naddress].nsays++] = atoi(w); }
+            r->naddress++; }
         else if (!strcmp(tok, "refer") && r->nrefer < 48 && !strcmp(r->grammar, "table")) {
             char *at = strtok(NULL, "\r\n"), nm[64], rn[64]; if (!name_next(&at, nm, sizeof nm) || !name_next(&at, rn, sizeof rn)) { fprintf(stderr, "%s: refer COLUMN RECIPE\n", path); fclose(f); return 0; }
             r->refer[r->nrefer].el[0] = 0; snprintf(r->refer[r->nrefer].attr, 64, "%s", nm); snprintf(r->refer[r->nrefer].kind, 64, "%s", rn); r->refer[r->nrefer++].within = 0;
@@ -503,8 +526,8 @@ static int source_parse(const char *path, Source *s){
         if (!strcmp(tok, "name")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(s->name, sizeof s->name, "%s", tok); }
         else if (!strcmp(tok, "witness")) rest_of(s->witness, sizeof s->witness);
         else if (!strcmp(tok, "lineage")) rest_of(s->lineage, sizeof s->lineage);
-        else if (!strcmp(tok, "trust")) { tok = strtok(NULL, " \t\r\n"); if (tok) s->trust = atof(tok); }
-        else if (!strcmp(tok, "deviation")) { tok = strtok(NULL, " \t\r\n"); if (tok) { double phi = atof(tok) / LP_GLICKO_SCALE; s->trust = 1.0 / sqrt(1.0 + 3.0 * phi * phi / (M_PI * M_PI)); } }
+        else if (!strcmp(tok, "class")) s->trust = class_trust(path, strtok(NULL, " \t\r\n"));
+        else if (!strcmp(tok, "trust") || !strcmp(tok, "deviation")) trust_by_number(path, tok);
         else if (!strcmp(tok, "root")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nroot < 8) path_expand(tok, s->root[s->nroot++], 512); }
         else if (!strcmp(tok, "files")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nfiles < 8) path_expand(tok, s->files[s->nfiles++], 512); }
         else if (!strcmp(tok, "room")) { tok = strtok(NULL, " \t\r\n"); if (tok) s->room = atof(tok); }
@@ -926,8 +949,25 @@ uint64_t keys_held(void){ uint64_t n = 0; for (int i = 0; i < 64; i++) n += kstr
 /* A field as what it says: the row of another file it is the key of (refer COLUMN RECIPE), or the type it is the
  * source's key of (type COLUMN LIST, the first of the column's lists that knows the key; a key none knows says
  * nothing), else the value as written. */
+/* A source's address for a thing (/c/en/ice_cream/n): one part of it is the thing, read as the text it is, the words its
+ * join character parts as words; the parts named after "says" are said of the thing, each as the pair of the two; every
+ * other part is the source's own addressing and is recorded nowhere. Every witness observes the same entity: the word,
+ * never a source's path to it. What is said of the thing waits here until its row is said. */
+static __thread Ref addr_said[16][2]; static __thread int naddr_said;
+static Ref addr_text(const uint8_t *p, size_t n, char join){
+    uint8_t stack[512], *b = n < sizeof stack ? stack : malloc(n + 1); for (size_t i = 0; i < n; i++) b[i] = join && p[i] == (uint8_t)join ? ' ' : p[i];
+    Ref x = string_ref(b, n); if (b != stack) free(b); return x;
+}
 static Ref col_ref(const Recipe *r, char (*name)[64], int ci, int role, const uint8_t *p, size_t n, int *has){
     *has = 1; int any = 0;
+    if (ci >= 0 && ci < 64 && name[ci][0]) for (int z = 0; z < r->naddress; z++) if (!strcmp(r->address[z].col, name[ci])) {
+        char sep = r->path_sep ? r->path_sep : '/'; const uint8_t *pp[16], *q = p, *e = p + n; size_t pl[16]; int np = 0;
+        while (q < e && np < 16) { if (*q == (uint8_t)sep) { q++; continue; } const uint8_t *s0 = q; while (q < e && *q != (uint8_t)sep) q++; pp[np] = s0; pl[np++] = (size_t)(q - s0); }
+        int t = r->address[z].thing; if (t > np || !pl[t - 1]) { *has = 0; return (Ref){ 0 }; }
+        Ref thing = addr_text(pp[t - 1], pl[t - 1], r->path_join);
+        for (int k = 0; k < r->address[z].nsays; k++) { int a = r->address[z].says[k]; if (a < 1 || a > np || !pl[a - 1] || naddr_said >= 16) continue;
+            addr_said[naddr_said][0] = thing; addr_said[naddr_said][1] = addr_text(pp[a - 1], pl[a - 1], r->path_join); naddr_said++; }
+        return thing; }
     if (ci >= 0 && ci < 64 && name[ci][0]) for (int z = 0; z < r->nrefer; z++) if (!strcmp(r->refer[z].attr, name[ci])) { Ref x; if (keys_get(r->refer[z].kind, p, n, &x)) return x; *has = 0; return (Ref){ 0 }; }
     if (ci >= 0 && ci < 64 && name[ci][0]) for (int z = 0; z < r->ntype; z++) if (!strcmp(r->type[z].attr, name[ci])) { any = 1; int h = 0; Ref x = highway_typed(r->type[z].list, p, n, &h); if (h) return x; }
     if (any) { *has = 0; return (Ref){ 0 }; }
@@ -1169,6 +1209,7 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
                 if (nt >= 2) SAY(tp, nt);
             }
             else {
+            naddr_said = 0;
             for (int role = 0; role < 3; role++) {
                 int ci = cols[k].in[role]; if (ci < 0 || ci >= nc) continue;
                 if (role == 2 && listc[ci]) continue;                          /* several objects: said one by one, below */
@@ -1243,6 +1284,8 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
             else if (b->pair && have[0] && have[1] && cols[k].in[2] < 0 && !cols[k].nattest && !b->rest) { Ref pr[2] = { part[0], part[1] }; SAY(pr, 2); }   /* what the file's name says of each */
             else if (have[0] && have[1] && have[2] && !(b->distinct && !memcmp(&part[0].id, &part[2].id, 16))) SAY(part, 3);
             }
+            for (int z = 0; z < naddr_said; z++) { Ref pr[2] = { addr_said[z][0], addr_said[z][1] }; if (memcmp(&pr[0].id, &pr[1].id, 16)) SAY(pr, 2); }   /* what the row's addresses say of their things */
+            naddr_said = 0;
             for (int a = 0; have[0] && a < cols[k].nvoice; a++) {                /* columns that are each a witness: what each says of the subject */
                 int ci = cols[k].voice[a]; if (ci >= nc || !cell[ci].n) continue; const uint8_t *vp = cell[ci].p; size_t vn = cell[ci].n; if (!part_said(rd, b, 2, "text", buf, &vp, &vn)) continue;
                 Ref tr[3] = { part[0], part[1], part_ref(r, 2, vp, vn) }; int nt_ = 3; if (!have[1]) { tr[1] = tr[2]; nt_ = 2; }

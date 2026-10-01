@@ -6,8 +6,7 @@ name wsd-evaluation-framework
 # Every dataset is its own witness, named as the framework names its directory (SemCor, senseval2, ALL ...): the
 # identifiers the data files write (d000, d000.s000, d000.s000.t000) begin again in every dataset.
 witness {dir}
-# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
-deviation 90
+class AcademicCurated
 root $LAPLACE_DATA/WSD
 # Data_Validation/sample-dataset holds semeval2015.data.xml and semeval2015.gold.key.txt, byte for byte the files of
 # Evaluation_Datasets/semeval2015: they are read there, under that directory's name.

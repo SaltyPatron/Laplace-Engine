@@ -2,7 +2,7 @@ name open-english-wordnet
 # Open English WordNet. The witness is named as the lexicon names itself.
 witness {first label}
 lineage WordNet
-deviation 35
+class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/OpenEnglishWordNet-2025-plus
 # Measured when it was loaded: 4,489,027 compositions from 103 MB, at 750 bytes each with their indexes and standings.
 room 33

@@ -1,7 +1,7 @@
 name iso-639
 # Language identifiers: ISO 639-3 (SIL), 639-2 and 639-5 (Library of Congress), the IANA subtag registry.
 witness ISO 639
-trust 1.0
+class StandardsDerived
 root $LAPLACE_DATA/ISO639
 # Measured when it was loaded: 175,147 compositions from 3.7 MB, at 750 bytes each with their indexes and standings.
 room 36

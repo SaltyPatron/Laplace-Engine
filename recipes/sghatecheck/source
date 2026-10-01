@@ -3,8 +3,7 @@ name sghatecheck
 # templates and placeholders, annotations of a sample of them, and language models' readings of them.
 # The README's title: "SGHateCheck: Functional Tests for Detecting Hate Speech in Low-Resource Languages of Singapore".
 witness SGHateCheck
-# The deviation is this recipe's choice for a curated academic resource; the specification does not give one.
-deviation 90
+class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/Safety/SGHateCheck/extracted/sghatecheck-*
 except */code/* *.png
 after unicode iso-639 hatecheck
