@@ -24,13 +24,25 @@ So:
 - Whatever a source leaves empty (its own empty marker) attests nothing.
 - The witness is named **as the source names itself** (its README title, its own `label`).
 - Do not decide what is "useful". If the source says something of a thing, it is attested.
+- **A source's identifiers are keys, never content.** A synset id, a sense key, an ILI number, a sentence id, a
+  geonameid, a case id, a roleset id, an `ID` attribute, an entry's etymology number: these are how the source points
+  at its own things. Name them with `key` (never recorded), `refer` (read as the thing another row or element of the
+  same source defines) or `type` (read as the type in the highway's list that the key points at). No claim may hold one.
+- **A thing is its content.** A word is what the lemma writes; a synset is the words it lists; a sentence is its text
+  or its words; a place is its name, latitude and longitude; a case or a post is its text. Say `identity`, `subject in`
+  or `named ... by` over content, never over an id column.
+- **Types are the highway's.** Parts of speech, dependency relations, ILI concepts, VerbNet classes and roles, FrameNet
+  frames, frame elements and lexical units, PropBank rolesets, VerbAtlas frames are listed by `laplace highway`. A
+  source that writes a key of one (`i46360`, `va:0001f`, `abandon.01`, `leave-51.2`, an FE's `ID`) names it with
+  `type COLUMN LIST`. A file that is only a mapping between such keys (SemLink, PredicateMatrix, CILI's maps,
+  VerbAtlas's bridges) is the highway's input and gets no recipe.
 
 ## Where you work, and what you must not touch
 
-- Recipes go in **`/repos/work/recipes-next/<source-name>/`**: a file `source`, and one `.recipe` file per kind of file.
-  Work **only inside the source directories you were assigned**. Do not edit other directories there.
+- Recipes go in **`recipes/<source-name>/`** of this repository: a file `source`, and one `.recipe` file per kind of
+  file. Work **only inside the source directories you were assigned**. Do not edit other directories there.
 - **Never write to the database.** Only ever run the engine with `--claims`, `--no-load` or `--plan`.
-- **Never modify** anything under `/repos/src`, `/repos/build`, or the engine. If the engine cannot express what a file
+- **Never modify** the engine's sources (`src/`), the builds, or another source's recipes. If the engine cannot express what a file
   needs, do not work around it: report exactly what is missing, with three lines of the raw data.
 - Under `/vault/Data` you may only **extract an archive** into a directory named `extracted` beside the archive (this is
   the existing convention, see `/vault/Data/.refresh-20260903/CILI/extracted`). Change nothing else there.
@@ -39,12 +51,13 @@ So:
 ## The engine
 
 ```sh
-source /repos/src/Laplace-Engine/laplace.env
-N=/repos/build/Laplace-Engine/icx-next/laplace
-$N ingest -r /repos/work/recipes-next --plan   <source-name>     # which recipe takes which files
-$N ingest -r /repos/work/recipes-next --claims <source-name> > out.txt 2> err.txt   # every claim, as text
-$N ingest -r /repos/work/recipes-next --no-load <source-name>    # counts and timings only
-$N tree -g xml|json|turtle|... -n 60 FILE                        # a file's syntax tree
+. $LAPLACE_SRC/Laplace-Operations/laplace.env          # LAPLACE_SRC, LAPLACE_BUILD, LAPLACE_DATA, the paths
+N=$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace
+$N ingest --plan   <source-name>                      # which recipe takes which files
+$N ingest --claims <source-name> > out.txt 2> err.txt # every claim, as text
+$N ingest --no-load <source-name>                     # counts and timings only
+$N ingest -s <source-name> --claims FILE...           # files read as that source's (a sample in your scratch directory)
+$N tree -g xml|json|turtle|... -n 60 FILE             # a file's syntax tree
 ```
 
 `--claims` prints one claim per line, `[a, b, c]`, and `-- record N` before the claims of a record. Put scratch output
@@ -56,21 +69,24 @@ the whole source once at the end.
 
 The full reference is the comment at the top of **`/repos/src/Laplace-Engine/src/recipe.c`**; the native readers are
 described at the top of `records.c`, `elements.c` and `members.c` in the same directory. **Read those four comments.**
-Working examples to copy from, all in `/repos/work/recipes-next/`:
+Working examples to copy from, all under `recipes/`:
 
 | Kind of file | Example |
 |---|---|
 | table with a header row, every column said of one column's value | `iso-639/iso-639-3.recipe` (`attest *`) |
-| table without a header, predicate in the file's name, a score column | `cili/maps.recipe` |
+| table without a header, predicate in the file's name | `princeton-wordnet/exceptions.recipe` |
+| table whose id column is a key, other files pointing at its rows | `tatoeba/sentences.recipe` (`key`), `tatoeba/links.recipe` (`refer`) |
+| table whose column is a resource's key of a type | `verbatlas/frame-info.recipe`, `princeton-wordnet/cntlist.recipe` (`type`) |
 | table of pairs (nothing written between the two) | `unicode/aliases.recipe` (`pair`) |
 | table whose row is one record, said together | use `together` in the claims block |
 | records of rows (a sentence, a row per word, a tree by heads) | `universal-dependencies/conllu.recipe` |
 | records of `Key: Value` lines | `iso-639/iana.recipe` (`grammar fields`) |
-| XML, elements that are things named by an attribute | `propbank/frames.recipe`, `verbnet/classes.recipe` (`identity`, `link`) |
-| XML by tree-sitter patterns (slower; only when `identity` cannot say it) | `wn-lmf.recipe`, `unicode/ucd.recipe` |
-| Turtle | `turtle.recipe`, used through `like turtle` (`cili/ili.recipe`) |
-| JSON whose keys are the things | `semlink/mappings.recipe` (`keys things`) |
-| JSON objects named by a member; `records` for a value on every line | `grammar json` + `identity KEY...` |
+| XML, elements that are things, keys resolved, types by a resource's key | `wn-lmf.recipe` (`key`, `refer`, `type`, `link`), `framenet/framenet.recipe`, `propbank/frames.recipe`, `verbnet/classes.recipe` |
+| XML, a sentence as its words | `wsd-evaluation-framework/data.recipe` (`words`) |
+| XML by tree-sitter patterns (slower; only when `identity` cannot say it) | `unicode/ucd.recipe` |
+| Turtle | `turtle.recipe`, used through `like turtle` (`framebase/schema.recipe`) |
+| JSON whose keys are the things | `universal-dependencies-tools/data.recipe` (`keys things`) |
+| JSON objects named by members, keys never recorded; `records` for a value on every line | `wiktionary-kaikki/kaikki.recipe` (`named ... by`, `key`) |
 | ordinary text (READMEs, documentation) | add `reads text` to the `source` file |
 
 A `source` file:
@@ -110,5 +126,5 @@ Your final report, in plain text, per set:
 5. Every place you were unsure whether a name was the source's own. Say so plainly; do not guess in the recipe.
 6. Engine features that are missing, each with three raw lines of data that need it.
 
-Do not summarize what the data "means". Do not propose schema changes. There are exactly six database tables and
-there will be no others.
+Do not summarize what the data "means". Do not propose schema changes. There are exactly five database tables
+(entity, physicality, witness, attestation, consensus) and there will be no others.
