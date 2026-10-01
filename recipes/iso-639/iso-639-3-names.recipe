@@ -1,0 +1,10 @@
+name iso-639-3-names
+# ISO 639-3's name index: the names each identifier is printed and inverted under.
+match iso-639-3_Name_Index.tab
+grammar table
+header
+witness SIL Global
+
+claims
+subject in Id
+attest Print_Name Inverted_Name

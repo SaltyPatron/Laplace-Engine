@@ -1,0 +1,10 @@
+name iso-639-3-retirements
+# ISO 639-3's retirements: what a retired identifier was called, why it was retired, what it changed to, and when.
+match iso-639-3_Retirements.tab
+grammar table
+header
+witness SIL Global
+
+claims
+subject in Id
+attest Ref_Name Ret_Reason Change_To Ret_Remedy Effective
