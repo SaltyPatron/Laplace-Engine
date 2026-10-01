@@ -403,7 +403,7 @@ static int recipe_parse(const char *path, Recipe *r){
             char *dot = strchr(at, '.'); r->refer[r->nrefer].el[0] = 0; if (dot) { *dot = 0; snprintf(r->refer[r->nrefer].el, 64, "%s", at); at = dot + 1; }
             snprintf(r->refer[r->nrefer].attr, 64, "%s", at); snprintf(r->refer[r->nrefer].kind, 64, "%s", kd); r->refer[r->nrefer++].within = wi && !strcmp(wi, "within");
         }
-        else if (!strcmp(tok, "key")) { while ((tok = strtok(NULL, " \t\r\n")) && r->nkey < 16) snprintf(r->key[r->nkey++], 64, "%s", tok); }
+        else if (!strcmp(tok, "key")) { char *at = strtok(NULL, "\r\n"), nm[64]; while (r->nkey < 16 && name_next(&at, nm, sizeof nm)) snprintf(r->key[r->nkey++], 64, "%s", nm); }
         else if (!strcmp(tok, "type") && r->ntype < 16) {
             char *at = strtok(NULL, " \t\r\n"), *ls = strtok(NULL, " \t\r\n"); if (!at || !ls) { fprintf(stderr, "%s: type ATTRIBUTE LIST\n", path); fclose(f); return 0; }
             snprintf(r->type[r->ntype].attr, 64, "%s", at); snprintf(r->type[r->ntype++].list, 32, "%s", ls);

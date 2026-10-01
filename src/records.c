@@ -1,17 +1,21 @@
 /* Tables whose rows come in records: a treebank's sentences, each with a row for every word.
  *
- * What the record is about (the sentence, as the source gives it) is content like any other. Every row is a word with
- * what the source says of it within that sentence. Each thing said is a claim, a tuple of entities, every part written
- * as the source writes it:
- *   [word, COLUMN, value]          a column the recipe attests, under the column's name
- *   [word, KEY, VALUE]             each part of a field of KEY is VALUE parts
- *   [word, relation, head word]    the word's relation to the word its head column numbers; a head that numbers no
- *                                  row is recorded as written
+ * What the record is about (the sentence, as the source gives it) is content like any other. What the source says
+ * of its words, column by column, is a layer: the column's values in the order of the words, one path aligned to the
+ * sentence (Research: Semantics Experiments, "Annotation layers as content": one claim per sentence per layer, not
+ * one record per token per layer; composed like text, layers share their small sub-structures almost entirely).
+ * Each thing said is a claim, a tuple of entities, every part written as the source writes it:
+ *   [sentence, COLUMN, layer]      a column the recipe attests: its values down the sentence, a path of them
+ *   [word, COLUMN, value]          and, of each word, the value the column gives it: one claim per word and value,
+ *                                  wherever they meet, which is what stands for "dog is a NOUN"
+ *   [sentence, KEY, layer]         a field of KEY is VALUE parts: the layer of each word's parts, under each key
+ *   [sentence, relation, layer]    the relations: for each word, its relation and the word it relates to, as a path
+ *   [word, relation, head word]    and each relation itself, once wherever it occurs
  *   [token, [word, word...]]       a row that spans rows: the token, and the words it is
- *   [sentence, KEY, VALUE]         a note of the record
- * The rows form a tree by their heads. A word's node is the path of its dependents' nodes and its own, in the order
- * of the rows, each dependent's node after the claim that relates it: so a phrase analysed the same way is the same
- * node wherever it occurs. The record is the path of what it is about, its notes, its spans, and its trees.
+ *   [sentence, KEY, VALUE]         a note of the record, unless KEY is one of the source's keys (key KEY...): how it
+ *                                  numbers its sentences and documents is recorded nowhere
+ * The record is the path of what it is about, its notes, its spans, and its layers. A row's number (number COLUMN)
+ * is how the source points at its rows: never recorded.
  *
  * The record is what was witnessed; its claims are witnessed within it. One ledger row per record; every claim in it
  * plays. Nothing here renames, reorders or fills in anything the source did not write. */
@@ -65,6 +69,10 @@ static int row_numbered(const Rec *rc, Cell id){
     for (int i = 0; i < rc->n; i++) if (!rc->row[i].span && rc->row[i].id.n == id.n && !memcmp(rc->row[i].id.p, id.p, id.n)) return i;
     return -1;
 }
+/* The layers of a record: for each attested column and each pairs column, the values down the words. */
+typedef struct { Ref *v; int n, cap; } Layer;
+static void layer_push(Layer *l, Ref x){ if (l->n == l->cap) { l->cap = l->cap ? l->cap * 2 : 64; l->v = xrealloc(l->v, sizeof(Ref) * (size_t)l->cap); } x.said = 0; l->v[l->n++] = x; }
+static int key_note(const Recipe *r, Cell k){ for (int i = 0; i < r->nkey; i++) if (strlen(r->key[i]) == k.n && !memcmp(r->key[i], k.p, k.n)) return 1; return 0; }
 /* What is said of a row's word in its own fields. */
 static void said_of(const Recipe *r, const Plan *pl, Rec *rc, Row *w){
     for (int a = 0; a < pl->nattest; a++) {
@@ -91,25 +99,6 @@ static void said_of(const Recipe *r, const Plan *pl, Rec *rc, Row *w){
         }
     }
 }
-static Ref node_of(Rec *rc, int i){
-    Row *w = &rc->row[i];
-    if (w->state == 2) return w->node;
-    Ref stack[64], *it = stack; int n = 0, cap = 64, self = 0;
-    #define PUT(x) do { if (n == cap) { cap *= 2; Ref *m = malloc(sizeof(Ref) * (size_t)cap); memcpy(m, it, sizeof(Ref) * (size_t)n); if (it != stack) free(it); it = m; } it[n++] = (x); } while (0)
-    w->state = 1;
-    for (int c = w->kid; c >= 0; c = rc->row[c].sib) {
-        if (rc->row[c].state == 1) continue;                                /* heads that lead back to themselves: not a tree */
-        if (!self && c > i) { self = 1; if (w->nown) PUT(said_record(compose(w->own, (uint32_t)w->nown, tier_over(w->own, (size_t)w->nown)))); else if (w->has_word) PUT(w->word); }
-        if (rc->row[c].has_edge) PUT(rc->row[c].edge);
-        Ref k = node_of(rc, c); PUT(k);
-    }
-    if (!self) { if (w->nown) PUT(said_record(compose(w->own, (uint32_t)w->nown, tier_over(w->own, (size_t)w->nown)))); else if (w->has_word) PUT(w->word); }
-    if (!n) { w->state = 2; w->node = w->word; return w->node; }
-    w->node = said_record(compose(it, (uint32_t)n, tier_over(it, (size_t)n))); w->state = 2;
-    if (it != stack) free(it);
-    return w->node;
-    #undef PUT
-}
 /* One record: its notes and its rows, between two offsets. Returns 0 if it holds nothing. */
 static int record(const Recipe *r, const Plan *pl, Ctx *ctx, Rec *rc, const uint8_t *src, size_t lo, size_t hi, Events *ev, Ref *out){
     rc->n = rc->np = rc->ncl = 0; Ref about = { 0 }; int has_about = 0;
@@ -135,7 +124,8 @@ static int record(const Recipe *r, const Plan *pl, Ctx *ctx, Rec *rc, const uint
     }
     if (!rc->n && !has_about) return 0;
     if (has_about) part_push(rc, about);
-    for (int i = 0; has_about && i < nnote; i++) {                           /* the record's notes, said of what it is about */
+    for (int i = 0; has_about && i < nnote; i++) {                           /* the record's notes, said of what it is about; its keys are not */
+        if (key_note(r, note[i].k)) continue;
         Ref t[3] = { about, string_ref(note[i].k.p, note[i].k.n) }; int n = 2;
         if (note[i].v.n) t[n++] = note[i].v.n > 256 ? text_ref(ctx, note[i].v.p, note[i].v.n) : string_ref(note[i].v.p, note[i].v.n);
         part_push(rc, tuple(rc, t, n));
@@ -158,7 +148,7 @@ static int record(const Recipe *r, const Plan *pl, Ctx *ctx, Rec *rc, const uint
         if (pl->head >= 0 && pl->head < w->nc && pl->rel >= 0 && pl->rel < w->nc && !is_empty(r, pl, w->cell[pl->head]) && !is_empty(r, pl, w->cell[pl->rel])) {
             int h = row_numbered(rc, w->cell[pl->head]); Ref rel = string_ref(w->cell[pl->rel].p, w->cell[pl->rel].n);
             if (h >= 0 && h != i && rc->row[h].has_word) { Ref t[3] = { w->word, rel, rc->row[h].word }; w->edge = tuple(rc, t, 3); w->has_edge = 1; w->head = h; }
-            else if (h < 0) { Ref t[3] = { w->word, rel, string_ref(w->cell[pl->head].p, w->cell[pl->head].n) }; w->edge = tuple(rc, t, 3); w->has_edge = 1; w->head = -2; }
+            else if (h < 0) { Ref t[2] = { w->word, rel }; w->edge = tuple(rc, t, 2); w->has_edge = 1; w->head = -2; }      /* a head that numbers no row (0: the root): the relation alone */
         }
         for (int k = 0; k < r->nrelations; k++) {
             int ci = pl->relations[k]; if (ci >= w->nc || is_empty(r, pl, w->cell[ci])) continue;
@@ -177,18 +167,35 @@ static int record(const Recipe *r, const Plan *pl, Ctx *ctx, Rec *rc, const uint
             }
         }
     }
-    for (int i = 0; i < rc->n; i++) { Row *w = &rc->row[i]; if (w->span || w->head < 0) continue;
-        Row *h = &rc->row[w->head]; if (h->last < 0) h->kid = i; else rc->row[h->last].sib = i; h->last = i; }
-    for (int i = 0; i < rc->n; i++) {                                         /* the trees, each from a row no row is the head of */
-        Row *w = &rc->row[i]; if (w->span || w->head >= 0 || w->state) continue;
-        Ref k = node_of(rc, i); if (!w->has_word && !w->nown && w->kid < 0) continue;
+    /* the layers: each attested column's values down the words; each pairs column's parts; the relations */
+    if (has_about) {
+        for (int a = 0; a < pl->nattest; a++) { int ci = pl->attest[a]; Layer l = { 0 }; int any = 0;
+            for (int i = 0; i < rc->n; i++) { Row *w = &rc->row[i]; if (w->span || !w->has_word) continue;
+                if (ci < w->nc && !is_empty(r, pl, w->cell[ci])) { layer_push(&l, string_ref(w->cell[ci].p, w->cell[ci].n)); any = 1; } else layer_push(&l, string_ref((const uint8_t *)r->empty, strlen(r->empty))); }
+            if (any && l.n) { Ref t[3] = { about, string_ref((const uint8_t *)r->column[ci], strlen(r->column[ci])), l.n == 1 ? l.v[0] : compose(l.v, (uint32_t)l.n, tier_over(l.v, (size_t)l.n)) }; part_push(rc, tuple(rc, t, 3)); }
+            free(l.v); }
+        for (int k = 0; k < r->npairs; k++) { int ci = pl->pairs[k]; Layer l = { 0 }; int any = 0;
+            for (int i = 0; i < rc->n; i++) { Row *w = &rc->row[i]; if (w->span || !w->has_word) continue;
+                if (ci < w->nc && !is_empty(r, pl, w->cell[ci])) { Ref parts[64]; int np = 0; const uint8_t *p = w->cell[ci].p, *e = p + w->cell[ci].n;
+                    while (p < e && np < 64) { const uint8_t *q = memchr(p, r->pairs[k].part, (size_t)(e - p)); if (!q) q = e; const uint8_t *is = memchr(p, r->pairs[k].is, (size_t)(q - p));
+                        if (is && is > p && is + 1 < q) { Ref pr[2] = { string_ref(p, (size_t)(is - p)), string_ref(is + 1, (size_t)(q - is - 1)) }; parts[np++] = said_tuple(compose(pr, 2, tier_over(pr, 2))); }
+                        else if (q > p) parts[np++] = string_ref(p, (size_t)(q - p));
+                        p = q + 1; }
+                    layer_push(&l, np == 1 ? parts[0] : np ? said_tuple(compose(parts, (uint32_t)np, tier_over(parts, (size_t)np))) : string_ref((const uint8_t *)r->empty, strlen(r->empty))); any |= np > 0; }
+                else layer_push(&l, string_ref((const uint8_t *)r->empty, strlen(r->empty))); }
+            if (any && l.n) { Ref t[3] = { about, string_ref((const uint8_t *)r->column[ci], strlen(r->column[ci])), l.n == 1 ? l.v[0] : compose(l.v, (uint32_t)l.n, tier_over(l.v, (size_t)l.n)) }; part_push(rc, tuple(rc, t, 3)); }
+            free(l.v); }
+        if (pl->rel >= 0 && pl->head >= 0) { Layer l = { 0 }; int any = 0;    /* the relations: for each word, [relation, head word], down the sentence */
+            for (int i = 0; i < rc->n; i++) { Row *w = &rc->row[i]; if (w->span || !w->has_word) continue;
+                if (w->has_edge && w->head >= 0) { Ref pr[2] = { string_ref(w->cell[pl->rel].p, w->cell[pl->rel].n), rc->row[w->head].word }; layer_push(&l, said_tuple(compose(pr, 2, tier_over(pr, 2)))); any = 1; }
+                else if (w->has_edge) { layer_push(&l, string_ref(w->cell[pl->rel].p, w->cell[pl->rel].n)); any = 1; }
+                else layer_push(&l, string_ref((const uint8_t *)r->empty, strlen(r->empty))); }
+            if (any && l.n) { Ref t[3] = { about, string_ref((const uint8_t *)r->column[pl->rel], strlen(r->column[pl->rel])), l.n == 1 ? l.v[0] : compose(l.v, (uint32_t)l.n, tier_over(l.v, (size_t)l.n)) }; part_push(rc, tuple(rc, t, 3)); }
+            free(l.v); }
+    }
+    for (int i = 0; i < rc->n; i++) { Row *w = &rc->row[i]; if (w->span || !w->has_word) continue;   /* every claim of every word, once, as part of the record */
         if (w->has_edge) part_push(rc, w->edge);
-        part_push(rc, k);
-    }
-    for (int i = 0; i < rc->n; i++) {                                         /* rows whose heads lead back to themselves */
-        Row *w = &rc->row[i]; if (w->span || w->state) continue;
-        Ref k = node_of(rc, i); if (w->has_edge) part_push(rc, w->edge); part_push(rc, k);
-    }
+        for (int j = 0; j < w->nown; j++) part_push(rc, w->own[j]); }
     if (!rc->np) return 0;
     *out = rc->np == 1 ? rc->part[0] : compose(rc->part, (uint32_t)rc->np, tier_over(rc->part, (size_t)rc->np));
     Event x = { out->id, out->id, 1.0f, pl->enter_rating, pl->enter_deviation, 0, EV_RECORD }; ev_push(ev, &x);

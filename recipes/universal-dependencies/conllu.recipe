@@ -1,6 +1,8 @@
 name conllu
 # CoNLL-U. A sentence is a record: its notes, then a row for every word. The columns are named as Universal
-# Dependencies' format names them; every value is recorded as the treebank writes it.
+# Dependencies' format names them; every value is recorded as the treebank writes it. What the treebank says of the
+# words, column by column, is a layer down the sentence; of each word, the value it gives it. How it numbers its
+# sentences, documents and paragraphs (sent_id, newdoc id, newpar id) is how it points at them: recorded nowhere.
 match *.conllu
 grammar table
 columns ID FORM LEMMA UPOS XPOS FEATS HEAD DEPREL DEPS MISC
@@ -9,6 +11,7 @@ record blank
 empty _
 note =
 about text
+key sent_id "newdoc id" "newpar id" newdoc newpar
 word FORM
 number ID -
 attest LEMMA UPOS XPOS
