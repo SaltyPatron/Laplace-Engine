@@ -173,12 +173,11 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     PGresult *r = PQexec(pg[0], "SELECT count(*) FROM entity WHERE tier = 0");
     int atoms_needed = !(PQresultStatus(r) == PGRES_TUPLES_OK && atoll(PQgetvalue(r, 0, 0)) == (long long)LP_NCP); PQclear(r);
 
-    /* ---- trunk to leaf: a recorded node means its whole subtree is recorded, so nothing below it is checked */
+    /* ---- what of this batch is recorded: the files first, by their trunks; then every node, bucketed by its
+     * partition, staged in the database and answered by one join per partition, on every connection at once. A
+     * recorded node has its whole subtree recorded, so a node under one is found recorded by the same join: no
+     * frontier, no rounds, nothing shipped back and forth but the IDs once and the recorded ones once. */
     double t = now();
-    uint64_t cap = 1 << 20, nf = 0; lp_id *front = malloc(cap * sizeof(lp_id));
-    #define FPUSH(x) do { if (nf == cap) { cap *= 2; front = xrealloc(front, cap * sizeof(lp_id)); } front[nf++] = (x); } while (0)
-    if (load_whole)                                                          /* every node is looked for: nothing is taken to be recorded because what holds it is */
-        for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) if (!shard[s].node[i].keep) { shard[s].node[i].keep = 3; FPUSH(shard[s].node[i].id); }
     /* The files first, by their trunks: a file whose trunk is recorded is recorded, with everything under it and
      * everything it attested, and nothing of it is looked for, played or written again. */
     { lp_id *trunk = malloc(sizeof(lp_id) * (size_t)(nfiles + 1)); int *of = malloc(sizeof(int) * (size_t)(nfiles + 1)); uint64_t nt = 0;
@@ -187,35 +186,30 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
                 for (uint64_t i = 0; i < nt; i++) if (hit[i]) { files[of[i]].known = 1; st->known++; st->found++; Node *x = table_find(&trunk[i]); if (x) x->keep = 2; }
                 free(hit); }
       free(trunk); free(of); }
-    for (int fi = 0; fi < nfiles; fi++) {
-        if (files[fi].known || files[fi].skipped) continue;
-        if (files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (x && !x->keep) { x->keep = 3; FPUSH(x->id); } }
-        Node *x = table_find(&files[fi].trunk.id); if (x && !x->keep) { x->keep = 3; FPUSH(x->id); }
-        if (files[fi].ev.n) { Node *w = table_find(&files[fi].witness.id); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } }
-        if (files[fi].has_lineage) { Node *lin = table_find(&files[fi].lineage.id); if (lin && !lin->keep) { lin->keep = 3; FPUSH(lin->id); } }
-        for (uint64_t i = 0; i < files[fi].ev.n; i++) { Node *c = table_find(&files[fi].ev.e[i].claim); if (c && !c->keep) { c->keep = 3; FPUSH(c->id); }     /* a record's claims are under it */
-            if (files[fi].ev.e[i].kind == EV_RECORD) { Node *w = table_find(&files[fi].ev.e[i].witnessed); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } }
-            if (files[fi].ev.e[i].own_witness) { Node *w = table_find(&files[fi].ev.e[i].witness); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } } }
-    }
-    while (nf) {
-        st->rounds++; st->checked += nf;
-        uint8_t *hit = recorded(pg, npg, front, nf);
-        uint64_t nn = 0; lp_id *next = malloc((nf + 1) * sizeof(lp_id)); uint64_t ncap = nf + 1;
-        for (uint64_t i = 0; i < nf; i++) {
-            Node *x = table_find(&front[i]);
-            if (hit[i]) { x->keep = 2; st->found++; continue; }
-            x->keep = 1; st->new_nodes++;
-            Shard *s = &shard[x->id.b[0]];
-            for (uint32_t v = 0; v < x->nv; v++) {
-                Node *ch = table_find(&s->vtx[x->voff + v].id);
-                if (ch && !ch->keep) { ch->keep = 3; if (nn == ncap) { ncap *= 2; next = xrealloc(next, ncap * sizeof(lp_id)); } next[nn++] = ch->id; }
-            }
-        }
-        free(hit); free(front); front = next; nf = nn; cap = ncap;
-        fprintf(stderr, "\r  dedup round %llu: %llu new so far, %llu subtrees already recorded   ", (unsigned long long)st->rounds,
-                (unsigned long long)st->new_nodes, (unsigned long long)st->found);
-    }
-    free(front); fputc('\n', stderr);
+    { uint64_t cnt[NPART] = { 0 };
+      for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) if (!shard[s].node[i].keep) cnt[part_of(&shard[s].node[i].id, shard[s].node[i].tier)]++;
+      for (int p = 0; p < NPART; p++) { bucket[p] = malloc(sizeof(NRef) * (cnt[p] + 1)); nbucket[p] = 0; }
+      for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) if (!shard[s].node[i].keep) {
+          int p = part_of(&shard[s].node[i].id, shard[s].node[i].tier); bucket[p][nbucket[p]++] = (NRef){ (uint32_t)s, (uint32_t)i }; }
+      uint64_t found = 0, fresh = 0, checked = 0;
+      #pragma omp parallel for num_threads(npg) schedule(dynamic) reduction(+:found, fresh, checked)
+      for (int p = 0; p < NPART; p++) {
+          if (!nbucket[p]) continue; PGconn *c = pg[omp_get_thread_num()]; char name[64]; part_name(p, "entity", name, sizeof name);
+          PGresult *r = PQexec(c, "CREATE TEMP TABLE IF NOT EXISTS stage (id blake3 NOT NULL)"); PQclear(r); r = PQexec(c, "TRUNCATE stage"); PQclear(r);
+          Copy cp = { 0 }; copy_begin(&cp, c, "COPY stage (id) FROM STDIN (FORMAT binary)");
+          for (uint64_t i = 0; i < nbucket[p]; i++) { Node *x = &shard[bucket[p][i].shard].node[bucket[p][i].idx]; c16(&cp, 1); cfield(&cp, x->id.b, 16); cp.rows++; }
+          copy_end(&cp); free(cp.b); checked += nbucket[p];
+          char sql[200]; snprintf(sql, sizeof sql, "SELECT s.id FROM stage s JOIN %s e ON e.id = s.id", name);
+          r = PQexecParams(c, sql, 0, NULL, NULL, NULL, NULL, 1);
+          if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "recorded, %s: %s", name, PQerrorMessage(c)); exit(1); }
+          for (int j = 0; j < PQntuples(r); j++) { lp_id id; memcpy(id.b, PQgetvalue(r, j, 0), 16); Node *x = table_find(&id); if (x && !x->keep) { x->keep = 2; found++; } }
+          PQclear(r);
+          for (uint64_t i = 0; i < nbucket[p]; i++) { Node *x = &shard[bucket[p][i].shard].node[bucket[p][i].idx]; if (!x->keep) { x->keep = 1; fresh++; } }
+          free(bucket[p]); bucket[p] = NULL;
+      }
+      st->checked += checked; st->found += found; st->new_nodes += fresh; st->rounds++;
+      fprintf(stderr, "\r  recorded: %llu of %llu nodes already, %llu new   ", (unsigned long long)found, (unsigned long long)checked, (unsigned long long)fresh); }
+    fputc('\n', stderr);
     /* a file's trunk is written last, after what the file attested: it is held back from the writing below */
     uint64_t nlast = 0;
     for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (x && x->keep == 1) { x->keep = 5; nlast++; } }
