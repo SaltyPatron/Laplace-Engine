@@ -95,11 +95,17 @@ static void part_name(int p, const char *table, char *out, size_t cap){
 #define NPART (17 * 16)
 
 
-typedef struct { uint32_t shard; uint32_t idx; } NRef;
+typedef struct { uint32_t shard; uint32_t idx; uint64_t h; } NRef;        /* h: the node's Hilbert value, computed once */
 static NRef *bucket[NPART]; static uint64_t nbucket[NPART];
+static NRef nref(uint32_t s, uint32_t i){ lp_coord co; memcpy(co.m, shard[s].node[i].m, 32); return (NRef){ s, i, lp_hilbert4(&co) }; }
+static int by_hilbert(const void *a, const void *b){ uint64_t x = ((const NRef *)a)->h, y = ((const NRef *)b)->h; return x < y ? -1 : x > y; }
+/* A partition's new rows go in Hilbert order (Atoms: the Hilbert value is for locality, partitioning, and ordering):
+ * rows near each other in the 4-ball are written together, so the coordinate and Hilbert indexes take a run of
+ * neighbours on the same pages instead of one row per page in hash order. */
 static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_p, int atoms_needed){
     char tn[64]; Copy c = { 0 }; char sql[160]; uint8_t geo[64 * 1024];
     lp_id *ids = NULL; uint64_t *runs = NULL; size_t idc = 0;
+    qsort(bucket[p], nbucket[p], sizeof(NRef), by_hilbert);
     part_name(p, "entity", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY %s (id, tier, coord, hilbert) FROM STDIN (FORMAT binary)", tn);
     copy_begin(&c, pg, sql);
     if (atoms_needed && p / 16 == 0)
@@ -112,8 +118,8 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
     for (uint64_t b = 0; b < nbucket[p]; b++) {
         int s = (int)bucket[p][b].shard; Node *x = &shard[s].node[bucket[p][b].idx];
         double xm[4]; for (int d = 0; d < 4; d++) xm[d] = (double)x->m[d] / LP_FIXED_ONE;
-        lp_coord co; memcpy(co.m, x->m, 32); size_t gl = lp_ewkb_point4(xm, geo, sizeof geo);
-        c16(&c, 4); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(lp_hilbert4(&co))); c.rows++;
+        size_t gl = lp_ewkb_point4(xm, geo, sizeof geo);
+        c16(&c, 4); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(bucket[p][b].h)); c.rows++;
     }
     copy_end(&c); *rows_e = c.rows;
     part_name(p, "physicality", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY %s (entity, tier, hilbert, path, mask) FROM STDIN (FORMAT binary)", tn);
@@ -131,11 +137,10 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
         for (uint32_t v = 0; v < x->nv; v++) { ids[v] = shard[s].vtx[x->voff + v].id; runs[v] = shard[s].vtx[x->voff + v].m; }
         size_t gl = lp_ewkb_runs(ids, runs, x->nv, NULL, 0); uint8_t *gp = gl > sizeof geo ? malloc(gl) : geo;
         lp_ewkb_runs(ids, runs, x->nv, gp, gl);
-        lp_coord co; memcpy(co.m, x->m, 32);
         /* the mask: what the row is, and the types it holds (each constituent that is a type of a mask field) */
         memset(mask + 4, 0, 32); for (int b = 0; b < 8; b++) if (x->kind & (1u << b)) mask[4 + (b >> 3)] |= (uint8_t)(0x80 >> (b & 7));
         if (HW) for (uint32_t v = 0; v < x->nv; v++) { int32_t b = lp_highway_mask_bit(HW, &ids[v]); if (b >= 0 && b < 256) mask[4 + (b >> 3)] |= (uint8_t)(0x80 >> (b & 7)); }
-        c16(&c, 5); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cf_i64(&c, hsigned(lp_hilbert4(&co))); cfield(&c, gp, (uint32_t)gl); cfield(&c, mask, 36); c.rows++;
+        c16(&c, 5); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cf_i64(&c, hsigned(bucket[p][b].h)); cfield(&c, gp, (uint32_t)gl); cfield(&c, mask, 36); c.rows++;
         if (gp != geo) free(gp);
     }
     copy_end(&c); *rows_p = c.rows;
@@ -228,7 +233,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
       for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) if (shard[s].node[i].keep == 1) cnt[part_of(&shard[s].node[i].id, shard[s].node[i].tier)]++;
       for (int p = 0; p < NPART; p++) { bucket[p] = malloc(sizeof(NRef) * (cnt[p] + 1)); nbucket[p] = 0; }
       for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) if (shard[s].node[i].keep == 1) {
-          int p = part_of(&shard[s].node[i].id, shard[s].node[i].tier); bucket[p][nbucket[p]++] = (NRef){ (uint32_t)s, (uint32_t)i }; } } uint64_t re[NPART] = { 0 }, rp[NPART] = { 0 };
+          int p = part_of(&shard[s].node[i].id, shard[s].node[i].tier); bucket[p][nbucket[p]++] = nref((uint32_t)s, (uint32_t)i); } } uint64_t re[NPART] = { 0 }, rp[NPART] = { 0 };
     /* A tier at a time, from the lowest: what a composition is made of is always of a lower tier than it, so whatever
      * is recorded has everything under it recorded, even if the writing is cut off. Trunk-to-leaf deduplication
      * rests on that. */
@@ -415,7 +420,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (x && x->keep == 5) cnt[part_of(&x->id, x->tier)]++; }
         for (int p = 0; p < NPART; p++) { bucket[p] = malloc(sizeof(NRef) * (cnt[p] + 1)); nbucket[p] = 0; }
         for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (!x || x->keep != 5) continue;
-            int p = part_of(&x->id, x->tier), sh = x->id.b[0]; bucket[p][nbucket[p]++] = (NRef){ (uint32_t)sh, (uint32_t)(x - shard[sh].node) }; x->keep = 1; }
+            int p = part_of(&x->id, x->tier), sh = x->id.b[0]; bucket[p][nbucket[p]++] = nref((uint32_t)sh, (uint32_t)(x - shard[sh].node)); x->keep = 1; }
         for (int p = 0; p < NPART; p++) { uint64_t e = 0, ph = 0; if (nbucket[p]) { write_node_rows(pg[0], p, &e, &ph, 0); st->ent_rows += e; st->phy_rows += ph; } free(bucket[p]); bucket[p] = NULL; }
     }
     { PGresult *e = PQexec(pg[0], "COMMIT"); if (PQresultStatus(e) != PGRES_COMMAND_OK) { fprintf(stderr, "commit: %s", PQerrorMessage(pg[0])); return 1; } PQclear(e); }
