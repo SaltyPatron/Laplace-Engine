@@ -54,6 +54,7 @@ typedef struct { uint8_t *p; size_t n; } Txt;                                 /*
 typedef struct { TSNode name, an[256], av[256], content; int na, has_content; } Tag;
 
 static void refs_push(Refs *a, Ref x){ if (a->n == a->cap) { a->cap = a->cap ? a->cap * 2 : 16; a->c = xrealloc(a->c, sizeof(Ref) * (size_t)a->cap); } a->c[a->n++] = x; }
+static void refs_append(Refs *a, const Ref *x, int n){ if (n <= 0) return; if (a->n + n > a->cap) { while (a->n + n > a->cap) a->cap = a->cap ? a->cap * 2 : 16; a->c = xrealloc(a->c, sizeof(Ref) * (size_t)a->cap); } memcpy(a->c + a->n, x, sizeof(Ref) * (size_t)n); a->n += n; }
 static uint8_t tier_of(const Ref *r, int n){ uint8_t t = 0; for (int i = 0; i < n; i++) if (r[i].tier > t) t = r[i].tier; return (uint8_t)(t < 255 ? t + 1 : 255); }
 static int is(TSNode n, const char *t){ return !strcmp(ts_node_type(n), t); }
 static int named(const EW *w, TSNode n, const char *s){ uint32_t a = ts_node_start_byte(n), b = ts_node_end_byte(n); size_t l = strlen(s); return b - a == l && !memcmp(w->src + a, s, l); }
@@ -382,7 +383,7 @@ static void inside(const EW *w, TSNode content, const Ref *S, long scp, const Tx
         for (int t = 0; t < nt; t++)
             for (uint32_t i = (uint32_t)((uint64_t)k * t / nt); i < (uint32_t)((uint64_t)k * (t + 1) / nt); i++) { Ref n_; int h_ = 0; uint64_t from = pe[t].n; element(w, kid[i], S, scp, tx, NULL, &n_, &h_, &pe[t]);
                 if (h_ && items) { refs_push(&pn[t], n_); for (uint64_t j = from; j < pe[t].n; j++) if (pe[t].e[j].kind != EV_MEMBER && !memcmp(&pe[t].e[j].witnessed, &n_.id, 16)) pe[t].e[j].inner = 1; } }
-        for (int t = 0; t < nt; t++) { for (uint64_t j = 0; j < pe[t].n; j++) ev_push(ev, &pe[t].e[j]); free(pe[t].e); for (int j = 0; items && j < pn[t].n; j++) refs_push(items, pn[t].c[j]); free(pn[t].c); }
+        for (int t = 0; t < nt; t++) { for (uint64_t j = 0; j < pe[t].n; j++) ev_push(ev, &pe[t].e[j]); free(pe[t].e); if (items) refs_append(items, pn[t].c, pn[t].n); free(pn[t].c); }
         free(pe); free(pn); free(kid); return;
     }
     for (uint32_t i = 0; i < k; i++) { Ref n_; int h_ = 0; uint64_t from = ev->n; element(w, kid[i], S, scp, tx, rec, &n_, &h_, ev);
