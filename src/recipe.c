@@ -62,6 +62,14 @@
  *     attest COLUMN... | *          each of these columns is a predicate, by the name the table gives it, and its field
  *                                   the object (*: every column but the subject's); NAME*: every column whose name begins with NAME
  *   An empty field attests nothing.
+ *   key COLUMN...                 columns that are the source's keys: how it points at its rows (a sentence id).
+ *                                 Never recorded. For the rows of the source's other files, a key names the row's
+ *                                 subject
+ *   refer COLUMN RECIPE           the column's values are keys that RECIPE's rows define (its key columns): each is
+ *                                 read as that row's subject; a key no row defines says nothing. RECIPE's files are
+ *                                 read before this one's
+ *   type COLUMN LIST              the column's values are the source's keys of types in the highway's LIST, read as
+ *                                 those types; written for several lists, the first that knows the key
  *   A table whose rows come in records, each about one thing (a treebank: a sentence, and a row for each word):
  *   record blank                  rows up to an empty line are one record
  *   empty TEXT                    what the source writes in a field it leaves empty
@@ -399,6 +407,10 @@ static int recipe_parse(const char *path, Recipe *r){
             r->nwords++;
         }
         else if (!strcmp(tok, "subject-kind") && b) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(b->subject_kind, 64, "%s", tok); }
+        else if (!strcmp(tok, "refer") && r->nrefer < 48 && !strcmp(r->grammar, "table")) {
+            char *at = strtok(NULL, "\r\n"), nm[64], rn[64]; if (!name_next(&at, nm, sizeof nm) || !name_next(&at, rn, sizeof rn)) { fprintf(stderr, "%s: refer COLUMN RECIPE\n", path); fclose(f); return 0; }
+            r->refer[r->nrefer].el[0] = 0; snprintf(r->refer[r->nrefer].attr, 64, "%s", nm); snprintf(r->refer[r->nrefer].kind, 64, "%s", rn); r->refer[r->nrefer++].within = 0;
+        }
         else if (!strcmp(tok, "refer") && r->nrefer < 48) {
             char *at = strtok(NULL, " \t\r\n"), *kd = strtok(NULL, " \t\r\n"), *wi = strtok(NULL, " \t\r\n"); if (!at || !kd) { fprintf(stderr, "%s: refer [ELEMENT.]ATTRIBUTE ELEMENT [within]\n", path); fclose(f); return 0; }
             char *dot = strchr(at, '.'); r->refer[r->nrefer].el[0] = 0; if (dot) { *dot = 0; snprintf(r->refer[r->nrefer].el, 64, "%s", at); at = dot + 1; }
@@ -871,10 +883,38 @@ Ref path_ref(const uint8_t *p, size_t n, char sep, char join){
     return ok && q == p + n ? out : string_ref(p, n);
 }
 static Ref part_ref(const Recipe *r, int role, const uint8_t *p, size_t n){ (void)role; return r->path_sep ? path_ref(p, n, r->path_sep, r->path_join) : string_ref(p, n); }
-/* A field as what it says: the type it is the source's key of, when the recipe types its column (type COLUMN LIST, the
- * first of the column's lists that knows the key; a key none knows says nothing), else the value as written. */
+/* ---- a source's keys across its files: what a key column holds, resolved to its row's subject, for the rows of the
+ * source's other files that point at it (refer COLUMN RECIPE). Process-wide, in stripes: a source is read in one process,
+ * and the files that refer are read after the files referred to (ingest orders them). The first row to define a key keeps it. */
+typedef struct { uint64_t h; const char *recipe; Ref ref; uint32_t off, len; } KEnt;
+typedef struct { pthread_mutex_t mu; KEnt *t; uint64_t cap, n; uint8_t *pool; size_t pn, pcap; } KStripe;
+static KStripe kstripe[64] = { [0 ... 63] = { PTHREAD_MUTEX_INITIALIZER, NULL, 0, 0, NULL, 0, 0 } };
+static uint64_t khash(const char *recipe, const uint8_t *k, size_t n){ uint64_t h = fnv((const uint8_t *)recipe, strlen(recipe)); for (size_t i = 0; i < n; i++) { h ^= k[i]; h *= 1099511628211ull; } return h ? h : 1; }
+static KEnt *kfind(KStripe *s, uint64_t h, const char *recipe, const uint8_t *k, size_t n, uint64_t *slot){
+    if (!s->cap) return NULL; uint64_t x = h & (s->cap - 1);
+    while (s->t[x].h) { if (s->t[x].h == h && s->t[x].len == n && !memcmp(s->pool + s->t[x].off, k, n) && !strcmp(s->t[x].recipe, recipe)) { *slot = x; return &s->t[x]; } x = (x + 1) & (s->cap - 1); }
+    *slot = x; return NULL;
+}
+static void keys_put(const char *recipe, const uint8_t *k, size_t n, Ref x){
+    uint64_t h = khash(recipe, k, n); KStripe *s = &kstripe[(h >> 58) & 63]; pthread_mutex_lock(&s->mu);
+    if ((s->n + 1) * 2 > s->cap) { uint64_t oc = s->cap; KEnt *old = s->t; s->cap = oc ? oc * 2 : 1 << 12; s->t = calloc(s->cap, sizeof(KEnt));
+        for (uint64_t i = 0; i < oc; i++) if (old[i].h) { uint64_t y = old[i].h & (s->cap - 1); while (s->t[y].h) y = (y + 1) & (s->cap - 1); s->t[y] = old[i]; } free(old); }
+    uint64_t slot; if (!kfind(s, h, recipe, k, n, &slot)) {
+        if (s->pn + n > s->pcap) { s->pcap = (s->pn + n) * 2 + 65536; s->pool = xrealloc(s->pool, s->pcap); }
+        memcpy(s->pool + s->pn, k, n); s->t[slot] = (KEnt){ h, recipe, x, (uint32_t)s->pn, (uint32_t)n }; s->pn += n; s->n++; }
+    pthread_mutex_unlock(&s->mu);
+}
+static int keys_get(const char *recipe, const uint8_t *k, size_t n, Ref *out){
+    uint64_t h = khash(recipe, k, n), slot; KStripe *s = &kstripe[(h >> 58) & 63]; pthread_mutex_lock(&s->mu);
+    KEnt *e = kfind(s, h, recipe, k, n, &slot); if (e) *out = e->ref; pthread_mutex_unlock(&s->mu); return e != NULL;
+}
+uint64_t keys_held(void){ uint64_t n = 0; for (int i = 0; i < 64; i++) n += kstripe[i].n; return n; }
+/* A field as what it says: the row of another file it is the key of (refer COLUMN RECIPE), or the type it is the
+ * source's key of (type COLUMN LIST, the first of the column's lists that knows the key; a key none knows says
+ * nothing), else the value as written. */
 static Ref col_ref(const Recipe *r, char (*name)[64], int ci, int role, const uint8_t *p, size_t n, int *has){
     *has = 1; int any = 0;
+    if (ci >= 0 && ci < 64 && name[ci][0]) for (int z = 0; z < r->nrefer; z++) if (!strcmp(r->refer[z].attr, name[ci])) { Ref x; if (keys_get(r->refer[z].kind, p, n, &x)) return x; *has = 0; return (Ref){ 0 }; }
     if (ci >= 0 && ci < 64 && name[ci][0]) for (int z = 0; z < r->ntype; z++) if (!strcmp(r->type[z].attr, name[ci])) { any = 1; int h = 0; Ref x = highway_typed(r->type[z].list, p, n, &h); if (h) return x; }
     if (any) { *has = 0; return (Ref){ 0 }; }
     return part_ref(r, role, p, n);
@@ -1064,6 +1104,8 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
         kindc[j] = string_ref((const uint8_t *)kd, strlen(kd)); kinded[j] = 1; }
     Ref own_ = { 0 }; if (r->kinds_own && r->witness[0]) own_ = string_ref((const uint8_t *)r->witness, strlen(r->witness));
     #define KIND(ci, ref) ({ Ref r_ = (ref); if ((ci) >= 0 && (ci) < MAXCOLS && kinded[ci]) { Ref kp_[3]; int kn_ = 0; if (r->kinds_own && r->witness[0]) kp_[kn_++] = own_; kp_[kn_++] = kindc[ci]; kp_[kn_++] = r_; kp_[kn_ - 1].said = 0; r_ = said_tuple(compose(kp_, (uint32_t)kn_, over(kp_, kn_))); } r_; })
+    int keyc[16], nkeyc = 0;                                                       /* the key columns: what they hold names the row's subject */
+    for (int i = 0; i < r->nkey && nkeyc < 16; i++) for (int j = 0; j < MAXCOLS; j++) if (name[j][0] && !strcmp(name[j], r->key[i])) keyc[nkeyc++] = j;
     char listc[MAXCOLS] = { 0 };                                                   /* per column: what parts its field into several values */
     for (int i = 0; i < r->nlist; i++) { if (!strcmp(r->list[i].col, "*")) { for (int j = 0; j < MAXCOLS; j++) if (!listc[j]) listc[j] = r->list[i].sep; continue; }
         for (int j = 0; j < MAXCOLS; j++) if (name[j][0] && !strcmp(name[j], r->list[i].col)) listc[j] = r->list[i].sep; }
@@ -1140,6 +1182,7 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
             }
             if (have[0] && b->subject_kind[0]) { const char *kd = !strcmp(b->subject_kind, "{dir}") ? rd->dir : !strcmp(b->subject_kind, "{name}") ? rd->name : b->subject_kind;
                 Ref kp[2] = { string_ref((const uint8_t *)kd, strlen(kd)), part[0] }; kp[1].said = 0; part[0] = said_tuple(compose(kp, 2, (uint8_t)((kp[0].tier > kp[1].tier ? kp[0].tier : kp[1].tier) + 1))); }
+            if (have[0]) for (int z = 0; z < nkeyc; z++) if (keyc[z] < nc && cell[keyc[z]].n) keys_put(r->name, cell[keyc[z]].p, cell[keyc[z]].n, part[0]);   /* its keys name the subject, for the source's other files */
             if (!have[1] && rd->predicate[k][0]) { part[1] = string_ref((const uint8_t *)rd->predicate[k], strlen(rd->predicate[k])); have[1] = 1; }
             for (int a = 0; have[0] && !b->json[0] && a < cols[k].nattest; a++) { /* columns that are each a predicate, by name */
                 int ci = cols[k].attest[a]; if (ci >= nc || !cell[ci].n) continue;

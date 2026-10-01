@@ -1,4 +1,6 @@
 name tatoeba
+# sentences_in_lists.csv names lists only by id, and tags_detailed.csv and tag_metadata.csv have no documented
+# fields: nothing in them is content, and they are not read.
 # Tatoeba's weekly exports: tables of tab-separated fields, without a header row. Tatoeba's page "Download sentences"
 # names every file's fields ("Fields and structure"); it is kept beside the files, in "documentation".
 # What Tatoeba says is of whole sentences: a sentence, its language, who wrote it, which sentences translate it, its

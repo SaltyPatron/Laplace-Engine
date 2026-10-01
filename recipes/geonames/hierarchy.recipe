@@ -5,6 +5,9 @@ name geonames-hierarchy
 match hierarchy.txt
 grammar table
 columns parentId childId type
+# both ids are keys of the geoname table's rows: each is read as the place it points at
+refer parentId geonames-geoname
+refer childId geonames-geoname
 
 claims
 together

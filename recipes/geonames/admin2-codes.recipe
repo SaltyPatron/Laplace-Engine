@@ -4,7 +4,10 @@ name geonames-admin2-codes
 match admin2Codes.txt
 grammar table
 columns "concatenated codes" name asciiname geonameId
+# the geonameId is read as the place; the concatenated codes are GeoNames's key to the division, recorded nowhere
+key "concatenated codes"
+refer geonameId geonames-geoname
 
 claims
-subject in "concatenated codes"
-attest *
+subject in geonameId
+attest name asciiname

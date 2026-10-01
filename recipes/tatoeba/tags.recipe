@@ -1,14 +1,14 @@
 name tatoeba-tags
 # "Contains the list of tags associated with each sentence. 381279 [tab] proverb means that sentence #381279 has
 # been assigned the "proverb" tag."   Fields and structure: Sentence id [tab] Tag name
+# The id is a key of sentences.csv's rows, read as the sentence.
 match tags.csv
 grammar table
-escaped \
-# "\N: Unknown (rare)."
-empty-matches ^\\N$
+escaped \\
+# "\\N: Unknown (rare)."
+empty-matches ^\\\\N$
 columns "Sentence id" "Tag name"
-kinds own
-kind "Sentence id" "Sentence id"
+refer "Sentence id" tatoeba-sentences
 
 claims
 subject in "Sentence id"

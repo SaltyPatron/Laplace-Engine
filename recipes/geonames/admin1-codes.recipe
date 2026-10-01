@@ -4,7 +4,10 @@ name geonames-admin1-codes
 match admin1CodesASCII.txt
 grammar table
 columns code name "name ascii" geonameid
+# the geonameid is read as the place; the code (US.CA) is GeoNames's key to the division, recorded nowhere
+key code
+refer geonameid geonames-geoname
 
 claims
-subject in code
-attest *
+subject in geonameid
+attest name "name ascii"

@@ -17,6 +17,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* How many recipes a recipe's keys are reached through: 0 when it refers to none (refer COLUMN RECIPE), else one more
+ * than the recipes it refers to. The files of a deeper recipe are read after the shallower ones' */
+static int refer_depth(const Recipe *rec, int nrec, const Recipe *r, int guard){
+    if (!r || guard > 16 || strcmp(r->grammar, "table")) return 0; int d = 0;
+    for (int z = 0; z < r->nrefer; z++) for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, r->refer[z].kind)) { int x = 1 + refer_depth(rec, nrec, &rec[k], guard + 1); if (x > d) d = x; }
+    return d;
+}
 /* ---- recomposition: an entity back to its bytes, from the node table and tier 0 */
 typedef struct { uint8_t *b; size_t n, cap; } Buf;
 static int expand(const lp_id *id, Buf *o){
@@ -189,6 +196,12 @@ int cmd_ingest(int argc, char **argv){
     for (int i = 1; i < nfiles; i++) { File x = files[i]; int j = i;
         while (j > 0 && path_of[i] && x.recipe && files[j - 1].recipe && x.recipe->trust > files[j - 1].recipe->trust) { files[j] = files[j - 1]; j--; }
         files[j] = x; }
+    /* a file whose recipe refers to the keys of another recipe's rows is read after that recipe's files (refer COLUMN RECIPE) */
+    int *depth = calloc((size_t)nfiles, sizeof(int));
+    for (int i = 0; i < nfiles; i++) depth[i] = refer_depth(rec, nrec, files[i].recipe, 0);
+    for (int i = 1; i < nfiles; i++) { File x = files[i]; int d = depth[i], j = i;
+        while (j > 0 && depth[j - 1] > d) { files[j] = files[j - 1]; depth[j] = depth[j - 1]; j--; }
+        files[j] = x; depth[j] = d; }
     if (uncovered) {                                                                  /* what no recipe covers yet, by extension */
         typedef struct { char ext[16]; int n; } Ext; Ext ex[512]; int ne = 0;
         for (int i = 0; i < nfiles; i++) if (!files[i].recipe) {
@@ -228,7 +241,7 @@ int cmd_ingest(int argc, char **argv){
     #define WHOLE(F) do { File *f_ = (F); file_take(f_); if (!f_->partial) file_close(f_); } while (0)
     for (int a0 = 0; a0 < nfiles; ) {
         int b0 = a0; uint64_t sum = 0; char boundary = 0;
-        while (b0 < nfiles && (b0 == a0 || sum + size[b0] <= batch)) { sum += size[b0]; b0++; }
+        while (b0 < nfiles && (b0 == a0 || (sum + size[b0] <= batch && depth[b0] == depth[a0]))) { sum += size[b0]; b0++; }     /* a batch is a barrier: what refers waits for what is referred to */
         if (b0 == a0 + 1 && size[a0] > batch && reads_in_stretches(files[a0].recipe, &boundary)) {
             /* One long file, a stretch at a time. It is read twice: first for what it is, its trunk, with nothing
              * recorded; and, if that trunk is not recorded, again to record it. A file already recorded costs its

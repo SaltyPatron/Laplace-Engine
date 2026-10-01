@@ -2,16 +2,17 @@ name tatoeba-users-sentences
 # "Contains sentences reviewed by users. The value of the review can be -1 (sentence not OK), 0 (undecided or
 # unsure), or 1 (sentence OK). Warning: this data is still experimental."
 # Fields and structure: Username [tab] Sentence id [tab] Review [tab] Date added [tab] Date last modified
-# A review is a member saying of a sentence that it is OK, or not, or neither: the member attests the sentence
-# itself, and the review is the outcome. What the row says besides is said of the member's review of the sentence.
+# A review is a member saying of a sentence (its id read as the sentence) that it is OK, or not, or neither: the
+# member attests the sentence itself, and the review is the outcome. What the row says besides is said of the
+# member's review of the sentence.
 match users_sentences.csv
 grammar table
-escaped \
-# "\N: Unknown (rare)."
-empty-matches ^\\N$
+escaped \\
+# "\\N: Unknown (rare)."
+empty-matches ^\\\\N$
 columns Username "Sentence id" Review "Date added" "Date last modified"
+refer "Sentence id" tatoeba-sentences
 kinds own
-kind "Sentence id" "Sentence id"
 kind Username Username
 
 claims

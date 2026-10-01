@@ -30,11 +30,11 @@ columns geonameid name asciiname alternatenames latitude longitude "feature clas
 list alternatenames ,
 list cc2 ,
 
-# The ids are numbers GeoNames gives its own records (readme: "geonameid : integer id of record in geonames database";
-# "geonameId referring to id in table 'geoname'"). A number names a record only as that kind of id, so each is
-# recorded as the path of the column's own name and the number.
-kind geonameid geonameid
+# The geonameid is the number GeoNames gives its record (readme: "geonameid : integer id of record in geonames
+# database"): the key the other files point at a place with, recorded nowhere. A place is its name, latitude and
+# longitude together; the row says the rest of it.
+key geonameid
 
 claims
-subject in geonameid
+subject in name latitude longitude
 attest *

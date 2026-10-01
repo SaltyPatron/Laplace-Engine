@@ -17,12 +17,11 @@ match alternateNamesV2.txt
 grammar table
 columns alternateNameId geonameid isolanguage "alternate name" isPreferredName isShortName isColloquial isHistoric from to
 
-# The ids are numbers GeoNames gives its own records (readme: "geonameid : integer id of record in geonames database";
-# "geonameId referring to id in table 'geoname'"). A number names a record only as that kind of id, so each is
-# recorded as the path of the column's own name and the number.
-kind alternateNameId alternateNameId
-kind geonameid geonameid
+# The geonameid is read as the place it is GeoNames's key of ("geonameId referring to id in table 'geoname'"); the
+# alternateNameId is the row's own key, recorded nowhere. The row says the alternate name of the place.
+key alternateNameId
+refer geonameid geonames-geoname
 
 claims
-subject in alternateNameId
+subject in geonameid
 attest *

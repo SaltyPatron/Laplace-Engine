@@ -13,6 +13,8 @@ skip 49
 header
 list Languages ,
 list neighbours ,
+# the geonameid column is read as the country's place
+refer geonameid geonames-geoname
 
 claims
 subject in "#ISO"
