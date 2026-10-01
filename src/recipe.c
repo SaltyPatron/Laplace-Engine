@@ -93,7 +93,9 @@
  *                                 and the name. NAME written . is the element's own text
  *   omit NAME...                  attributes and elements (JSON: members) that are the file's bookkeeping, not what the
  *                                 witness says of content: dates an entry was made, colours, versions, licences,
- *                                 usage notes, who edited a row. Read by nothing
+ *                                 usage notes, who edited a row. Read by nothing. ELEMENT.ATTRIBUTE: that attribute of
+ *                                 that element only (a layer's name, which its labels are said under, is not said of
+ *                                 the sentence)
  *   key ATTRIBUTE...              attributes (JSON: members) that are the source's keys: how it points at its things
  *                                 (XML: id unless said). A key resolves to the thing; it is content of nothing and
  *                                 is never recorded

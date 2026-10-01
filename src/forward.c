@@ -101,7 +101,7 @@ int cmd_pull(int argc, char **argv){
               for (int u = 0; u < nobs && !dup; u++) dup = !memcmp(&obs[u], &ob, 16); if (dup) continue;
               if (nobs == cobs) { cobs = cobs ? cobs * 2 : 256; obs = xrealloc(obs, sizeof(lp_id) * (size_t)cobs); } obs[nobs++] = ob; }
           PQclear(o); free(sb); }
-      typedef struct { lp_id id; double pull; int strands; } Tug; Tug *tug = NULL; int ntug = 0, ctug = 0, nstr = 0;
+      typedef struct { lp_id id; double pull; int strands; } Tug; Tug *tug = NULL; int ntug = 0, ctug = 0, nstr = 0; double t_obs = now() - t; t = now();
       if (nobs) { uint8_t *ob = malloc(20 + 20 * (size_t)nobs); size_t ol = ids_param(ob, obs, (uint32_t)nobs); char fan2[24]; snprintf(fan2, sizeof fan2, "%d", 64);
           const char *ov[2] = { (const char *)ob, fan2 }; int oll[2] = { (int)ol, (int)strlen(fan2) }, of_[2] = { 1, 0 };
           PGresult *o = db_ask(pg, "SELECT i, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, '{0}'::smallint[])", 2, ov, oll, of_);     /* one call: every strand of every observation */
@@ -118,7 +118,7 @@ int cmd_pull(int argc, char **argv){
       for (int u = 0; u < ntug; u++) for (int k = 0; k < np; k++) if (!memcmp(&tug[u].id, &ph[k], 16)) tug[u].pull = 0;     /* the prompt's own words pull on nothing */
       for (int u = 1; u < ntug; u++) { Tug x = tug[u]; int y = u; while (y > 0 && tug[y - 1].pull < x.pull) { tug[y] = tug[y - 1]; y--; } tug[y] = x; }
       for (int u = 0; u < ntug && u < 12; u++) reader_want(rd, &tug[u].id);
-      printf("\npulls back %d strands of %d observations, through what holds the prompt's runs   (%.1f ms)\n", nstr, nobs, (now() - t) * 1000);
+      printf("\npulls back %d strands of %d observations, through what holds the prompt's runs   (%.1f ms to find them, %.1f ms to tug)\n", nstr, nobs, t_obs * 1000, (now() - t) * 1000);
       for (int u = 0; u < ntug && u < 12 && tug[u].pull > 0; u++) { char *tx = reader_text(rd, &tug[u].id, 110); printf("%10.2f %8d   %s\n", tug[u].pull, tug[u].strands, tx); free(tx); }
       free(tug); free(obs);
       #undef BE

@@ -136,7 +136,13 @@ static void record_of(const EW *w, Events *ev, Ref node, const Ref *claim, int n
 typedef struct { uint64_t h; uint32_t el, start, end; uint64_t parent; int state, owner; Ref X; } KeyEnt;     /* parent: the key hash of the keyed element it is inside, 0 for none (the table grows, so never a position); state: 0 not yet, 1 resolving (by the thread owner), 2 resolved (X valid), 3 nothing */
 struct KeyIndex { KeyEnt *t; size_t cap, n; char (*elname)[64]; int nel; const uint8_t *src; size_t n_src; pthread_mutex_t mu; pthread_cond_t cv; };
 static uint64_t kfnv(const uint8_t *s, size_t n, uint32_t el){ uint64_t h = 1469598103934665603ull ^ ((uint64_t)el << 40); for (size_t i = 0; i < n; i++) h = (h ^ s[i]) * 1099511628211ull; return h | 1; }
-static int omitted(const EW *w, TSNode nm){ const Recipe *r = w->r; for (int i = 0; i < r->nomit; i++) if (named(w, nm, r->omit[i])) return 1; return 0; }
+static int omitted(const EW *w, TSNode nm){ const Recipe *r = w->r; for (int i = 0; i < r->nomit; i++) if (!strchr(r->omit[i], '.') && named(w, nm, r->omit[i])) return 1; return 0; }
+static int omitted_in(const EW *w, TSNode elname, TSNode an){ const Recipe *r = w->r;             /* ELEMENT.ATTRIBUTE: that attribute of that element only */
+    for (int i = 0; i < r->nomit; i++) { const char *dot = strchr(r->omit[i], '.'); if (!dot) continue; char el[64]; snprintf(el, sizeof el, "%.*s", (int)(dot - r->omit[i]), r->omit[i]);
+        if (named(w, elname, el) && named(w, an, dot + 1)) return 1; } return 0; }
+/* An element the recipe names as a thing (identity ELEMENT ...) that resolves to none (its members name nothing, its
+ * key names nothing) says nothing: not of itself, and not of what it is inside. */
+static int meant_thing(const EW *w, TSNode elname){ const Recipe *r = w->r; for (int i = 0; i < r->nidentity; i++) if (strcmp(r->identity[i].el, "*") && named(w, elname, r->identity[i].el)) return 1; return 0; }
 static int key_attr(const EW *w, TSNode an){ const Recipe *r = w->r; if (!r->nkey) return named(w, an, "id"); for (int i = 0; i < r->nkey; i++) if (named(w, an, r->key[i])) return 1; return 0; }
 static int key_attr_bytes(const Recipe *r, const uint8_t *a, size_t n){ if (!r->nkey) return n == 2 && !memcmp(a, "id", 2); for (int i = 0; i < r->nkey; i++) if (strlen(r->key[i]) == n && !memcmp(r->key[i], a, n)) return 1; return 0; }
 static int refer_next(const EW *w, TSNode elname, TSNode an, int from){ const Recipe *r = w->r; for (int z = from; z < r->nrefer; z++) if (named(w, an, r->refer[z].attr) && (!r->refer[z].el[0] || named(w, elname, r->refer[z].el))) return z; return -1; }
@@ -315,7 +321,7 @@ static int thing_of(const EW *w, const Tag *t, const Ref *S, long scp, Thing *th
 static void said_by(const EW *w, const Tag *t, int a, Ref of, long scp, Refs *into, Refs *also){
     const Recipe *r = w->r; Ref key = name_of(w, t->an[a]); char ls = 0;
     if ((w->ki || r->nkey) && key_attr(w, t->an[a])) return;                 /* a key: how the source points at things, recorded nowhere */
-    if (omitted(w, t->an[a])) return;                                        /* the file's bookkeeping: not testimony */
+    if (omitted(w, t->an[a]) || omitted_in(w, t->name, t->an[a])) return;    /* the file's bookkeeping: not testimony */
     { const uint8_t *an = w->src + ts_node_start_byte(t->an[a]); uint32_t al = ts_node_end_byte(t->an[a]) - ts_node_start_byte(t->an[a]);      /* XML's own plumbing: namespaces and schema locations say nothing of the thing */
       if ((al >= 5 && !memcmp(an, "xmlns", 5) && (al == 5 || an[5] == ':')) || (al >= 4 && !memcmp(an, "xsi:", 4))) return; }
     int rz = w->ki ? refer_of(w, t->name, t->an[a]) : -1, tz = type_next(w, t->name, t->an[a], 0);
@@ -423,6 +429,7 @@ static void element(const EW *w, TSNode el, const Ref *S, long scp, const Txt *t
         if (rec && has_place) { refs_push(rec, place); *node = place; *has_node = 1; }   /* inside a record: its place there is what the record says of it */
         return;
     }
+    if (meant_thing(w, t.name)) return;                                      /* a thing that resolved to none: it says nothing */
     if (!S) { if (t.has_content) inside(w, t.content, NULL, -1, NULL, UINT32_MAX, NULL, NULL, ev); return; }   /* it speaks of nothing: what is inside it may */
     for (int i = 0; i < r->nlink; i++) if (named(w, t.name, r->link[i].el)) {              /* a relation of S */
         int pa = -1, oa = -1; for (int a = 0; a < t.na; a++) { if (named(w, t.an[a], r->link[i].pred)) pa = a; if (named(w, t.an[a], r->link[i].obj)) oa = a; }
