@@ -33,6 +33,13 @@ static void grow(Shard *s){
     free(old);
 }
 
+/* A node by its ID within a shard, under the shard's lock. */
+static Node *find_in(Shard *s, const lp_id *id){
+    if (!s->scap) return NULL; uint64_t k = hkey(id) & (s->scap - 1);
+    while (s->slot[k]) { Node *x = &s->node[s->slot[k] - 1]; if (!memcmp(&x->id, id, 16)) return x; k = (k + 1) & (s->scap - 1); }
+    return NULL;
+}
+static void kind_or(const lp_id *id, uint8_t bits){ Shard *s = &shard[id->b[0]]; pthread_mutex_lock(&s->mu); Node *x = find_in(s, id); if (x) x->kind |= bits; pthread_mutex_unlock(&s->mu); }
 /* A composition, recorded: Laplace-Native gives its ID and coordinate; the table keeps it, once, with its path. */
 Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     if (n == 1) return ch[0];
@@ -57,10 +64,11 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     }
     s->slot[k] = (uint32_t)++s->n;
     pthread_mutex_unlock(&s->mu);
-    /* what each child is said to be here, kept on the child: a claim, a record, a tuple, a file's metadata (its trunk is a file) */
-    for (uint32_t i = 0; i < n; i++) if (ch[i].said) { Node *c = table_find(&ch[i].id); uint8_t bit = ch[i].said == LP_SAID_CLAIM ? LP_KIND_CLAIM : ch[i].said == LP_SAID_RECORD ? LP_KIND_RECORD : ch[i].said == LP_SAID_TUPLE ? LP_KIND_TUPLE : 255;
-        if (c && bit != 255) __atomic_fetch_or(&c->kind, (uint8_t)(1u << bit), __ATOMIC_RELAXED);
-        if (ch[i].said == LP_SAID_METADATA) { Node *me = table_find(&r.id); if (me) __atomic_fetch_or(&me->kind, (uint8_t)(1u << LP_KIND_FILE), __ATOMIC_RELAXED); } }
+    /* what each child is said to be here, kept on the child: a claim, a record, a tuple, a file's metadata (its trunk is a
+     * file). Other threads insert and grow the shards meanwhile: each child is found under its shard's lock. */
+    for (uint32_t i = 0; i < n; i++) if (ch[i].said) { uint8_t bit = ch[i].said == LP_SAID_CLAIM ? LP_KIND_CLAIM : ch[i].said == LP_SAID_RECORD ? LP_KIND_RECORD : ch[i].said == LP_SAID_TUPLE ? LP_KIND_TUPLE : 255;
+        if (bit != 255) kind_or(&ch[i].id, (uint8_t)(1u << bit));
+        if (ch[i].said == LP_SAID_METADATA) kind_or(&r.id, (uint8_t)(1u << LP_KIND_FILE)); }
     return r;
 }
 static lp_ref compose_sink(void *sink, const lp_ref *ch, uint32_t n, uint8_t tier){ (void)sink; return compose(ch, n, tier); }
@@ -100,10 +108,5 @@ uint64_t table_total(void){ uint64_t n = nodes_before; for (int i = 0; i < NSHAR
 uint64_t table_hits(void){ uint64_t n = hits_before; for (int i = 0; i < NSHARD; i++) n += shard[i].hits; return n; }
 
 /* Lookups run after decomposition, when nothing inserts: no lock. */
-Node *table_find(const lp_id *id){
-    Shard *s = &shard[id->b[0]]; if (!s->scap) return NULL;
-    uint64_t k = hkey(id) & (s->scap - 1);
-    while (s->slot[k]) { Node *x = &s->node[s->slot[k] - 1]; if (!memcmp(&x->id, id, 16)) return x; k = (k + 1) & (s->scap - 1); }
-    return NULL;
-}
+Node *table_find(const lp_id *id){ return find_in(&shard[id->b[0]], id); }
 uint64_t table_count(void){ uint64_t n = 0; for (int i = 0; i < NSHARD; i++) n += shard[i].n; return n; }
