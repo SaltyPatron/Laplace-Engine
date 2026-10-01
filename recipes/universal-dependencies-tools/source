@@ -1,4 +1,6 @@
 name universal-dependencies-tools
+# The validator's lists of parts of speech and relations are the highway's input (laplace highway); the rest of its
+# data is the validator's own configuration, read by nothing.
 # The data of Universal Dependencies' validator: the tags, relations and features the project permits, language by
 # language, and its auxiliaries and tokens with spaces. The repository names itself "tools", of UniversalDependencies.
 witness UniversalDependencies tools

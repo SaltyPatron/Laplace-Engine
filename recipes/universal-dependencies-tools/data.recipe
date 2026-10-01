@@ -1,6 +1,0 @@
-name ud-tools-data
-# Every file is one object whose keys name what it lists ("upos", "deprels", "features", "auxiliaries", ...). What is
-# written under a key is said of it: the path from the key to each value, every key and value as written.
-match *.json
-grammar json
-keys things
