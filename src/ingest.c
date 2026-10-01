@@ -168,8 +168,13 @@ int cmd_ingest(int argc, char **argv){
             else nftw(src[k].found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
             walking = was;
         }
-        else if (!stat(argv[i], &st) && S_ISDIR(st.st_mode)) nftw(argv[i], walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
-        else add_path(argv[i]);
+        else {                                                               /* a file or directory: under a source's root, it is that source's */
+            const Source *was = walking; char real[4096]; if (!walking && realpath(argv[i], real))
+                for (int z = 0; z < nsrc; z++) { size_t l = strlen(src[z].found); if (l && !strncmp(real, src[z].found, l) && (real[l] == '/' || !real[l])) { walking = &src[z]; break; } }
+            if (!stat(argv[i], &st) && S_ISDIR(st.st_mode)) nftw(argv[i], walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+            else add_path(argv[i]);
+            walking = was;
+        }
     }
     if (a >= argc && !of) return ingest_every(argc, argv, src, nsrc, rec, nrec);         /* nothing named: every source, in order */
     int nfiles = npaths; if (nfiles <= 0) { fprintf(stderr, "no files\n"); return 2; }
