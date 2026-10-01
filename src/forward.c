@@ -64,6 +64,30 @@ int cmd_pull(int argc, char **argv){
     { int words = 0; for (int i = 0; i < np; i++) words += table_find(&ph[i]) != NULL; printf(", %d of them compositions\n", words); }
 
     PGconn *pg = db_connect(conninfo); Reader *rd = reader_new(pg);
+    /* every segment of the prompt at once (laplace_forward): "The", "The dog", "The dog barked" and every other run of it,
+     * the observations that hold each, how many as a run, and what follows the run in them, counted. The whole pass is one
+     * set; a segment that is only tier-0 atoms (a space, a letter) is a hub and is not shown. */
+    { double t = now(); uint8_t *ab = malloc(20 + 20 * (size_t)np); size_t al = ids_param(ab, ph, (uint32_t)np); char fan[24]; snprintf(fan, sizeof fan, "%d", fw.fan);
+      const char *v[2] = { (const char *)ab, fan }; int l[2] = { (int)al, (int)strlen(fan) }, f[2] = { 1, 0 };
+      /* the prefixes first, as the pass walks them ("The", "The dog", ...), then every other segment by how many hold it */
+      PGresult *q = db_ask(pg, "SELECT i, j, paths, runs, next, times FROM laplace_forward($1::blake3[], $2::bigint) ORDER BY (i > 1), CASE WHEN i = 1 THEN j END, paths DESC, (j - i) DESC, i, times DESC NULLS LAST", 2, v, l, f);
+      if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "forward: %s", PQerrorMessage(pg)); return 1; }
+      #define BE(p_, n_) ({ uint64_t u_ = 0; for (int y_ = 0; y_ < (n_); y_++) u_ = u_ << 8 | (uint8_t)(p_)[y_]; u_; })
+      int nr = PQntuples(q), shown = 0, segments = 0;
+      for (int r = 0; r < nr; r++) if (!PQgetisnull(q, r, 4)) { lp_id x; memcpy(x.b, PQgetvalue(q, r, 4), 16); reader_want(rd, &x); }
+      for (int i = 0; i < np; i++) reader_want(rd, &ph[i]);
+      for (int r = 0; r < nr; ) { int i = (int)BE(PQgetvalue(q, r, 0), 4), j = (int)BE(PQgetvalue(q, r, 1), 4); long paths = (long)BE(PQgetvalue(q, r, 2), 8), runs = (long)BE(PQgetvalue(q, r, 3), 8); int r0 = r;
+          while (r < nr && (int)BE(PQgetvalue(q, r, 0), 4) == i && (int)BE(PQgetvalue(q, r, 1), 4) == j) r++;
+          int words = 0; for (int k = i - 1; k < j; k++) words += table_find(&ph[k]) != NULL; if (!words || !paths) continue;
+          segments++; if (shown >= 32) continue; shown++;
+          printf("%-10s \"", shown == 1 ? "segments" : i == 1 ? "" : "   also"); for (int k = i - 1; k < j; k++) { char *tx = reader_text(rd, &ph[k], 0); printf("%s", tx); free(tx); }
+          printf("\"   %ld held, %ld as a run", paths, runs); if (paths >= fw.fan) printf(" (the fan)");
+          int shownext = 0; for (int z = r0; z < r && shownext < 6; z++) { if (PQgetisnull(q, z, 4)) continue; long times = (long)BE(PQgetvalue(q, z, 5), 8); if (times < 2 && shownext) break;
+              lp_id x; memcpy(x.b, PQgetvalue(q, z, 4), 16); char *tx = reader_text(rd, &x, 0); printf("%s %s×%ld", shownext ? "" : "  then", strcmp(tx, " ") ? tx : "␠", times); free(tx); shownext++; }
+          printf("\n"); }
+      printf("%-10s %d segments observed of %d   (%.1f ms)\n", "", segments, np * (np + 1) / 2, (now() - t) * 1000);
+      #undef BE
+      PQclear(q); free(ab); }
     Claim *mine = NULL; int nmine = -1, capped = 0;                           /* what is attested of the prompt itself, fetched once */
     #define MINE() do { if (nmine < 0) { mine = claims_of(pg, &pr.id, fw.fan, fw.k, &nmine, &capped); nmine = refused(pg, c, &fw, mine, nmine); } } while (0)
     int held_back = 0, took = 0;
