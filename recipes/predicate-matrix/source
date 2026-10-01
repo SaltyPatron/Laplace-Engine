@@ -9,3 +9,5 @@ root $LAPLACE_DATA/PredicateMatrix.v1.3
 room 15
 after unicode iso-639
 reads text
+# The matrix itself is the highway's input (laplace highway), not text to be read: only the README is.
+except PredicateMatrix.v*.txt
