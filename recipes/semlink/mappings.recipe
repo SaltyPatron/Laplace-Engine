@@ -1,6 +1,0 @@
-name semlink-mappings
-# The mapping files. Every key of the file is a thing (a PropBank roleset, a VerbNet class and verb), and what is
-# written under it is said of it: the path from the key to each value.
-match pb-vn2.json vn-fn2.json external_vn2pb.json
-grammar json
-keys things

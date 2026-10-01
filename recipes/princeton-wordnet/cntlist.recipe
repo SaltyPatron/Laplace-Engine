@@ -6,8 +6,12 @@ match cntlist
 grammar table
 separator space
 columns tag_cnt sense_key sense_number
+# the sense key is WordNet's key of the sense, read as the ILI concept it is mapped to; the sense number is where the sense
+# stands in the lemma's list, a key, recorded nowhere; the tag count is what the file says of the sense
+type sense_key ili
+key sense_number
 
 claims
 together
 subject in sense_key
-attest tag_cnt sense_number
+attest tag_cnt

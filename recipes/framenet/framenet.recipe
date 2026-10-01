@@ -1,47 +1,45 @@
 name framenet
-# FrameNet's XML. FrameNet numbers each kind of thing from one: the number 4489 is a frame element, a lexical unit,
-# a lemma, a lexeme and a word form, five different things. So a thing is named by its kind and its name together, as
-# FrameNet's own attributes do when they refer to one (feID, luID, lemmaID, frameName): [FE, 4489], [frame, Abandonment].
-# Every name and value is as the files write them.
+# FrameNet's XML. Its things are what it names them: a frame its name (Abandonment), a frame element its frame and
+# its name ([Abandonment, Agent]), a lexical unit its frame and its name ([Abandonment, abandon.v]), a sentence its
+# text, a corpus and a document their names, a semantic type its name. These are the types the highway lists from
+# FrameNet's own indexes (Semantics: Claims), so an element that carries only a number (FE ID="12338", lexUnit
+# ID="14839", feID, luID, frameID) is read as the type that number is FrameNet's key of; the numbers themselves, with
+# the ids of sentences, annotation sets, corpora, documents and the user who made an entry, are keys, recorded nowhere.
+# Every other name and value is as the files write them.
 match *.xml
 grammar xml
+key ID id corpID docID lemmaID cBy
 
 # the things, and what names each
-identity frame name kind
-identity FE ID kind
-identity lexUnit ID kind
-identity lu ID kind lexUnit
-identity semType name kind
-identity superType superTypeName kind semType
-identity corpus name kind
-identity document name kind
-identity sentence ID kind
-identity annotationSet ID kind
-identity annoSet ID kind annotationSet
-identity frameRelationType name kind
-identity statusType name kind
-identity Lemma id kind
-identity WordForm id kind
-identity WordForm ID kind
-identity Lexeme ID kind
-# elements that are a frame element spoken of again
-identity memberFE ID kind FE
-identity requiresFE ID kind FE
-identity excludesFE ID kind FE
+identity frame name
+identity FE ID
+identity lexUnit ID
+identity lu ID
+identity semType name
+identity superType superTypeName
+identity corpus name
+identity document name within
+identity sentence >text
+identity memberFE ID
+identity requiresFE ID
+identity excludesFE ID
 
-# attributes that name a thing
-refer lexUnit.frame frame
-refer frameName frame
-refer feID FE
-refer luID lexUnit
-refer lemmaID Lemma
-refer frameRelation.subFrameName frame
-refer frameRelation.superFrameName frame
-refer FERelation.subID FE
-refer FERelation.supID FE
+# the numbers FrameNet points at its types with, each read as the type
+type frame.ID fnframe
+type frameID fnframe
+type FE.ID fnfe
+type memberFE.ID fnfe
+type requiresFE.ID fnfe
+type excludesFE.ID fnfe
+type feID fnfe
+type subID fnfe
+type supID fnfe
+type lexUnit.ID fnlu
+type lu.ID fnlu
+type luID fnlu
 
 # a frame's relation to another frame: <frameRelation type="Inherits from"><relatedFrame>Name</relatedFrame>
-link frameRelation type >relatedFrame frame
+link frameRelation type >relatedFrame
 
 # a label speaks of the stretch of its sentence's text from start to end; FrameNet's end is the last character
 span label start end text inclusive

@@ -1,10 +1,9 @@
 name va-frame-pas
-# README, FORMAT 2: "Each line contains the ID of a VerbAtlas frame and its argument structure, where each element is
-# separated by a tab." The row is the statement: the frame, then its argument structure, in order.
+# A frame (by its id, read as the frame) and its predicate-argument structure: the roles, in order, as one tuple.
 match VA_frame_pas.tsv
 grammar table
 skip 1
 columns frame
-
+type frame vaframe
 claims
 row tuple

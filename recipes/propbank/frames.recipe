@@ -1,6 +1,16 @@
 name propbank-frames
-# A frame file. A predicate is its lemma and a roleset its id; everything else speaks of the roleset it is inside.
+# A frame file. A predicate is its lemma; a roleset is the predicate's lemma and the name PropBank writes for it,
+# [abandon, leave behind], the type the highway lists from these files, and its id (abandon.01) the key PropBank points
+# at it with, recorded nowhere. A role's links name a VerbNet class or a FrameNet frame as those resources write them:
+# each is read as that type. An example is its text; what is marked in it speaks of it.
 match *.xml
 grammar xml
+key id
 identity predicate lemma
 identity roleset id
+type roleset.id pbroleset
+type rolelink.class vnclass
+type rolelink.class fnframe
+type lexlink.class vnclass
+type lexlink.class fnframe
+identity example >text

@@ -133,14 +133,15 @@ static void record_of(const EW *w, Events *ev, Ref node, const Ref *claim, int n
  * whichever part of the file asks first: a synset is what its members are, a sense is the word it is inside with its
  * synset, and the keys themselves are recorded nowhere. */
 #include <pthread.h>
-typedef struct { uint64_t h; uint32_t el, start, end, parent; int state; Ref X; } KeyEnt;     /* state: 0 not yet, 1 resolving, 2 resolved (X valid), 3 nothing */
-struct KeyIndex { KeyEnt *t; size_t cap, n; char (*elname)[64]; int nel; const uint8_t *src; size_t n_src; pthread_mutex_t mu; };
+typedef struct { uint64_t h; uint32_t el, start, end, parent; int state, owner; Ref X; } KeyEnt;     /* state: 0 not yet, 1 resolving (by the thread owner), 2 resolved (X valid), 3 nothing */
+struct KeyIndex { KeyEnt *t; size_t cap, n; char (*elname)[64]; int nel; const uint8_t *src; size_t n_src; pthread_mutex_t mu; pthread_cond_t cv; };
 static uint64_t kfnv(const uint8_t *s, size_t n, uint32_t el){ uint64_t h = 1469598103934665603ull ^ ((uint64_t)el << 40); for (size_t i = 0; i < n; i++) h = (h ^ s[i]) * 1099511628211ull; return h | 1; }
 static int key_attr(const EW *w, TSNode an){ const Recipe *r = w->r; if (!r->nkey) return named(w, an, "id"); for (int i = 0; i < r->nkey; i++) if (named(w, an, r->key[i])) return 1; return 0; }
 static int key_attr_bytes(const Recipe *r, const uint8_t *a, size_t n){ if (!r->nkey) return n == 2 && !memcmp(a, "id", 2); for (int i = 0; i < r->nkey; i++) if (strlen(r->key[i]) == n && !memcmp(r->key[i], a, n)) return 1; return 0; }
 static int refer_of(const EW *w, TSNode elname, TSNode an){ const Recipe *r = w->r; for (int z = 0; z < r->nrefer; z++) if (named(w, an, r->refer[z].attr) && (!r->refer[z].el[0] || named(w, elname, r->refer[z].el))) return z; return -1; }
 static int refer_named(const Recipe *r, const char *el, const char *attr){ for (int z = 0; z < r->nrefer; z++) if (!strcmp(r->refer[z].attr, attr) && (!r->refer[z].el[0] || !strcmp(r->refer[z].el, el))) return z; return -1; }
-static int type_named(const Recipe *r, const char *attr){ for (int z = 0; z < r->ntype; z++) if (!strcmp(r->type[z].attr, attr)) return z; return -1; }
+static int type_named(const Recipe *r, const char *el, const char *attr, int from){ for (int z = from; z < r->ntype; z++) if (!strcmp(r->type[z].attr, attr) && (!r->type[z].el[0] || !strcmp(r->type[z].el, el))) return z; return -1; }
+static int type_next(const EW *w, TSNode elname, TSNode an, int from){ const Recipe *r = w->r; for (int z = from; z < r->ntype; z++) if (named(w, an, r->type[z].attr) && (!r->type[z].el[0] || named(w, elname, r->type[z].el))) return z; return -1; }
 static int elname_index(KeyIndex *k, const uint8_t *nm, size_t nl){
     for (int i = 0; i < k->nel; i++) if (strlen(k->elname[i]) == nl && !memcmp(k->elname[i], nm, nl)) return i;
     if (k->nel == 256 || nl >= 64) return -1; k->elname = xrealloc(k->elname, sizeof(*k->elname) * (size_t)(k->nel + 1)); memcpy(k->elname[k->nel], nm, nl); k->elname[k->nel][nl] = 0; return k->nel++;
@@ -154,7 +155,7 @@ static KeyEnt *key_find(const KeyIndex *k, uint64_t h){ if (!k || !k->cap) retur
 /* The index: one pass over the bytes, every tag; an element with a key is entered with the nearest keyed element it is inside. */
 static KeyIndex *keys_index(const Recipe *r, const uint8_t *src, size_t n){
     if (!r->nidentity && !r->nrefer) return NULL;
-    KeyIndex *k = calloc(1, sizeof *k); k->src = src; k->n_src = n; pthread_mutex_init(&k->mu, NULL);
+    KeyIndex *k = calloc(1, sizeof *k); k->src = src; k->n_src = n; pthread_mutex_init(&k->mu, NULL); pthread_cond_init(&k->cv, NULL);
     typedef struct { uint32_t ent; int keyed; } Open; Open *stack = malloc(sizeof(Open) * 4096); int depth = 0, scap = 4096;
     for (size_t i = 0; i < n; ) {
         const uint8_t *lt = memchr(src + i, '<', n - i); if (!lt) break; size_t at = (size_t)(lt - src);
@@ -187,7 +188,7 @@ static KeyIndex *keys_index(const Recipe *r, const uint8_t *src, size_t n){
     free(stack);
     return k;
 }
-static void keys_free(KeyIndex *k){ if (!k) return; free(k->t); free(k->elname); pthread_mutex_destroy(&k->mu); free(k); }
+static void keys_free(KeyIndex *k){ if (!k) return; free(k->t); free(k->elname); pthread_mutex_destroy(&k->mu); pthread_cond_destroy(&k->cv); free(k); }
 /* The bytes of an element's attribute, in its tag. */
 static int tag_attr(const uint8_t *src, size_t n, size_t start, const char *name, const uint8_t **v, size_t *vn){
     size_t p = start + 1; while (p < n && src[p] != ' ' && src[p] != '>' && src[p] != '/') p++; size_t nl = strlen(name);
@@ -208,18 +209,16 @@ static Ref referred(const EW *w, KeyIndex *k, int z, const uint8_t *kv, size_t k
     KeyEnt *pe = &k->t[e->parent]; const uint8_t *pk; size_t pkn; if (!tag_attr(k->src, k->n_src, pe->start, r->nkey ? r->key[0] : "id", &pk, &pkn)) return (Ref){ 0 };
     return key_thing(w, k, pe->el, pk, pkn, has);
 }
-/* A type by the source's key of it: the highway's record, as a reference. */
-static Ref typed(const EW *w, int z, const uint8_t *kv, size_t kn, int *has){
-    *has = 0; if (!HW) return (Ref){ 0 }; const lp_list *l = lp_highway_list(HW, w->r->type[z].list); if (!l) return (Ref){ 0 };
-    char key[128]; if (kn >= sizeof key) return (Ref){ 0 }; memcpy(key, kv, kn); key[kn] = 0; int64_t slot = lp_highway_key(HW, l, key); if (slot < 0) return (Ref){ 0 };
-    const lp_tier0_record *rec = lp_highway_at(HW, l, (uint32_t)slot); if (!rec) return (Ref){ 0 };
-    Ref x; memset(&x, 0, sizeof x); x.id = rec->id; memcpy(x.c.m, rec->m, 32); x.tier = (uint8_t)rec->pad; *has = 1; return x;
-}
+/* A type by the source's key of it: the highway's record, as a reference, from the first of the attribute's lists that knows the key. */
+static Ref typed(const EW *w, int z, const uint8_t *kv, size_t kn, int *has){ return highway_typed(w->r->type[z].list, kv, kn, has); }
+static Ref typed_any(const EW *w, TSNode elname, TSNode an, int tz, const uint8_t *kv, size_t kn, int *has){ Ref x = { 0 }; *has = 0; for (int q = tz; q >= 0 && !*has; q = type_next(w, elname, an, q + 1)) x = typed(w, q, kv, kn, has); return x; }
 /* The thing an element with this key is: its identity, from its content, once. */
 static Ref key_thing(const EW *w, KeyIndex *k, uint32_t el, const uint8_t *kv, size_t kn, int *has){
     const Recipe *r = w->r; *has = 0; KeyEnt *e = key_find(k, kfnv(kv, kn, el)); if (!e) return (Ref){ 0 };
-    pthread_mutex_lock(&k->mu); int st = e->state; if (st == 0) e->state = 1; pthread_mutex_unlock(&k->mu);
-    if (st == 2) { *has = 1; return e->X; } if (st == 1 || st == 3) return (Ref){ 0 };       /* being resolved above us (a circle), or nothing */
+    int me = omp_get_thread_num(); pthread_mutex_lock(&k->mu);
+    while (e->state == 1 && e->owner != me) pthread_cond_wait(&k->cv, &k->mu);          /* another thread is resolving it: its answer is ours */
+    int st = e->state; if (st == 0) { e->state = 1; e->owner = me; } pthread_mutex_unlock(&k->mu);
+    if (st == 2) { *has = 1; return e->X; } if (st == 1 || st == 3) return (Ref){ 0 };       /* being resolved above us by this thread (a circle), or nothing */
     Ref X = { 0 }; int found = 0; const char *elname = k->elname[el]; const uint8_t *src = k->src; size_t n = k->n_src;
     for (int i = 0; i < r->nidentity && !found; i++) {
         if (strcmp(r->identity[i].el, "*") && strcmp(r->identity[i].el, elname)) continue;
@@ -234,14 +233,14 @@ static Ref key_thing(const EW *w, KeyIndex *k, uint32_t el, const uint8_t *kv, s
             continue;
         }
         const uint8_t *v; size_t vn; if (!tag_attr(src, n, e->start, r->identity[i].attr, &v, &vn) || !vn) continue;
-        int z = refer_named(r, elname, r->identity[i].attr), tz = type_named(r, r->identity[i].attr);
+        int z = refer_named(r, elname, r->identity[i].attr), tz = type_named(r, elname, r->identity[i].attr, 0);
         if (z >= 0) {                                                        /* the composition of what it refers to */
             char sep = ' '; for (int q = 0; q < r->nlist; q++) if (!strcmp(r->list[q].col, r->identity[i].attr)) sep = r->list[q].sep;
             Ref parts[256]; int np = 0; const uint8_t *p = v, *ve = v + vn;
             while (p < ve && np < 256) { const uint8_t *q = memchr(p, sep, (size_t)(ve - p)); if (!q) q = ve; if (q > p) { int h2; Ref t = referred(w, k, z, p, (size_t)(q - p), &h2); if (h2) parts[np++] = t; } p = q + 1; }
             if (np == 1) { X = parts[0]; found = 1; } else if (np > 1) { for (int q = 0; q < np; q++) parts[q].said = 0; X = compose(parts, (uint32_t)np, tier_of(parts, np)); found = 1; }
         }
-        else if (tz >= 0) { int h2; X = typed(w, tz, v, vn, &h2); found = h2; }
+        else if (tz >= 0) { int h2 = 0; for (int q = tz; q >= 0 && !h2; q = type_named(r, elname, r->identity[i].attr, q + 1)) X = typed(w, q, v, vn, &h2); found = h2; }
         else if (r->identity[i].res == 1) { char h[16]; if (vn <= 8) { memcpy(h, v, vn); h[vn] = 0; char *en; unsigned long cp = strtoul(h, &en, 16); if (!*en && cp < LP_NCP) { X = atom((uint32_t)cp); found = 1; } } }
         else { X = text_bytes(v, vn); found = 1; }
         if (found && r->identity[i].kind) { X = pair_of(r->identity[i].as[0] ? kind_of(w, r->identity[i].as) : string_ref((const uint8_t *)elname, strlen(elname)), X); }
@@ -250,7 +249,7 @@ static Ref key_thing(const EW *w, KeyIndex *k, uint32_t el, const uint8_t *kv, s
             if (tag_attr(src, n, pe->start, r->nkey ? r->key[0] : "id", &pk, &pkn)) P = key_thing(w, k, pe->el, pk, pkn, &h2);
             if (h2) X = pair_of(P, X); }
     }
-    pthread_mutex_lock(&k->mu); if (found) { e->X = X; e->state = 2; } else e->state = 3; pthread_mutex_unlock(&k->mu);
+    pthread_mutex_lock(&k->mu); if (found) { e->X = X; e->state = 2; } else e->state = 3; pthread_cond_broadcast(&k->cv); pthread_mutex_unlock(&k->mu);
     *has = found; return X;
 }
 
@@ -309,14 +308,15 @@ static int thing_of(const EW *w, const Tag *t, const Ref *S, long scp, Thing *th
 /* What an attribute says: its value, as the thing it names if the recipe says it names one; several, if it is a list. */
 static void said_by(const EW *w, const Tag *t, int a, Ref of, long scp, Refs *into, Refs *also){
     const Recipe *r = w->r; Ref key = name_of(w, t->an[a]); char ls = 0;
-    if (w->ki && key_attr(w, t->an[a])) return;                              /* a key: how the source points at things, recorded nowhere */
-    int rz = w->ki ? refer_of(w, t->name, t->an[a]) : -1, tz = -1;
-    for (int z = 0; z < r->ntype && tz < 0; z++) if (named(w, t->an[a], r->type[z].attr)) tz = z;
+    if ((w->ki || r->nkey) && key_attr(w, t->an[a])) return;                 /* a key: how the source points at things, recorded nowhere */
+    { const uint8_t *an = w->src + ts_node_start_byte(t->an[a]); uint32_t al = ts_node_end_byte(t->an[a]) - ts_node_start_byte(t->an[a]);      /* XML's own plumbing: namespaces and schema locations say nothing of the thing */
+      if ((al >= 5 && !memcmp(an, "xmlns", 5) && (al == 5 || an[5] == ':')) || (al >= 4 && !memcmp(an, "xsi:", 4))) return; }
+    int rz = w->ki ? refer_of(w, t->name, t->an[a]) : -1, tz = type_next(w, t->name, t->an[a], 0);
     for (int z = 0; z < r->nlist; z++) if (named(w, t->an[a], r->list[z].col)) ls = r->list[z].sep;
     if (rz >= 0 || tz >= 0) {                                                /* what it refers to, or the type it names: each, as that thing */
         const uint8_t *p, *e; size_t n; if (!raw_of(w, t->av[a], 0, &p, &n)) return; e = p + n; if (!ls && rz >= 0) ls = ' ';
         while (p < e) { const uint8_t *q = ls ? memchr(p, ls, (size_t)(e - p)) : NULL; if (!q) q = e;
-            if (q > p) { int has = 0; Ref v = rz >= 0 ? referred(w, w->ki, rz, p, (size_t)(q - p), &has) : typed(w, tz, p, (size_t)(q - p), &has);
+            if (q > p) { int has = 0; Ref v = rz >= 0 ? referred(w, w->ki, rz, p, (size_t)(q - p), &has) : typed_any(w, t->name, t->an[a], tz, p, (size_t)(q - p), &has);
                 if (has) { Ref c = claim3(of, key, v); refs_push(into, c); if (also) refs_push(also, c); } }
             p = q + 1; }
         return;

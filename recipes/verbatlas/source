@@ -1,5 +1,7 @@
 name verbatlas
-# VerbAtlas 1.1.0: WordNet synsets clustered into frames, with the mappings the package ships beside them.
+# VerbAtlas 1.1.0: WordNet synsets clustered into frames, and what the package says of them. The mappings it ships
+# (bn2wn, VA_bn2va, pb2va, wn2sense) are the highway's own input and are read there, not here; VA_va2sp names
+# selectional preferences only by their ids (va:0081p), keys of VA_preference_info's rows, and is not read.
 # The witness is named as the README's title names it: "VerbAtlas 1.1.0".
 witness VerbAtlas 1.1.0
 # The deviation is this recipe's choice for a curated academic resource; the specification does not give one.

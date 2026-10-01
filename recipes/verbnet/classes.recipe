@@ -1,7 +1,18 @@
 name verbnet-classes
-# A class file. A class and a subclass are their IDs and a member its key; everything else speaks of the class it is inside.
+# A class file. A class and a subclass are their IDs as VerbNet writes them (leave-51.2), the types the highway lists
+# from these files; a thematic role is its type (Theme), listed the same way. A member is the verb it names; its
+# verbnet_key (abandon#1) is a key, recorded nowhere; its grouping names PropBank rolesets, its wn WordNet senses and
+# its fn_mapping a FrameNet frame, each read as the type those resources' keys point at (None names no frame and says
+# nothing). Everything else speaks of the class, the role or the member it is inside.
 match *.xml
 grammar xml
+key verbnet_key
 identity VNCLASS ID
 identity VNSUBCLASS ID
-identity MEMBER verbnet_key
+identity THEMROLE type
+identity MEMBER name
+list grouping space
+list wn space
+type grouping pbroleset
+type wn ili
+type fn_mapping fnframe

@@ -1,14 +1,11 @@
 name mapnet-lus-synsets
-# README:
-#   "- file 'mapping_lus_synsets.txt':
-#      mapping between FrameNet frames, lus and WordNet synsets (5,162 mappings)."
-# The file has no header row and the README names no column: each row is recorded as a tuple of its three fields, in
-# the row's own order. The names after "columns" only point at a position in the row and are never recorded.
+# README: "mapping_lus_synsets.txt" holds a frame, a lexical unit and a WordNet 1.6 synset on each row. The frame is
+# as FrameNet names it, the lexical unit as written (bejewelled.a); the synset is a WordNet 1.6 offset, a key of an
+# edition no other source here has, and is recorded nowhere.
 match mapping_lus_synsets.txt
 grammar table
 columns frames lus synsets
-
+key synsets
 claims
 subject in frames
-predicate in lus
-object in synsets
+attest lus

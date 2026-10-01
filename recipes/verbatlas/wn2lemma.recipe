@@ -1,14 +1,9 @@
 name verbatlas-wn2lemma
-# README.txt, FORMAT, 10. wn2lemma.tsv:
-#   "A mapping from a WordNet synset to a lemma. Each line contains a WordNet synset
-#    ID and a lemma, separated by a tab."
-# The predicate is the README's name for the second column, "lemma". The name of the first column only points at a
-# position in the row and is never recorded.
-# This file has no licence line: its first line is a row.
+# A WordNet 3.0 synset (wn:00001740v, VerbAtlas's key of it, read as the ILI concept) and one of its lemmas.
 match wn2lemma.tsv
 grammar table
 columns WordNet_synset_ID lemma
-
+type WordNet_synset_ID ili
 claims
 subject in WordNet_synset_ID
 attest lemma

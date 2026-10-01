@@ -4,7 +4,8 @@
  * dependency relation, a lexicographer file, an interlingual concept, a VerbNet class or role, a FrameNet frame,
  * frame element or lexical unit, a PropBank roleset, a VerbAtlas frame. Each list is the resource's own, in the order
  * it writes it; each type's record is the ID and coordinate of its content, computed here from tier 0 (a type's
- * content is what the resource writes for it: NOUN; adj.all; a concept's definition; a frame's name); and the
+ * content is what the resource writes for it: NOUN; adj.all; a concept's definition; a frame's name; a predicate's
+ * lemma and its roleset's name; never the number or id a resource points at it with, which is a key, kept beside); and the
  * mappings the highway resources draw between the lists (PredicateMatrix, SemLink, VerbAtlas, PropBank's links,
  * VerbNet's members, FrameNet's units) are edges between slots. The layout is written beside the records, with the
  * lists small enough to be mask fields (Semantics: Claims, Masks), and the records and edges have a fingerprint.
@@ -140,7 +141,7 @@ int cmd_highway(int argc, char **argv){
             if (s) { for (char *line = strtok((char *)s, "\n"); line; line = strtok(NULL, "\n")) { char *sp = strchr(line, ' '); if (!sp) continue; *sp = 0; char *off = sp + 1, *sp2 = strchr(off, ' '); if (sp2) *sp2 = 0;
                     const char *pc = strchr(line, '%'); if (!pc) continue; char pos = pc[1] == '1' ? 'n' : pc[1] == '2' ? 'v' : pc[1] == '3' ? 'a' : pc[1] == '4' ? 'r' : 's';
                     char key[48]; snprintf(key, sizeof key, "wn30:%s-%c", off, pos); int64_t sl = sense_get(key); if (sl < 0 && pos == 's') { snprintf(key, sizeof key, "wn30:%s-a", off); sl = sense_get(key); }
-                    if (sl >= 0) { char sk[64]; snprintf(sk, sizeof sk, "sense:%s", line); sense_put(sk, sl); keys++; } } free(s); }
+                    if (sl >= 0) { char sk[64]; snprintf(sk, sizeof sk, "sense:%s", line); sense_put(sk, sl); size_t L = strlen(line); if (L > 2 && !strcmp(line + L - 2, "::")) { snprintf(sk, sizeof sk, "sense:%.*s", (int)(L - 2), line); sense_put(sk, sl); } keys++; } } free(s); }
             printf("  %-28s %'llu synsets mapped, %'llu sense keys resolved\n", "WordNet 3.0 to ILI", (unsigned long long)mapped, (unsigned long long)keys); }
     }
     /* VerbNet: classes and subclasses by their IDs as written, thematic roles; members to ILI and FrameNet */
@@ -163,22 +164,22 @@ int cmd_highway(int argc, char **argv){
                     if (attr(ln, "wn", v, sizeof v)) for (char *k = strtok(v, " "); k; k = strtok(NULL, " ")) { char sk[80]; snprintf(sk, sizeof sk, "sense:%s", k); int64_t il = sense_get(sk); if (il < 0) { snprintf(sk, sizeof sk, "sense:%s::", k); il = sense_get(sk); } edge("vnclass", cslot, "ili", il); }
                 } }
             free(s); }
-        for (size_t i = 0; i < ncls; i++) { const char *d = cls[i].id; while (*d && !(*d == '-' && d[1] >= '0' && d[1] <= '9')) d++; if (*d) { char key[80]; snprintf(key, sizeof key, "vn:%s", d + 1); sense_put(key, cls[i].slot); } }
+        for (size_t i = 0; i < ncls; i++) { const char *d = cls[i].id; while (*d && !(*d == '-' && d[1] >= '0' && d[1] <= '9')) d++; char key[80]; if (*d) { snprintf(key, sizeof key, "vn:%s", d + 1); sense_put(key, cls[i].slot); } snprintf(key, sizeof key, "vn:%s", cls[i].id); sense_put(key, cls[i].slot); }
         globfree(&g); free(cls);
     }
     /* FrameNet: frames, frame elements, lexical units, as its indexes list them */
     if (fn && fn->found[0]) {
         list_begin("fnframe", "FrameNet frame"); snprintf(p, sizeof p, "%s/frameIndex.xml", fn->found); s = read_file(p, &n); char v[256], w[256];
-        if (s) { EACH_TAG(s, "frame", ln) if (attr(ln, "name", v, sizeof v)) { int64_t sl = slot_of(text(v, strlen(v))); char key[300]; snprintf(key, sizeof key, "fn:%s", v); sense_put(key, sl); } free(s); }
+        if (s) { EACH_TAG(s, "frame", ln) if (attr(ln, "name", v, sizeof v)) { int64_t sl = slot_of(text(v, strlen(v))); char key[300]; snprintf(key, sizeof key, "fn:%s", v); sense_put(key, sl); if (attr(ln, "ID", w, sizeof w)) { snprintf(key, sizeof key, "fn:%s", w); sense_put(key, sl); } } free(s); }
         printf("  %-28s %'llu\n", "FrameNet frames", (unsigned long long)cur->count);
         list_begin("fnfe", "FrameNet frame element"); snprintf(p, sizeof p, "%s/frame/*.xml", fn->found); glob_t g; if (glob(p, 0, NULL, &g)) g.gl_pathc = 0;
         for (size_t i = 0; i < g.gl_pathc; i++) { s = read_file(g.gl_pathv[i], &n); if (!s) continue; const char *fr = strstr((const char *)s, "<frame "); if (!fr || !attr(fr, "name", w, sizeof w)) { free(s); continue; }
             Ref frame = text(w, strlen(w)); int64_t fslot = slot_in("fnframe", frame);
-            EACH_TAG(s, "FE", ln) if (attr(ln, "name", v, sizeof v)) { int64_t sl = slot_of(pair(frame, text(v, strlen(v)))); edge("fnfe", sl, "fnframe", fslot); }
+            EACH_TAG(s, "FE", ln) if (attr(ln, "name", v, sizeof v)) { int64_t sl = slot_of(pair(frame, text(v, strlen(v)))); edge("fnfe", sl, "fnframe", fslot); char id[64]; if (attr(ln, "ID", id, sizeof id)) { char key[80]; snprintf(key, sizeof key, "fe:%s", id); sense_put(key, sl); } }
             free(s); }
         globfree(&g); printf("  %-28s %'llu\n", "FrameNet frame elements", (unsigned long long)cur->count);
         list_begin("fnlu", "FrameNet lexical unit"); snprintf(p, sizeof p, "%s/luIndex.xml", fn->found); s = read_file(p, &n);
-        if (s) { EACH_TAG(s, "lu", ln) if (attr(ln, "name", v, sizeof v) && attr(ln, "frameName", w, sizeof w)) { Ref frame = text(w, strlen(w)); int64_t sl = slot_of(pair(frame, text(v, strlen(v)))); edge("fnlu", sl, "fnframe", slot_in("fnframe", frame)); } free(s); }
+        if (s) { EACH_TAG(s, "lu", ln) if (attr(ln, "name", v, sizeof v) && attr(ln, "frameName", w, sizeof w)) { Ref frame = text(w, strlen(w)); int64_t sl = slot_of(pair(frame, text(v, strlen(v)))); edge("fnlu", sl, "fnframe", slot_in("fnframe", frame)); char id[64]; if (attr(ln, "ID", id, sizeof id)) { char key[80]; snprintf(key, sizeof key, "lu:%s", id); sense_put(key, sl); } } free(s); }
         printf("  %-28s %'llu\n", "FrameNet lexical units", (unsigned long long)cur->count);
     }
     /* VerbNet members' FrameNet mappings, now that frames are listed */
@@ -192,9 +193,12 @@ int cmd_highway(int argc, char **argv){
     /* PropBank: rolesets, and their links to VerbNet classes and FrameNet frames */
     if (pb && pb->found[0]) {
         list_begin("pbroleset", "PropBank roleset"); snprintf(p, sizeof p, "%s/*.xml", pb->found); glob_t g; if (glob(p, 0, NULL, &g)) g.gl_pathc = 0; size_t before = nedges;
-        for (size_t i = 0; i < g.gl_pathc; i++) { s = read_file(g.gl_pathv[i], &n); if (!s) continue; char v[256], cl[256], rs[128]; int64_t rslot = -1;
+        for (size_t i = 0; i < g.gl_pathc; i++) { s = read_file(g.gl_pathv[i], &n); if (!s) continue; char v[256], cl[256], rs[128], lm[128] = ""; int64_t rslot = -1;
             for (const char *ln = (const char *)s; (ln = strchr(ln, '<')); ln++) {
-                if (!strncmp(ln, "<roleset ", 9)) { if (attr(ln, "id", rs, sizeof rs)) { rslot = slot_of(text(rs, strlen(rs))); char key[160]; snprintf(key, sizeof key, "pb:%s", rs); sense_put(key, rslot); } }
+                if (!strncmp(ln, "<predicate ", 11)) attr(ln, "lemma", lm, sizeof lm);
+                else if (!strncmp(ln, "<roleset ", 9)) { if (attr(ln, "id", rs, sizeof rs)) { char nm[256];     /* its content: the predicate's lemma and the name PropBank writes for the roleset, as a frame element is its frame and its name; the id a key */
+                        Ref content = attr(ln, "name", nm, sizeof nm) && nm[0] && lm[0] ? pair(text(lm, strlen(lm)), text(nm, strlen(nm))) : text(rs, strlen(rs));
+                        rslot = slot_of(content); char key[160]; snprintf(key, sizeof key, "pb:%s", rs); sense_put(key, rslot); } }
                 else if ((!strncmp(ln, "<rolelink ", 10) || !strncmp(ln, "<lexlink ", 9)) && rslot >= 0 && attr(ln, "resource", v, sizeof v) && attr(ln, "class", cl, sizeof cl)) {
                     if (!strcmp(v, "VerbNet")) { const char *d = cl; while (*d && !(*d == '-' && d[1] >= '0' && d[1] <= '9')) d++; char key[300]; snprintf(key, sizeof key, "vn:%s", *d ? d + 1 : cl); edge("pbroleset", rslot, "vnclass", sense_get(key)); }
                     else if (!strcmp(v, "FrameNet")) { char key[300]; snprintf(key, sizeof key, "fn:%s", cl); edge("pbroleset", rslot, "fnframe", sense_get(key)); } } }
@@ -214,7 +218,7 @@ int cmd_highway(int argc, char **argv){
             snprintf(p, sizeof p, "%s/bn2wn.tsv", dir); s = read_file(p, &n);                    /* bn -> wn30 offset+pos: a table */
             if (s) { for (char *line = strtok((char *)s, "\n"); line; line = strtok(NULL, "\n")) { if (strncmp(line, "bn:", 3)) continue; char *t = strchr(line, '\t'); if (!t) continue; *t = 0; char *w = t + 1; if (strncmp(w, "wn:", 3)) continue; w += 3; size_t l = strlen(w); if (w[l - 1] == '\r') w[--l] = 0;
                         char key[48]; snprintf(key, sizeof key, "wn30:%.*s-%c", (int)l - 1, w, w[l - 1]); int64_t il = sense_get(key); if (il < 0 && w[l - 1] == 's') { snprintf(key, sizeof key, "wn30:%.*s-a", (int)l - 1, w); il = sense_get(key); }
-                        if (il >= 0) { snprintf(key, sizeof key, "%s", line); sense_put(key, il); } } free(s); }
+                        if (il >= 0) { snprintf(key, sizeof key, "%s", line); sense_put(key, il); snprintf(key, sizeof key, "wn:%s", w); sense_put(key, il); } } free(s); }
             snprintf(p, sizeof p, "%s/VA_bn2va.tsv", dir); s = read_file(p, &n);
             if (s) { for (char *line = strtok((char *)s, "\n"); line; line = strtok(NULL, "\n")) { if (strncmp(line, "bn:", 3)) continue; char *t = strchr(line, '\t'); if (!t) continue; *t = 0; char *v = t + 1; if (strncmp(v, "va:", 3)) continue; char *cr = strchr(v, '\r'); if (cr) *cr = 0;
                         char key[40]; snprintf(key, sizeof key, "va:%s", v + 3); edge("ili", sense_get(line), "vaframe", sense_get(key)); } free(s); }
@@ -270,11 +274,13 @@ int cmd_highway(int argc, char **argv){
     for (int i = 0; i < nlists; i++) if (lists[i].count && lists[i].count <= 64 && bit + (int)lists[i].count <= 256) { fprintf(o, "mask\t%s\t%d\t%u\n", lists[i].name, bit, lists[i].count); bit += (int)lists[i].count; }
     fclose(o);
     /* the keys the resources point at their types with, beside the highway: resolved by readers, recorded nowhere */
-    static const struct { const char *prefix, *list; } K[] = { { "ili:", "ili" }, { "vn:", "vnclass" }, { "fn:", "fnframe" }, { "pb:", "pbroleset" }, { "va:", "vaframe" } };
+    /* as_written: the resource writes the prefix itself (bn:00082138v, wn:00001740v, va:0001f), so the key is kept whole; both: some write it, some not (pb:abandon.01 in PredicateMatrix, abandon.01 in PropBank) */
+    static const struct { const char *prefix, *list; int as_written, both; } K[] = { { "ili:", "ili", 0, 0 }, { "wn30:", "ili", 0, 0 }, { "wn:", "ili", 1, 0 }, { "sense:", "ili", 0, 0 }, { "bn:", "ili", 1, 0 }, { "vn:", "vnclass", 0, 1 }, { "fn:", "fnframe", 0, 1 }, { "fe:", "fnfe", 0, 0 }, { "lu:", "fnlu", 0, 0 }, { "pb:", "pbroleset", 0, 1 }, { "va:", "vaframe", 1, 0 } };
     snprintf(lay, sizeof lay, "%s.keys", outp); o = fopen(lay, "w"); if (!o) { perror(lay); return 1; } size_t nkeys = 0;
     fprintf(o, "# The keys the resources point at their types with: list, the key as the resource writes it, the slot. Resolved by readers, recorded nowhere.\n");
     for (size_t i = 0; i < nsenses; i++) for (size_t j = 0; j < sizeof K / sizeof *K; j++) { size_t pl = strlen(K[j].prefix);
-        if (!strncmp(senses[i].key, K[j].prefix, pl) && senses[i].ili >= 0) { fprintf(o, "%s\t%s\t%lld\n", K[j].list, senses[i].key + pl, (long long)senses[i].ili); nkeys++; } }
+        if (!strncmp(senses[i].key, K[j].prefix, pl) && senses[i].ili >= 0) { if (!K[j].as_written || K[j].both) { fprintf(o, "%s\t%s\t%lld\n", K[j].list, senses[i].key + pl, (long long)senses[i].ili); nkeys++; }
+            if (K[j].as_written || K[j].both) { fprintf(o, "%s\t%s\t%lld\n", K[j].list, senses[i].key, (long long)senses[i].ili); nkeys++; } } }
     fclose(o);
     uint8_t fp[32]; blake3_hasher hs; blake3_hasher_init(&hs); blake3_hasher_update(&hs, rec, nrec * sizeof(lp_tier0_record)); for (size_t i = 0; i < nedges; i++) { uint32_t pr[2] = { edges[i].from, edges[i].to }; blake3_hasher_update(&hs, pr, 8); } blake3_hasher_finalize(&hs, fp, 32);
     printf("\n%s: %'zu types in %d lists, %'zu edges, %'zu keys beside them; %d of 256 mask bits   (%.1f s)\nfingerprint ", outp, nrec, nlists, nedges, nkeys, bit, now() - T);

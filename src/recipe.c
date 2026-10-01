@@ -406,8 +406,9 @@ static int recipe_parse(const char *path, Recipe *r){
         }
         else if (!strcmp(tok, "key")) { char *at = strtok(NULL, "\r\n"), nm[64]; while (r->nkey < 16 && name_next(&at, nm, sizeof nm)) snprintf(r->key[r->nkey++], 64, "%s", nm); }
         else if (!strcmp(tok, "type") && r->ntype < 16) {
-            char *at = strtok(NULL, " \t\r\n"), *ls = strtok(NULL, " \t\r\n"); if (!at || !ls) { fprintf(stderr, "%s: type ATTRIBUTE LIST\n", path); fclose(f); return 0; }
-            snprintf(r->type[r->ntype].attr, 64, "%s", at); snprintf(r->type[r->ntype++].list, 32, "%s", ls);
+            char *at = strtok(NULL, "\r\n"), nm[64], ls[32]; if (!name_next(&at, nm, sizeof nm) || !name_next(&at, ls, sizeof ls)) { fprintf(stderr, "%s: type [ELEMENT.]ATTRIBUTE LIST | type COLUMN LIST\n", path); fclose(f); return 0; }
+            char *dot = strcmp(r->grammar, "table") ? strchr(nm, '.') : NULL; r->type[r->ntype].el[0] = 0; char *an = nm; if (dot) { *dot = 0; snprintf(r->type[r->ntype].el, 64, "%s", nm); an = dot + 1; }
+            snprintf(r->type[r->ntype].attr, 64, "%s", an); snprintf(r->type[r->ntype++].list, 32, "%s", ls);
         }
         else if (!strcmp(tok, "span") && r->nstretch < 8) {
             char *el = strtok(NULL, " \t\r\n"), *a = strtok(NULL, " \t\r\n"), *b2 = strtok(NULL, " \t\r\n"), *tx = strtok(NULL, " \t\r\n"), *inc = strtok(NULL, " \t\r\n");
@@ -453,7 +454,7 @@ static int recipe_parse(const char *path, Recipe *r){
     if (!strcmp(r->grammar, "table")) { for (int k = 0; k < r->nblock; k++) if (!r->block[k].is_map) r->query = (TSQuery *)r; if (r->word[0]) r->query = (TSQuery *)r; }   /* it attests: a curated source */
     else if (strcmp(r->grammar, "text") && strcmp(r->grammar, "vocabulary")) {
         r->lang = grammar_load(r->grammar); if (!r->lang) return 0;
-        if (r->nidentity) r->query = (TSQuery *)r;                             /* read natively: a curated source */
+        if (r->nidentity || r->nwords) r->query = (TSQuery *)r;                /* read natively: a curated source */
         for (int k = 0; k < r->nblock; k++) {
             Block *x = &r->block[k]; if (!x->query_src || (x->is_map && x->from[0] && !x->lang)) continue;
             if (!x->is_map && !x->predicate[0] && r->predicate[0]) snprintf(x->predicate, sizeof x->predicate, "%s", r->predicate);
@@ -870,6 +871,14 @@ Ref path_ref(const uint8_t *p, size_t n, char sep, char join){
     return ok && q == p + n ? out : string_ref(p, n);
 }
 static Ref part_ref(const Recipe *r, int role, const uint8_t *p, size_t n){ (void)role; return r->path_sep ? path_ref(p, n, r->path_sep, r->path_join) : string_ref(p, n); }
+/* A field as what it says: the type it is the source's key of, when the recipe types its column (type COLUMN LIST, the
+ * first of the column's lists that knows the key; a key none knows says nothing), else the value as written. */
+static Ref col_ref(const Recipe *r, char (*name)[64], int ci, int role, const uint8_t *p, size_t n, int *has){
+    *has = 1; int any = 0;
+    if (ci >= 0 && ci < 64 && name[ci][0]) for (int z = 0; z < r->ntype; z++) if (!strcmp(r->type[z].attr, name[ci])) { any = 1; int h = 0; Ref x = highway_typed(r->type[z].list, p, n, &h); if (h) return x; }
+    if (any) { *has = 0; return (Ref){ 0 }; }
+    return part_ref(r, role, p, n);
+}
 static int capture_role(const char *name, uint32_t l, const char *what, char *suf, size_t cap){
     size_t wl = strlen(what); if (l < wl || memcmp(name, what, wl) || (l > wl && name[wl] != '.')) return 0;
     snprintf(suf, cap, "%.*s", l > wl ? (int)(l - wl - 1) : 4, l > wl ? name + wl + 1 : "text");
@@ -1006,7 +1015,7 @@ static Cols *cols_for(const Recipe *r, char (*name)[64], int n, int only){
         if (b->json[0] && c[k].json < 0) { fprintf(stderr, "%s: there is no column %s\n", r->name, b->json); exit(2); }
         for (int i = 0; i < b->nsubj; i++) { c[k].subj[i] = column_named(name, n, b->subj[i]); if (c[k].subj[i] < 0) { fprintf(stderr, "%s: there is no column %s\n", r->name, b->subj[i]); exit(2); } }
         for (int i = 0; i < b->nattest; i++) {
-            if (!strcmp(b->attest[i], "*")) { for (int j = 0; j < n && c[k].nattest < MAXCOLS; j++) { int sub = j == c[k].in[0] || !name[j][0]; for (int z = 0; z < b->nsubj; z++) sub |= j == c[k].subj[z]; if (!sub) c[k].attest[c[k].nattest++] = j; } continue; }   /* a column the table gives no name says nothing */
+            if (!strcmp(b->attest[i], "*")) { for (int j = 0; j < n && c[k].nattest < MAXCOLS; j++) { int sub = j == c[k].in[0] || !name[j][0]; for (int z = 0; z < b->nsubj; z++) sub |= j == c[k].subj[z]; for (int z = 0; z < r->nkey; z++) sub |= !strcmp(name[j], r->key[z]); if (!sub) c[k].attest[c[k].nattest++] = j; } continue; }   /* a column the table gives no name, or that is a key, says nothing */
             { size_t al = strlen(b->attest[i]); if (al > 1 && b->attest[i][al - 1] == '*') { int any = 0;        /* every column whose name so begins */
                 for (int j = 0; j < n && c[k].nattest < MAXCOLS; j++) if (!strncmp(name[j], b->attest[i], al - 1)) { c[k].attest[c[k].nattest++] = j; any = 1; }
                 if (!any) { fprintf(stderr, "%s: there is no column %s\n", r->name, b->attest[i]); exit(2); } continue; } }
@@ -1092,9 +1101,9 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
                 if (b->together || b->field_pair) { if (ntg < 256) tg[ntg++] = said_claim(c_); } \
                 else { Event x_ = { c_.id, c_.id, score, b->enter_rating, b->enter_deviation, 0, EV_CLAIM }; ev_push(ev, &x_); } } while (0)
             #define EACH(cell_, ci_, ...) do { char ls_ = listc[(ci_) < MAXCOLS ? (ci_) : MAXCOLS - 1]; const uint8_t *p_ = (cell_).p, *e_ = p_ + (cell_).n; \
-                if (ls_ == 1) { uint8_t jb_[4096]; size_t jn_; while (json_list_next(&p_, e_, jb_, sizeof jb_, &jn_)) { if (!jn_) continue; Ref val = KIND((ci_), part_ref(r, 2, jb_, jn_)); __VA_ARGS__; } } \
+                if (ls_ == 1) { uint8_t jb_[4096]; size_t jn_; while (json_list_next(&p_, e_, jb_, sizeof jb_, &jn_)) { if (!jn_) continue; int h_; Ref val = KIND((ci_), col_ref(r, name, (ci_), 2, jb_, jn_, &h_)); if (h_) { __VA_ARGS__; } } } \
                 else while (p_ < e_) { const uint8_t *q_ = ls_ ? memchr(p_, ls_, (size_t)(e_ - p_)) : NULL; if (!q_) q_ = e_; \
-                    const uint8_t *vp = p_; size_t vn = (size_t)(q_ - p_); if (part_said(rd, b, 2, "text", buf, &vp, &vn)) { Ref val = KIND((ci_), part_ref(r, 2, vp, vn)); __VA_ARGS__; } p_ = q_ + 1; } } while (0)
+                    const uint8_t *vp = p_; size_t vn = (size_t)(q_ - p_); if (part_said(rd, b, 2, "text", buf, &vp, &vn)) { int h_; Ref val = KIND((ci_), col_ref(r, name, (ci_), 2, vp, vn, &h_)); if (h_) { __VA_ARGS__; } } p_ = q_ + 1; } } while (0)
             if (b->field_pair) {                                                /* every field a pair */
                 for (int i = 0; i < nc; i++) { const uint8_t *m = memchr(cell[i].p, b->field_pair, cell[i].n); if (!m || m == cell[i].p || m + 1 >= cell[i].p + cell[i].n) continue;
                     Ref pr[2] = { string_ref(cell[i].p, (size_t)(m - cell[i].p)), string_ref(m + 1, (size_t)(cell[i].p + cell[i].n - m - 1)) }; SAY(pr, 2); }
@@ -1119,13 +1128,13 @@ static void table_rows(const Reading *rd, const Cols *cols, char (*name)[64], in
                     else { Ref two[2] = { atom((uint32_t)lo), atom((uint32_t)hi) }; part[role] = said_tuple(compose(two, 2, 1)); }
                     have[role] = 1; continue;
                 }
-                if (part_said(rd, b, role, cols[k].res[role], buf, &p, &n)) { part[role] = part_ref(r, role, p, n); have[role] = 1;
+                if (part_said(rd, b, role, cols[k].res[role], buf, &p, &n)) { int h_; part[role] = col_ref(r, name, ci, role, p, n, &h_); have[role] = h_; if (!h_) continue;
                     if (role == 0 && part[0].tier == 0) subject_cp = (long)lp_tier0_codepoint(T0, &part[0].id);
                     part[role] = KIND(ci, part[role]); }
             }
             if (have[0] && b->nsubj) {                                         /* a subject of several columns: the path of them */
                 Ref sp[9]; int nsp = 0; sp[nsp++] = part[0];
-                for (int z = 0; z < b->nsubj; z++) { int ci = cols[k].subj[z]; if (ci >= nc || !cell[ci].n) continue; const uint8_t *p = cell[ci].p; size_t n = cell[ci].n; if (part_said(rd, b, 0, "text", buf, &p, &n)) sp[nsp++] = KIND(ci, string_ref(p, n)); }
+                for (int z = 0; z < b->nsubj; z++) { int ci = cols[k].subj[z]; if (ci >= nc || !cell[ci].n) continue; const uint8_t *p = cell[ci].p; size_t n = cell[ci].n; int h_; if (part_said(rd, b, 0, "text", buf, &p, &n)) { Ref x_ = col_ref(r, name, ci, 0, p, n, &h_); if (h_) sp[nsp++] = KIND(ci, x_); } }
                 uint8_t ts = 0; for (int i = 0; i < nsp; i++) if (sp[i].tier > ts) ts = sp[i].tier;
                 part[0] = nsp > 1 ? said_tuple(compose(sp, (uint32_t)nsp, (uint8_t)(ts + 1))) : sp[0];
             }
@@ -1380,7 +1389,7 @@ void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
     else if (r && !strcmp(r->grammar, "table") && r->word[0]) attest_records(r, f, src, n);
     else if (r && !strcmp(r->grammar, "table")) attest_table(r, f, src, n, &f->ev);
     else if (!r || !r->lang) f->trunk = text_ref(c, src, n);
-    else if (r->records && r->nidentity && n > (16u << 20)) attest_elements(r, f, NULL, src, n);
+    else if (r->records && (r->nidentity || r->nwords) && n > (16u << 20)) attest_elements(r, f, NULL, src, n);
     else if (r->records && n > (64u << 20) && !getenv("LAPLACE_ONE_PARSE")) {
         /* line records: split after a line break, parse the pieces on every core, and join their top-level children
          * (with the bytes between them) under one root, exactly as one parse of the whole file would give */
@@ -1425,7 +1434,7 @@ void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
         TSTree *t = ts_parser_parse_string(ps, NULL, (const char *)src, (uint32_t)n);
         TSNode root = ts_tree_root_node(t);
         if (!r->query) f->trunk = ast_node(root, src, 0, (uint32_t)n, 0);   /* content: the file as itself */
-        else if (r->nidentity) attest_elements(r, f, &root, src, n);
+        else if (r->nidentity || r->nwords) attest_elements(r, f, &root, src, n);
         else attest_tree(r, f->path, root, src, n, &f->ev, &f->incomplete);                       /* a curated source: what it attests */
         ts_tree_delete(t); ts_parser_delete(ps);
     }

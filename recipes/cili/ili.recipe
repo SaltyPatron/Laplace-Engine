@@ -1,4 +1,0 @@
-name cili-turtle
-# The index and its maps, in Turtle.
-match *.ttl
-like turtle
