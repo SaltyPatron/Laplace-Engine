@@ -324,17 +324,18 @@ static void said_by(const EW *w, const Tag *t, int a, Ref of, long scp, Refs *in
         const uint8_t *p, *e; size_t n; if (!raw_of(w, t->av[a], 0, &p, &n)) return; e = p + n; if (!ls && rz >= 0) ls = ' ';
         while (p < e) { const uint8_t *q = ls ? memchr(p, ls, (size_t)(e - p)) : NULL; if (!q) q = e;
             if (q > p) { int has = 0; Ref v = { 0 }; if (rz >= 0) { for (int zz = rz; zz >= 0 && !has; zz = refer_next(w, t->name, t->an[a], zz + 1)) v = referred(w, w->ki, zz, p, (size_t)(q - p), &has); } else v = typed_any(w, t->name, t->an[a], tz, p, (size_t)(q - p), &has);
-                if (has) { Ref c = claim3(of, key, v); refs_push(into, c); if (also) refs_push(also, c); } }
+                if (has) { if (!memcmp(&v.id, &of.id, 16)) continue; Ref c = claim3(of, key, v); refs_push(into, c); if (also) refs_push(also, c); } }
             p = q + 1; }
         return;
     }
     if (!ls) { Ref v; if (!value_ref(w, t->av[a], listed((char (*)[32])r->codepoints, r->ncodepoints, w, t->an[a]), 0, scp, &v)) return;
+        if (!memcmp(&v.id, &of.id, 16)) return;                                 /* the value is the thing itself (the attribute that named it): said already */
         Ref c = claim3(of, key, v); refs_push(into, c); if (also) refs_push(also, c); return; }
     const uint8_t *p, *e; size_t n; if (!raw_of(w, t->av[a], 0, &p, &n)) return; e = p + n;
     while (p < e) { const uint8_t *q = memchr(p, ls, (size_t)(e - p)); if (!q) q = e; const uint8_t *vp = p; size_t vn = (size_t)(q - p);
         while (vn && (vp[0] == ' ' || vp[0] == '\n' || vp[0] == '\t')) { vp++; vn--; } while (vn && (vp[vn - 1] == ' ' || vp[vn - 1] == '\n' || vp[vn - 1] == '\t')) vn--;
         if (vn) { uint8_t *ub = malloc(vn * 2 + 16); size_t ul = xml_unescape(vp, vn, ub);
-            if (ul) { Ref v = string_ref(ub, ul); Ref c = claim3(of, key, v); refs_push(into, c); if (also) refs_push(also, c); }
+            if (ul) { Ref v = string_ref(ub, ul); if (!memcmp(&v.id, &of.id, 16)) continue; Ref c = claim3(of, key, v); refs_push(into, c); if (also) refs_push(also, c); }
             free(ub); }
         p = q + 1; }
 }
