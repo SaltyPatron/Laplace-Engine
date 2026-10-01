@@ -3,7 +3,8 @@ name wiktextract
 # for each word is a dictionary", of "a single word and part-of-speech", with
 #   word - the word form;  pos - part-of-speech;  lang_code - Wiktionary language code;
 #   etymology_number - "the number of the etymology under which this entry appeared"
-# so an entry is the thing those members name together: [en, free, noun, 3]. A translation or a linked word holds
+# so an entry is the thing the first three name together: [en, free, noun]; the etymology number is where on the
+# page it appeared, a key, and the entries under each etymology say what they say of that one word. A translation or a linked word holds
 # "word", and "lang_code" when it is in another language: [fi, vapari]. A redirect holds "title" and no "word".
 # A sense is the thing its glosses name ("glosses - list of gloss strings for the word sense"), a form the thing its
 # "form" names, an example the thing its "text" names ("each example being a dictionary with text field
@@ -15,7 +16,8 @@ name wiktextract
 match raw-wiktextract-data-*
 grammar json
 records
-named word by lang_code word pos etymology_number
+named word by lang_code word pos
+key etymology_number id senseid wikidata
 identity * title
 identity senses glosses
 identity forms form

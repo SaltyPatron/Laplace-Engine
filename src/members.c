@@ -5,7 +5,8 @@
  * is inside nothing are themselves things, and each one's value speaks of it.
  * A claim is the path from a thing to a value, every key and value as written:
  *   [thing, key, value]   [thing, key, key, value]   ...   and, where the path ends at another thing, [thing, key, thing]
- * An array says each of its values under the same path. null, and an empty text, say nothing.
+ * An array says each of its values under the same path. null, and an empty text, say nothing. A member the recipe
+ * names as a key (key MEMBER...) is how the source points at its things, an identifier: it is never recorded.
  * An object can instead be a row (subject in KEY, predicate in KEY, object in KEY, score in KEY): those members are the
  * claim, the score the one the row gives it, and every other member is said of the claim itself.
  * Everything a top-level value says it says together: it is one record, the path of its claims and of the records of
@@ -50,6 +51,8 @@ static int string(JP *j, const uint8_t **s, size_t *n){
 static Ref text_of(JP *j, const uint8_t *s, size_t n){ if (j->r->path_sep && n > 1 && s[0] == (uint8_t)j->r->path_sep) return path_ref(s, n, j->r->path_sep, j->r->path_join); return n > 256 ? text_ref(j->ctx, s, n) : string_ref(s, n); }
 static void skip(JP *j);
 static void value(JP *j, Ref *path, int np, Refs *items);
+/* A member that is a source's key: how it points at its things (an entry's number, a sense's id). Never recorded. */
+static int is_key(const JP *j, const uint8_t *k, size_t kn){ for (int i = 0; i < j->r->nkey; i++) if (strlen(j->r->key[i]) == kn && !memcmp(j->r->key[i], k, kn)) return 1; return 0; }
 
 /* What an object is: the thing the members the recipe names say it is. The cursor is on its opening brace, and
  * stays. Gives which identity named it (-2: the members that name it together), or -1 when nothing does. */
@@ -147,7 +150,7 @@ static void pairs(JP *j, int by, Ref X, Ref *kp, int nk, Refs *out){
         if (by >= 0) is_id = strlen(j->r->identity[by].attr) == kn && !memcmp(j->r->identity[by].attr, k, kn);
         else if (by == -2) for (int i = 0; i < j->r->nnamed && !is_id; i++) is_id = strlen(j->r->named[i]) == kn && !memcmp(j->r->named[i], k, kn);
         ws(j); if (j->p < j->e && *j->p == ':') j->p++; ws(j);
-        if (!kn || (is_id && by >= 0 && j->p < j->e && *j->p != '{')) skip(j);           /* the member that names it: said already */
+        if (!kn || is_key(j, k, kn) || (is_id && by >= 0 && j->p < j->e && *j->p != '{')) skip(j);           /* a key, or the member that names it: said already */
         else if (is_id && j->p < j->e && *j->p != '{' && *j->p != '[') { Ref v; if (plain_text(j, &v) && memcmp(&v.id, &X.id, 16)) held_one(j, key, kp, nk, v, out); }
         else held(j, key, kp, nk, out);
         ws(j); if (j->p < j->e && *j->p == ',') { j->p++; ws(j); } else break;
@@ -178,7 +181,7 @@ static void object(JP *j, Ref *path, int np, Refs *items){
         if (by >= 0) is_id = strlen(j->r->identity[by].attr) == kn && !memcmp(j->r->identity[by].attr, k, kn);
         else if (by == -2) for (int i = 0; i < j->r->nnamed && !is_id; i++) is_id = strlen(j->r->named[i]) == kn && !memcmp(j->r->named[i], k, kn);
         ws(j); if (j->p < j->e && *j->p == ':') j->p++; ws(j);
-        if (!kn || ns >= MAXPATH) skip(j);
+        if (!kn || ns >= MAXPATH || is_key(j, k, kn)) skip(j);
         else if (keys_things) { Ref one[1] = { key }; value(j, one, 1, &mine); }
         else if (is_id && j->p < j->e && *j->p == '[') skip(j);                   /* the texts that name it together: said already */
         else if (is_id && j->p < j->e && *j->p != '{') {        /* the member that names it: said already, unless another names it first */

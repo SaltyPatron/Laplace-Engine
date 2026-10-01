@@ -83,8 +83,9 @@
  *                                 the name stands only among things of its kind: the thing is the path of the kind
  *                                 (the element's name, unless the source writes the kind under another name, KIND)
  *                                 and the name. NAME written . is the element's own text
- *   key ATTRIBUTE...              attributes that are the source's keys: how it points at its things (id unless said).
- *                                 A key resolves to the thing; it is content of nothing and is never recorded
+ *   key ATTRIBUTE...              attributes (JSON: members) that are the source's keys: how it points at its things
+ *                                 (XML: id unless said). A key resolves to the thing; it is content of nothing and
+ *                                 is never recorded
  *   type ATTRIBUTE LIST           the attribute's value is the source's key of a type in the highway's LIST (an ILI
  *                                 number): it is read as that type's content, never as the key
  *   refer [ELEMENT.]ATTRIBUTE ELEMENT [within]

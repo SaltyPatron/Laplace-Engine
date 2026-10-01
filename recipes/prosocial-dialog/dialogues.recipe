@@ -6,3 +6,5 @@ match train.json test.json valid.json
 grammar json
 records
 identity * context
+# dialogue_id, response_id: the numbering of the turns, keys
+key dialogue_id response_id
