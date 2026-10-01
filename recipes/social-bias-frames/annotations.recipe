@@ -16,16 +16,18 @@ grammar table
 separator ,
 header
 quoted
+# A post is its text; the HITId is the crowdsourcing task's key, recorded nowhere. The WorkerId names the annotator,
+# the witness of what the row says of the post, and of what the row says of the annotator.
+key HITId
 kinds own
-kind HITId HITId
 kind WorkerId WorkerId
 
 claims
-subject in HITId
-attest post dataSource
+subject in post
+attest dataSource
 
 claims
-subject in HITId
+subject in post
 attest whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype
 witness in WorkerId
 

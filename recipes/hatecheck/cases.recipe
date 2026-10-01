@@ -10,13 +10,13 @@ grammar table
 separator ,
 header
 quoted
-kinds own
-kind case_id case_id
-kind ref_case_id case_id
-kind templ_id templ_id
-kind ref_templ_id templ_id
+# A case is its test case, the sentence itself; case_id and templ_id are HateCheck's keys to the case and to the
+# template it was made from (case_templ, said of the case as written), recorded nowhere; ref_case_id and
+# ref_templ_id point at another case by those keys, read as that case's sentence and template.
+key case_id templ_id ref_templ_id
+refer ref_case_id hatecheck-cases
 
 claims
 together
-subject in case_id
+subject in test_case
 attest *

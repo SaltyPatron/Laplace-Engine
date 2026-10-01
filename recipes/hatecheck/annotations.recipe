@@ -11,11 +11,10 @@ grammar table
 separator ,
 header
 quoted
-kinds own
-kind case_id case_id
-kind templ_id templ_id
+# The case is its test case, the sentence; case_id and templ_id are keys, recorded nowhere.
+key case_id templ_id
 
 claims
-subject in case_id
-attest functionality templ_id test_case label_gold count_label_h count_label_nh label_annot_maj
+subject in test_case
+attest functionality label_gold count_label_h count_label_nh label_annot_maj
 voices label_1 label_2 label_3 label_4 label_5 label_6 label_7 label_8 label_9 label_10

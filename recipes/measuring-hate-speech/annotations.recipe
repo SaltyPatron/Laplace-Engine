@@ -18,21 +18,23 @@ match train-*.tsv
 grammar table
 header
 escaped \
+# A comment is its text; comment_id is the data set's key to it, recorded nowhere. The annotator_id names the
+# annotator, the witness of what the row says of the comment, and of what the row says of the annotator.
+key comment_id
 kinds own
-kind comment_id comment_id
 kind annotator_id annotator_id
 
 claims
-subject in comment_id
-attest text platform hate_speech_score infitms outfitms std_err hypothesis
+subject in text
+attest platform hate_speech_score infitms outfitms std_err hypothesis
 
 claims
-subject in comment_id
+subject in text
 attest sentiment respect insult humiliate status dehumanize violence genocide attack_defend hatespeech
 witness in annotator_id
 
 claims
-subject in comment_id
+subject in text
 attest target_*
 witness in annotator_id
 
