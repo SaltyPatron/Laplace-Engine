@@ -43,13 +43,24 @@ static const char *name_of(const File *f){
 }
 
 /* The file is whole: its trunk, over its metadata and its content. */
+/* What a curated file witnessed, as one composition of bounded fan: blocks of FILE_FAN by position, level by level,
+ * until one holds them all. Canonical from the content alone, as a text's paragraphs and sentences are; a flat
+ * composition of millions of records would be one path of a gigabyte, which no row can hold and no read should decode. */
+#define FILE_FAN 4096
+static Ref tree_of(Ref *r, uint32_t n){
+    if (n == 1) return r[0];
+    if (n <= FILE_FAN) return compose(r, n, above(r, n));
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < n; i += FILE_FAN) { uint32_t k = n - i < FILE_FAN ? n - i : FILE_FAN; Ref b = k == 1 ? r[i] : compose(r + i, k, above(r + i, k)); b.said = 0; r[m++] = b; }
+    return tree_of(r, m);
+}
 void file_close(File *f){
     if (f->recipe && f->recipe->query && !f->nsaid) { f->has_file = 0; return; }  /* it witnessed nothing: there is nothing of it to record */
     const char *name = name_of(f);
     Ref part[2]; uint32_t n = 0;
     part[n++] = said_metadata(text_ref(CTX[0], (const uint8_t *)name, strlen(name)));
     if (f->recipe && f->recipe->query) {                                       /* curated: what it witnessed */
-        if (f->nsaid) { part[n] = f->nsaid == 1 ? f->said[0] : said_record(compose(f->said, (uint32_t)f->nsaid, above(f->said, f->nsaid))); n++; }
+        if (f->nsaid) { part[n] = f->nsaid == 1 ? f->said[0] : said_record(tree_of(f->said, (uint32_t)f->nsaid)); n++; }
     }
     else { part[n] = f->trunk; part[n].said = 0; n++; }
     f->file = compose(part, n, above(part, n)); f->file.said = 0; f->has_file = 1;
