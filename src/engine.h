@@ -170,7 +170,7 @@ typedef struct {
     char omit[48][64]; int nomit;                                                        /* XML attributes and elements, JSON members, that are a file's bookkeeping (dates, colours, versions, licences): not testimony, read by nothing */
     char key[16][64]; int nkey;                                                          /* XML attributes, JSON members, that are a source's keys: how it points at its things; resolved, never recorded */
     struct { char el[64], attr[64], list[32]; } type[16]; int ntype;                     /* XML attributes, table columns, whose value is a source's key of a type in a highway list: read as the type */
-    struct { char el[64], start[32], end[32], text[64]; int inclusive; } stretch[8]; int nstretch;   /* XML: elements that speak of a stretch of a text */
+    struct { char el[64], start[32], end[32], text[64]; int inclusive; char val[32], par_el[64], par_attr[64]; } stretch[8]; int nstretch;   /* XML: elements that speak of a stretch of a text; val under par_el.par_attr: the attribute VAL is said under the value of the enclosing element's attribute (a label's tag under its layer's name) */
     struct { char rec[64], word[8][64]; int nword; } words[4]; int nwords;      /* XML: an element that is a record of words, and the elements inside it that are its words */
     struct { char el[64], pred[64], obj[64], kind[64]; } link[16]; int nlink;             /* XML: elements that are relations of what they are inside */
     char codepoints[32][32]; int ncodepoints;          /* XML: attributes whose values are codepoints written in hex */

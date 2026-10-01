@@ -107,9 +107,11 @@
  *                                 inside it is a word, and that element's attributes are said of the word, within the
  *                                 record. What the record is about is the path of its words, in order
  *   A KIND written {dir} is the name of the directory the file is in: a name that stands only within its data set.
- *   span ELEMENT START END TEXT [inclusive]
+ *   span ELEMENT START END TEXT [inclusive] [ATTRIBUTE under ELEMENT.ATTRIBUTE]
  *                                 the element speaks of a stretch of the text of the element TEXT, between two
- *                                 characters; what it says is said of that stretch (see elements.c)
+ *                                 characters; what it says is said of that stretch (see elements.c). With under, its
+ *                                 ATTRIBUTE is said under the value of the enclosing element's attribute: a label's
+ *                                 tag under its layer's name, [stretch, PENN, NN]
  *   list ATTRIBUTE CHAR           an attribute whose value is several values, parted by CHAR
  *   link ELEMENT A B              an ELEMENT is a relation of the thing it is inside: [thing, value of A, value of B];
  *                                 B written >CHILD is the text of each element CHILD inside it; a KIND after B says
@@ -427,10 +429,16 @@ static int recipe_parse(const char *path, Recipe *r){
             snprintf(r->type[r->ntype].attr, 64, "%s", an); snprintf(r->type[r->ntype++].list, 32, "%s", ls);
         }
         else if (!strcmp(tok, "span") && r->nstretch < 8) {
-            char *el = strtok(NULL, " \t\r\n"), *a = strtok(NULL, " \t\r\n"), *b2 = strtok(NULL, " \t\r\n"), *tx = strtok(NULL, " \t\r\n"), *inc = strtok(NULL, " \t\r\n");
-            if (!el || !a || !b2 || !tx) { fprintf(stderr, "%s: span ELEMENT START END TEXT [inclusive]\n", path); fclose(f); return 0; }
+            char *el = strtok(NULL, " \t\r\n"), *a = strtok(NULL, " \t\r\n"), *b2 = strtok(NULL, " \t\r\n"), *tx = strtok(NULL, " \t\r\n");
+            if (!el || !a || !b2 || !tx) { fprintf(stderr, "%s: span ELEMENT START END TEXT [inclusive] [ATTRIBUTE under ELEMENT.ATTRIBUTE]\n", path); fclose(f); return 0; }
             snprintf(r->stretch[r->nstretch].el, 64, "%s", el); snprintf(r->stretch[r->nstretch].start, 32, "%s", a); snprintf(r->stretch[r->nstretch].end, 32, "%s", b2); snprintf(r->stretch[r->nstretch].text, 64, "%s", tx);
-            r->stretch[r->nstretch++].inclusive = inc && !strcmp(inc, "inclusive");
+            r->stretch[r->nstretch].inclusive = 0; r->stretch[r->nstretch].val[0] = r->stretch[r->nstretch].par_el[0] = r->stretch[r->nstretch].par_attr[0] = 0;
+            for (char *w2 = strtok(NULL, " \t\r\n"); w2; w2 = strtok(NULL, " \t\r\n")) {
+                if (!strcmp(w2, "inclusive")) r->stretch[r->nstretch].inclusive = 1;
+                else if (!strcmp(w2, "under")) { char *pa = strtok(NULL, " \t\r\n"), *dot = pa ? strchr(pa, '.') : NULL; if (!pa || !dot) { fprintf(stderr, "%s: span ... ATTRIBUTE under ELEMENT.ATTRIBUTE\n", path); fclose(f); return 0; }
+                    *dot = 0; snprintf(r->stretch[r->nstretch].par_el, 64, "%s", pa); snprintf(r->stretch[r->nstretch].par_attr, 64, "%s", dot + 1); }
+                else snprintf(r->stretch[r->nstretch].val, 32, "%s", w2); }
+            r->nstretch++;
         }
         else if (!strcmp(tok, "link") && r->nlink < 16) {
             char *el = strtok(NULL, " \t\r\n"), *pa = strtok(NULL, " \t\r\n"), *oa = strtok(NULL, " \t\r\n"); if (!el || !pa || !oa) { fprintf(stderr, "%s: link ELEMENT ATTRIBUTE ATTRIBUTE\n", path); fclose(f); return 0; }

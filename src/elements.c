@@ -443,8 +443,13 @@ static void element(const EW *w, TSNode el, const Ref *S, long scp, const Txt *t
         free(said.c); return;
     }
     /* one that speaks of a stretch of text speaks of that stretch */
-    Ref of = *S; long ofcp = scp; int sa = -1, sb = -1, spanned = 0; Ref covered;
+    Ref of = *S; long ofcp = scp; int sa = -1, sb = -1, spanned = 0, sv = -1, has_under = 0; Ref covered, under = { 0 };
     for (int i = 0; i < r->nstretch && !spanned; i++) if (named(w, t.name, r->stretch[i].el)) {
+        if (r->stretch[i].val[0] && r->stretch[i].par_el[0]) {                 /* the attribute said under the enclosing element's attribute (a layer's name) */
+            TSNode pc = ts_node_parent(el), pe = ts_node_is_null(pc) ? pc : ts_node_parent(pc); Tag pt;
+            if (!ts_node_is_null(pe) && is(pe, "element") && tag_of(pe, &pt) && named(w, pt.name, r->stretch[i].par_el))
+                for (int a = 0; a < pt.na && !has_under; a++) if (named(w, pt.an[a], r->stretch[i].par_attr) && value_ref(w, pt.av[a], 0, 0, -1, &under)) has_under = 1;
+            if (has_under) for (int a = 0; a < t.na; a++) if (named(w, t.an[a], r->stretch[i].val)) sv = a; }
         for (int a = 0; a < t.na; a++) { if (named(w, t.an[a], r->stretch[i].start)) sa = a; if (named(w, t.an[a], r->stretch[i].end)) sb = a; }
         const uint8_t *p, *q; size_t pn, qn;
         if (sa >= 0 && sb >= 0 && raw_of(w, t.av[sa], 0, &p, &pn) && raw_of(w, t.av[sb], 0, &q, &qn) && pn < 12 && qn < 12) {
@@ -460,7 +465,9 @@ static void element(const EW *w, TSNode el, const Ref *S, long scp, const Txt *t
     }
     Refs mine = { 0 }, items = { 0 }, *claims = rec ? rec : &mine; int before = claims->n;
     if (spanned) refs_push(&items, covered);
-    for (int a = 0; a < t.na; a++) if (a != sa && a != sb) said_by(w, &t, a, of, ofcp, claims, &items);
+    for (int a = 0; a < t.na; a++) if (a != sa && a != sb) {
+        if (a == sv && spanned) { Ref v; if (value_ref(w, t.av[a], 0, 0, -1, &v)) { Ref c = claim3(of, under, v); refs_push(claims, c); refs_push(&items, c); } continue; }
+        said_by(w, &t, a, of, ofcp, claims, &items); }
     if (t.has_content) {
         if (!holds_elements(t.content)) { Ref v; if (value_ref(w, t.content, 0, is_span_text(w, t.name), ofcp, &v)) { Ref c = claim3(of, nref, v); refs_push(claims, c); refs_push(&items, c); } }
         else inside(w, t.content, spanned ? &of : S, ofcp, tx, UINT32_MAX, claims, &items, ev);

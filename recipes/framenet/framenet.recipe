@@ -45,4 +45,4 @@ type luID fnlu
 link frameRelation type >relatedFrame
 
 # a label speaks of the stretch of its sentence's text from start to end; FrameNet's end is the last character
-span label start end text inclusive
+span label start end text inclusive name under layer.name
