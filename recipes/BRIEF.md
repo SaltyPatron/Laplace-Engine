@@ -23,7 +23,10 @@ So:
 - A claim is a **tuple of entities** (`[subject, predicate, object]`, a pair, or a longer path). Every part is content.
 - Whatever a source leaves empty (its own empty marker) attests nothing.
 - The witness is named **as the source names itself** (its README title, its own `label`).
-- Do not decide what is "useful". If the source says something of a thing, it is attested.
+- **Testimony, not bookkeeping.** A witness provides content and attestations about it: that is what a recipe reads.
+  A file's bookkeeping about its own records (dates an entry was made, colours, versions, licences, usage notes,
+  templates, who edited a row) is not testimony: name it with `omit`, or leave the column out of `attest`. Never
+  `attest *`.
 - **A source's identifiers are keys, never content.** A synset id, a sense key, an ILI number, a sentence id, a
   geonameid, a case id, a roleset id, an `ID` attribute, an entry's etymology number: these are how the source points
   at its own things. Name them with `key` (never recorded), `refer` (read as the thing another row or element of the
