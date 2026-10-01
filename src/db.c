@@ -250,15 +250,19 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         scap = 1; while (scap < nev * 2) scap <<= 1; smap = calloc(scap, 4); stand = malloc(sizeof(Standing) * (nev + 1)); sn = 0;
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) if (files[fi].ev.e[i].kind != EV_RECORD) stand_get(&files[fi].ev.e[i].claim, &files[fi].ev.e[i], files[fi].trust);
         /* claims already recorded start from their recorded standing */
-        lp_id *old = malloc(sizeof(lp_id) * (sn + 1)); uint64_t nold = 0;
-        for (uint64_t i = 0; i < sn; i++) { Node *x = table_find(&stand[i].id); if (!x || x->keep != 1) old[nold++] = stand[i].id; }
-        const uint64_t CH = 100000;
+        /* the statistics are partitioned by the claim's first hex digit: each read goes to its one partition */
+        lp_id *old = malloc(sizeof(lp_id) * (sn + 1)); uint64_t nold = 0, ocnt[17] = { 0 };
+        for (uint64_t i = 0; i < sn; i++) { Node *x = table_find(&stand[i].id); if (!x || x->keep != 1) { old[nold++] = stand[i].id; ocnt[(stand[i].id.b[0] >> 4) + 1]++; } }
+        for (int h = 0; h < 16; h++) ocnt[h + 1] += ocnt[h];
+        { lp_id *by = malloc(sizeof(lp_id) * (nold + 1)); uint64_t fill[16]; memcpy(fill, ocnt, sizeof fill); for (uint64_t i = 0; i < nold; i++) by[fill[old[i].b[0] >> 4]++] = old[i]; free(old); old = by; }
+        const uint64_t CH = 100000; typedef struct { int h; uint64_t lo, n; } OJob; OJob *oj = malloc(sizeof(OJob) * (nold / CH + 17)); uint64_t noj = 0;
+        for (int h = 0; h < 16; h++) for (uint64_t lo = ocnt[h]; lo < ocnt[h + 1]; lo += CH) oj[noj++] = (OJob){ h, lo, ocnt[h + 1] - lo < CH ? ocnt[h + 1] - lo : CH };
         #pragma omp parallel for num_threads(npg) schedule(dynamic)
-        for (uint64_t i0 = 0; i0 < nold; i0 += CH) {
-            uint32_t k = (uint32_t)(nold - i0 < CH ? nold - i0 : CH); uint8_t *ab = malloc(20 + 20 * (size_t)k);
-            size_t len = ids_param(ab, old + i0, k); PGconn *c = pg[omp_get_thread_num()];
+        for (uint64_t j = 0; j < noj; j++) {
+            uint32_t k = (uint32_t)oj[j].n; uint8_t *ab = malloc(20 + 20 * (size_t)k);
+            size_t len = ids_param(ab, old + oj[j].lo, k); PGconn *c = pg[omp_get_thread_num()]; char sql[160]; snprintf(sql, sizeof sql, "SELECT claim, rating, deviation, volatility, matches FROM consensus_%x WHERE claim = ANY($1::blake3[])", oj[j].h);
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
-            PGresult *q = PQexecParams(c, "SELECT claim, rating, deviation, volatility, matches FROM consensus WHERE claim = ANY($1::blake3[])", 1, NULL, v, l, f, 1);
+            PGresult *q = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
             if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "standing: %s", PQerrorMessage(c)); exit(1); }
             #pragma omp critical
             for (int j = 0; j < PQntuples(q); j++) {
@@ -269,7 +273,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             }
             PQclear(q); free(ab);
         }
-        free(old);
+        free(old); free(oj);
         /* What was witnessed plays once per lineage: a copy of it is a row in the ledger and nothing more. What this
          * lineage witnessed before is read from the ledger; what it witnesses in this run is kept here. */
         typedef struct { lp_id witnessed, lin; uint8_t used; } Seen;
@@ -357,25 +361,28 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         for (uint64_t i = 0; i < nown; i++) if (!oknown[i]) { int dup = 0; for (int k = 0; k < nw && !dup; k++) dup = !memcmp(&wid[k], &own[i], 16); if (dup) continue;
             c16(&c, 3); cfield(&c, own[i].b, 16); c32(&c, 0xFFFFFFFFu); cf_f64(&c, owntrust[i]); }
         copy_end(&c); free(wid); free(wfile); free(known); free(own); free(owntrust); free(oslot); free(oknown);
-        { Copy lc = { 0 };                                                       /* the ledger, in reading order: its order is the order of play */
-          copy_begin(&lc, pg[0], "COPY attestation (claim, witness, score, position) FROM STDIN (FORMAT binary)");
+        /* the ledger, in reading order (its order is the order of play), and the new standings: each row into the
+         * partition its claim's first hex digit names, sixteen copies, no routing */
+        for (int h = 0; h < 16; h++) { Copy lc = { 0 }; char sql[160]; snprintf(sql, sizeof sql, "COPY attestation_%x (claim, witness, score, position) FROM STDIN (FORMAT binary)", h);
+          copy_begin(&lc, pg[0], sql);
           for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) {
-              if (files[fi].ev.e[i].kind == EV_MEMBER) continue;                /* witnessed within its record: the record's row */
+              if (files[fi].ev.e[i].kind == EV_MEMBER || (files[fi].ev.e[i].witnessed.b[0] >> 4) != h) continue;                /* witnessed within its record: the record's row */
               c16(&lc, 4); cfield(&lc, files[fi].ev.e[i].witnessed.b, 16); cfield(&lc, files[fi].ev.e[i].own_witness ? files[fi].ev.e[i].witness.b : files[fi].witness.id.b, 16); cf_f32(&lc, files[fi].ev.e[i].score);
               if (files[fi].ev.e[i].position) cf_i32(&lc, (int32_t)files[fi].ev.e[i].position); else c32(&lc, 0xFFFFFFFFu);
               lc.rows++;
           }
           copy_end(&lc); st->led += lc.rows; free(lc.b); }
-        copy_begin(&c, pg[0], "COPY consensus (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)");
-        for (uint64_t i = 0; i < sn; i++) {
-            Standing *s = &stand[i]; if (s->had) continue;
-            c16(&c, 5); cfield(&c, s->id.b, 16); cf_f64(&c, s->r.rating); cf_f64(&c, s->r.deviation); cf_f64(&c, s->r.volatility); cf_i32(&c, (int32_t)s->matches); st->std_new++;
-        }
-        copy_end(&c); free(c.b);
-        for (uint64_t i0 = 0; i0 < sn; ) {                                       /* recorded standings: set-based updates */
+        for (int h = 0; h < 16; h++) { char sql[160]; snprintf(sql, sizeof sql, "COPY consensus_%x (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)", h);
+          copy_begin(&c, pg[0], sql);
+          for (uint64_t i = 0; i < sn; i++) {
+              Standing *s = &stand[i]; if (s->had || (s->id.b[0] >> 4) != h) continue;
+              c16(&c, 5); cfield(&c, s->id.b, 16); cf_f64(&c, s->r.rating); cf_f64(&c, s->r.deviation); cf_f64(&c, s->r.volatility); cf_i32(&c, (int32_t)s->matches); st->std_new++;
+          }
+          copy_end(&c); free(c.b); c = (Copy){ 0 }; }
+        for (int h = 0; h < 16; h++) for (uint64_t i0 = 0; i0 < sn; ) {           /* recorded standings: set-based updates, each into its claim's partition */
             const uint32_t oid[5] = { id_oid, 701, 701, 701, 23 }; static const int w[5] = { 16, 8, 8, 8, 4 };
             uint64_t idx[100000]; uint32_t n = 0;
-            for (; i0 < sn && n < 100000; i0++) if (stand[i0].had) idx[n++] = i0;
+            for (; i0 < sn && n < 100000; i0++) if (stand[i0].had && (stand[i0].id.b[0] >> 4) == h) idx[n++] = i0;
             if (!n) continue;
             uint8_t *arr[5]; int alen[5];
             for (int f = 0; f < 5; f++) {
@@ -391,8 +398,9 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
                 alen[f] = (int)(q - arr[f]);
             }
             const char *v[5] = { (char *)arr[0], (char *)arr[1], (char *)arr[2], (char *)arr[3], (char *)arr[4] }; int fm[5] = { 1, 1, 1, 1, 1 };
-            PGresult *u = PQexecParams(pg[0], "UPDATE consensus s SET rating = u.r, deviation = u.d, volatility = u.v, matches = u.m "
-                "FROM unnest($1::blake3[], $2::float8[], $3::float8[], $4::float8[], $5::int[]) AS u(c, r, d, v, m) WHERE s.claim = u.c", 5, NULL, v, alen, fm, 0);
+            char usql[300]; snprintf(usql, sizeof usql, "UPDATE consensus_%x s SET rating = u.r, deviation = u.d, volatility = u.v, matches = u.m "
+                "FROM unnest($1::blake3[], $2::float8[], $3::float8[], $4::float8[], $5::int[]) AS u(c, r, d, v, m) WHERE s.claim = u.c", h);
+            PGresult *u = PQexecParams(pg[0], usql, 5, NULL, v, alen, fm, 0);
             if (PQresultStatus(u) != PGRES_COMMAND_OK) { fprintf(stderr, "standing update: %s", PQerrorMessage(pg[0])); return 1; }
             PQclear(u); for (int f = 0; f < 5; f++) free(arr[f]); st->std_upd += n;
         }
