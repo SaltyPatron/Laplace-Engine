@@ -138,8 +138,10 @@ struct KeyIndex { KeyEnt *t; size_t cap, n; char (*elname)[64]; int nel; const u
 static uint64_t kfnv(const uint8_t *s, size_t n, uint32_t el){ uint64_t h = 1469598103934665603ull ^ ((uint64_t)el << 40); for (size_t i = 0; i < n; i++) h = (h ^ s[i]) * 1099511628211ull; return h | 1; }
 static int key_attr(const EW *w, TSNode an){ const Recipe *r = w->r; if (!r->nkey) return named(w, an, "id"); for (int i = 0; i < r->nkey; i++) if (named(w, an, r->key[i])) return 1; return 0; }
 static int key_attr_bytes(const Recipe *r, const uint8_t *a, size_t n){ if (!r->nkey) return n == 2 && !memcmp(a, "id", 2); for (int i = 0; i < r->nkey; i++) if (strlen(r->key[i]) == n && !memcmp(r->key[i], a, n)) return 1; return 0; }
-static int refer_of(const EW *w, TSNode elname, TSNode an){ const Recipe *r = w->r; for (int z = 0; z < r->nrefer; z++) if (named(w, an, r->refer[z].attr) && (!r->refer[z].el[0] || named(w, elname, r->refer[z].el))) return z; return -1; }
-static int refer_named(const Recipe *r, const char *el, const char *attr){ for (int z = 0; z < r->nrefer; z++) if (!strcmp(r->refer[z].attr, attr) && (!r->refer[z].el[0] || !strcmp(r->refer[z].el, el))) return z; return -1; }
+static int refer_next(const EW *w, TSNode elname, TSNode an, int from){ const Recipe *r = w->r; for (int z = from; z < r->nrefer; z++) if (named(w, an, r->refer[z].attr) && (!r->refer[z].el[0] || named(w, elname, r->refer[z].el))) return z; return -1; }
+static int refer_of(const EW *w, TSNode elname, TSNode an){ return refer_next(w, elname, an, 0); }
+static int refer_named_next(const Recipe *r, const char *el, const char *attr, int from){ for (int z = from; z < r->nrefer; z++) if (!strcmp(r->refer[z].attr, attr) && (!r->refer[z].el[0] || !strcmp(r->refer[z].el, el))) return z; return -1; }
+static int refer_named(const Recipe *r, const char *el, const char *attr){ return refer_named_next(r, el, attr, 0); }
 static int type_named(const Recipe *r, const char *el, const char *attr, int from){ for (int z = from; z < r->ntype; z++) if (!strcmp(r->type[z].attr, attr) && (!r->type[z].el[0] || !strcmp(r->type[z].el, el))) return z; return -1; }
 static int type_next(const EW *w, TSNode elname, TSNode an, int from){ const Recipe *r = w->r; for (int z = from; z < r->ntype; z++) if (named(w, an, r->type[z].attr) && (!r->type[z].el[0] || named(w, elname, r->type[z].el))) return z; return -1; }
 static int elname_index(KeyIndex *k, const uint8_t *nm, size_t nl){
@@ -237,7 +239,9 @@ static Ref key_thing(const EW *w, KeyIndex *k, uint32_t el, const uint8_t *kv, s
         if (z >= 0) {                                                        /* the composition of what it refers to */
             char sep = ' '; for (int q = 0; q < r->nlist; q++) if (!strcmp(r->list[q].col, r->identity[i].attr)) sep = r->list[q].sep;
             Ref parts[256]; int np = 0; const uint8_t *p = v, *ve = v + vn;
-            while (p < ve && np < 256) { const uint8_t *q = memchr(p, sep, (size_t)(ve - p)); if (!q) q = ve; if (q > p) { int h2; Ref t = referred(w, k, z, p, (size_t)(q - p), &h2); if (h2) parts[np++] = t; } p = q + 1; }
+            while (p < ve && np < 256) { const uint8_t *q = memchr(p, sep, (size_t)(ve - p)); if (!q) q = ve;
+                if (q > p) { int h2 = 0; Ref t = { 0 }; for (int zz = z; zz >= 0 && !h2; zz = refer_named_next(r, elname, r->identity[i].attr, zz + 1)) t = referred(w, k, zz, p, (size_t)(q - p), &h2); if (h2) parts[np++] = t; }     /* the first element the key names a thing of */
+                p = q + 1; }
             if (np == 1) { X = parts[0]; found = 1; } else if (np > 1) { for (int q = 0; q < np; q++) parts[q].said = 0; X = compose(parts, (uint32_t)np, tier_of(parts, np)); found = 1; }
         }
         else if (tz >= 0) { int h2 = 0; for (int q = tz; q >= 0 && !h2; q = type_named(r, elname, r->identity[i].attr, q + 1)) X = typed(w, q, v, vn, &h2); found = h2; }
@@ -293,6 +297,7 @@ static int thing_of(const EW *w, const Tag *t, const Ref *S, long scp, Thing *th
             if (lo >= 0 && hi >= 0) { Ref two[2] = { atom((uint32_t)lo), atom((uint32_t)hi) }; th->X = said_tuple(compose(two, 2, 1)); found = 1; } else th->attr = th->attr2 = -1;
         }
         else for (int a = 0; a < t->na && !found; a++) if (named(w, t->an[a], r->identity[i].attr)) {
+            if (refer_of(w, t->name, t->an[a]) >= 0 || type_next(w, t->name, t->an[a], 0) >= 0) break;     /* a key that named nothing: the element is no thing here, never the key as text */
             if (r->identity[i].res == 1) { const uint8_t *p; size_t n; char h[16];
                 if (raw_of(w, t->av[a], 0, &p, &n) && n <= 8) { memcpy(h, p, n); h[n] = 0; char *e; unsigned long cp = strtoul(h, &e, 16); if (!*e && cp < LP_NCP) { th->X = atom((uint32_t)cp); th->cp = (long)cp; found = 1; } } }
             else found = value_ref(w, t->av[a], r->identity[i].res == 2, 0, scp, &th->X);
@@ -316,7 +321,7 @@ static void said_by(const EW *w, const Tag *t, int a, Ref of, long scp, Refs *in
     if (rz >= 0 || tz >= 0) {                                                /* what it refers to, or the type it names: each, as that thing */
         const uint8_t *p, *e; size_t n; if (!raw_of(w, t->av[a], 0, &p, &n)) return; e = p + n; if (!ls && rz >= 0) ls = ' ';
         while (p < e) { const uint8_t *q = ls ? memchr(p, ls, (size_t)(e - p)) : NULL; if (!q) q = e;
-            if (q > p) { int has = 0; Ref v = rz >= 0 ? referred(w, w->ki, rz, p, (size_t)(q - p), &has) : typed_any(w, t->name, t->an[a], tz, p, (size_t)(q - p), &has);
+            if (q > p) { int has = 0; Ref v = { 0 }; if (rz >= 0) { for (int zz = rz; zz >= 0 && !has; zz = refer_next(w, t->name, t->an[a], zz + 1)) v = referred(w, w->ki, zz, p, (size_t)(q - p), &has); } else v = typed_any(w, t->name, t->an[a], tz, p, (size_t)(q - p), &has);
                 if (has) { Ref c = claim3(of, key, v); refs_push(into, c); if (also) refs_push(also, c); } }
             p = q + 1; }
         return;

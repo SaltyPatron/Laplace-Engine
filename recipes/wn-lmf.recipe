@@ -3,8 +3,9 @@ name wn-lmf
 # says things of it. Its identifiers are its keys: how the file points at its entries, senses and synsets; they
 # resolve to the things and are recorded nowhere (Semantics: Claims; Storage: Identity).
 #   a lexical entry   is the word its Lemma writes
-#   a synset          is the composition of the words its members are, in the order it lists them: every wordnet that
-#                     lists the same words has the same synset, and their attestations meet there
+#   a synset          is the composition of the words its members are, in the order it lists them (members are sense
+#                     ids in OMW's files, entry ids in OEWN's: either names the word): every wordnet that lists the same
+#                     words has the same synset, and their attestations meet there
 #   a sense           is the word it is inside, with its synset
 #   the lexicon       is named as it names itself (its label)
 #   ili               is a type of the highway's interlingual index: read as the concept's content, never as i46360
@@ -21,6 +22,7 @@ identity Synset members
 identity Sense synset within
 identity SyntacticBehaviour subcategorizationFrame
 refer members Sense within
+refer members LexicalEntry
 refer synset Synset
 refer SynsetRelation.target Synset
 refer SenseRelation.target Sense
