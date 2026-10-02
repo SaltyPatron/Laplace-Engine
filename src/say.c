@@ -39,7 +39,8 @@ enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, 
 /* A key as a resource writes it, matched by a pattern and written as a template (\1: the pattern's first part) where it
  * writes it otherwise than those it points at write it (vn:51.2 for 51.2): the highway's lines, and a type's key. */
 typedef struct { char list[32], path[160], as[64]; regex_t re; int has_re; } KSpec;
-typedef struct { char name[64]; int what; char arg[64]; KSpec k; } Dis;           /* k: of a type, how its key is written */
+typedef struct { char name[64]; int what; char arg[64]; KSpec k;
+                 struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; } Dis;   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse) */
 typedef struct { char tier[32], name[64]; } Pair;
 typedef struct { char tier[32]; char name[64][64]; int n; uint32_t when; char by[64], of[64]; int file; } Att;      /* when: the conditions it is said under, by their places in where[]; by: the part that names who says it; of: the part it is said of; file: a witness stands within the file */
 typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char by[64]; int alone; } Rel;     /* alone: where what it is to names nothing, the relation alone */
@@ -65,11 +66,20 @@ static char *name_next(char **at, char *out, size_t cap){
     else { e = p; while (*e && *e != ' ' && *e != '\t' && *e != '\r' && *e != '\n') e++; snprintf(out, cap, "%.*s", (int)(e - p), p); *at = e; }
     return out;
 }
+/* A name as it is matched, split once when the recipe is read, not again for every part of every row: NAME, NAME* (every
+ * name that begins so), note:NAME (a note of that name); and ELEMENT.NAME, NAME scoped to what holds it. */
+static void name_split(const char *n, size_t at, size_t end, uint8_t *off, uint8_t *len, uint8_t *wild, uint8_t *note){
+    *note = end - at >= 5 && !strncmp(n + at, "note:", 5); if (*note) at += 5;
+    size_t l = end - at; *wild = l && n[at + l - 1] == '*'; if (*wild) l--; *off = (uint8_t)at; *len = (uint8_t)l; }
+static void dis_parse(Dis *d){
+    size_t n = strlen(d->name); name_split(d->name, 0, n, &d->whole.off, &d->whole.len, &d->whole.wild, &d->whole.note);
+    const char *dot = strrchr(d->name, '.'); d->el_l = dot && dot != d->name ? (uint8_t)(dot - d->name) : 0;
+    if (d->el_l) name_split(d->name, (size_t)d->el_l + 1, n, &d->part.off, &d->part.len, &d->part.wild, &d->part.note); }
 static int dis_add(Say *s, const char *path, const char *name, int what, const char *arg){
     if (s->ndis == 256) { fprintf(stderr, "%s: more parts than a recipe disposes of (256)\n", path); return -1; }
     for (int i = 0; i < s->ndis; i++) if (!strcmp(s->dis[i].name, name)) { if (what == D_KEY && s->dis[i].what == D_KEY) return 1;      /* one name may be the key of several kinds of thing (id) */
         fprintf(stderr, "%s: the part %s is given two dispositions\n", path, name); return -1; }
-    Dis *d = &s->dis[s->ndis++]; snprintf(d->name, sizeof d->name, "%s", name); d->what = what; snprintf(d->arg, sizeof d->arg, "%s", arg ? arg : ""); return 1;
+    Dis *d = &s->dis[s->ndis++]; snprintf(d->name, sizeof d->name, "%s", name); dis_parse(d); d->what = what; snprintf(d->arg, sizeof d->arg, "%s", arg ? arg : ""); return 1;
 }
 /* A recipe's line, if it lays the file out or disposes of a part: 1, or 0 for something else, or -1 when written wrong. */
 int say_says(Recipe *r, const char *path, char *tok){
@@ -247,12 +257,15 @@ static int named_as(const SNode *x, const char *name){
     size_t l = strlen(name); if (l && name[l - 1] == '*') return x->nlen >= l - 1 && !memcmp(x->name, name, l - 1); return s_named(x, name, l); }
 /* The tree being read, for a name scoped to what holds it (ELEMENT.NAME: that part of that element only). */
 static __thread const STree *TT;
+/* named_as, for a name split when the recipe was read */
+static inline int name_is(const SNode *x, const char *n, uint8_t off, uint8_t len, uint8_t wild, uint8_t note){
+    if (note && x->kind != S_NOTE) return 0; return wild ? x->nlen >= len && !memcmp(x->name, n + off, len) : s_named(x, n + off, len); }
 static const Dis *dis_of(const Say *s, const SNode *x){
     if (TT && x->parent >= 0) {                                              /* ELEMENT.NAME first: it says more than NAME */
         const SNode *el = &TT->n[x->parent]; if (el->nlen == x->nlen && !memcmp(el->name, x->name, x->nlen) && el->parent >= 0) el = &TT->n[el->parent];   /* a piece of a part: the part's element */
-        for (int i = 0; i < s->ndis; i++) { const char *dot = strrchr(s->dis[i].name, '.'); if (!dot || dot == s->dis[i].name) continue; size_t el_l = (size_t)(dot - s->dis[i].name);
-            if (el->nlen == el_l && !memcmp(el->name, s->dis[i].name, el_l) && named_as(x, dot + 1)) return &s->dis[i]; } }
-    for (int i = 0; i < s->ndis; i++) if (named_as(x, s->dis[i].name)) return &s->dis[i];
+        for (int i = 0; i < s->ndis; i++) { const Dis *d = &s->dis[i]; if (!d->el_l) continue;
+            if (el->nlen == d->el_l && !memcmp(el->name, d->name, d->el_l) && name_is(x, d->name, d->part.off, d->part.len, d->part.wild, d->part.note)) return d; } }
+    for (int i = 0; i < s->ndis; i++) { const Dis *d = &s->dis[i]; if (name_is(x, d->name, d->whole.off, d->whole.len, d->whole.wild, d->whole.note)) return d; }
     return NULL;
 }
 /* One step of a path from a part: ^ what it is inside; N (a number) its Nth part, counted from 1 (a piece of a part
