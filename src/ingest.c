@@ -373,9 +373,8 @@ int cmd_ingest(int argc, char **argv){
            (unsigned long long)st.ent_rows, (unsigned long long)st.phy_rows, (st.ent_rows + st.phy_rows) / (st.t_copy > 0 ? st.t_copy : 1));
     if (nev) printf("  %-44s %8.2f s   %'llu attestations; standings %'llu new, %'llu updated\n", "witnesses, ledger, standings", st.t_sem,
                     (unsigned long long)st.led, (unsigned long long)st.std_new, (unsigned long long)st.std_upd);
-    if (nev) printf("    %-42s %8.2f s\n    %-42s %8.2f s\n    %-42s %8.2f s\n    %-42s %8.2f s\n    %-42s %8.2f s\n    %-42s %8.2f s\n",
-                    "standings and lineages read", st.t_read, "matchups played", st.t_play, "witnesses", st.t_wit, "the ledger, COPY", st.t_led,
-                    "new standings, COPY", st.t_new, "standings updated", st.t_upd);
+    if (nev) printf("    %-42s %8.2f s\n    %-42s %8.2f s\n    %-42s %8.2f s\n    %-42s %8.2f s\n",
+                    "standings and lineages read", st.t_read, "matchups played", st.t_play, "witnesses", st.t_wit, "the ledger and standings, every partition", st.t_led);
     /* What the container index was handed during the load it keeps in a list of its own until it is merged, and
      * every lookup reads that list through: it is merged here, once, so no lookup pays for a load. Where the index
      * is not built yet (a bulk load: laplace index comes after) there is nothing to merge. */

@@ -161,6 +161,75 @@ static Standing *stand_get(const lp_id *id, const Event *add, double trust){
     sn = lp_idmap_count(smap); return &stand[i];
 }
 
+/* One partition of the semantics, on one connection: the ledger's rows whose witnessed thing's ID begins with h, in
+ * reading order (its order is the order of play), the new standings and the recorded ones updated. Each partition is
+ * written by one connection, inside that connection's part of the batch's transaction (load: prepared, then committed
+ * as one). Returns 0, or 1 when the database refused. */
+static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led, uint64_t *nnew, uint64_t *nupd){
+    Copy lc = { 0 }; char sql[300]; snprintf(sql, sizeof sql, "COPY attestation_%x (claim, witness, score, position) FROM STDIN (FORMAT binary)", h);
+    copy_begin(&lc, pg, sql);
+    for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i];
+        if (e->kind == EV_MEMBER || (e->witnessed.b[0] >> 4) != h) continue;                /* witnessed within its record: the record's row */
+        c16(&lc, 4); cfield(&lc, e->witnessed.b, 16); cfield(&lc, e->own_witness ? e->witness.b : files[fi].witness.id.b, 16); cf_f32(&lc, e->score);
+        if (e->position) cf_i32(&lc, (int32_t)e->position); else c32(&lc, 0xFFFFFFFFu);
+        lc.rows++; }
+    copy_end(&lc); *led += lc.rows; free(lc.b);
+    Copy c = { 0 }; snprintf(sql, sizeof sql, "COPY consensus_%x (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)", h);
+    copy_begin(&c, pg, sql);
+    for (uint64_t i = 0; i < sn; i++) { const Standing *s = &stand[i]; if (s->had || (s->id.b[0] >> 4) != h) continue;
+        c16(&c, 5); cfield(&c, s->id.b, 16); cf_f64(&c, s->r.rating); cf_f64(&c, s->r.deviation); cf_f64(&c, s->r.volatility); cf_i32(&c, (int32_t)s->matches); c.rows++; }
+    copy_end(&c); *nnew += c.rows; free(c.b);
+    for (uint64_t i0 = 0; i0 < sn; ) {                                        /* recorded standings: set-based updates */
+        const uint32_t oid[5] = { id_oid, 701, 701, 701, 23 }; static const int w[5] = { 16, 8, 8, 8, 4 };
+        uint64_t *idx = malloc(sizeof(uint64_t) * 100000); uint32_t n = 0;
+        for (; i0 < sn && n < 100000; i0++) if (stand[i0].had && (stand[i0].id.b[0] >> 4) == h) idx[n++] = i0;
+        if (!n) { free(idx); continue; }
+        uint8_t *arr[5]; int alen[5];
+        for (int f = 0; f < 5; f++) {
+            arr[f] = malloc(20 + (size_t)n * (4 + w[f])); uint8_t *q = arr[f] + 20;
+            uint32_t hdr[5] = { htonl(1), htonl(0), htonl(oid[f]), htonl(n), htonl(1) }; memcpy(arr[f], hdr, 20);
+            for (uint32_t j = 0; j < n; j++) {
+                const Standing *s = &stand[idx[j]]; uint32_t l = htonl((uint32_t)w[f]); memcpy(q, &l, 4); q += 4;
+                if (f == 0) memcpy(q, s->id.b, 16);
+                else if (f < 4) { double d = f == 1 ? s->r.rating : f == 2 ? s->r.deviation : s->r.volatility; uint64_t u; memcpy(&u, &d, 8); for (int y = 0; y < 8; y++) q[y] = (uint8_t)(u >> (56 - 8 * y)); }
+                else { uint32_t m = htonl(s->matches); memcpy(q, &m, 4); }
+                q += w[f];
+            }
+            alen[f] = (int)(q - arr[f]);
+        }
+        const char *v[5] = { (char *)arr[0], (char *)arr[1], (char *)arr[2], (char *)arr[3], (char *)arr[4] }; int fm[5] = { 1, 1, 1, 1, 1 };
+        snprintf(sql, sizeof sql, "UPDATE consensus_%x s SET rating = u.r, deviation = u.d, volatility = u.v, matches = u.m "
+            "FROM unnest($1::blake3[], $2::float8[], $3::float8[], $4::float8[], $5::int[]) AS u(c, r, d, v, m) WHERE s.claim = u.c", h);
+        PGresult *u = PQexecParams(pg, sql, 5, NULL, v, alen, fm, 0); int bad = PQresultStatus(u) != PGRES_COMMAND_OK;
+        if (bad) fprintf(stderr, "standing update: %s", PQerrorMessage(pg));
+        PQclear(u); for (int f = 0; f < 5; f++) free(arr[f]); free(idx); if (bad) return 1; *nupd += n;
+    }
+    return 0;
+}
+/* A statement that must succeed. */
+static int must(PGconn *pg, const char *sql){
+    PGresult *r = PQexec(pg, sql); int ok = PQresultStatus(r) == PGRES_COMMAND_OK || PQresultStatus(r) == PGRES_TUPLES_OK;
+    if (!ok) fprintf(stderr, "%s: %s", sql, PQerrorMessage(pg)); PQclear(r); return ok;
+}
+/* A batch's transaction is in parts, one a connection, prepared and then committed (two-phase commit): part 0, which
+ * holds the witnesses and the files' trunks, is prepared last and committed first, so its commit is the decision. A
+ * part named 'laplace X j' is of the batch whose part 0 is transaction X. Left over after a stop: committed where X
+ * committed, rolled back where X did not, part 0 itself committed where it was prepared (every part was). */
+static int resolve_parts(PGconn *pg){
+    for (int round = 0; round < 2; round++) {
+        PGresult *r = PQexec(pg, "SELECT gid, split_part(gid, ' ', 3), pg_xact_status(split_part(gid, ' ', 2)::xid8) FROM pg_prepared_xacts "
+                                 "WHERE gid LIKE 'laplace %' AND database = current_database() ORDER BY split_part(gid, ' ', 3)::int");
+        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "prepared parts: %s", PQerrorMessage(pg)); PQclear(r); return 0; }
+        for (int i = 0; i < PQntuples(r); i++) { const char *gid = PQgetvalue(r, i, 0), *part = PQgetvalue(r, i, 1), *st = PQgetvalue(r, i, 2); char sql[160];
+            if (round == 0 && strcmp(part, "0")) continue;                       /* part 0 first: it decides */
+            if (!strcmp(part, "0") || !strcmp(st, "committed")) snprintf(sql, sizeof sql, "COMMIT PREPARED '%s'", gid);
+            else if (!strcmp(st, "aborted")) snprintf(sql, sizeof sql, "ROLLBACK PREPARED '%s'", gid);
+            else { fprintf(stderr, "prepared part %s: its batch's decision is unknown (%s); left as it is\n", gid, st); continue; }
+            if (!must(pg, sql)) { PQclear(r); return 0; }
+            fprintf(stderr, "  %s, left from a batch that stopped\n", sql); }
+        PQclear(r); }
+    return 1;
+}
 int load_whole;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     table_kinds();                                                           /* what each child is said to be: on the child, for its mask */
@@ -173,6 +242,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         PQclear(PQexec(pg[i], "SET synchronous_commit = off"));
     }
     parts_plan(pg[0]);
+    if (!resolve_parts(pg[0])) return 1;                                       /* a batch that stopped between its parts' commits, finished first */
     PGresult *r = PQexec(pg[0], "SELECT count(*) FROM entity WHERE tier = 0");
     int atoms_needed = !(PQresultStatus(r) == PGRES_TUPLES_OK && atoll(PQgetvalue(r, 0, 0)) == (long long)LP_NCP); PQclear(r);
 
@@ -249,6 +319,9 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     for (int fi = 0; fi < nfiles; fi++) { if (files[fi].known) { free(files[fi].ev.e); memset(&files[fi].ev, 0, sizeof files[fi].ev); } nev += files[fi].ev.n; }
     /* What the files attested and the files' trunks are written as one: either all of it is recorded or none is. */
     { PGresult *b = PQexec(pg[0], "BEGIN"); if (PQresultStatus(b) != PGRES_COMMAND_OK) { fprintf(stderr, "begin: %s", PQerrorMessage(pg[0])); return 1; } PQclear(b); }
+    int nparts = npg < 16 ? npg : 16, begun = 1; char xid0[32] = "";      /* the parts of the batch's transaction; part 0's transaction ID names them */
+    { PGresult *x = PQexec(pg[0], "SELECT pg_current_xact_id()"); if (PQresultStatus(x) != PGRES_TUPLES_OK) { fprintf(stderr, "transaction: %s", PQerrorMessage(pg[0])); return 1; }
+      snprintf(xid0, sizeof xid0, "%s", PQgetvalue(x, 0, 0)); PQclear(x); }
     if (nev) {
         smap = lp_idmap_new(); stand = malloc(sizeof(Standing) * (nev + 1)); sn = 0;
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) if (files[fi].ev.e[i].kind != EV_RECORD) stand_get(&files[fi].ev.e[i].claim, &files[fi].ev.e[i], files[fi].trust);
@@ -385,53 +458,17 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             c16(&c, 3); cfield(&c, own[i].b, 16); c32(&c, 0xFFFFFFFFu); cf_f64(&c, owntrust[i]); }
         copy_end(&c); free(wid); free(wfile); free(known); free(own); free(owntrust); lp_idmap_free(oseen); free(oknown);
         st->t_wit += now() - tp; tp = now();
-        /* the ledger, in reading order (its order is the order of play), and the new standings: each row into the
-         * partition its claim's first hex digit names, sixteen copies, no routing */
-        for (int h = 0; h < 16; h++) { Copy lc = { 0 }; char sql[160]; snprintf(sql, sizeof sql, "COPY attestation_%x (claim, witness, score, position) FROM STDIN (FORMAT binary)", h);
-          copy_begin(&lc, pg[0], sql);
-          for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) {
-              if (files[fi].ev.e[i].kind == EV_MEMBER || (files[fi].ev.e[i].witnessed.b[0] >> 4) != h) continue;                /* witnessed within its record: the record's row */
-              c16(&lc, 4); cfield(&lc, files[fi].ev.e[i].witnessed.b, 16); cfield(&lc, files[fi].ev.e[i].own_witness ? files[fi].ev.e[i].witness.b : files[fi].witness.id.b, 16); cf_f32(&lc, files[fi].ev.e[i].score);
-              if (files[fi].ev.e[i].position) cf_i32(&lc, (int32_t)files[fi].ev.e[i].position); else c32(&lc, 0xFFFFFFFFu);
-              lc.rows++;
-          }
-          copy_end(&lc); st->led += lc.rows; free(lc.b); }
+        /* the ledger and the standings, a partition a connection at a time on every connection: each connection's
+         * part of the batch's transaction (prepared and committed as one below) */
+        uint64_t led = 0, nnew = 0, nupd = 0; int bad = 0;
+        for (int j = 1; j < nparts; j++) if (!must(pg[j], "BEGIN")) return 1;
+        begun = nparts;
+        #pragma omp parallel for num_threads(nparts) schedule(static, 1) reduction(+:led, nnew, nupd, bad)
+        for (int j = 0; j < nparts; j++) for (int h = j; h < 16; h += nparts) { uint64_t a = 0, b = 0, c = 0; bad += part_write(pg[j], h, files, nfiles, &a, &b, &c); led += a; nnew += b; nupd += c; }
+        if (bad) return 1;
+        st->led += led; st->std_new += nnew; st->std_upd += nupd;
         st->t_led += now() - tp; tp = now();
-        for (int h = 0; h < 16; h++) { char sql[160]; snprintf(sql, sizeof sql, "COPY consensus_%x (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)", h);
-          copy_begin(&c, pg[0], sql);
-          for (uint64_t i = 0; i < sn; i++) {
-              Standing *s = &stand[i]; if (s->had || (s->id.b[0] >> 4) != h) continue;
-              c16(&c, 5); cfield(&c, s->id.b, 16); cf_f64(&c, s->r.rating); cf_f64(&c, s->r.deviation); cf_f64(&c, s->r.volatility); cf_i32(&c, (int32_t)s->matches); st->std_new++;
-          }
-          copy_end(&c); free(c.b); c = (Copy){ 0 }; }
-        st->t_new += now() - tp; tp = now();
-        for (int h = 0; h < 16; h++) for (uint64_t i0 = 0; i0 < sn; ) {           /* recorded standings: set-based updates, each into its claim's partition */
-            const uint32_t oid[5] = { id_oid, 701, 701, 701, 23 }; static const int w[5] = { 16, 8, 8, 8, 4 };
-            uint64_t idx[100000]; uint32_t n = 0;
-            for (; i0 < sn && n < 100000; i0++) if (stand[i0].had && (stand[i0].id.b[0] >> 4) == h) idx[n++] = i0;
-            if (!n) continue;
-            uint8_t *arr[5]; int alen[5];
-            for (int f = 0; f < 5; f++) {
-                arr[f] = malloc(20 + (size_t)n * (4 + w[f])); uint8_t *q = arr[f] + 20;
-                uint32_t hdr[5] = { htonl(1), htonl(0), htonl(oid[f]), htonl(n), htonl(1) }; memcpy(arr[f], hdr, 20);
-                for (uint32_t j = 0; j < n; j++) {
-                    Standing *s = &stand[idx[j]]; uint32_t l = htonl((uint32_t)w[f]); memcpy(q, &l, 4); q += 4;
-                    if (f == 0) memcpy(q, s->id.b, 16);
-                    else if (f < 4) { double d = f == 1 ? s->r.rating : f == 2 ? s->r.deviation : s->r.volatility; uint64_t u; memcpy(&u, &d, 8); for (int y = 0; y < 8; y++) q[y] = (uint8_t)(u >> (56 - 8 * y)); }
-                    else { uint32_t m = htonl(s->matches); memcpy(q, &m, 4); }
-                    q += w[f];
-                }
-                alen[f] = (int)(q - arr[f]);
-            }
-            const char *v[5] = { (char *)arr[0], (char *)arr[1], (char *)arr[2], (char *)arr[3], (char *)arr[4] }; int fm[5] = { 1, 1, 1, 1, 1 };
-            char usql[300]; snprintf(usql, sizeof usql, "UPDATE consensus_%x s SET rating = u.r, deviation = u.d, volatility = u.v, matches = u.m "
-                "FROM unnest($1::blake3[], $2::float8[], $3::float8[], $4::float8[], $5::int[]) AS u(c, r, d, v, m) WHERE s.claim = u.c", h);
-            PGresult *u = PQexecParams(pg[0], usql, 5, NULL, v, alen, fm, 0);
-            if (PQresultStatus(u) != PGRES_COMMAND_OK) { fprintf(stderr, "standing update: %s", PQerrorMessage(pg[0])); return 1; }
-            PQclear(u); for (int f = 0; f < 5; f++) free(arr[f]); st->std_upd += n;
-        }
     }
-    st->t_upd += now() - tp;
     if (nev) { free(stand); lp_idmap_free(smap); stand = NULL; smap = NULL; }
     st->t_sem += now() - t;
 
@@ -444,7 +481,12 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             int p = part_of(&x->id, x->tier); bucket[p][nbucket[p]++] = nref(x); x->keep = 1; }
         for (int p = 0; p < NPART; p++) { uint64_t e = 0, ph = 0; if (nbucket[p]) { write_node_rows(pg[0], p, &e, &ph, 0, 0); st->ent_rows += e; st->phy_rows += ph; } free(bucket[p]); bucket[p] = NULL; }
     }
-    { PGresult *e = PQexec(pg[0], "COMMIT"); if (PQresultStatus(e) != PGRES_COMMAND_OK) { fprintf(stderr, "commit: %s", PQerrorMessage(pg[0])); return 1; } PQclear(e); }
+    /* one transaction in parts: each prepared, part 0 last; then part 0 committed, which decides, and the rest */
+    if (begun == 1) { if (!must(pg[0], "COMMIT")) return 1; }
+    else { char sql[96];
+        for (int j = 1; j < begun; j++) { snprintf(sql, sizeof sql, "PREPARE TRANSACTION 'laplace %s %d'", xid0, j); if (!must(pg[j], sql)) return 1; }
+        snprintf(sql, sizeof sql, "PREPARE TRANSACTION 'laplace %s 0'", xid0); if (!must(pg[0], sql)) return 1;
+        for (int j = 0; j < begun; j++) { snprintf(sql, sizeof sql, "COMMIT PREPARED 'laplace %s %d'", xid0, j); if (!must(pg[0], sql)) return 1; } }
     for (int i = 0; i < npg; i++) PQfinish(pg[i]);
     return 0;
 }
