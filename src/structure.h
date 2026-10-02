@@ -34,7 +34,7 @@ typedef struct {
     uint32_t nlen, vlen;
     int32_t parent, first, last, next;  /* -1: none */
     uint32_t nkids;
-    uint64_t at;                      /* where it begins in the file */
+    uint64_t at, end;                 /* where it begins in the file; where a group ends */
     uint8_t kind, tier, join;         /* tier: which of the layout's tiers it is a part of; join: a text the next joins */
 } SNode;
 typedef struct { SNode *n; uint32_t count, cap; uint8_t **pool; size_t npool, used, room; } STree;
@@ -70,6 +70,12 @@ static inline int s_empty(const Layout *l, const uint8_t *v, uint32_t n){ if (!n
 /* The tree of a file a grammar parsed: root is the grammar's own tree (a TSNode), given by address. The whole file
  * is one part: handed over once. */
 void s_grammar(const Layout *l, const void *ts_root, const uint8_t *src, size_t n, void (*fn)(void *sink, const STree *t, int32_t root, uint64_t ordinal), void *sink);
+/* A long file of records (split ELEMENT...), parsed a part at a time on every core and read as the one tree the whole
+ * file is: each record grafted where it stands in the file, so its keys resolve across the file and it is read once.
+ * spans: where each record begins and ends, in the file's order; lang: the grammar (a TSLanguage). Returns how many parts
+ * did not parse whole. */
+uint64_t s_grammar_split(const Layout *l, const void *lang, const uint8_t *src, size_t n, const size_t *ra, const size_t *rb, size_t nrs,
+                         void (*fn)(void *sink, const STree *t, int32_t root, uint64_t ordinal), void *sink);
 
 /* A recipe's line, if it lays the file out: 1 when it was one, 0 when it is something else, -1 when it is written wrong
  * (what is wrong is said). tok is the line's first word; the rest of the line is read with strtok. */

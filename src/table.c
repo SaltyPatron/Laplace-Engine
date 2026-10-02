@@ -24,7 +24,8 @@ void *xrealloc(void *p, size_t n){ p = realloc(p, n ? n : 1); if (!p) { perror("
 #define SLOTS_MAX (1ull << 32)                          /* the most a table can be: reserved, touched only as used */
 #define NCHUNK 4096                                     /* nodes a thread takes at a time */
 #define VCHUNK (1u << 16)                               /* vertices a thread takes at a time */
-static uint64_t *slot, smask, node_top, vtx_top, node_cap, vtx_cap;
+static uint64_t *slot, smask, node_top, vtx_top, node_cap, vtx_cap, grow_at;
+static uint64_t *area[2]; static int side, resizing;          /* the slots alternate between two reserved areas as the table doubles */
 
 static void *reserve(size_t bytes){
     void *p = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
@@ -36,7 +37,7 @@ static void *reserve(size_t bytes){
  * Only while the table is empty. */
 static void table_size_slots(uint64_t want){
     uint64_t n = 1u << 20; while (n < want && n < SLOTS_MAX) n <<= 1;
-    smask = n - 1; node_cap = n - n / 8;                /* past seven eighths full, probing is no longer a table */
+    smask = n - 1; node_cap = n - n / 8; grow_at = n / 2;  /* half full, it doubles; past seven eighths, probing is no longer a table */
 }
 void table_size(uint64_t bytes){
     const char *e = getenv("LAPLACE_NODES_PER_MB");     /* measured: Universal Dependencies made 9,100 a MB */
@@ -45,7 +46,7 @@ void table_size(uint64_t bytes){
 }
 void table_init(void){
     if (slot) return;
-    slot = reserve(SLOTS_MAX * sizeof *slot);
+    area[0] = reserve(SLOTS_MAX * sizeof *slot); area[1] = reserve(SLOTS_MAX * sizeof *slot); slot = area[0]; side = 0;
     vtx_cap = SLOTS_MAX * 4;
     NODE = reserve(SLOTS_MAX * sizeof(Node)); VTX = reserve(vtx_cap * sizeof(Vtx));
     table_size_slots(1ull << 26);
@@ -76,7 +77,7 @@ static void full(const char *what){
  * counts, are here too. The table emptied between batches empties these: a cache holds only what the table holds now
  * (its epoch). */
 #define SEEN (1u << 15)
-typedef struct Seen { uint64_t epoch, hits, added, n_at, n_end, v_at, v_end; struct Seen *next; lp_id id[SEEN]; uint8_t tier[SEEN]; } Seen;
+typedef struct Seen { uint64_t active, epoch, hits, added, n_at, n_end, v_at, v_end; struct Seen *next; lp_id id[SEEN]; uint8_t tier[SEEN]; } Seen;
 static uint64_t epoch = 1; static Seen *seen_all; static pthread_mutex_t seen_mu = PTHREAD_MUTEX_INITIALIZER;
 static __thread Seen *seen_here;
 static Seen *seen_of(void){
@@ -85,6 +86,34 @@ static Seen *seen_of(void){
     uint64_t e = __atomic_load_n(&epoch, __ATOMIC_ACQUIRE);
     if (c->epoch != e) { memset(c->id, 0, sizeof c->id); memset(c->tier, 0, sizeof c->tier); c->n_at = c->n_end = c->v_at = c->v_end = 0; c->epoch = e; }
     return c;
+}
+/* The table doubles when it is half full: what a batch makes is not known before it is decomposed (Unicode's small files
+ * make far more nodes a byte than a corpus). A thread inside the table says so (active); the thread that doubles it waits
+ * until none is, puts every node into slots twice as many, and lets them go on. Nothing is copied but the slots. */
+static inline void enter(Seen *c){
+    for (;;) {
+        __atomic_store_n(&c->active, 1, __ATOMIC_SEQ_CST);
+        if (!__atomic_load_n(&resizing, __ATOMIC_SEQ_CST)) return;
+        __atomic_store_n(&c->active, 0, __ATOMIC_RELEASE);
+        while (__atomic_load_n(&resizing, __ATOMIC_ACQUIRE)) _mm_pause();
+    }
+}
+static inline void leave(Seen *c){ __atomic_store_n(&c->active, 0, __ATOMIC_RELEASE); }
+uint64_t table_end(void);
+static void grow(void){
+    int z = 0;
+    if (!__atomic_compare_exchange_n(&resizing, &z, 1, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) { while (__atomic_load_n(&resizing, __ATOMIC_ACQUIRE)) _mm_pause(); return; }
+    if (__atomic_load_n(&node_top, __ATOMIC_ACQUIRE) > grow_at && smask + 1 < SLOTS_MAX) {      /* not already doubled by another */
+        pthread_mutex_lock(&seen_mu);
+        for (Seen *s = seen_all; s; s = s->next) while (__atomic_load_n(&s->active, __ATOMIC_SEQ_CST)) _mm_pause();
+        pthread_mutex_unlock(&seen_mu);
+        uint64_t old = smask + 1, n = old * 2, m = n - 1, end = table_end(); uint64_t *ns = area[!side];
+        for (uint64_t i = 0; i < end; i++) { const Node *x = &NODE[i]; if (!x->live) continue;
+            uint64_t k = hkey(&x->id) & m; while (ns[k]) k = (k + 1) & m; ns[k] = tag_of(&x->id) | (i + 1); }
+        madvise(slot, old * sizeof *slot, MADV_DONTNEED);                    /* the old slots, empty for the next time */
+        slot = ns; side = !side; smask = m; node_cap = n - n / 8; grow_at = n / 2;
+    }
+    __atomic_store_n(&resizing, 0, __ATOMIC_SEQ_CST);
 }
 static Node *node_new(Seen *c){
     if (c->n_at == c->n_end) {
@@ -117,6 +146,8 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     Seen *c = seen_of(); uint64_t h = hkey(&r.id); uint32_t at = (uint32_t)(h >> 17) & (SEEN - 1);
     if (!memcmp(&c->id[at], &r.id, 16) && c->tier[at] <= tier) { c->hits++; return r; }   /* in the table, as this thread found, at this tier or lower */
     c->id[at] = r.id; c->tier[at] = tier;                               /* in the table once this returns, found or added, at this tier or lower */
+    if (__atomic_load_n(&node_top, __ATOMIC_RELAXED) > grow_at) grow();
+    enter(c);
     uint64_t tag = tag_of(&r.id), k = h & smask;
     for (;;) {
         uint64_t w = __atomic_load_n(&slot[k], __ATOMIC_ACQUIRE);
@@ -132,11 +163,11 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
             }
             x->nv = nv; x->live = 1; if (!own) c->v_at += nv;
             __atomic_store_n(&slot[k], tag | (uint64_t)(x - NODE + 1), __ATOMIC_RELEASE);
-            c->added++; return r;
+            leave(c); c->added++; return r;
         }
         if ((w & ~IDX_MASK) == tag) {
             if ((w & IDX_MASK) == BUSY) w = published(&slot[k]);
-            if (!memcmp(&NODE[(w & IDX_MASK) - 1].id, &r.id, 16)) { tier_floor(&NODE[(w & IDX_MASK) - 1], tier); c->hits++; return r; }
+            if (!memcmp(&NODE[(w & IDX_MASK) - 1].id, &r.id, 16)) { tier_floor(&NODE[(w & IDX_MASK) - 1], tier); leave(c); c->hits++; return r; }
         }
         k = (k + 1) & smask;
     }
@@ -144,13 +175,14 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
 /* A node by its ID; safe while others insert (a slot being written is waited for). */
 Node *table_find(const lp_id *id){
     if (!slot) return NULL;
+    Seen *c = seen_of(); enter(c); Node *found = NULL;
     uint64_t tag = tag_of(id), k = hkey(id) & smask, w;
     while ((w = __atomic_load_n(&slot[k], __ATOMIC_ACQUIRE))) {
         if ((w & ~IDX_MASK) == tag) { if ((w & IDX_MASK) == BUSY) w = published(&slot[k]);
-            Node *x = &NODE[(w & IDX_MASK) - 1]; if (!memcmp(&x->id, id, 16)) return x; }
+            Node *x = &NODE[(w & IDX_MASK) - 1]; if (!memcmp(&x->id, id, 16)) { found = x; break; } }
         k = (k + 1) & smask;
     }
-    return NULL;
+    leave(c); return found;
 }
 size_t table_parts(const lp_id *id, lp_id *out, size_t cap){
     Node *x = table_find(id); if (!x) return 0; size_t n = 0;

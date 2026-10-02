@@ -9,6 +9,9 @@ name wn-lmf
 #   file the highway lists.
 #   What is no thing (a lemma, a relation, a definition) speaks of the nearest thing it is inside.
 format xml
+# a long wordnet (the Open English WordNet, the larger OMW lexicons) is parsed a part at a time on every core and read as
+# the one tree the whole file is: its keys resolve across the file
+split LexicalEntry Synset SyntacticBehaviour
 
 key LexicalEntry id
 key Sense id

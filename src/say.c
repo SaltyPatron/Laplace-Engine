@@ -753,24 +753,12 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
             { const uint8_t *nl2 = e < n ? memchr(src + e, '\n', n - e) : NULL; e = nl2 ? (size_t)(nl2 - src) + 1 : n; }
             if (nrs == crs) { crs *= 2; rs = xrealloc(rs, sizeof(Span) * crs); } rs[nrs].a = c; rs[nrs++].b = e; c = e;
         }
-        /* the records in parts of about two megabytes each, in the file's order */
-        size_t *pfirst = malloc(sizeof(size_t) * (nrs + 2)); size_t npart = 0, acc = 0;
-        for (size_t i = 0; i < nrs; i++) { if (!acc) pfirst[npart++] = i; acc += rs[i].b - rs[i].a; if (acc >= (2u << 20)) acc = 0; }
-        pfirst[npart] = nrs; nc = npart; part = calloc(nc + 1, sizeof(Sink));
+        /* parsed a part at a time on every core, read as the one tree the whole file is (s_grammar_split) */
         #undef BEGINS
-        #pragma omp taskloop grainsize(1)
-        for (size_t i = 0; i <= nc; i++) { Sink *k = &part[i]; k->r = r; k->s = &s; k->er = er; k->ed = ed; k->fw = f->witness; k->fname = fname; k->fstem = fstem; k->hw = hw;
-            uint8_t *doc; size_t len = 0;
-            if (i < nc) { size_t need = 16; for (size_t j = pfirst[i]; j < pfirst[i + 1]; j++) need += rs[j].b - rs[j].a; doc = malloc(need);
-                memcpy(doc, "<_>\n", 4); len = 4; for (size_t j = pfirst[i]; j < pfirst[i + 1]; j++) { memcpy(doc + len, src + rs[j].a, rs[j].b - rs[j].a); len += rs[j].b - rs[j].a; }
-                memcpy(doc + len, "\n</_>", 5); len += 5; }
-            else { doc = malloc(alen + 1); memcpy(doc, around, alen); len = alen; }      /* what stands around the records, as the one document it is without them */
-            TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang); TSTree *tt = ts_parser_parse_string(ps, NULL, (const char *)doc, (uint32_t)len);
-            TSNode root = ts_tree_root_node(tt);
-            if (ts_node_has_error(root)) { k->open[1]++; fprintf(stderr, "\n  %s: the part of %s from byte %zu to byte %zu does not parse whole\n", r->name, f->path, i < nc ? rs[pfirst[i]].a : 0, i < nc ? rs[pfirst[i + 1] - 1].b : n); }
-            s_grammar(&s.lay, &root, doc, len, unit, k); ts_tree_delete(tt); ts_parser_delete(ps); free(doc); }
-        nc++; free(rs); free(pfirst); free(around);
-        uint64_t bad = 0; for (size_t i = 0; i < nc; i++) bad += part[i].open[1];
+        size_t *ra = malloc(sizeof(size_t) * (nrs + 1)), *rb = malloc(sizeof(size_t) * (nrs + 1)); for (size_t i = 0; i < nrs; i++) { ra[i] = rs[i].a; rb[i] = rs[i].b; }
+        part = calloc(1, sizeof(Sink)); part[0].r = r; part[0].s = &s; part[0].er = er; part[0].ed = ed; part[0].fw = f->witness; part[0].fname = fname; part[0].fstem = fstem; part[0].hw = hw;
+        uint64_t bad = s_grammar_split(&s.lay, r->lang, src, n, ra, rb, nrs, unit, &part[0]); nc = 1;
+        free(ra); free(rb); free(rs); free(around);
         if (bad) { fprintf(stderr, "\n  %s: %llu parts of %s do not parse whole by the grammar; what parses is read\n", r->name, (unsigned long long)bad, f->path); f->incomplete += bad; }
     } else if (s.lay.g.n && r->lang) {                                       /* the grammar gives the tree: the file parsed once, its tree read by the same dispositions */
         part = calloc(1, sizeof(Sink)); part[0].r = r; part[0].s = &s; part[0].er = er; part[0].ed = ed; part[0].fw = f->witness; part[0].fname = fname; part[0].fstem = fstem; part[0].hw = hw;

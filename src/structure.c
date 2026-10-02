@@ -326,7 +326,7 @@ static void g_node(GW *w, TSNode nd, int32_t in, const uint8_t *name, uint32_t n
         return; }
     int32_t into = in;
     if (r && r->what == G_GROUP) {
-        into = node(w->t, S_GROUP, tier, in, ts_node_start_byte(nd));
+        into = node(w->t, S_GROUP, tier, in, ts_node_start_byte(nd)); w->t->n[into].end = ts_node_end_byte(nd);
         if (!name && in >= 0 && w->t->n[in].join == S_PIECES && w->t->n[in].nlen) { name = w->t->n[in].name; nlen = w->t->n[in].nlen; }    /* a group in a list is named by the list */
         if (r->list) w->t->n[into].join = S_PIECES;
         if (!name && r->kind) { name = (const uint8_t *)r->type; nlen = (uint32_t)strlen(r->type); }      /* named by what kind of node it is */
@@ -377,4 +377,92 @@ int cmd_structure(int argc, char **argv){
     { size_t e = n; while (e && src[e - 1] != '\n') e--; if (e && n == cap) n = e; }
     size_t at = s_head(l, src, n); Show s = { nodes, 0 }; uint64_t units = s_decompose(l, src + at, n - at, show_unit, &s);
     printf("%llu parts of the outermost tier in the first %zu bytes\n", (unsigned long long)units, n); free(src); free(l); return 0;
+}
+
+/* ---- a long file of records, parsed on every core and read as one tree */
+typedef struct { size_t doc, file; } Seg;                                    /* a run of bytes copied into a part: where it begins there and in the file */
+typedef struct { uint8_t *doc; size_t len; Seg *seg; size_t nseg; STree t; uint64_t bad; } SPartTree;
+typedef struct { const SPartTree *p; int32_t i; uint64_t at; } Item;         /* a record's node in its part's tree, and where it begins in the file */
+typedef struct { STree m; const SPartTree *around; Item *it; size_t nit, next; } Graft;
+static uint64_t file_at(const SPartTree *p, uint64_t a){
+    size_t lo = 0, hi = p->nseg; while (hi - lo > 1) { size_t mid = (lo + hi) / 2; if (p->seg[mid].doc <= a) lo = mid; else hi = mid; }
+    return p->seg[lo].file + (a - p->seg[lo].doc);
+}
+static uint64_t file_end(const SPartTree *p, uint64_t e){ return e ? file_at(p, e - 1) + 1 : 0; }
+static void part_tree(const Layout *l, const TSLanguage *lang, SPartTree *p){
+    TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, lang);
+    TSTree *tt = ts_parser_parse_string(ps, NULL, (const char *)p->doc, (uint32_t)p->len); TSNode root = ts_tree_root_node(tt);
+    if (ts_node_has_error(root)) p->bad++;                                   /* what parses is read */
+    int32_t r = node(&p->t, S_GROUP, 0, -1, 0); p->t.n[r].end = p->len; GW w = { l, &p->t, p->doc, 0 };
+    g_node(&w, root, r, NULL, 0, 1); ts_tree_delete(tt); ts_parser_delete(ps);
+}
+static int32_t copy_node(STree *m, const SNode *x, int32_t parent, uint8_t tier, uint64_t at, uint64_t end){
+    int32_t i = node(m, x->kind, tier, parent, at); SNode *y = &m->n[i];
+    y->name = x->name; y->nlen = x->nlen; y->val = x->val; y->vlen = x->vlen; y->join = x->join; y->end = end; return i;
+}
+/* A record, where it stands: its tiers as deep as the group it is inside makes them. */
+static void copy_rec(STree *m, const SPartTree *p, int32_t i, int32_t parent, int delta){
+    const SNode *x = &p->t.n[i];
+    int32_t y = copy_node(m, x, parent, (uint8_t)(x->tier + delta), file_at(p, x->at), x->kind == S_GROUP ? file_end(p, x->end) : 0);
+    for (int32_t c = p->t.n[i].first; c >= 0; c = p->t.n[c].next) copy_rec(m, p, c, y, delta);
+}
+static void graft(Graft *g, int32_t parent){
+    const Item *r = &g->it[g->next++];
+    copy_rec(&g->m, r->p, r->i, parent, (int)g->m.n[parent].tier + 1 - (int)r->p->t.n[r->i].tier);
+}
+/* What stands around the records, in the file's order; each record goes into the innermost group around it, before the
+ * first of that group's nodes that comes after it. */
+static void copy_around(Graft *g, int32_t i, int32_t parent){
+    const STree *t = &g->around->t; const SNode *x = &t->n[i]; int32_t y; uint64_t end;
+    if (i == 0) { y = node(&g->m, S_GROUP, 0, -1, 0); end = UINT64_MAX; g->m.n[y].end = end; }
+    else { end = x->kind == S_GROUP ? file_end(g->around, x->end) : 0; y = copy_node(&g->m, x, parent, x->tier, file_at(g->around, x->at), end); }
+    if (x->kind != S_GROUP) return;
+    for (int32_t c = x->first; c >= 0; c = t->n[c].next) {
+        uint64_t ca = file_at(g->around, t->n[c].at);
+        while (g->next < g->nit && g->it[g->next].at < ca) graft(g, y);
+        copy_around(g, c, y);
+    }
+    while (g->next < g->nit && g->it[g->next].at < end) graft(g, y);
+}
+uint64_t s_grammar_split(const Layout *l, const void *lang, const uint8_t *src, size_t n, const size_t *ra, const size_t *rb, size_t nrs, s_unit_fn fn, void *sink){
+    /* the records in parts of about two megabytes each, in the file's order; what stands around them is a part of its own */
+    size_t *first = malloc(sizeof(size_t) * (nrs + 2)), np = 0, acc = 0;
+    for (size_t i = 0; i < nrs; i++) { if (!acc) first[np++] = i; acc += rb[i] - ra[i]; if (acc >= (2u << 20)) acc = 0; }
+    first[np] = nrs;
+    SPartTree *pt = calloc(np + 1, sizeof(SPartTree));
+    for (size_t i = 0; i < np; i++) { SPartTree *p = &pt[i]; size_t need = 16, k = first[i + 1] - first[i];
+        for (size_t j = first[i]; j < first[i + 1]; j++) need += rb[j] - ra[j];
+        p->doc = malloc(need); p->seg = malloc(sizeof(Seg) * (k + 1)); memcpy(p->doc, "<_>\n", 4); p->len = 4; p->seg[p->nseg++] = (Seg){ 0, 0 };
+        for (size_t j = first[i]; j < first[i + 1]; j++) { p->seg[p->nseg++] = (Seg){ p->len, ra[j] }; memcpy(p->doc + p->len, src + ra[j], rb[j] - ra[j]); p->len += rb[j] - ra[j]; }
+        memcpy(p->doc + p->len, "\n</_>", 5); p->len += 5; }
+    { SPartTree *p = &pt[np]; p->doc = malloc(n + 1); p->seg = malloc(sizeof(Seg) * (nrs + 2)); size_t at = 0;
+      for (size_t j = 0; j <= nrs; j++) { size_t b = j < nrs ? ra[j] : n; if (b > at) { p->seg[p->nseg++] = (Seg){ p->len, at }; memcpy(p->doc + p->len, src + at, b - at); p->len += b - at; } if (j < nrs) at = rb[j]; }
+      if (!p->nseg) p->seg[p->nseg++] = (Seg){ 0, 0 }; }
+    #pragma omp taskloop grainsize(1)
+    for (size_t i = 0; i <= np; i++) part_tree(l, (const TSLanguage *)lang, &pt[i]);
+    /* every record: the nodes the part's own element (_) holds, in order */
+    size_t ni = 0, ci = 1024; Item *it = malloc(sizeof(Item) * ci);
+    for (size_t i = 0; i < np; i++) { const STree *t = &pt[i].t; int32_t u = -1;
+        for (uint32_t g = 1; g < t->count && u < 0; g++) if (t->n[g].kind == S_GROUP) u = (int32_t)g;
+        if (u < 0) continue;
+        for (int32_t c = t->n[u].first; c >= 0; c = t->n[c].next) { if (ni == ci) { ci *= 2; it = realloc(it, sizeof(Item) * ci); }
+            it[ni++] = (Item){ &pt[i], c, file_at(&pt[i], t->n[c].at) }; } }
+    Graft g = { .around = &pt[np], .it = it, .nit = ni };
+    copy_around(&g, 0, -1);
+    while (g.next < g.nit) graft(&g, 0);
+    /* white space between the nodes a group holds is how the file is laid out: where a record now stands beside it too */
+    for (uint32_t x = 0; x < g.m.count; x++) { SNode *G = &g.m.n[x]; if (G->kind != S_GROUP) continue;
+        int holds = 0; for (int32_t c = G->first; c >= 0 && !holds; c = g.m.n[c].next) holds = g.m.n[c].kind == S_GROUP;
+        if (!holds) continue;
+        int32_t prev = -1; for (int32_t c = G->first; c >= 0; ) { int32_t next = g.m.n[c].next; SNode *v = &g.m.n[c]; int blank = v->kind == S_TEXT;
+            for (uint32_t i = 0; blank && i < v->vlen; i++) blank = v->val[i] == ' ' || v->val[i] == '\n' || v->val[i] == '\t' || v->val[i] == '\r';
+            if (blank) { if (prev >= 0) g.m.n[prev].next = next; else G->first = next; if (G->last == c) G->last = prev; G->nkids--; } else prev = c;
+            c = next; } }
+    if (l->ntier) for (int32_t c = g.m.n[0].first; c >= 0; c = g.m.n[c].next)
+        if (g.m.n[c].kind == S_GROUP && !g.m.n[c].nlen) { g.m.n[c].name = (const uint8_t *)l->tier[0].name; g.m.n[c].nlen = (uint32_t)strlen(l->tier[0].name); }
+    fn(sink, &g.m, 0, 0);
+    uint64_t bad = 0;
+    for (size_t i = 0; i <= np; i++) { bad += pt[i].bad; tree_free(&pt[i].t); free(pt[i].doc); free(pt[i].seg); }
+    tree_free(&g.m); free(pt); free(it); free(first);
+    return bad;
 }
