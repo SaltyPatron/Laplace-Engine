@@ -64,6 +64,7 @@ int opts(int argc, char **argv, const Opt *o){
         const Opt *x = o; while (x->flag && strcmp(x->flag, argv[a])) x++;
         if (!x->flag) break;                                                   /* not an option: the arguments begin */
         if (x->kind == 'b') { *(int *)x->at = 1; continue; }
+        if (x->kind == 'v') { *(int *)x->at = x->val; continue; }
         if (a + 1 >= argc) break;                                              /* an option missing its value is an argument */
         const char *v = argv[++a];
         switch (x->kind) {

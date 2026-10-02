@@ -161,19 +161,15 @@ static const uint64_t *by_size_of;                                    /* the bat
 static int by_size(const void *a, const void *b){ int i = *(const int *)a, j = *(const int *)b; uint64_t x = by_size_of[i], y = by_size_of[j]; return x < y ? 1 : x > y ? -1 : i - j; }
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
-    int threads = 0, do_load = 1, a = 1, show_claims = 0; const char *of = NULL;
-    for (; a < argc && argv[a][0] == '-'; a++) {
-        if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
-        else if (!strcmp(argv[a], "-t") && a + 1 < argc) t0p = argv[++a];
-        else if (!strcmp(argv[a], "-r") && a + 1 < argc) rdir = argv[++a];
-        else if (!strcmp(argv[a], "-j") && a + 1 < argc) threads = atoi(argv[++a]);
-        else if (!strcmp(argv[a], "-s") && a + 1 < argc) of = argv[++a];            /* the files named are this source's: a part of it at a time */
-        else if (!strcmp(argv[a], "--whole")) { extern int load_whole; load_whole = 1; }   /* after a run that was cut off: every node is looked for */
-        else if (!strcmp(argv[a], "--no-load")) do_load = 0;
-        else if (!strcmp(argv[a], "--plan")) do_load = -1;
-        else if (!strcmp(argv[a], "--claims")) { show_claims = 1; do_load = 0; }     /* what the recipes attest, as text; nothing is loaded */
-        else { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] file...\n"); return 2; }
-    }
+    int threads = 0, do_load = 1, show_claims = 0; const char *of = NULL; extern int load_whole;
+    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-t", 's', &t0p }, { "-r", 's', &rdir }, { "-j", 'i', &threads },
+        { "-s", 's', &of },                                                       /* the files named are this source's: a part of it at a time */
+        { "--whole", 'b', &load_whole },                                          /* after a run that was cut off: every node is looked for */
+        { "--no-load", 'v', &do_load, 0 }, { "--plan", 'v', &do_load, -1 },
+        { "--claims", 'b', &show_claims },                                        /* what the recipes attest, as text; nothing is loaded */
+        { NULL } });
+    if (show_claims) do_load = 0;
+    if (a < argc && argv[a][0] == '-') { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] file...\n"); return 2; }
     Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec), nsrc; Source *src = sources_loaded(&nsrc);
     if (of) { int k = 0; while (k < nsrc && strcmp(src[k].name, of)) k++; if (k == nsrc) { fprintf(stderr, "%s is not a source\n", of); return 2; } walking = &src[k]; }
     for (int i = a; i < argc; i++) {                                         /* a source by its name, or files and directories */

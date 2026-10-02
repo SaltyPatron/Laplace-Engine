@@ -439,12 +439,9 @@ static void tree_print(TSTreeCursor *cur, const uint8_t *src, int depth, long *l
     } while (ts_tree_cursor_goto_next_sibling(cur));
 }
 int cmd_tree(int argc, char **argv){
-    const char *rdir = laplace_recipes(), *grammar = NULL; long nodes = 400; int a = 1;
-    for (; a < argc - 1 && argv[a][0] == '-'; a++) {
-        if (!strcmp(argv[a], "-r") && a + 1 < argc) rdir = argv[++a];
-        else if (!strcmp(argv[a], "-g") && a + 1 < argc) grammar = argv[++a];
-        else if (!strcmp(argv[a], "-n") && a + 1 < argc) nodes = atol(argv[++a]);
-    }
+    const char *rdir = laplace_recipes(), *grammar = NULL; long long nodes_opt = 400;
+    int a = opts(argc, argv, (const Opt[]){ { "-r", 's', &rdir }, { "-g", 's', &grammar }, { "-n", 'l', &nodes_opt }, { NULL } });
+    long nodes = (long)nodes_opt;
     if (a >= argc) { fprintf(stderr, "usage: laplace tree [-r recipes] [-g grammar] [-n nodes] file\n"); return 2; }
     const TSLanguage *lang = NULL;
     if (grammar) lang = grammar_load(grammar);

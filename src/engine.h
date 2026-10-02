@@ -257,9 +257,9 @@ Groups by_digit(const char *table);                                     /* table
 Groups whole(void);                                                     /* one group, the statement as written */
 
 /* ---- a command's options: each its flag, what it holds ('s' a string, 'i' an int, 'u' unsigned, 'l' long long, 'd' a
- * double, 'b' a flag that is there or not) and where; the list ends with { NULL }. Returns where the command's own
- * arguments begin: at the first that is not one of its options. */
-typedef struct { const char *flag; char kind; void *at; } Opt;
+ * double, 'b' a flag that is there or not, 'v' an int set to val) and where; the list ends with { NULL }. Returns where
+ * the command's own arguments begin: at the first that is not one of its options. */
+typedef struct { const char *flag; char kind; void *at; int val; } Opt;
 int opts(int argc, char **argv, const Opt *o);
 typedef lp_vec(lp_id) Ids;
 /* A path's constituents in order, its runs written out, into ids: one array kept and refilled row after row. */

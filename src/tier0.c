@@ -208,11 +208,7 @@ static uint64_t hilbert_x(const double x[4]){
 int cmd_tier0(int argc, char **argv){
     char dflt[4096]; snprintf(dflt, sizeof dflt, "%s/Public/UCD/latest", laplace_ucd());
     const char *root = dflt, *outp = lp_tier0_path();
-    for (int a = 1; a < argc; a++) {
-        if (!strcmp(argv[a], "-u") && a + 1 < argc) root = argv[++a];
-        else if (!strcmp(argv[a], "-o") && a + 1 < argc) outp = argv[++a];
-        else { fprintf(stderr, "usage: laplace tier0 [-u UCD_ROOT] [-o tier0.bin]\n"); return 2; }
-    }
+    if (opts(argc, argv, (const Opt[]){ { "-u", 's', &root }, { "-o", 's', &outp }, { NULL } }) < argc) { fprintf(stderr, "usage: laplace tier0 [-u UCD_ROOT] [-o tier0.bin]\n"); return 2; }
     T_start = now();
     load_ucd(root); say("UCD properties and decompositions read");
     load_allkeys(root); say("allkeys.txt read");
