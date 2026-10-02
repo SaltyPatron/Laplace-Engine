@@ -245,7 +245,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     st->t_copy += now() - t;
 
     /* ---- semantics: witnesses, the ledger, and standings played in reading order */
-    t = now(); uint64_t nev = 0;
+    t = now(); double tp = t; uint64_t nev = 0;      /* tp: where each part of it began */
     for (int fi = 0; fi < nfiles; fi++) { if (files[fi].known) { free(files[fi].ev.e); memset(&files[fi].ev, 0, sizeof files[fi].ev); } nev += files[fi].ev.n; }
     /* What the files attested and the files' trunks are written as one: either all of it is recorded or none is. */
     { PGresult *b = PQexec(pg[0], "BEGIN"); if (PQresultStatus(b) != PGRES_COMMAND_OK) { fprintf(stderr, "begin: %s", PQerrorMessage(pg[0])); return 1; } PQclear(b); }
@@ -314,6 +314,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             PQclear(q); free(ab);
         }
         free(wold); free(lj);
+        st->t_read += now() - tp; tp = now();
         /* The matchups, first in, first out: each attestation is played as one Glicko-2 matchup at the witness's trust.
          * A claim entering for the first time enters at its stock default and plays its first attestation from there;
          * every attestation plays the witness at the rating its record would enter at, with the deviation its trust
@@ -335,6 +336,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             }
         }
         free(seen);
+        st->t_play += now() - tp; tp = now();
         Copy c = { 0 };
         /* witnesses: each once, and only those the database does not know yet */
         lp_id *wid = malloc(sizeof(lp_id) * (size_t)nfiles); int *wfile = malloc(sizeof(int) * (size_t)nfiles), nw = 0;
@@ -372,6 +374,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         for (uint64_t i = 0; i < nown; i++) if (!oknown[i]) { int dup = 0; for (int k = 0; k < nw && !dup; k++) dup = !memcmp(&wid[k], &own[i], 16); if (dup) continue;
             c16(&c, 3); cfield(&c, own[i].b, 16); c32(&c, 0xFFFFFFFFu); cf_f64(&c, owntrust[i]); }
         copy_end(&c); free(wid); free(wfile); free(known); free(own); free(owntrust); lp_idmap_free(oseen); free(oknown);
+        st->t_wit += now() - tp; tp = now();
         /* the ledger, in reading order (its order is the order of play), and the new standings: each row into the
          * partition its claim's first hex digit names, sixteen copies, no routing */
         for (int h = 0; h < 16; h++) { Copy lc = { 0 }; char sql[160]; snprintf(sql, sizeof sql, "COPY attestation_%x (claim, witness, score, position) FROM STDIN (FORMAT binary)", h);
@@ -383,6 +386,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
               lc.rows++;
           }
           copy_end(&lc); st->led += lc.rows; free(lc.b); }
+        st->t_led += now() - tp; tp = now();
         for (int h = 0; h < 16; h++) { char sql[160]; snprintf(sql, sizeof sql, "COPY consensus_%x (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)", h);
           copy_begin(&c, pg[0], sql);
           for (uint64_t i = 0; i < sn; i++) {
@@ -390,6 +394,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
               c16(&c, 5); cfield(&c, s->id.b, 16); cf_f64(&c, s->r.rating); cf_f64(&c, s->r.deviation); cf_f64(&c, s->r.volatility); cf_i32(&c, (int32_t)s->matches); st->std_new++;
           }
           copy_end(&c); free(c.b); c = (Copy){ 0 }; }
+        st->t_new += now() - tp; tp = now();
         for (int h = 0; h < 16; h++) for (uint64_t i0 = 0; i0 < sn; ) {           /* recorded standings: set-based updates, each into its claim's partition */
             const uint32_t oid[5] = { id_oid, 701, 701, 701, 23 }; static const int w[5] = { 16, 8, 8, 8, 4 };
             uint64_t idx[100000]; uint32_t n = 0;
@@ -416,6 +421,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             PQclear(u); for (int f = 0; f < 5; f++) free(arr[f]); st->std_upd += n;
         }
     }
+    st->t_upd += now() - tp;
     if (nev) { free(stand); lp_idmap_free(smap); stand = NULL; smap = NULL; }
     st->t_sem += now() - t;
 
