@@ -101,7 +101,6 @@ static void resolve_roles(State *st){
 }
 
 /* ---- COUPLE: the strands of the occurrences, the prompt and the discourse; and what follows the active trajectory */
-static int id_cmp(const void *a, const void *b){ return memcmp(a, b, 16); }
 typedef struct { lp_id id; double d; lp_id *v; int nv; } Curve;              /* an observed curve near the prompt's, and its vertices */
 /* COUPLE through the extension's one native operator (Sequence 20.2): the strands, the containment and, when asked, the
  * shape of these entities, in one call. Each row keeps its route; here they are folded into the field by entity, the
@@ -150,20 +149,6 @@ static int follows(State *st, Next *out, int cap){
     PQclear(q); free(ab); return m;
 }
 
-/* How many strands hold each of these cells, up to the fan: what more than the fan holds is a hub, reached and never
- * crossed, and among the rest the least shared meets first. One set-based read. */
-static void share(State *st, Field *fd, const int *idx, int n, int upto){             /* counted up to upto: past it, how many more is no reason */
-    if (!n) return; lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) { ids[i] = fd->c[idx[i]].id; fd->c[idx[i]].shared = 0; }
-    uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n); char fan[24]; snprintf(fan, sizeof fan, "%d", upto);
-    int rl; const char *v[3] = { (const char *)ab, fan, refuse_param(&rl) }; int l[3] = { (int)al, 0, rl }, f[3] = { 1, 0, 1 };
-    /* counted where they are, up to the fan and one: one row an entity, not every strand that holds it */
-    PGresult *q = ask(st, "SELECT u.i, (SELECT count(*) FROM (SELECT 1 FROM physicality p WHERE p.tier > e.tier AND p.path @> ARRAY[u.id] AND p.mask ? 0::smallint "
-                          "AND NOT laplace_middle_any(p.path, $3::blake3[]) LIMIT $2::bigint) x) FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN entity e ON e.id = u.id", 3, v, l, f);
-    if (PQresultStatus(q) == PGRES_TUPLES_OK) for (int r = 0; r < PQntuples(q); r++) { int i = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (i >= 0 && i < n) fd->c[idx[i]].shared = (int)lp_be(PQgetvalue(q, r, 1), 8); }
-    else { fprintf(stderr, "held: %s", PQerrorMessage(st->pg)); exit(1); }
-    for (int i = 0; i < n; i++) if (fd->c[idx[i]].shared > st->fw->fan) fd->c[idx[i]].hub = 1;
-    PQclear(q); free(ab); free(ids);
-}
 /* A chain the firmware names, followed from a word: each relation in turn, the strands that hold where the chain stands
  * (or, past the first step, one of the things it is made of) in their witness's order, then by standing; the top taken.
  * The first of the firmware's chains that reaches its end answers; *rating: the standing of its last strand. */
@@ -228,102 +213,57 @@ static int elect(const void *a, const void *b){                               /*
     if (x->hub != y->hub) return x->hub > y->hub ? 1 : -1;
     return memcmp(&x->id, &y->id, 16);
 }
-
 /* ---- ORIENT: the joint interpretation (Sequence 20.3; INVENTION §7, "Joint interpretation before policy"). A winning
- * interpretation is a jointly compatible subgraph, not the definition with the largest global score: each occurrence's
- * candidates are what its own strands reach in the field, and the candidates of different occurrences constrain one
- * another through the web. Two are compatible when a strand ties them, or a strand of each meets in one entity that is
- * no hub (a hub is reached, never crossed). Each occurrence takes the candidate the others' choices support most, round
- * after round until no choice changes: a candidate in turn changes what makes sense for the other constituents. An
- * occurrence whose best two stand level is ambiguous; one no other occurrence's choice supports binds nothing. */
-#define CAND 8                                                                   /* readings weighed per word */
-#define MEETS 512                                                                /* meetings weighed: those the most pairs of readings meet in */
-typedef struct { lp_id id; int n; } Meet;
-static int meet_by_n(const void *a, const void *b){ int x = ((const Meet *)a)->n, y = ((const Meet *)b)->n; return x != y ? y - x : memcmp(a, b, 16); }
-typedef struct { int cell, occ; lp_id *nb; int nnb; } Cand;
+ * interpretation is a jointly compatible subgraph, not the definition with the largest global score. A word's readings
+ * are the types its own strands reach: a concept, a frame, a lexical unit, a roleset, a class, a role, whatever list of
+ * the highway holds it. The lists small enough to be mask fields (a part of speech, a dependency relation, a
+ * lexicographer file, a thematic role, a row's kind) are features every word shares, not readings: glue is known by its
+ * type. Two readings of different words hold together when they are the same type, or when the Linguistic Super
+ * Highway maps the one to the other (ILI to frame, roleset, class; roleset to frame and class; lexical unit to frame).
+ * Each word takes the reading the others' choices hold together with most, round after round until no choice
+ * changes: a reading in turn changes what makes sense for the other words. A word whose best readings stand level is
+ * ambiguous; one whose readings nothing else holds together with binds nothing. All of it is the perf-cache: no read. */
+typedef struct { int cell, occ, list; uint32_t slot; } Cand;
 typedef struct { int ncand, choice, level, capped; double score; } Bind;      /* per occurrence */
-static const Field *CF;
-static int cand_by_force(const void *a, const void *b){ double x = CF->c[*(const int *)a].force, y = CF->c[*(const int *)b].force; return x < y ? 1 : x > y ? -1 : 0; }
-static int has_id(const lp_id *s, int n, const lp_id *id){ return n && bsearch(id, s, (size_t)n, 16, id_cmp) != NULL; }
-/* How strongly two candidates of different occurrences hold together, the least shared meeting first (Sequence 18.9):
- * a strand that ties them counts one; each entity a strand of each meets in counts one over how many strands share it,
- * a hub nothing; the sum over the breadth of the two (the root of how many each reaches), so a reading that touches
- * everything cannot win by reach. Popularity is never a reason (20.8). */
-static double compat(const Cand *a, const Cand *b, const lp_id *aid, const lp_id *bid, const lp_id *meet, const double *mw, int nmeet){
-    if (!memcmp(aid, bid, 16)) { const lp_id *m = nmeet ? bsearch(aid, meet, (size_t)nmeet, 16, id_cmp) : NULL; return m ? mw[m - meet] : 0.0; }    /* one entity both reach: as least-shared as it is */
-    double s = 0;
-    if (has_id(a->nb, a->nnb, bid) || has_id(b->nb, b->nnb, aid)) s += 1.0;
-    for (int i = 0, j = 0; i < a->nnb && j < b->nnb; ) { int c = memcmp(&a->nb[i], &b->nb[j], 16);
-        if (!c) { const lp_id *m = nmeet ? bsearch(&a->nb[i], meet, (size_t)nmeet, 16, id_cmp) : NULL; if (m) s += mw[m - meet]; i++; j++; } else if (c < 0) i++; else j++; }
-    return s / sqrt((double)(a->nnb > 1 ? a->nnb : 1) * (double)(b->nnb > 1 ? b->nnb : 1));
+static int reading_of(const lp_highway *h, const lp_id *id, int *list, uint32_t *slot){
+    for (size_t l = 0; l < h->nlists; l++) { if (lp_highway_mask(h, h->list[l].name)) continue;        /* a feature, not a reading */
+        int64_t s = lp_highway_slot(h, &h->list[l], id); if (s >= 0) { *list = (int)l; *slot = (uint32_t)s; return 1; } }
+    return 0;
+}
+static int mapped(const lp_highway *h, const Cand *a, const Cand *b){        /* the highway maps a to b */
+    const lp_edge *e; size_t n = lp_highway_edges(h, h->list[a->list].name, a->slot, h->list[b->list].name, &e);
+    for (size_t k = 0; k < n; k++) if (e[k].to == b->slot) return 1;
+    return 0;
+}
+static int holds_with(const lp_highway *h, const Cand *a, const Cand *b){
+    return (a->list == b->list && a->slot == b->slot) || mapped(h, a, b) || mapped(h, b, a);
 }
 static int orient(State *st, Field *fd, Bind *bind, int *nambig){
-    double T_ = now(); const Firmware *fw = st->fw; Cand *cand = NULL; int nc = 0, cc = 0; *nambig = 0;
-    int *byocc = malloc(sizeof(int) * (size_t)(fd->n ? fd->n : 1));
-    for (int i = 0; i < st->nocc; i++) { memset(&bind[i], 0, sizeof bind[i]); bind[i].choice = -1;
-        if (!st->composed[i] || st->role[i] <= 0) continue;                                 /* every word has readings: the frame's constrain the slot's */
-        int m = 0; for (int z = 0; z < fd->n; z++) { const Cell *x = &fd->c[z];
-            if (x->hub || x->segment || x->force <= 0 || !((x->support.w[i >> 6] >> (i & 63)) & 1)) continue; byocc[m++] = z; }    /* a segment is evidence, not a reading */
-        CF = fd; qsort(byocc, (size_t)m, sizeof(int), cand_by_force);
-        int lead = m < 4 * CAND ? m : 4 * CAND, keep = 0;                    /* a candidate more than the fan holds (a lexicon, a language) is a hub: reached, never a reading */
-        for (int b0 = 0; b0 < lead; b0 += 512) share(st, fd, byocc + b0, lead - b0 < 512 ? lead - b0 : 512, fw->fan + 1);
-        for (int k = 0; k < lead; k++) if (!fd->c[byocc[k]].hub) byocc[keep++] = byocc[k];
-        if (m > lead) bind[i].capped = 1; m = keep;
-        if (m > CAND) { bind[i].capped = 1; m = CAND; }
-        for (int k = 0; k < m; k++) { if (nc == cc) { cc = cc ? cc * 2 : 256; cand = xrealloc(cand, sizeof(Cand) * (size_t)cc); } cand[nc++] = (Cand){ byocc[k], i, NULL, 0 }; }
-        bind[i].ncand = m; }
-    free(byocc);
-    if (getenv("LAPLACE_TIMING")) fprintf(stderr, "orient: readings chosen, %.1f ms\n", (now() - T_) * 1000);
-    /* what each candidate's strands reach: one set-based read a batch, refusals out before the fan */
-    for (int b0 = 0; b0 < nc; b0 += 512) { int m = nc - b0 < 512 ? nc - b0 : 512; lp_id *ids = malloc(sizeof(lp_id) * (size_t)m);
-        for (int k = 0; k < m; k++) ids[k] = fd->c[cand[b0 + k].cell].id;
-        uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(ab, ids, (uint32_t)m); char fan[24]; snprintf(fan, sizeof fan, "%d", fw->fan + 1);
-        int rl; const char *v[4] = { (const char *)ab, fan, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
-        PGresult *q = ask(st, "SELECT i, path FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
-        if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "orient: %s", PQerrorMessage(st->pg)); exit(1); }
-        int *cap = calloc((size_t)m, sizeof(int));
-        for (int r = 0; r < PQntuples(q); r++) { int k = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (k < 0 || k >= m) continue;
-            Run rn = run_of((const uint8_t *)PQgetvalue(q, r, 1), (size_t)PQgetlength(q, r, 1)); Cand *x = &cand[b0 + k];
-            const lp_id *other = rn.n >= 2 && !memcmp(&rn.id[0], &ids[k], 16) ? &rn.id[rn.n - 1] : rn.n >= 2 && !memcmp(&rn.id[rn.n - 1], &ids[k], 16) ? &rn.id[0] : NULL;
-            if (other && memcmp(other, &ids[k], 16)) { if (x->nnb == cap[k]) { cap[k] = cap[k] ? cap[k] * 2 : 16; x->nb = xrealloc(x->nb, sizeof(lp_id) * (size_t)cap[k]); } x->nb[x->nnb++] = *other; }
-            free(rn.id); }
-        for (int k = 0; k < m; k++) { Cand *x = &cand[b0 + k]; if (x->nnb) qsort(x->nb, (size_t)x->nnb, 16, id_cmp); }
-        PQclear(q); free(ab); free(ids); free(cap); }
-    if (getenv("LAPLACE_TIMING")) { int nb_ = 0; for (int a = 0; a < nc; a++) nb_ += cand[a].nnb; fprintf(stderr, "orient: candidates %d, their strands %d, %.1f ms\n", nc, nb_, (now() - T_) * 1000); }
-    /* the entities candidates of two occurrences meet in: a hub among them is reached, never crossed */
-    lp_id *meet = NULL; int nmeet = 0, cmeet = 0; double *mw = NULL;
-    for (int a = 0; a < nc; a++) for (int b = a + 1; b < nc; b++) if (cand[a].occ != cand[b].occ && !memcmp(&fd->c[cand[a].cell].id, &fd->c[cand[b].cell].id, 16)) {      /* a reading two words share is a meeting too */
-        if (nmeet == cmeet) { cmeet = cmeet ? cmeet * 2 : 256; meet = xrealloc(meet, sizeof(lp_id) * (size_t)cmeet); } meet[nmeet++] = fd->c[cand[a].cell].id; }
-    for (int a = 0; a < nc; a++) for (int b = a + 1; b < nc; b++) { if (cand[a].occ == cand[b].occ) continue;
-        for (int i = 0, j = 0; i < cand[a].nnb && j < cand[b].nnb; ) { int c = memcmp(&cand[a].nb[i], &cand[b].nb[j], 16);
-            if (!c) { if (nmeet == cmeet) { cmeet = cmeet ? cmeet * 2 : 256; meet = xrealloc(meet, sizeof(lp_id) * (size_t)cmeet); } if (nmeet < 1 << 16) meet[nmeet++] = cand[a].nb[i]; i++; j++; } else if (c < 0) i++; else j++; } }
-    if (nmeet) { qsort(meet, (size_t)nmeet, 16, id_cmp);                   /* each once, with how many pairs of readings meet in it */
-        Meet *mm = malloc(sizeof(Meet) * (size_t)nmeet); int u = 0;
-        for (int i = 0; i < nmeet; i++) if (!u || memcmp(&meet[i], &mm[u - 1].id, 16)) mm[u++] = (Meet){ meet[i], 1 }; else mm[u - 1].n++;
-        if (u > MEETS) { qsort(mm, (size_t)u, sizeof(Meet), meet_by_n); u = MEETS; qsort(mm, (size_t)u, sizeof(Meet), id_cmp); }   /* a meeting one pair passes through decides nothing */
-        for (int i = 0; i < u; i++) meet[i] = mm[i].id; nmeet = u; free(mm);
-        Field mf = { 0 }; int *idx = malloc(sizeof(int) * (size_t)nmeet); for (int i = 0; i < nmeet; i++) { cell(&mf, &meet[i]); idx[i] = i; }
-        for (int b0 = 0; b0 < nmeet; b0 += 512) share(st, &mf, idx + b0, nmeet - b0 < 512 ? nmeet - b0 : 512, 32);     /* the least shared first: past 32, a meeting weighs next to nothing */
-        mw = malloc(sizeof(double) * (size_t)nmeet);                         /* meet is sorted, and mf holds it in the same order */
-        for (int i = 0; i < nmeet; i++) mw[i] = mf.c[i].hub ? 0.0 : 1.0 / (double)(mf.c[i].shared > 1 ? mf.c[i].shared : 1);
-        free(idx); field_free(&mf); }
-    if (getenv("LAPLACE_TIMING")) fprintf(stderr, "orient: meetings %d, %.1f ms\n", nmeet, (now() - T_) * 1000);
-    /* the joint interpretation: each occurrence's choice, given the others', until none changes */
-    int *first = calloc((size_t)st->nocc + 1, sizeof(int)); for (int i = 0, at = 0; i < st->nocc; i++) { first[i] = at; at += bind[i].ncand; } first[st->nocc] = nc;
+    const lp_highway *h = lp_highway_map(NULL); *nambig = 0;
+    for (int i = 0; i < st->nocc; i++) { memset(&bind[i], 0, sizeof bind[i]); bind[i].choice = -1; }
+    if (!h) return 0;
+    Cand *cand = NULL; int nc = 0, cc = 0, *first = calloc((size_t)st->nocc + 1, sizeof(int));
+    for (int i = 0; i < st->nocc; i++) { first[i] = nc;
+        if (!st->composed[i] || st->role[i] <= 0) continue;
+        for (int z = 0; z < fd->n; z++) { const Cell *x = &fd->c[z]; int list; uint32_t slot;
+            if (!x->routes[R_CLAIM] || !((x->support.w[i >> 6] >> (i & 63)) & 1) || !reading_of(h, &x->id, &list, &slot)) continue;
+            if (lp_highway_mask_bit(h, &x->rel) >= 0) continue;                       /* reached through a feature (a dependency, a part of speech): syntax, not a reading */
+            if (nc == cc) { cc = cc ? cc * 2 : 256; cand = xrealloc(cand, sizeof(Cand) * (size_t)cc); } cand[nc++] = (Cand){ z, i, list, slot }; }
+        bind[i].ncand = nc - first[i]; }
+    first[st->nocc] = nc;
     for (int round = 0; round < 8; round++) { int changed = 0;
-        for (int i = 0; i < st->nocc; i++) { if (!bind[i].ncand) continue; double best = 0, second = 0; int pick = -1;
+        for (int i = 0; i < st->nocc; i++) { if (!bind[i].ncand) continue; double best = 0; int pick = -1, level = 0;
             for (int a = first[i]; a < first[i] + bind[i].ncand; a++) { double s = 0;
-                for (int j = 0; j < st->nocc; j++) { if (j == i || !bind[j].ncand) continue; int lo = first[j], hi = first[j] + bind[j].ncand, bj = bind[j].choice;
-                    double w = st->role[j], top = 0;                              /* before the others have chosen, the best any of their candidates gives */
-                    if (round && bj >= 0) top = compat(&cand[a], &cand[bj], &fd->c[cand[a].cell].id, &fd->c[cand[bj].cell].id, meet, mw, nmeet);
-                    else if (!round) for (int b = lo; b < hi; b++) { double c = compat(&cand[a], &cand[b], &fd->c[cand[a].cell].id, &fd->c[cand[b].cell].id, meet, mw, nmeet); if (c > top) top = c; }
-                    s += w * top; }
-                if (s > best) { second = best; best = s; pick = a; } else if (s > second) second = s; }
-            bind[i].level = pick >= 0 && second == best;
-            if (pick != bind[i].choice) { bind[i].choice = pick; changed = 1; } bind[i].score = best; }
+                for (int j = 0; j < st->nocc; j++) { if (j == i || !bind[j].ncand) continue; int hold = 0;
+                    if (round && bind[j].choice >= 0) hold = holds_with(h, &cand[a], &cand[bind[j].choice]);
+                    else if (!round) for (int b = first[j]; b < first[j] + bind[j].ncand && !hold; b++) hold = holds_with(h, &cand[a], &cand[b]);
+                    s += hold * st->role[j]; }
+                if (s > best) { best = s; pick = a; level = 0; } else if (s == best && s > 0) level = 1; }
+            if (pick != bind[i].choice) { bind[i].choice = pick; changed = 1; } bind[i].score = best; bind[i].level = level; }
         if (round && !changed) break; }
-    int bound = 0; for (int i = 0; i < st->nocc; i++) { int owes = (st->open.w[i >> 6] >> (i & 63)) & 1; if (bind[i].choice >= 0) { bound += owes; if (bind[i].level && owes) (*nambig)++; bind[i].choice = cand[bind[i].choice].cell; } }
-    for (int a = 0; a < nc; a++) free(cand[a].nb); free(cand); free(meet); free(mw); free(first);
+    int bound = 0; for (int i = 0; i < st->nocc; i++) { int owes = (st->open.w[i >> 6] >> (i & 63)) & 1;
+        if (bind[i].choice >= 0) { bound += owes; if (bind[i].level && owes) (*nambig)++; bind[i].choice = cand[bind[i].choice].cell; } }
+    free(cand); free(first);
     return bound;
 }
 int cmd_turn(int argc, char **argv){
