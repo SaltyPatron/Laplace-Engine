@@ -161,6 +161,27 @@ static Standing *stand_get(const lp_id *id, const Event *add, double trust){
     sn = lp_idmap_count(smap); return &stand[i];
 }
 
+/* What the ledger already holds, by the witnessed thing and the witness that witnessed it: the same witness witnessing
+ * the same thing again is the observation it made before, read again (Content 11.12: a retried job does not multiply
+ * the same witnessing), and is not written again. Another witness of the same lineage is a copy, and is. */
+typedef struct { lp_id w, by; } Ledgered;
+static Ledgered *ldg; static uint8_t *ldg_used; static uint64_t ldg_cap, ldg_n;
+static uint64_t ldg_slot(const lp_id *w, const lp_id *by){ uint64_t a, b; memcpy(&a, w->b, 8); memcpy(&b, by->b + 8, 8); return (a ^ b * 0x9E3779B97F4A7C15ull) & (ldg_cap - 1); }
+static void ldg_put(const lp_id *w, const lp_id *by){
+    if ((ldg_n + 1) * 2 > ldg_cap) {                                         /* half full: twice the room */
+        Ledgered *o = ldg; uint8_t *ou = ldg_used; uint64_t oc = ldg_cap; ldg_cap = oc ? oc * 2 : 1 << 16;
+        ldg = malloc(sizeof(Ledgered) * ldg_cap); ldg_used = calloc(ldg_cap, 1);
+        for (uint64_t i = 0; i < oc; i++) if (ou[i]) { uint64_t k = ldg_slot(&o[i].w, &o[i].by); while (ldg_used[k]) k = (k + 1) & (ldg_cap - 1); ldg_used[k] = 1; ldg[k] = o[i]; }
+        free(o); free(ou); }
+    uint64_t k = ldg_slot(w, by);
+    while (ldg_used[k]) { if (!memcmp(&ldg[k].w, w, 16) && !memcmp(&ldg[k].by, by, 16)) return; k = (k + 1) & (ldg_cap - 1); }
+    ldg_used[k] = 1; ldg[k].w = *w; ldg[k].by = *by; ldg_n++;
+}
+static int ldg_has(const lp_id *w, const lp_id *by){
+    if (!ldg_cap) return 0; uint64_t k = ldg_slot(w, by);
+    while (ldg_used[k]) { if (!memcmp(&ldg[k].w, w, 16) && !memcmp(&ldg[k].by, by, 16)) return 1; k = (k + 1) & (ldg_cap - 1); }
+    return 0;
+}
 /* One partition of the semantics, on one connection: the ledger's rows whose witnessed thing's ID begins with h, in
  * reading order (its order is the order of play), the new standings and the recorded ones updated. Each partition is
  * written by one connection, inside that connection's part of the batch's transaction (load: prepared, then committed
@@ -170,6 +191,7 @@ static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led,
     copy_begin(&lc, pg, sql);
     for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i];
         if (e->kind == EV_MEMBER || (e->witnessed.b[0] >> 4) != h) continue;                /* witnessed within its record: the record's row */
+        if (ldg_has(&e->witnessed, e->own_witness ? &e->witness : &files[fi].witness.id)) continue;      /* this witness's, already in the ledger */
         c16(&lc, 4); cfield(&lc, e->witnessed.b, 16); cfield(&lc, e->own_witness ? e->witness.b : files[fi].witness.id.b, 16); cf_f32(&lc, e->score);
         if (e->position) cf_i32(&lc, (int32_t)e->position); else c32(&lc, 0xFFFFFFFFu);
         lc.rows++; }
@@ -383,6 +405,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
                 if (PQgetisnull(q, j, 2)) lin = wid; else memcpy(lin.b, PQgetvalue(q, j, 2), 16);
                 uint64_t k_; int found; SEEN_AT(&wit, &lin, found);
                 if (!found) { seen[k_].used = 1; seen[k_].witnessed = wit; seen[k_].lin = lin; }
+                ldg_put(&wit, &wid);
             }
             PQclear(q); free(ab);
         }
@@ -467,6 +490,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         for (int j = 0; j < nparts; j++) for (int h = j; h < 16; h += nparts) { uint64_t a = 0, b = 0, c = 0; bad += part_write(pg[j], h, files, nfiles, &a, &b, &c); led += a; nnew += b; nupd += c; }
         if (bad) return 1;
         st->led += led; st->std_new += nnew; st->std_upd += nupd;
+        free(ldg); free(ldg_used); ldg = NULL; ldg_used = NULL; ldg_cap = ldg_n = 0;
         st->t_led += now() - tp; tp = now();
     }
     if (nev) { free(stand); lp_idmap_free(smap); stand = NULL; smap = NULL; }
