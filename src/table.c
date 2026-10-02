@@ -40,9 +40,26 @@ static Node *find_in(Shard *s, const lp_id *id){
     return NULL;
 }
 /* A composition, recorded: Laplace-Native gives its ID and coordinate; the table keeps it, once, with its path. */
+/* What this thread has already found in the table, by ID: a repeat (the same tag, the same empty field, the same small
+ * tuple, row after row) is answered without the shard's lock. Every thread composing the same few nodes took the one
+ * shard they hash to in turn: 12 threads doing the work of 2. The table emptied between batches empties these too: a
+ * cache holds only what the table holds now (its epoch). */
+#define SEEN (1u << 15)
+typedef struct Seen { uint64_t epoch, hits; struct Seen *next; lp_id id[SEEN]; } Seen;
+static uint64_t epoch = 1; static Seen *seen_all; static pthread_mutex_t seen_mu = PTHREAD_MUTEX_INITIALIZER;
+static __thread Seen *seen_here;
+static Seen *seen_of(void){
+    Seen *c = seen_here;
+    if (!c) { c = calloc(1, sizeof *c); if (!c) { perror("calloc"); exit(1); } pthread_mutex_lock(&seen_mu); c->next = seen_all; seen_all = c; pthread_mutex_unlock(&seen_mu); seen_here = c; }
+    uint64_t e = __atomic_load_n(&epoch, __ATOMIC_ACQUIRE); if (c->epoch != e) { memset(c->id, 0, sizeof c->id); c->epoch = e; }
+    return c;
+}
 Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     if (n == 1) return ch[0];
     Ref r = lp_ref_compose(ch, n, tier); r.said = 0;
+    Seen *c = seen_of(); uint32_t at = (uint32_t)(hkey(&r.id) >> 17) & (SEEN - 1);
+    if (!memcmp(&c->id[at], &r.id, 16)) { c->hits++; return r; }       /* already in the table, as this thread found */
+    c->id[at] = r.id;                                                   /* in the table once this returns, found or added */
     Shard *s = &shard[r.id.b[0]];
     pthread_mutex_lock(&s->mu);
     if ((s->n + 1) * 2 > s->scap) grow(s);
@@ -94,14 +111,15 @@ void ctx_open(int threads){
 Ref text_ref(Ctx *c, const uint8_t *s, size_t n){ Ref r = lp_text_decompose(c, s, n, compose_sink, NULL); r.said = 0; return r; }
 
 static uint64_t nodes_before, hits_before;
+static uint64_t seen_hits(int forget){ uint64_t n = 0; pthread_mutex_lock(&seen_mu); for (Seen *c = seen_all; c; c = c->next) { n += c->hits; if (forget) c->hits = 0; } pthread_mutex_unlock(&seen_mu); return n; }
 void strings_forget(void);
 void table_reset(void){
-    strings_forget();
+    strings_forget(); hits_before += seen_hits(1); __atomic_fetch_add(&epoch, 1, __ATOMIC_RELEASE);     /* every thread's cache is of a table that is gone */
     for (int i = 0; i < NSHARD; i++) { Shard *s = &shard[i]; nodes_before += s->n; hits_before += s->hits;
         free(s->node); free(s->slot); free(s->vtx); s->node = NULL; s->slot = NULL; s->vtx = NULL; s->n = s->cap = s->scap = s->nv = s->vcap = s->hits = 0; }
 }
 uint64_t table_total(void){ uint64_t n = nodes_before; for (int i = 0; i < NSHARD; i++) n += shard[i].n; return n; }
-uint64_t table_hits(void){ uint64_t n = hits_before; for (int i = 0; i < NSHARD; i++) n += shard[i].hits; return n; }
+uint64_t table_hits(void){ uint64_t n = hits_before + seen_hits(0); for (int i = 0; i < NSHARD; i++) n += shard[i].hits; return n; }
 
 /* Lookups run after decomposition, when nothing inserts: no lock. */
 Node *table_find(const lp_id *id){ return find_in(&shard[id->b[0]], id); }
