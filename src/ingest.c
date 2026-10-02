@@ -269,8 +269,11 @@ int cmd_ingest(int argc, char **argv){
             table_size(batch);                                                                                    /* a stretch at a time: room for one stretch */
             /* One long file, a stretch at a time. It is read twice: first for what it is, its trunk, with nothing
              * recorded; and, if that trunk is not recorded, again to record it. A file already recorded costs its
-             * decomposition and one lookup, and nothing is written. */
+             * decomposition and one lookup, and nothing is written. The first pass ends at the first stretch holding a
+             * thing that is not recorded: a recorded trunk has everything under it recorded, so that file's is not, and a
+             * new file is read once more, not twice. */
             File *f = &files[a0]; int failed = 0;
+            int unrecorded = 0;                                               /* a stretch held something not recorded: the trunk is not looked for */
             for (int pass = do_load ? 0 : 1; pass < 2 && !failed && !f->known; pass++) {
                 gzFile g = gzopen(f->path, "rb"); if (!g) { f->skipped = 1; break; } gzbuffer(g, 1 << 20);
                 size_t cap = (size_t)batch / 2 + (64u << 20), have = 0; uint8_t *buf = malloc(cap + 1); int first = 1, last = 0;
@@ -281,17 +284,25 @@ int cmd_ingest(int argc, char **argv){
                     if (!last) { end = 0; for (size_t i = have; i > 1; i--) if (buf[i - 1] == '\n' && (boundary == 1 || (i >= 2 && buf[i - 2] == '\n') || (i >= 3 && buf[i - 2] == '\r' && buf[i - 3] == '\n'))) { end = i; break; }
                                  if (!end) { fprintf(stderr, "\n  %s: a record longer than a stretch (%zu MB): the file cannot be read in stretches of this length\n", f->path, cap >> 20); mism++; failed = 1; break; } }
                     f->partial = !last;
+                    uint64_t s0 = f->nsaid;                                       /* where this stretch's things begin among the file's */
                     #pragma omp parallel
                     #pragma omp single
                     decompose_bytes(CTX[omp_get_thread_num()], f, buf, end, first);
                     first = 0; f->bytes += end; WHOLE(f); t_dec += now() - td;
+                    if (!pass && !last && f->nsaid > s0) {                        /* a thing of its content not recorded: its trunk is not, and it is recorded now */
+                        uint64_t k = 0, want = f->nsaid - s0 < 4096 ? f->nsaid - s0 : 4096; lp_id *ids = malloc(sizeof(lp_id) * want); uint8_t *tt = malloc(want);
+                        for (uint64_t j = s0; j < f->nsaid && k < want; j++) if (f->said[j].said != LP_SAID_METADATA) { const Node *x = table_find(&f->said[j].id); ids[k] = f->said[j].id; tt[k++] = x ? x->tier : f->said[j].tier; }     /* the tier it is recorded at: the lowest it is composed at */
+                        if (!db_all_recorded(conninfo, ids, tt, k)) unrecorded = 1;
+                        free(ids); free(tt); }
                     if (pass) { bytes += end; nev += f->ev.n; batches++; }
                     fprintf(stderr, "\r  %s: %s  %.1f MB read  %'llu nodes in this stretch   ", f->path, pass ? "recording" : "its trunk", f->bytes / 1e6, (unsigned long long)table_count());
                     if (pass) { SHOW(f); if (do_load && load(conninfo, threads, f, 1, &st)) return 1; }
                     free(f->ev.e); memset(&f->ev, 0, sizeof f->ev); table_reset();
                     memmove(buf, buf + end, have - end); have -= end;
+                    if (unrecorded) { fprintf(stderr, "\n  %s: what it holds is not all recorded: it is recorded now\n", f->path); break; }
                 }
                 gzclose(g); free(buf);
+                if (unrecorded) { free(f->said); f->said = NULL; f->nsaid = f->csaid = 0; continue; }
                 if (!pass && !failed && f->has_file) {                          /* is its trunk recorded */
                     PGconn *pg = db_connect(conninfo); uint8_t ab[40]; size_t al = ids_param(ab, &f->file.id, 1);
                     const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, fm[1] = { 1 };

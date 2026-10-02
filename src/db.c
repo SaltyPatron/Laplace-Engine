@@ -432,3 +432,12 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     for (int i = 0; i < npg; i++) PQfinish(pg[i]);
     return 0;
 }
+
+/* Whether every one of these compositions is recorded: one set question per partition. What is recorded has everything
+ * under it recorded, so one composition of a file's content that is not means the file's trunk is not. */
+int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers, uint64_t n){
+    if (!n) return 1;
+    PGconn *pg = db_connect(conninfo); parts_plan(pg);
+    uint8_t *hit = recorded(&pg, 1, ids, tiers, n); uint64_t got = 0; for (uint64_t i = 0; i < n; i++) got += hit[i];
+    free(hit); PQfinish(pg); return got == n;
+}
