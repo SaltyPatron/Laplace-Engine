@@ -178,9 +178,8 @@ static int chain_from(State *st, const lp_id *word, const lp_id *reading, lp_id 
             for (int t = 0; t < nt && !n; t++) { lp_id part[3] = { tryv[t], pred, pred }; int have[3] = { 2, 2, 0 }; cl = claims_like(st->pg, part, have, fw->fan, fw->k, &n, &cap); st->trips++; if (!n) { free(cl); cl = NULL; } }
             if (!n) break;
             positions_of(st->pg, cl, n); if (fw->order_witness) qsort(cl, (size_t)n, sizeof(Claim), claim_by_position);
-            int take = 0;                                                    /* the first step follows the word's oriented reading, or this chain does not answer it */
-            if (z == 0 && reading) { take = -1; for (int k = 0; k < n && take < 0; k++) if (!memcmp(&cl[k].part[cl[k].np - 1], reading, 16)) take = k; }
-            if (take < 0) { free(cl); break; }
+            int take = 0;
+            if (z == 0 && reading) for (int k = 0; k < n; k++) if (!memcmp(&cl[k].part[cl[k].np - 1], reading, 16)) { take = k; break; }    /* the oriented reading, where the chain passes through it; else the witness's order */
             cur = cl[take].part[cl[take].np - 1]; *rating = cl[take].r; free(cl); }
         if (z == fw->nchain[alt]) { *answer = cur; return 1; } }
     return 0;
