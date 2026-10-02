@@ -260,26 +260,16 @@ int recipes_broken(const Recipe *r, int n, const Source *of){
     return k;
 }
 
-/* ---- strings to entities, decomposed once per thread */
-typedef struct { uint64_t h; Ref ref; uint32_t off, len; } SEnt;
-typedef struct { SEnt *t; uint64_t cap, n; char *pool; size_t pn, pcap; uint64_t epoch; } SCache;
+/* ---- strings to entities, decomposed once per thread: a string map from the text to its entity, emptied with the table */
+typedef struct { lp_strmap *m; uint64_t epoch; } SCache;
 static __thread SCache sc;
 static uint64_t strings_epoch;                                           /* raised when the node table is emptied: what was remembered is of the table before */
 void strings_forget(void){ __atomic_add_fetch(&strings_epoch, 1, __ATOMIC_RELAXED); }
-static uint64_t fnv(const uint8_t *s, size_t n){ uint64_t h = 1469598103934665603ull; for (size_t i = 0; i < n; i++) { h ^= s[i]; h *= 1099511628211ull; } return h ? h : 1; }
 Ref string_ref(const uint8_t *s, size_t n){
-    if (sc.epoch != strings_epoch) { free(sc.t); free(sc.pool); memset(&sc, 0, sizeof sc); sc.epoch = strings_epoch; }
-    if ((sc.n + 1) * 2 > sc.cap) {
-        uint64_t oc = sc.cap; SEnt *old = sc.t; sc.cap = oc ? oc * 2 : 4096; sc.t = calloc(sc.cap, sizeof(SEnt));
-        for (uint64_t i = 0; i < oc; i++) if (old[i].h) { uint64_t k = old[i].h & (sc.cap - 1); while (sc.t[k].h) k = (k + 1) & (sc.cap - 1); sc.t[k] = old[i]; }
-        free(old);
-    }
-    uint64_t h = fnv(s, n), k = h & (sc.cap - 1);
-    while (sc.t[k].h) { if (sc.t[k].h == h && sc.t[k].len == n && !memcmp(sc.pool + sc.t[k].off, s, n)) return sc.t[k].ref; k = (k + 1) & (sc.cap - 1); }
-    if (sc.pn + n > sc.pcap) { sc.pcap = (sc.pn + n) * 2 + 4096; sc.pool = xrealloc(sc.pool, sc.pcap); }
-    memcpy(sc.pool + sc.pn, s, n);
-    sc.t[k] = (SEnt){ h, text_ref(ctx_here(), s, n), (uint32_t)sc.pn, (uint32_t)n }; sc.pn += n; sc.n++;
-    return sc.t[k].ref;
+    if (!sc.m || sc.epoch != strings_epoch) { lp_strmap_free(sc.m); sc.m = lp_strmap_sized(sizeof(Ref)); sc.epoch = strings_epoch; }
+    bool fresh; Ref *r = lp_strmap_get(sc.m, s, n, &fresh);
+    if (fresh) *r = text_ref(ctx_here(), s, n);
+    return *r;
 }
 
 /* ---- the syntax tree as content. Large nodes decompose their children as parallel tasks. */
@@ -334,29 +324,26 @@ void ev_push(Events *e, const Event *x){                         /* by address: 
 /* ---- a source's keys across its files: what a key column holds, resolved to its row's subject, for the rows of the
  * source's other files that point at it (refer COLUMN RECIPE). Process-wide, in stripes: a source is read in one process,
  * and the files that refer are read after the files referred to (ingest orders them). The first row to define a key keeps it. */
-typedef struct { uint64_t h; const char *recipe; Ref ref; uint32_t off, len; } KEnt;
-typedef struct { pthread_mutex_t mu; KEnt *t; uint64_t cap, n; uint8_t *pool; size_t pn, pcap; } KStripe;
-static KStripe kstripe[64] = { [0 ... 63] = { PTHREAD_MUTEX_INITIALIZER, NULL, 0, 0, NULL, 0, 0 } };
-static uint64_t khash(const char *recipe, const uint8_t *k, size_t n){ uint64_t h = fnv((const uint8_t *)recipe, strlen(recipe)); for (size_t i = 0; i < n; i++) { h ^= k[i]; h *= 1099511628211ull; } return h ? h : 1; }
-static KEnt *kfind(KStripe *s, uint64_t h, const char *recipe, const uint8_t *k, size_t n, uint64_t *slot){
-    if (!s->cap) return NULL; uint64_t x = h & (s->cap - 1);
-    while (s->t[x].h) { if (s->t[x].h == h && s->t[x].len == n && !memcmp(s->pool + s->t[x].off, k, n) && !strcmp(s->t[x].recipe, recipe)) { *slot = x; return &s->t[x]; } x = (x + 1) & (s->cap - 1); }
-    *slot = x; return NULL;
+/* A stripe is a string map, its key the recipe's name, a NUL, and the key's bytes; the stripe is the key's hash's top bits. */
+typedef struct { pthread_mutex_t mu; lp_strmap *m; } KStripe;
+static KStripe kstripe[64] = { [0 ... 63] = { PTHREAD_MUTEX_INITIALIZER, NULL } };
+static KStripe *key_at(const char *recipe, const uint8_t *k, size_t n, uint8_t **key, size_t *len, uint8_t *stack, size_t cap){
+    size_t rl = strlen(recipe); *len = rl + 1 + n; *key = *len <= cap ? stack : malloc(*len);
+    memcpy(*key, recipe, rl + 1); memcpy(*key + rl + 1, k, n);
+    return &kstripe[(lp_hash_bytes(*key, *len) >> 58) & 63];
 }
 void keys_put(const char *recipe, const uint8_t *k, size_t n, Ref x){
-    uint64_t h = khash(recipe, k, n); KStripe *s = &kstripe[(h >> 58) & 63]; pthread_mutex_lock(&s->mu);
-    if ((s->n + 1) * 2 > s->cap) { uint64_t oc = s->cap; KEnt *old = s->t; s->cap = oc ? oc * 2 : 1 << 12; s->t = calloc(s->cap, sizeof(KEnt));
-        for (uint64_t i = 0; i < oc; i++) if (old[i].h) { uint64_t y = old[i].h & (s->cap - 1); while (s->t[y].h) y = (y + 1) & (s->cap - 1); s->t[y] = old[i]; } free(old); }
-    uint64_t slot; if (!kfind(s, h, recipe, k, n, &slot)) {
-        if (s->pn + n > s->pcap) { s->pcap = (s->pn + n) * 2 + 65536; s->pool = xrealloc(s->pool, s->pcap); }
-        memcpy(s->pool + s->pn, k, n); s->t[slot] = (KEnt){ h, recipe, x, (uint32_t)s->pn, (uint32_t)n }; s->pn += n; s->n++; }
-    pthread_mutex_unlock(&s->mu);
+    uint8_t stack[512], *key; size_t len; KStripe *s = key_at(recipe, k, n, &key, &len, stack, sizeof stack);
+    pthread_mutex_lock(&s->mu); if (!s->m) s->m = lp_strmap_sized(sizeof(Ref));
+    bool fresh; Ref *r = lp_strmap_get(s->m, key, len, &fresh); if (fresh) *r = x;          /* the first row to define a key keeps it */
+    pthread_mutex_unlock(&s->mu); if (key != stack) free(key);
 }
 int keys_get(const char *recipe, const uint8_t *k, size_t n, Ref *out){
-    uint64_t h = khash(recipe, k, n), slot; KStripe *s = &kstripe[(h >> 58) & 63]; pthread_mutex_lock(&s->mu);
-    KEnt *e = kfind(s, h, recipe, k, n, &slot); if (e) *out = e->ref; pthread_mutex_unlock(&s->mu); return e != NULL;
+    uint8_t stack[512], *key; size_t len; KStripe *s = key_at(recipe, k, n, &key, &len, stack, sizeof stack);
+    pthread_mutex_lock(&s->mu); const Ref *r = s->m ? lp_strmap_lookup(s->m, key, len) : NULL; if (r) *out = *r;
+    pthread_mutex_unlock(&s->mu); if (key != stack) free(key); return r != NULL;
 }
-uint64_t keys_held(void){ uint64_t n = 0; for (int i = 0; i < 64; i++) n += kstripe[i].n; return n; }
+uint64_t keys_held(void){ uint64_t n = 0; for (int i = 0; i < 64; i++) n += lp_strmap_count(kstripe[i].m); return n; }
 
 /* ---- one file */
 /* A file's bytes; gzip is read through zlib, so a recipe sees what the container holds. */
