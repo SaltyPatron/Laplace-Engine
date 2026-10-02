@@ -304,13 +304,11 @@ int cmd_ingest(int argc, char **argv){
                 gzclose(g); free(buf);
                 if (unrecorded && !pass) { free(f->said); f->said = NULL; f->nsaid = f->csaid = 0; continue; }
                 if (!pass && !failed && f->has_file) {                          /* is its trunk recorded */
-                    PGconn *pg = db_connect(conninfo); uint8_t ab[40]; size_t al = ids_param(ab, &f->file.id, 1);
-                    const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, fm[1] = { 1 };
+                    PGconn *pg = db_connect(conninfo); Args a = { 0 }; arg_ids(&a, &f->file.id, 1);
                     char q[96]; snprintf(q, sizeof q, "SELECT 1 FROM entity WHERE tier = %d AND id = ANY($1::blake3[])", (int)f->file.tier);   /* its tier and its ID: one partition */
-                    PGresult *r = PQexecParams(pg, q, 1, NULL, v, l, fm, 0);
-                    if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "%s", PQerrorMessage(pg)); return 1; }
+                    PGresult *r = ask_once(pg, q, &a);
                     if (PQntuples(r)) { f->known = 1; st.known++; }
-                    PQclear(r); PQfinish(pg);
+                    PQclear(r); args_free(&a); PQfinish(pg);
                 }
             }
             done++; exact++; a0 = b0; continue;

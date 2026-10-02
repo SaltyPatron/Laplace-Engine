@@ -45,12 +45,14 @@ typedef struct {
     char role_by[96], role_name[FW_WEIGHS][96]; double role[FW_WEIGHS]; int nrole;      /* how hard a word pulls, by what is attested of it under role_by (its part of speech) */
     char chain[FW_ALTS][FW_CHAIN][96]; int nchain[FW_ALTS], nalt;                                             /* the relations a pull follows from the word that pulls hardest, in order */
     char up[FW_CHAIN][96]; int nup; char language[2][96], gloss[96];                                          /* translation: the relations from a word up to its concept (followed back down in another language); how what stands below the concept says its language (what holds it under the first, and what that says under the second); what is shown of a concept */
-} Firmware;
+    struct { int ready; lp_id refuse[FW_NAMES], refuse_witness[FW_NAMES], weigh[FW_WEIGHS], role_by, role[FW_WEIGHS], chain[FW_ALTS][FW_CHAIN], up[FW_CHAIN], language[2], gloss; } id;
+} Firmware;                                           /* id: every name above as the entity it is, computed once a pass (firmware_ids) */
 /* ---- the lookups the forward pass is made of (pull.c) */
 #define MAXPARTS 12
 typedef struct { lp_id id, part[MAXPARTS]; int np; lp_rating r; int matches; double conf; int position; } Claim;   /* a claim is a tuple: a pair, three parts, or a longer path */
 const char *firmware_path(void);                     /* LAPLACE_FIRMWARE, or firmware/program.firmware beside the recipes */
 Firmware firmware_for(const char *path, int op);
+const Firmware *firmware_ids(Firmware *);            /* the firmware's names as entities: computed the first time they are asked, once a pass */
 void firmware_say(const Firmware *, int op);
 lp_ref entity_named(lp_text *, const char *text, lp_ref *parts, size_t cap, size_t *np);      /* a text's trunk, computed here */
 Claim *claims_like(PGconn *, const lp_id *part, const int *have, int fan, double k, int *n, int *capped);
@@ -61,7 +63,11 @@ int    claim_by_conf(const void *, const void *);
 int    refused(PGconn *, lp_text *, const Firmware *, Claim *, int n);
 void   weights_named(lp_text *, const Firmware *, lp_id *ids);                           /* the kinds a firmware weighs, as entities */
 double strand_weight(const Firmware *, const lp_id *ids, const lp_id *part, int np);     /* how hard a claim of these parts is allowed to pull */
-void   weighed(lp_text *, const Firmware *, Claim *, int n);                             /* each claim's confidence by its weight, and the set in that order */                  /* what the firmware refuses, taken out */
+void   weighed(lp_text *, const Firmware *, Claim *, int n);
+typedef struct Reader Reader;
+double role_of(PGconn *, Firmware *, const lp_id *word);                                  /* how hard a word pulls, by its role; -1 when nothing says */
+void   take_top(Claim *, int n, int want, const Firmware *, unsigned *seed);              /* the top, or as near a tie as the firmware allows (seed NULL: the top) */
+int    chain_follow(PGconn *, Reader *, Firmware *, const lp_id *word, const lp_id *reading, unsigned *seed, lp_id *answer, Claim *last, int *alt);                             /* each claim's confidence by its weight, and the set in that order */                  /* what the firmware refuses, taken out */
 
 /* ---- commands */
 int cmd_ingest(int argc, char **argv);
@@ -208,26 +214,71 @@ typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows,
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
 int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers, uint64_t n);   /* every one of them recorded (in its tier's partition) */
 
-/* ---- reading the database: set-based fetches, decoded here */
+/* ---- the database, as the engine speaks to it (pg.c): a statement's parameters, its columns read back, COPY */
 extern uint32_t id_oid;                                               /* the database's own number for the type of an ID, blake3 */
-size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n);         /* a binary blake3[] parameter; out holds 20 + 20 n bytes */
-typedef struct { lp_id *id; int n; } Run;                               /* a trajectory's constituents in order, runs written out */
-Run run_of(const uint8_t *ewkb, size_t len);                            /* ... from a path as the database sends it (lp_path_ids) */
+size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n);         /* a binary blake3[] parameter, out 20 + 20 n bytes (db.c's; Args elsewhere) */
+#define ARGS_MAX 8
+typedef struct { lp_buf b; int binary; } Arg;
+typedef struct { Arg a[ARGS_MAX]; int n; } Args;                       /* zeroed to begin; args_free when done */
+void arg_ids(Args *, const lp_id *ids, size_t n);                     /* a blake3[], in binary */
+void arg_text(Args *, const char *s);                                 /* a value as text: the server casts it */
+void arg_int(Args *, long long v);
+void arg_f64(Args *, double v);
+void arg_raw(Args *, const void *bytes, size_t n);                    /* bytes already in the binary form */
+void args_reset(Args *);                                              /* empty, its buffers kept for the next statement */
+void args_free(Args *);
+PGresult *ask(PGconn *, const char *sql, Args *);                     /* planned once for the connection (db_ask); exits on an error */
+PGresult *ask_once(PGconn *, const char *sql, Args *);                /* a statement made for this call alone (a partition named in it) */
+PGresult *ask_try(PGconn *, const char *sql, Args *);                 /* the same, NULL when the database refuses it (a table not made yet) */
+void exec(PGconn *, const char *sql);                                 /* a statement with nothing to read back */
+/* A column of a row, as the database sends it in binary. */
+static inline const lp_id *col_id(const PGresult *q, int r, int c){ return (const lp_id *)PQgetvalue(q, r, c); }
+static inline int64_t col_int(const PGresult *q, int r, int c){ int n = PQgetlength(q, r, c); uint64_t u = lp_be(PQgetvalue(q, r, c), n); return n == 2 ? (int16_t)u : n == 4 ? (int32_t)u : (int64_t)u; }
+static inline double col_f64(const PGresult *q, int r, int c){ return lp_be_f64(PQgetvalue(q, r, c)); }
+static inline lp_path col_path(const PGresult *q, int r, int c){ return lp_path_of((const uint8_t *)PQgetvalue(q, r, c), (size_t)PQgetlength(q, r, c)); }
+static inline lp_rating col_rating(const PGresult *q, int r, int c){ lp_rating x = { col_f64(q, r, c), col_f64(q, r, c + 1), col_f64(q, r, c + 2) }; return x; }
+/* A COPY ... FROM STDIN (FORMAT binary) begun on the connection: rows with Native's lp_copy_*, flushed as it fills. */
+void copy_open(lp_copy *, PGconn *, const char *sql);
+void copy_close(lp_copy *);                                           /* the trailer, the last flush, the server's answer: exits on a failure */
+
+/* One statement over a set of IDs, on every connection at once (pg.c): the IDs grouped by where each can be, each group
+ * in ID order and in chunks, a chunk sent to each table its group names (%s in the statement); every row through each,
+ * one at a time, with place[k] where the chunk's k-th ID stands in ids. */
+typedef void (*Each)(const PGresult *q, int row, const uint64_t *place, void *ctx);
+typedef struct {
+    int ngroups;
+    int (*group)(const lp_id *ids, uint64_t i, void *ctx);                  /* NULL: one group */
+    int (*targets)(int group, void *ctx);                                    /* NULL: one table a group */
+    void (*target)(int group, int t, char *out, size_t cap, void *ctx);      /* NULL: no table named */
+    void *ctx;
+} Groups;
+uint64_t over_ids(PGconn **pg, int npg, const lp_id *ids, uint64_t n, const Groups *, size_t chunk, const char *sql, Each, void *ctx);
+Groups by_digit(const char *table);                                     /* table_0 .. table_f, by the ID's first hex digit */
+Groups whole(void);                                                     /* one group, the statement as written */
+
+/* ---- a command's options: each its flag, what it holds ('s' a string, 'i' an int, 'u' unsigned, 'l' long long, 'd' a
+ * double, 'b' a flag that is there or not) and where; the list ends with { NULL }. Returns where the command's own
+ * arguments begin: at the first that is not one of its options. */
+typedef struct { const char *flag; char kind; void *at; } Opt;
+int opts(int argc, char **argv, const Opt *o);
+typedef lp_vec(lp_id) Ids;
+/* A path's constituents in order, its runs written out, into ids: one array kept and refilled row after row. */
+static inline size_t path_into(Ids *ids, lp_path p){ size_t n = lp_path_len(p); lp_vec_reserve(ids, n ? n : 1); return ids->n = lp_path_expand(p, ids->v, n); }
 void   refuse_named(const Firmware *fw);                                 /* the predicates this pass's firmware refuses */
-const char *refuse_param(int *len);                                      /* ... as the blake3[] every claim read passes */
-void   id_text(const lp_id *id, char out[33]);                        /* 32 hexadecimal digits */
-int    id_parse(const char *s, lp_id *out);                         /* the 32 hexadecimal digits back to the ID; 0 when they are not */
+void   arg_refused(Args *);                                              /* ... as the blake3[] every claim read passes */
+/* 32 hexadecimal digits back to the ID, ending the field: 0 when they are not. */
+static inline int id_parse(const char *s, lp_id *out){ return lp_id_unhex(s, out) && (s[32] == 0 || s[32] == '\t' || s[32] == '\n'); }
 
 /* ---- a file in the DAG (file.c) */
 void file_close(File *);                                              /* the file is whole: its metadata, its content, its trunk */
 
 /* Entities back to their text: paths fetched one level at a time for every entity at once, expanded here down to tier 0. */
-typedef struct Reader Reader;
 Reader *reader_new(PGconn *pg);
 void    reader_free(Reader *);
 void    reader_want(Reader *, const lp_id *id);                       /* queue an entity; fetched by the next reader_text */
 char   *reader_text(Reader *, const lp_id *id, size_t limit);         /* its text (malloc'd), cut at limit bytes with an ellipsis */
 uint64_t reader_trips(const Reader *);                                /* round trips made */
+size_t  reader_parts(Reader *, const lp_id *id, lp_id *out, size_t cap); /* an entity's constituents, runs written out; 0 for an atom or nothing recorded */
 
 double now(void);
 void  *xrealloc(void *, size_t);

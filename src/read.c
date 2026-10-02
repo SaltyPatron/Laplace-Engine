@@ -1,24 +1,12 @@
 /* Reading the database. SQL only fetches: paths come back for a whole set of entities at once, one level of the DAG per
  * round trip, and are decoded and expanded here. */
 #include "engine.h"
-#include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n){
-    uint32_t hdr[5] = { htonl(1), htonl(0), htonl(id_oid), htonl(n), htonl(1) }; memcpy(out, hdr, 20); uint8_t *q = out + 20;
-    for (uint32_t i = 0; i < n; i++) { uint32_t l = htonl(16); memcpy(q, &l, 4); memcpy(q + 4, ids[i].b, 16); q += 20; }
-    return (size_t)(q - out);
-}
-void id_text(const lp_id *id, char out[33]){
-    static const char hex[] = "0123456789abcdef";
-    for (int i = 0; i < 16; i++) { out[2 * i] = hex[id->b[i] >> 4]; out[2 * i + 1] = hex[id->b[i] & 15]; } out[32] = 0;
-}
-int id_parse(const char *s, lp_id *out){
-    for (int i = 0; i < 16; i++) { int v = 0; for (int j = 0; j < 2; j++) { char c = s[2 * i + j]; int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; if (d < 0) return 0; v = v * 16 + d; } out->b[i] = (uint8_t)v; }
-    return s[32] == 0 || s[32] == '\t' || s[32] == '\n';
-}
+/* A blake3[] written where the caller has room for it: Native's lp_pg_ids, for the writer that keeps its own buffers. */
+size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n){ lp_buf b = { out, 0, 20 + 20 * (size_t)n }; lp_pg_ids(&b, id_oid, ids, n); return b.n; }
 
 typedef struct { lp_id id; lp_id *kid; uint32_t *run; uint32_t nv; uint8_t state; } Ent;      /* state: 0 wanted, 1 fetched, 2 not recorded */
 struct Reader { PGconn *pg; Ent *e; size_t n, cap; lp_idmap *m; uint64_t trips; };
@@ -39,22 +27,18 @@ void reader_want(Reader *r, const lp_id *id){ if (lp_tier0_codepoint(T0, id) < 0
 static size_t fetch(Reader *r){
     size_t nw = 0; for (size_t i = 0; i < r->n; i++) nw += r->e[i].state == 0;
     if (!nw) return 0;
-    lp_id *ids = malloc(sizeof(lp_id) * nw); size_t k = 0;
-    for (size_t i = 0; i < r->n; i++) if (r->e[i].state == 0) { ids[k++] = r->e[i].id; r->e[i].state = 2; }
-    uint8_t *ab = malloc(20 + 20 * nw); size_t al = ids_param(ab, ids, (uint32_t)nw);
-    const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = db_ask(r->pg, "SELECT entity, path FROM laplace_paths($1::blake3[])", 1, v, l, f);
-    if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "paths: %s", PQerrorMessage(r->pg)); exit(1); }
+    lp_vec(lp_id) ids = { 0 };
+    for (size_t i = 0; i < r->n; i++) if (r->e[i].state == 0) { lp_push(&ids, r->e[i].id); r->e[i].state = 2; }
+    Args a = { 0 }; arg_ids(&a, ids.v, ids.n);
+    PGresult *q = ask(r->pg, "SELECT entity, path FROM laplace_paths($1::blake3[])", &a);
     r->trips++;
     for (int j = 0; j < PQntuples(q); j++) {
-        lp_id id; memcpy(id.b, PQgetvalue(q, j, 0), 16); Ent *x = ent(r, &id, 0); if (!x || x->state == 1) continue;
-        const uint8_t *pb = (const uint8_t *)PQgetvalue(q, j, 1); size_t pl = (size_t)PQgetlength(q, j, 1), nv = lp_path_vertices(pb, pl, NULL, 0);
-        lp_vertex *vt = malloc(sizeof(lp_vertex) * (nv ? nv : 1)); lp_path_vertices(pb, pl, vt, nv);
-        x->kid = malloc(sizeof(lp_id) * (nv ? nv : 1)); x->run = malloc(4 * (nv ? nv : 1)); x->nv = (uint32_t)nv; x->state = 1;
-        for (size_t i = 0; i < nv; i++) { x->kid[i] = vt[i].id; x->run[i] = vt[i].run; }
-        free(vt);
+        Ent *x = ent(r, col_id(q, j, 0), 0); if (!x || x->state == 1) continue;
+        lp_path p = col_path(q, j, 1);
+        x->kid = malloc(sizeof(lp_id) * (p.n ? p.n : 1)); x->run = malloc(4 * (p.n ? p.n : 1)); x->nv = (uint32_t)p.n; x->state = 1;
+        for (size_t i = 0; i < p.n; i++) { x->kid[i] = lp_path_id(p, i); x->run[i] = lp_path_run(p, i); }
     }
-    PQclear(q); free(ab); free(ids);
+    PQclear(q); args_free(&a); lp_vec_free(&ids);
     return nw;
 }
 
@@ -83,7 +67,7 @@ char *reader_text(Reader *r, const lp_id *id, size_t limit){
         if (!o.wants) break;
     }
     Ent *x = ent(r, id, 0);
-    if (!o.n && x && x->state == 2) { free(o.b); char t[33]; id_text(id, t); char *s = malloc(48); snprintf(s, 48, "{%s}", t); return s; }   /* not recorded */
+    if (!o.n && x && x->state == 2) { free(o.b); char t[33]; lp_id_hex(id, t); char *s = malloc(48); snprintf(s, 48, "{%s}", t); return s; }   /* not recorded */
     if (o.n >= o.limit) {                                   /* cut at a character, and say so */
         size_t n = o.n; if (n > o.limit) { n = o.limit; while (n > 0 && ((uint8_t)o.b[n] & 0xC0) == 0x80) n--; }
         o.b = xrealloc(o.b, n + 8); memcpy(o.b + n, "\xE2\x80\xA6", 4); return o.b;
@@ -91,8 +75,12 @@ char *reader_text(Reader *r, const lp_id *id, size_t limit){
     o.b = xrealloc(o.b, o.n + 1); o.b[o.n] = 0;
     return o.b;
 }
-/* A trajectory's constituents in order, runs written out, from a path as the database sends it. */
-Run run_of(const uint8_t *ewkb, size_t len){
-    size_t n = lp_path_ids(ewkb, len, NULL, 0); Run r = { malloc(sizeof(lp_id) * (n ? n : 1)), (int)n };
-    lp_path_ids(ewkb, len, r.id, n); return r;
+/* An entity's constituents, its runs written out, at most cap of them: fetched if the reader has not read it. 0 for an
+ * atom, or for what is not recorded. */
+size_t reader_parts(Reader *r, const lp_id *id, lp_id *out, size_t cap){
+    if (lp_tier0_codepoint(T0, id) >= 0) return 0;
+    Ent *x = ent(r, id, 1); if (x->state == 0) fetch(r);
+    x = ent(r, id, 0); if (!x || x->state != 1) return 0;
+    size_t n = 0; for (uint32_t v = 0; v < x->nv; v++) for (uint32_t k = 0; k < x->run[v]; k++, n++) if (n < cap) out[n] = x->kid[v];
+    return n < cap ? n : cap;
 }

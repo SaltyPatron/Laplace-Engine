@@ -72,7 +72,7 @@ static int edge_cmp(const void *x, const void *y){ const Edge *a = x, *b = y; in
 /* ---- the types' contents, as the compositions they are: every node under a type, once, before what holds it */
 typedef struct { lp_idmap *m; } Seen;
 static int seen_add(Seen *s, const lp_id *id){ if (!s->m) s->m = lp_idmap_new(); bool fresh; lp_idmap_put(s->m, id, &fresh); return fresh; }
-static void hexid(const lp_id *id, char out[33]){ id_text(id, out); }
+static void hexid(const lp_id *id, char out[33]){ lp_id_hex(id, out); }
 static void node_write(FILE *o, Seen *s, const lp_id *id, int depth){
     if (lp_tier0_codepoint(T0, id) >= 0 || depth > 256) return; Node *x = table_find(id); if (!x || !seen_add(s, id)) return;
     for (uint32_t v = 0; v < x->nv; v++) node_write(o, s, &VTX[x->voff + v].id, depth + 1);

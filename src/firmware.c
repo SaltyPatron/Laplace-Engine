@@ -89,6 +89,25 @@ Firmware firmware_for(const char *path, int op){
     fclose(f);
     refuse_named(&fw); return fw;
 }
+/* Every name the firmware says, as the entity it names: the text's trunk, decomposed as any text is. A pass computes
+ * them once, not again for every stage, step or strand that uses them. */
+const Firmware *firmware_ids(Firmware *fw){
+    if (fw->id.ready) return fw;
+    lp_text *c = lp_text_new(lp_tier0_map(NULL)); if (!c) { fprintf(stderr, "cannot open ICU's break iterators\n"); exit(1); }
+    #define NAMED(name) (entity_named(c, (name), NULL, 0, NULL).id)
+    for (int i = 0; i < fw->nrefuse_predicate; i++) fw->id.refuse[i] = NAMED(fw->refuse_predicate[i]);
+    for (int i = 0; i < fw->nrefuse_witness; i++) fw->id.refuse_witness[i] = NAMED(fw->refuse_witness[i]);
+    for (int i = 0; i < fw->nweigh; i++) fw->id.weigh[i] = NAMED(fw->weigh_name[i]);
+    if (fw->role_by[0]) fw->id.role_by = NAMED(fw->role_by);
+    for (int i = 0; i < fw->nrole; i++) fw->id.role[i] = NAMED(fw->role_name[i]);
+    for (int a = 0; a < fw->nalt; a++) for (int i = 0; i < fw->nchain[a]; i++) fw->id.chain[a][i] = NAMED(fw->chain[a][i]);
+    for (int i = 0; i < fw->nup; i++) fw->id.up[i] = NAMED(fw->up[i]);
+    for (int i = 0; i < 2; i++) if (fw->language[i][0]) fw->id.language[i] = NAMED(fw->language[i]);
+    if (fw->gloss[0]) fw->id.gloss = NAMED(fw->gloss);
+    #undef NAMED
+    lp_text_free(c); fw->id.ready = 1;
+    return fw;
+}
 void firmware_say(const Firmware *fw, int op){
     printf("firmware   %s   for %s: k %g, lambda %g, fan %d, hops %d, top %s", fw->path, OPS[op], fw->k, fw->lambda, fw->fan, fw->hops, fw->top_within > 0 ? "within" : "always");
     if (fw->top_within > 0) printf(" %g", fw->top_within);
