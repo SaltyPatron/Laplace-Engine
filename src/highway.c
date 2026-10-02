@@ -22,32 +22,26 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { char name[32], say[64]; Ref *t; size_t n, cap; uint32_t *map; size_t mcap; uint32_t first; } List;   /* map: ID -> slot + 1 */
+typedef struct { char name[32], say[64]; Ref *t; size_t n, cap; lp_idmap *map; uint32_t first; } List;   /* map: a type's slot by its ID */
 typedef struct { int list; char *key; lp_id id; } Key;
 typedef struct { int list; char *key, *to; int done; } Alias;
 typedef struct { int la, lb; char *ka, *kb; } PEdge;
 typedef struct { int la, lb; uint32_t from, to; } Edge;
 struct Hw { List *l; int nl; Key *k; size_t nk, ck; uint32_t *kmap; size_t kcap; Alias *a; size_t na, ca; PEdge *e; size_t ne, ce; };
 
-static uint64_t idk(const lp_id *id){ uint64_t k; memcpy(&k, id->b, 8); return k; }
 static uint64_t strk(int list, const char *s){ uint64_t h = 1469598103934665603ull ^ (uint64_t)list; for (; *s; s++) h = (h ^ (uint8_t)*s) * 1099511628211ull; return h; }
 static int list_of(Hw *h, const char *name, const char *say){
     for (int i = 0; i < h->nl; i++) if (!strcmp(h->l[i].name, name)) { if (say && !h->l[i].say[0]) snprintf(h->l[i].say, sizeof h->l[i].say, "%s", say); return i; }
     h->l = xrealloc(h->l, sizeof(List) * (size_t)(h->nl + 1)); List *l = &h->l[h->nl]; memset(l, 0, sizeof *l);
     snprintf(l->name, sizeof l->name, "%s", name); if (say) snprintf(l->say, sizeof l->say, "%s", say); return h->nl++;
 }
-static int64_t slot_in(const List *l, const lp_id *id){
-    if (!l->mcap) return -1; uint64_t k = idk(id) & (l->mcap - 1);
-    while (l->map[k]) { if (!memcmp(&l->t[l->map[k] - 1].id, id, 16)) return l->map[k] - 1; k = (k + 1) & (l->mcap - 1); }
-    return -1;
-}
+static int64_t slot_in(const List *l, const lp_id *id){ return lp_idmap_find(l->map, id); }
 /* A type of a list: its slot is the next, unless its content is in the list already. */
 void hw_type(Hw *h, const char *list, const char *say, Ref thing){
     int li = list_of(h, list, say); List *l = &h->l[li]; if (slot_in(l, &thing.id) >= 0) return;      /* the list first: naming a new one moves them all */
-    if ((l->n + 1) * 2 > l->mcap) { size_t nc = l->mcap ? l->mcap * 2 : 1024; uint32_t *m = calloc(nc, 4);
-        for (size_t i = 0; i < l->n; i++) { uint64_t k = idk(&l->t[i].id) & (nc - 1); while (m[k]) k = (k + 1) & (nc - 1); m[k] = (uint32_t)i + 1; } free(l->map); l->map = m; l->mcap = nc; }
+    if (!l->map) l->map = lp_idmap_new(); lp_idmap_put(l->map, &thing.id, NULL);
     if (l->n == l->cap) { l->cap = l->cap ? l->cap * 2 : 1024; l->t = xrealloc(l->t, sizeof(Ref) * l->cap); }
-    uint64_t k = idk(&thing.id) & (l->mcap - 1); while (l->map[k]) k = (k + 1) & (l->mcap - 1); l->t[l->n] = thing; l->map[k] = (uint32_t)++l->n;
+    l->t[l->n++] = thing;
 }
 static Key *key_find(Hw *h, int list, const char *key){
     if (!h->kcap) return NULL; uint64_t k = strk(list, key) & (h->kcap - 1);
@@ -76,15 +70,8 @@ static int edge_cmp(const void *x, const void *y){ const Edge *a = x, *b = y; in
     return a->from < b->from ? -1 : a->from > b->from ? 1 : a->to < b->to ? -1 : a->to > b->to; }
 
 /* ---- the types' contents, as the compositions they are: every node under a type, once, before what holds it */
-typedef struct { lp_id *t; size_t n, cap; } Seen;
-static int seen_add(Seen *s, const lp_id *id){
-    if ((s->n + 1) * 2 > s->cap) { size_t nc = s->cap ? s->cap * 2 : 1 << 16; lp_id *t = calloc(nc, sizeof(lp_id)); static const lp_id zero;
-        for (size_t i = 0; i < s->cap; i++) if (memcmp(&s->t[i], &zero, 16)) { uint64_t k = idk(&s->t[i]) & (nc - 1); while (memcmp(&t[k], &zero, 16)) k = (k + 1) & (nc - 1); t[k] = s->t[i]; }
-        free(s->t); s->t = t; s->cap = nc; }
-    static const lp_id zero; uint64_t k = idk(id) & (s->cap - 1);
-    while (memcmp(&s->t[k], &zero, 16)) { if (!memcmp(&s->t[k], id, 16)) return 0; k = (k + 1) & (s->cap - 1); }
-    s->t[k] = *id; s->n++; return 1;
-}
+typedef struct { lp_idmap *m; } Seen;
+static int seen_add(Seen *s, const lp_id *id){ if (!s->m) s->m = lp_idmap_new(); bool fresh; lp_idmap_put(s->m, id, &fresh); return fresh; }
 static void hexid(const lp_id *id, char out[33]){ id_text(id, out); }
 static void node_write(FILE *o, Seen *s, const lp_id *id, int depth){
     if (lp_tier0_codepoint(T0, id) >= 0 || depth > 256) return; Node *x = table_find(id); if (!x || !seen_add(s, id)) return;

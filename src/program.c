@@ -48,17 +48,15 @@ static void bit_clear(Bits *a, const Bits *b){ for (int i = 0; i < MAXOCC / 64; 
 enum { R_CLAIM, R_FOLLOWS, R_DISCOURSE, R_SCAN, R_CONTAIN, R_KINDS };
 static const char *RK[R_KINDS] = { "strand", "follows", "discourse", "reached", "containment" };
 typedef struct { lp_id id; double force, cost; Bits support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, tier; } Cell;     /* shared: how many strands hold it, up to the fan (-1: not read) */
-typedef struct { Cell *c; int n, cap; uint32_t *map; int mcap; } Field;
-static uint64_t k64(const lp_id *id){ uint64_t k; memcpy(&k, id->b + 5, 8); return k; }
+typedef struct { Cell *c; int n, cap; lp_idmap *m; } Field;                  /* the cells, in the order they responded; found by ID */
 static Cell *cell(Field *f, const lp_id *id){
-    if ((f->n + 1) * 2 > f->mcap) { int nc = f->mcap ? f->mcap * 2 : 1024; uint32_t *m = calloc((size_t)nc, 4);
-        for (int i = 0; i < f->n; i++) { uint64_t k = k64(&f->c[i].id) & (uint64_t)(nc - 1); while (m[k]) k = (k + 1) & (uint64_t)(nc - 1); m[k] = (uint32_t)i + 1; } free(f->map); f->map = m; f->mcap = nc; }
-    uint64_t k = k64(id) & (uint64_t)(f->mcap - 1);
-    while (f->map[k]) { Cell *x = &f->c[f->map[k] - 1]; if (!memcmp(&x->id, id, 16)) return x; k = (k + 1) & (uint64_t)(f->mcap - 1); }
+    if (!f->m) f->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(f->m, id, &fresh);
+    if (!fresh) return &f->c[i];
     if (f->n == f->cap) { f->cap = f->cap ? f->cap * 2 : 1024; f->c = xrealloc(f->c, sizeof(Cell) * (size_t)f->cap); }
-    Cell *x = &f->c[f->n]; memset(x, 0, sizeof *x); x->id = *id; x->cost = INFINITY; f->map[k] = (uint32_t)++f->n; return x;
+    Cell *x = &f->c[f->n++]; memset(x, 0, sizeof *x); x->id = *id; x->cost = INFINITY; return x;
 }
-static void field_free(Field *f){ free(f->c); free(f->map); memset(f, 0, sizeof *f); }
+static Cell *cell_find(const Field *f, const lp_id *id){ int64_t i = lp_idmap_find(f->m, id); return i < 0 ? NULL : &f->c[i]; }
+static void field_free(Field *f){ free(f->c); lp_idmap_free(f->m); memset(f, 0, sizeof *f); }
 
 /* The constituents of a composition, in order, its runs written out; an atom or an unknown ID is itself. */
 static int constituents(const lp_id *id, lp_id *out, int cap){
@@ -446,7 +444,7 @@ int cmd_turn(int argc, char **argv){
     { /* COUPLE, once for the whole observation: the strands of every occurrence, of the prompt itself, and of the discourse */
       double t = now(); couple_strands(st, &fd, st->occ, st->nocc, 0, R_CLAIM); couple_strands(st, &fd, &st->prompt, 1, -1, R_CLAIM); couple_strands(st, &fd, st->disc, st->ndisc, 0, R_DISCOURSE);
       { lp_id cw[MAXOCC]; int co[MAXOCC], ncw = 0; for (int i = 0; i < st->nocc; i++) if (st->composed[i] && st->role[i] > 0) { cw[ncw] = st->occ[i]; co[ncw++] = i; } couple_containers(st, &fd, cw, ncw, co); }
-      for (int i = 0; i < st->nocc; i++) { Cell *x = NULL; for (int z = 0; z < fd.n; z++) if (!memcmp(&fd.c[z].id, &st->occ[i], 16)) x = &fd.c[z]; if (x) x->force = 0; }      /* the prompt's own words are not what it is about */
+      for (int i = 0; i < st->nocc; i++) { Cell *x = cell_find(&fd, &st->occ[i]); if (x) x->force = 0; }      /* the prompt's own words are not what it is about */
       int routes[R_KINDS] = { 0 }; for (int z = 0; z < fd.n; z++) for (int k = 0; k < R_KINDS; k++) routes[k] += fd.c[z].routes[k];
       printf("COUPLE     %d entities respond:", fd.n); for (int k = 0; k < R_KINDS; k++) if (routes[k]) printf(" %d by %s", routes[k], RK[k]); printf("   (%.1f ms)\n", (now() - t) * 1000); }
     /* ORIENT, the frame: the observed curves nearest the prompt's under the firmware's shape measure. The prompt's words
@@ -506,7 +504,7 @@ int cmd_turn(int argc, char **argv){
         Prop *pp = malloc(sizeof(Prop) * (size_t)(80)); int np = 0;
         Next nx[64]; int nn = follows(st, nx, 64);
         for (int i = 0; i < nn; i++) { Prop p = { nx[i].id, P_FOLLOW, 0, nx[i].len, 0, 0, nx[i].times, -1 };
-            for (int z = 0; z < fd.n; z++) if (!memcmp(&fd.c[z].id, &nx[i].id, 16)) { p.grounds = owed(&fd.c[z].support, &st->open); p.conf = fd.c[z].has_r ? lp_confidence(&fd.c[z].r, fw.k) : 0; p.hub = fd.c[z].hub; }
+            { const Cell *x = cell_find(&fd, &nx[i].id); if (x) { p.grounds = owed(&x->support, &st->open); p.conf = x->has_r ? lp_confidence(&x->r, fw.k) : 0; p.hub = x->hub; } }
             pp[np++] = p; }
         for (int q = 0; q < nchains; q++) { int o = chains[q].occ; if (!((st->open.w[o >> 6] >> (o & 63)) & 1)) continue; pp[np++] = chains[q]; }     /* a chain's answer, while its word is owed */
         if (!np) { free(pp); if (!nemit) disposition = ncentre ? "unresolved: nothing follows and nothing grounds what is open" : disposition; break; }
@@ -522,7 +520,7 @@ int cmd_turn(int argc, char **argv){
         free(tx);
         /* WITNESS, within the pass: the constituent joins the trajectory; what it grounds closes; the next coupling sees it */
         if (nemit < 512) emitted[nemit++] = sel.id; if (st->ntraj < 4096) st->traj[st->ntraj++] = sel.id;
-        for (int z = 0; z < fd.n; z++) if (!memcmp(&fd.c[z].id, &sel.id, 16)) bit_clear(&st->open, &fd.c[z].support);
+        { const Cell *x = cell_find(&fd, &sel.id); if (x) bit_clear(&st->open, &x->support); }
         if (sel.kind == P_CHAIN && sel.occ >= 0) st->open.w[sel.occ >> 6] &= ~(1ull << (sel.occ & 63));        /* the word the chain answers is owed no longer */
         couple_strands(st, &fd, &sel.id, 1, -1, R_DISCOURSE);
         if (sel.kind != P_FOLLOW && owed(&st->open, &st->open) <= (int)(fw.enough * owed0 + 0.5)) { disposition = bit_count_and(&st->open, &st->open) ? "complete: what is still owed is within what the firmware leaves open" : "complete: every obligation is grounded"; break; }

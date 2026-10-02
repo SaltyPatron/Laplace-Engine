@@ -19,19 +19,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { lp_id *id; uint64_t n, cap; uint32_t *slot; uint64_t scap; } Set;
-static uint64_t key(const lp_id *id){ uint64_t k; memcpy(&k, id->b + 6, 8); return k; }
+typedef struct { lp_id *id; uint64_t n, cap; lp_idmap *m; } Set;                           /* in the order added; membership by ID */
 static int set_add(Set *s, const lp_id *id){                              /* 1 if it was not there */
-    if ((s->n + 1) * 2 > s->scap) {
-        free(s->slot); s->scap = s->scap ? s->scap * 2 : 1 << 16; s->slot = calloc(s->scap, 4);
-        for (uint64_t i = 0; i < s->n; i++) { uint64_t k = key(&s->id[i]) & (s->scap - 1); while (s->slot[k]) k = (k + 1) & (s->scap - 1); s->slot[k] = (uint32_t)i + 1; }
-    }
-    uint64_t k = key(id) & (s->scap - 1);
-    while (s->slot[k]) { if (!memcmp(&s->id[s->slot[k] - 1], id, 16)) return 0; k = (k + 1) & (s->scap - 1); }
+    if (!s->m) s->m = lp_idmap_new(); bool fresh; lp_idmap_put(s->m, id, &fresh); if (!fresh) return 0;
     if (s->n == s->cap) { s->cap = s->cap ? s->cap * 2 : 1 << 16; s->id = xrealloc(s->id, s->cap * sizeof(lp_id)); }
-    s->id[s->n] = *id; s->slot[k] = (uint32_t)++s->n; return 1;
+    s->id[s->n++] = *id; return 1;
 }
-static void set_free(Set *s){ free(s->id); free(s->slot); memset(s, 0, sizeof *s); }
+static void set_free(Set *s){ free(s->id); lp_idmap_free(s->m); memset(s, 0, sizeof *s); }
 
 static void must(PGconn *pg, PGresult *r, ExecStatusType want, const char *what){
     if (PQresultStatus(r) != want) { fprintf(stderr, "%s: %s", what, PQerrorMessage(pg)); exit(1); }
@@ -104,19 +98,13 @@ typedef struct { lp_id id; uint32_t held; uint8_t entity, root, file; } Count;
 /* A file, and the content it is a trunk over: a file whose content is what it witnessed is kept by that content. */
 typedef struct { lp_id file, content; uint8_t curated; } Kept;
 static Kept *kept; static uint64_t nkept, ckept; static pthread_mutex_t kept_mu = PTHREAD_MUTEX_INITIALIZER;
-typedef struct { pthread_mutex_t mu; Count *c; uint64_t n, cap; uint32_t *slot; uint64_t scap; } CShard;
+typedef struct { pthread_mutex_t mu; Count *c; uint64_t n, cap; lp_idmap *m; } CShard;
 static CShard cs[256];
 static Count *count_of(CShard *s, const lp_id *id, int add){                /* the shard's lock is held */
-    if (add && (s->n + 1) * 2 > s->scap) {
-        free(s->slot); s->scap = s->scap ? s->scap * 2 : 1 << 14; s->slot = calloc(s->scap, 4);
-        for (uint64_t i = 0; i < s->n; i++) { uint64_t k = key(&s->c[i].id) & (s->scap - 1); while (s->slot[k]) k = (k + 1) & (s->scap - 1); s->slot[k] = (uint32_t)i + 1; }
-    }
-    if (!s->scap) return NULL;
-    uint64_t k = key(id) & (s->scap - 1);
-    while (s->slot[k]) { if (!memcmp(&s->c[s->slot[k] - 1].id, id, 16)) return &s->c[s->slot[k] - 1]; k = (k + 1) & (s->scap - 1); }
-    if (!add) return NULL;
+    if (!add) { int64_t i = lp_idmap_find(s->m, id); return i < 0 ? NULL : &s->c[i]; }
+    if (!s->m) s->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(s->m, id, &fresh); if (!fresh) return &s->c[i];
     if (s->n == s->cap) { s->cap = s->cap ? s->cap * 2 : 1 << 14; s->c = xrealloc(s->c, s->cap * sizeof(Count)); }
-    Count *c = &s->c[s->n]; memset(c, 0, sizeof *c); c->id = *id; s->slot[k] = (uint32_t)++s->n; return c;
+    Count *c = &s->c[s->n++]; memset(c, 0, sizeof *c); c->id = *id; return c;
 }
 /* A thread's pending counts, by shard, applied under that shard's lock a batch at a time. what: 0 held once more,
  * 1 it is an entity, 2 it is a root, 3 it is a file. */
@@ -227,7 +215,7 @@ static uint64_t sweep(PGconn **pg, int npg, int dry){
         set_free(&going); going = next;
     }
     printf("  %-52s %'12llu%s   (%.1f s)\n", "entities nothing held", (unsigned long long)total, dry ? "   (dry: nothing was removed)" : "", now() - T);
-    for (int sh = 0; sh < 256; sh++) { free(cs[sh].c); free(cs[sh].slot); memset(&cs[sh], 0, sizeof cs[sh]); }
+    for (int sh = 0; sh < 256; sh++) { free(cs[sh].c); lp_idmap_free(cs[sh].m); memset(&cs[sh], 0, sizeof cs[sh]); }
     return total;
 }
 int cmd_sweep(int argc, char **argv){

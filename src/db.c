@@ -146,8 +146,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
 
 /* ---- standings: a map from claim ID to its slot */
 typedef struct { lp_id id; lp_rating r; uint32_t matches; uint8_t had, entered; } Standing;
-static Standing *stand; static uint32_t *smap; static uint64_t scap, sn;
-static uint64_t skey(const lp_id *id){ uint64_t k; memcpy(&k, id->b + 4, 8); return k; }
+static Standing *stand; static lp_idmap *smap; static uint64_t sn;          /* the standings in play, in the order met; found by claim ID */
 /* The stock default a claim enters at: Glicko-2's rating for the unrated, and the uncertainty of the witness that brings
  * it (the deviation its trust plays with), unless the recipe gives this kind of statement its own. */
 static double entry_deviation(const Event *e, double trust){
@@ -156,11 +155,10 @@ static double entry_deviation(const Event *e, double trust){
     double d = lp_trust_deviation(t); return d < 30.0 ? 30.0 : d;
 }
 static Standing *stand_get(const lp_id *id, const Event *add, double trust){
-    uint64_t k = skey(id) & (scap - 1);
-    while (smap[k]) { Standing *s = &stand[smap[k] - 1]; if (!memcmp(&s->id, id, 16)) return s; k = (k + 1) & (scap - 1); }
-    if (!add) return NULL;
-    stand[sn] = (Standing){ *id, { add->enter_rating, entry_deviation(add, trust), 0.06 }, 0, 0, 0 };  /* the stock default for its level of attestation */
-    smap[k] = (uint32_t)++sn; return &stand[sn - 1];
+    if (!add) { int64_t i = lp_idmap_find(smap, id); return i < 0 ? NULL : &stand[i]; }
+    bool fresh; size_t i = lp_idmap_put(smap, id, &fresh); if (!fresh) return &stand[i];
+    stand[i] = (Standing){ *id, { add->enter_rating, entry_deviation(add, trust), 0.06 }, 0, 0, 0 };  /* the stock default for its level of attestation */
+    sn = lp_idmap_count(smap); return &stand[i];
 }
 
 int load_whole;
@@ -253,7 +251,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     /* What the files attested and the files' trunks are written as one: either all of it is recorded or none is. */
     { PGresult *b = PQexec(pg[0], "BEGIN"); if (PQresultStatus(b) != PGRES_COMMAND_OK) { fprintf(stderr, "begin: %s", PQerrorMessage(pg[0])); return 1; } PQclear(b); }
     if (nev) {
-        scap = 1; while (scap < nev * 2) scap <<= 1; smap = calloc(scap, 4); stand = malloc(sizeof(Standing) * (nev + 1)); sn = 0;
+        smap = lp_idmap_new(); stand = malloc(sizeof(Standing) * (nev + 1)); sn = 0;
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) if (files[fi].ev.e[i].kind != EV_RECORD) stand_get(&files[fi].ev.e[i].claim, &files[fi].ev.e[i], files[fi].trust);
         /* claims already recorded start from their recorded standing */
         /* the statistics are partitioned by the claim's first hex digit: each read goes to its one partition */
@@ -336,14 +334,11 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             if (k == nw) { wid[nw] = files[fi].witness.id; wfile[nw++] = fi; }
         }
         /* witnesses a source names statement by statement: each is its own lineage, and plays at the source's trust */
-        lp_id *own = NULL; double *owntrust = NULL; uint64_t nown = 0, cown = 0, ocap = 1 << 16; uint32_t *oslot = calloc(ocap, 4);
+        lp_id *own = NULL; double *owntrust = NULL; uint64_t nown = 0, cown = 0; lp_idmap *oseen = lp_idmap_new();
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (!e->own_witness) continue;
-            if ((nown + 1) * 2 > ocap) { free(oslot); ocap *= 2; oslot = calloc(ocap, 4); for (uint64_t j = 0; j < nown; j++) { uint64_t h; memcpy(&h, own[j].b, 8); uint64_t k = h & (ocap - 1); while (oslot[k]) k = (k + 1) & (ocap - 1); oslot[k] = (uint32_t)j + 1; } }
-            uint64_t h; memcpy(&h, e->witness.b, 8); uint64_t k = h & (ocap - 1); int seen_ = 0;
-            while (oslot[k]) { if (!memcmp(&own[oslot[k] - 1], &e->witness, 16)) { seen_ = 1; break; } k = (k + 1) & (ocap - 1); }
-            if (seen_) continue;
+            bool fresh; lp_idmap_put(oseen, &e->witness, &fresh); if (!fresh) continue;
             if (nown == cown) { cown = cown ? cown * 2 : 4096; own = xrealloc(own, cown * sizeof(lp_id)); owntrust = xrealloc(owntrust, cown * 8); }
-            own[nown] = e->witness; owntrust[nown] = files[fi].trust; oslot[k] = (uint32_t)++nown; }
+            own[nown] = e->witness; owntrust[nown] = files[fi].trust; nown++; }
         uint8_t *oknown = calloc(nown ? nown : 1, 1);
         for (uint64_t i0 = 0; i0 < nown; i0 += 50000) { uint32_t k = (uint32_t)(nown - i0 < 50000 ? nown - i0 : 50000); uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t len = ids_param(ab, own + i0, k);
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
@@ -367,7 +362,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         }
         for (uint64_t i = 0; i < nown; i++) if (!oknown[i]) { int dup = 0; for (int k = 0; k < nw && !dup; k++) dup = !memcmp(&wid[k], &own[i], 16); if (dup) continue;
             c16(&c, 3); cfield(&c, own[i].b, 16); c32(&c, 0xFFFFFFFFu); cf_f64(&c, owntrust[i]); }
-        copy_end(&c); free(wid); free(wfile); free(known); free(own); free(owntrust); free(oslot); free(oknown);
+        copy_end(&c); free(wid); free(wfile); free(known); free(own); free(owntrust); lp_idmap_free(oseen); free(oknown);
         /* the ledger, in reading order (its order is the order of play), and the new standings: each row into the
          * partition its claim's first hex digit names, sixteen copies, no routing */
         for (int h = 0; h < 16; h++) { Copy lc = { 0 }; char sql[160]; snprintf(sql, sizeof sql, "COPY attestation_%x (claim, witness, score, position) FROM STDIN (FORMAT binary)", h);
@@ -412,7 +407,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             PQclear(u); for (int f = 0; f < 5; f++) free(arr[f]); st->std_upd += n;
         }
     }
-    if (nev) { free(stand); free(smap); stand = NULL; smap = NULL; }
+    if (nev) { free(stand); lp_idmap_free(smap); stand = NULL; smap = NULL; }
     st->t_sem += now() - t;
 
     /* the files' trunks: last */

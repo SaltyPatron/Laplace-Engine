@@ -21,25 +21,17 @@ int id_parse(const char *s, lp_id *out){
 }
 
 typedef struct { lp_id id; lp_id *kid; uint32_t *run; uint32_t nv; uint8_t state; } Ent;      /* state: 0 wanted, 1 fetched, 2 not recorded */
-struct Reader { PGconn *pg; Ent *e; size_t n, cap; uint32_t *slot; size_t scap; uint64_t trips; };
+struct Reader { PGconn *pg; Ent *e; size_t n, cap; lp_idmap *m; uint64_t trips; };
 
 Reader *reader_new(PGconn *pg){ Reader *r = calloc(1, sizeof *r); r->pg = pg; return r; }
-void reader_free(Reader *r){ if (!r) return; for (size_t i = 0; i < r->n; i++) { free(r->e[i].kid); free(r->e[i].run); } free(r->e); free(r->slot); free(r); }
+void reader_free(Reader *r){ if (!r) return; for (size_t i = 0; i < r->n; i++) { free(r->e[i].kid); free(r->e[i].run); } free(r->e); lp_idmap_free(r->m); free(r); }
 uint64_t reader_trips(const Reader *r){ return r->trips; }
 
-static uint64_t key(const lp_id *id){ uint64_t k; memcpy(&k, id->b + 5, 8); return k; }
 static Ent *ent(Reader *r, const lp_id *id, int add){
-    if (add && (r->n + 1) * 2 > r->scap) {
-        free(r->slot); r->scap = r->scap ? r->scap * 2 : 1024; r->slot = calloc(r->scap, 4);
-        for (size_t i = 0; i < r->n; i++) { size_t k = key(&r->e[i].id) & (r->scap - 1); while (r->slot[k]) k = (k + 1) & (r->scap - 1); r->slot[k] = (uint32_t)i + 1; }
-    }
-    if (!r->scap) return NULL;
-    size_t k = key(id) & (r->scap - 1);
-    while (r->slot[k]) { Ent *x = &r->e[r->slot[k] - 1]; if (!memcmp(&x->id, id, 16)) return x; k = (k + 1) & (r->scap - 1); }
-    if (!add) return NULL;
+    if (!add) { int64_t i = lp_idmap_find(r->m, id); return i < 0 ? NULL : &r->e[i]; }
+    if (!r->m) r->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(r->m, id, &fresh); if (!fresh) return &r->e[i];
     if (r->n == r->cap) { r->cap = r->cap ? r->cap * 2 : 1024; r->e = xrealloc(r->e, r->cap * sizeof(Ent)); }
-    Ent *x = &r->e[r->n]; memset(x, 0, sizeof *x); x->id = *id; r->slot[k] = (uint32_t)++r->n;
-    return x;
+    Ent *x = &r->e[r->n++]; memset(x, 0, sizeof *x); x->id = *id; return x;
 }
 void reader_want(Reader *r, const lp_id *id){ if (lp_tier0_codepoint(T0, id) < 0) ent(r, id, 1); }
 
