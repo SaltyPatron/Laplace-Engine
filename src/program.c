@@ -164,7 +164,7 @@ static void share(State *st, Field *fd, const int *idx, int n){
 /* A chain the firmware names, followed from a word: each relation in turn, the strands that hold where the chain stands
  * (or, past the first step, one of the things it is made of) in their witness's order, then by standing; the top taken.
  * The first of the firmware's chains that reaches its end answers; *rating: the standing of its last strand. */
-static int chain_from(State *st, const lp_id *word, lp_id *answer, lp_rating *rating){
+static int chain_from(State *st, const lp_id *word, const lp_id *reading, lp_id *answer, lp_rating *rating){
     const Firmware *fw = st->fw;
     for (int alt = 0; alt < fw->nalt; alt++) { lp_id cur = *word; int z = 0;
         for (; z < fw->nchain[alt]; z++) {
@@ -178,7 +178,10 @@ static int chain_from(State *st, const lp_id *word, lp_id *answer, lp_rating *ra
             for (int t = 0; t < nt && !n; t++) { lp_id part[3] = { tryv[t], pred, pred }; int have[3] = { 2, 2, 0 }; cl = claims_like(st->pg, part, have, fw->fan, fw->k, &n, &cap); st->trips++; if (!n) { free(cl); cl = NULL; } }
             if (!n) break;
             positions_of(st->pg, cl, n); if (fw->order_witness) qsort(cl, (size_t)n, sizeof(Claim), claim_by_position);
-            cur = cl[0].part[cl[0].np - 1]; *rating = cl[0].r; free(cl); }
+            int take = 0;                                                    /* the first step follows the word's oriented reading, or this chain does not answer it */
+            if (z == 0 && reading) { take = -1; for (int k = 0; k < n && take < 0; k++) if (!memcmp(&cl[k].part[cl[k].np - 1], reading, 16)) take = k; }
+            if (take < 0) { free(cl); break; }
+            cur = cl[take].part[cl[take].np - 1]; *rating = cl[take].r; free(cl); }
         if (z == fw->nchain[alt]) { *answer = cur; return 1; } }
     return 0;
 }
@@ -224,13 +227,87 @@ static int elect(const void *a, const void *b){                               /*
     return memcmp(&x->id, &y->id, 16);
 }
 
-/* ORIENT's order: the obligations a cell grounds, then (once read) a hub last and the least shared first, then force. */
-static const Field *OF; static const Bits *OPEN; static int SHARED;
-static int by_ground(const void *a, const void *b){
-    const Cell *x = &OF->c[*(const int *)a], *y = &OF->c[*(const int *)b]; int gx = owed(&x->support, OPEN), gy = owed(&y->support, OPEN);
-    if (gx != gy) return gy - gx;
-    if (SHARED) { if (x->hub != y->hub) return x->hub - y->hub; if (x->shared != y->shared) return x->shared - y->shared; }
-    return x->force < y->force ? 1 : x->force > y->force ? -1 : 0;
+/* ---- ORIENT: the joint interpretation (Sequence 20.3; INVENTION §7, "Joint interpretation before policy"). A winning
+ * interpretation is a jointly compatible subgraph, not the definition with the largest global score: each occurrence's
+ * candidates are what its own strands reach in the field, and the candidates of different occurrences constrain one
+ * another through the web. Two are compatible when a strand ties them, or a strand of each meets in one entity that is
+ * no hub (a hub is reached, never crossed). Each occurrence takes the candidate the others' choices support most, round
+ * after round until no choice changes: a candidate in turn changes what makes sense for the other constituents. An
+ * occurrence whose best two stand level is ambiguous; one no other occurrence's choice supports binds nothing. */
+#define CAND 32
+typedef struct { int cell, occ; lp_id *nb; int nnb; } Cand;
+typedef struct { int ncand, choice, level, capped; double score; } Bind;      /* per occurrence */
+static int id_cmp(const void *a, const void *b){ return memcmp(a, b, 16); }
+static const Field *CF;
+static int cand_by_force(const void *a, const void *b){ double x = CF->c[*(const int *)a].force, y = CF->c[*(const int *)b].force; return x < y ? 1 : x > y ? -1 : 0; }
+static int has_id(const lp_id *s, int n, const lp_id *id){ return n && bsearch(id, s, (size_t)n, 16, id_cmp) != NULL; }
+/* How strongly two candidates of different occurrences hold together: a strand that ties them counts twice, each
+ * entity a strand of each meets in (no hub) once. */
+static int compat(const Cand *a, const Cand *b, const lp_id *aid, const lp_id *bid, const lp_id *hubs, int nhubs){
+    int s = 0; if (!memcmp(aid, bid, 16)) return 4;
+    if (has_id(a->nb, a->nnb, bid) || has_id(b->nb, b->nnb, aid)) s += 2;
+    for (int i = 0, j = 0; i < a->nnb && j < b->nnb; ) { int c = memcmp(&a->nb[i], &b->nb[j], 16);
+        if (!c) { if (!has_id(hubs, nhubs, &a->nb[i])) s++; i++; j++; } else if (c < 0) i++; else j++; }
+    return s;
+}
+static int orient(State *st, Field *fd, Bind *bind, int *nambig){
+    const Firmware *fw = st->fw; Cand *cand = NULL; int nc = 0, cc = 0; *nambig = 0;
+    int *byocc = malloc(sizeof(int) * (size_t)(fd->n ? fd->n : 1));
+    for (int i = 0; i < st->nocc; i++) { memset(&bind[i], 0, sizeof bind[i]); bind[i].choice = -1;
+        if (!((st->open.w[i >> 6] >> (i & 63)) & 1)) continue;                         /* an occurrence that owes nothing orients nothing */
+        int m = 0; for (int z = 0; z < fd->n; z++) { const Cell *x = &fd->c[z];
+            if (x->hub || x->force <= 0 || !((x->support.w[i >> 6] >> (i & 63)) & 1)) continue; byocc[m++] = z; }
+        CF = fd; qsort(byocc, (size_t)m, sizeof(int), cand_by_force);
+        int lead = m < 4 * CAND ? m : 4 * CAND, keep = 0;                    /* a candidate more than the fan holds (a lexicon, a language) is a hub: reached, never a reading */
+        for (int b0 = 0; b0 < lead; b0 += 512) share(st, fd, byocc + b0, lead - b0 < 512 ? lead - b0 : 512);
+        for (int k = 0; k < lead; k++) if (!fd->c[byocc[k]].hub) byocc[keep++] = byocc[k];
+        if (m > lead) bind[i].capped = 1; m = keep;
+        if (m > CAND) { bind[i].capped = 1; m = CAND; }
+        for (int k = 0; k < m; k++) { if (nc == cc) { cc = cc ? cc * 2 : 256; cand = xrealloc(cand, sizeof(Cand) * (size_t)cc); } cand[nc++] = (Cand){ byocc[k], i, NULL, 0 }; }
+        bind[i].ncand = m; }
+    free(byocc);
+    /* what each candidate's strands reach: one set-based read a batch, refusals out before the fan */
+    for (int b0 = 0; b0 < nc; b0 += 512) { int m = nc - b0 < 512 ? nc - b0 : 512; lp_id *ids = malloc(sizeof(lp_id) * (size_t)m);
+        for (int k = 0; k < m; k++) ids[k] = fd->c[cand[b0 + k].cell].id;
+        uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(ab, ids, (uint32_t)m); char fan[24]; snprintf(fan, sizeof fan, "%d", fw->fan + 1);
+        int rl; const char *v[4] = { (const char *)ab, fan, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
+        PGresult *q = ask(st, "SELECT i, path FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
+        if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "orient: %s", PQerrorMessage(st->pg)); exit(1); }
+        int *cap = calloc((size_t)m, sizeof(int));
+        for (int r = 0; r < PQntuples(q); r++) { int k = (int)be(PQgetvalue(q, r, 0), 8) - 1; if (k < 0 || k >= m) continue;
+            Run rn = run_of((const uint8_t *)PQgetvalue(q, r, 1), (size_t)PQgetlength(q, r, 1)); Cand *x = &cand[b0 + k];
+            const lp_id *other = rn.n >= 2 && !memcmp(&rn.id[0], &ids[k], 16) ? &rn.id[rn.n - 1] : rn.n >= 2 && !memcmp(&rn.id[rn.n - 1], &ids[k], 16) ? &rn.id[0] : NULL;
+            if (other && memcmp(other, &ids[k], 16)) { if (x->nnb == cap[k]) { cap[k] = cap[k] ? cap[k] * 2 : 16; x->nb = xrealloc(x->nb, sizeof(lp_id) * (size_t)cap[k]); } x->nb[x->nnb++] = *other; }
+            free(rn.id); }
+        for (int k = 0; k < m; k++) { Cand *x = &cand[b0 + k]; if (x->nnb) qsort(x->nb, (size_t)x->nnb, 16, id_cmp); }
+        PQclear(q); free(ab); free(ids); free(cap); }
+    /* the entities candidates of two occurrences meet in: a hub among them is reached, never crossed */
+    lp_id *meet = NULL; int nmeet = 0, cmeet = 0, nhubs = 0; lp_id *hubs = NULL;
+    for (int a = 0; a < nc; a++) for (int b = a + 1; b < nc; b++) { if (cand[a].occ == cand[b].occ) continue;
+        for (int i = 0, j = 0; i < cand[a].nnb && j < cand[b].nnb; ) { int c = memcmp(&cand[a].nb[i], &cand[b].nb[j], 16);
+            if (!c) { if (nmeet == cmeet) { cmeet = cmeet ? cmeet * 2 : 256; meet = xrealloc(meet, sizeof(lp_id) * (size_t)cmeet); } if (nmeet < 1 << 16) meet[nmeet++] = cand[a].nb[i]; i++; j++; } else if (c < 0) i++; else j++; } }
+    if (nmeet) { qsort(meet, (size_t)nmeet, 16, id_cmp); int u = 0; for (int i = 0; i < nmeet; i++) if (!u || memcmp(&meet[i], &meet[u - 1], 16)) meet[u++] = meet[i]; nmeet = u;
+        Field mf = { 0 }; int *idx = malloc(sizeof(int) * (size_t)nmeet); for (int i = 0; i < nmeet; i++) { cell(&mf, &meet[i]); idx[i] = i; }
+        for (int b0 = 0; b0 < nmeet; b0 += 512) share(st, &mf, idx + b0, nmeet - b0 < 512 ? nmeet - b0 : 512);
+        hubs = malloc(sizeof(lp_id) * (size_t)nmeet); for (int i = 0; i < mf.n; i++) if (mf.c[i].hub) hubs[nhubs++] = mf.c[i].id;
+        if (nhubs) qsort(hubs, (size_t)nhubs, 16, id_cmp); free(idx); field_free(&mf); }
+    /* the joint interpretation: each occurrence's choice, given the others', until none changes */
+    int *first = calloc((size_t)st->nocc + 1, sizeof(int)); for (int i = 0, at = 0; i < st->nocc; i++) { first[i] = at; at += bind[i].ncand; } first[st->nocc] = nc;
+    for (int round = 0; round < 8; round++) { int changed = 0;
+        for (int i = 0; i < st->nocc; i++) { if (!bind[i].ncand) continue; double best = 0, second = 0; int pick = -1;
+            for (int a = first[i]; a < first[i] + bind[i].ncand; a++) { double s = 0;
+                for (int j = 0; j < st->nocc; j++) { if (j == i || !bind[j].ncand) continue; int lo = first[j], hi = first[j] + bind[j].ncand, bj = bind[j].choice;
+                    double w = st->role[j], top = 0;                              /* before the others have chosen, the best any of their candidates gives */
+                    if (round && bj >= 0) top = compat(&cand[a], &cand[bj], &fd->c[cand[a].cell].id, &fd->c[cand[bj].cell].id, hubs, nhubs);
+                    else if (!round) for (int b = lo; b < hi; b++) { int c = compat(&cand[a], &cand[b], &fd->c[cand[a].cell].id, &fd->c[cand[b].cell].id, hubs, nhubs); if (c > top) top = c; }
+                    s += w * top; }
+                if (s > best) { second = best; best = s; pick = a; } else if (s > second) second = s; }
+            bind[i].level = pick >= 0 && second == best;
+            if (pick != bind[i].choice) { bind[i].choice = pick; changed = 1; } bind[i].score = best; }
+        if (round && !changed) break; }
+    int bound = 0; for (int i = 0; i < st->nocc; i++) { if (bind[i].choice >= 0) { bound++; if (bind[i].level) (*nambig)++; bind[i].choice = cand[bind[i].choice].cell; } }
+    for (int a = 0; a < nc; a++) free(cand[a].nb); free(cand); free(meet); free(hubs); free(first);
+    return bound;
 }
 int cmd_turn(int argc, char **argv){
     const char *conninfo = laplace_db(), *fwp = NULL, *user = getenv("USER"), *session = NULL; int a = 1, seeded = 0, read_only = 0; unsigned seed = 0;
@@ -286,20 +363,20 @@ int cmd_turn(int argc, char **argv){
       for (int i = 0; i < st->nocc; i++) { Cell *x = NULL; for (int z = 0; z < fd.n; z++) if (!memcmp(&fd.c[z].id, &st->occ[i], 16)) x = &fd.c[z]; if (x) x->force = 0; }      /* the prompt's own words are not what it is about */
       int routes[R_KINDS] = { 0 }; for (int z = 0; z < fd.n; z++) for (int k = 0; k < R_KINDS; k++) routes[k] += fd.c[z].routes[k];
       printf("COUPLE     %d entities respond:", fd.n); for (int k = 0; k < R_KINDS; k++) if (routes[k]) printf(" %d by %s", routes[k], RK[k]); printf("   (%.1f ms)\n", (now() - t) * 1000); }
-    /* ORIENT: the responding entities that ground the most obligations together; of those, what no more than the fan
-     * holds, the least shared first, then by force. A hub grounds nothing: it is reached, never crossed. */
-    int order_n = fd.n; int *order = malloc(sizeof(int) * (size_t)(order_n ? order_n : 1)); for (int i = 0; i < order_n; i++) order[i] = i;
-    OF = &fd; OPEN = &st->open; qsort(order, (size_t)order_n, sizeof(int), by_ground);
-    { int lead = order_n < 64 ? order_n : 64; share(st, &fd, order, lead); SHARED = 1; qsort(order, (size_t)lead, sizeof(int), by_ground); SHARED = 0; }
-    int ncentre = 0; lp_id centre[4]; int top_g = -1;
-    for (int i = 0; i < order_n && i < 64 && ncentre < 4; i++) { Cell *x = &fd.c[order[i]]; if (x->hub || x->force <= 0) continue; int g = owed(&x->support, &st->open);
-        if (top_g < 0) top_g = g; if (g < top_g || !g) break; centre[ncentre++] = x->id; }
-    if (top_g < 0) top_g = 0;
-    int ambiguous = 0; if (ncentre >= 2) { Cell *x = NULL, *y = NULL; for (int z = 0; z < fd.n; z++) { if (!memcmp(&fd.c[z].id, &centre[0], 16)) x = &fd.c[z]; if (!memcmp(&fd.c[z].id, &centre[1], 16)) y = &fd.c[z]; }
-        if (x && y) { double tie = fw.top_within > 0 ? fw.top_within : 0.05; ambiguous = x->shared == y->shared && x->force - y->force <= tie * x->force; } }
-    for (int i = 0; i < ncentre; i++) reader_want(st->rd, &centre[i]);
-    printf("ORIENT     %s: ", !ncentre ? "nothing grounds an obligation" : ambiguous ? "ambiguous" : "unique enough to execute");
-    for (int i = 0; i < ncentre && i < 6; i++) { char *tx = reader_text(st->rd, &centre[i], 40); printf("%s%s", i ? "; " : "", tx); free(tx); } printf("   (grounding %.2f of what %d obligations owe)\n", top_g / 1000.0, bit_count_and(&st->open, &st->open));
+    /* ORIENT: the joint interpretation; its bindings are the centres SCAN starts from and what a chain answers from */
+    Bind *bind = calloc((size_t)st->nocc + 1, sizeof(Bind)); int nambig = 0, nbound, ncentre = 0, capped = 0; lp_id centre[MAXOCC];
+    { double t = now(); nbound = orient(st, &fd, bind, &nambig);
+      for (int i = 0; i < st->nocc; i++) { capped |= bind[i].capped; if (bind[i].choice >= 0 && !bind[i].level) centre[ncentre++] = fd.c[bind[i].choice].id; }
+      int ambiguous_ = nambig > 0;
+      printf("ORIENT     %s", !nbound ? (capped ? "resource-bounded: no joint binding among the candidates weighed" : "inconsistent: no reading of one word is compatible with a reading of another")
+                                    : ambiguous_ ? "ambiguous" : "unique enough to execute");
+      printf("   (%.1f ms)\n", (now() - t) * 1000);
+      for (int i = 0; i < st->nocc; i++) { if (!st->composed[i] || st->role[i] <= 0) continue; char *w = reader_text(st->rd, &st->occ[i], 32);
+          if (bind[i].choice < 0) printf("           %-12s binds nothing: %d reading%s, none another word's reading holds together with\n", w, bind[i].ncand, bind[i].ncand == 1 ? "" : "s");
+          else { reader_want(st->rd, &fd.c[bind[i].choice].id); char *b = reader_text(st->rd, &fd.c[bind[i].choice].id, 60);
+                 printf("           %-12s %s %s   (held together %.2f, of %d reading%s)\n", w, bind[i].level ? "ambiguous, e.g." : "->", b, bind[i].score, bind[i].ncand, bind[i].ncand == 1 ? "" : "s"); free(b); }
+          free(w); } }
+    int ambiguous = nambig > 0;
     /* ROUTE */
     printf("ROUTE      hops %d, fan %d, k %g, lambda %g, emit at most %d, from %d centre%s\n", fw.hops, fw.fan, fw.k, fw.lambda, fw.emit, ncentre, ncentre == 1 ? "" : "s");
     /* SCAN, COMPOSE */
@@ -310,14 +387,15 @@ int cmd_turn(int argc, char **argv){
     Prop chains[8]; int nchains = 0;
     { int byrole[MAXOCC], nb = 0; for (int i = 0; i < st->nocc; i++) if ((st->open.w[i >> 6] >> (i & 63)) & 1) byrole[nb++] = i;
       for (int x = 1; x < nb; x++) { int v = byrole[x], y = x; while (y > 0 && st->role[byrole[y - 1]] < st->role[v]) { byrole[y] = byrole[y - 1]; y--; } byrole[y] = v; }
-      for (int x = 0; x < nb && nchains < 8 && fw.nalt; x++) { lp_id ans; lp_rating rt; if (!chain_from(st, &st->occ[byrole[x]], &ans, &rt)) continue;
+      for (int x = 0; x < nb && nchains < 8 && fw.nalt; x++) { lp_id ans; lp_rating rt; int o_ = byrole[x]; if (bind[o_].choice < 0 || bind[o_].level) continue; if (!chain_from(st, &st->occ[o_], &fd.c[bind[o_].choice].id, &ans, &rt)) continue;
           chains[nchains++] = (Prop){ ans, P_CHAIN, (int)(st->role[byrole[x]] * 1000 + 0.5), 0, lp_confidence(&rt, fw.k), 0, 0, byrole[x] };
           reader_want(st->rd, &ans); char *w = reader_text(st->rd, &st->occ[byrole[x]], 32), *t = reader_text(st->rd, &ans, 80); printf("           chain from %s: %s\n", w, t); free(w); free(t); }
       printf("           %d chain%s of the firmware answer a word still owed\n", nchains, nchains == 1 ? "" : "s"); }
-    if (ncentre) disposition = ambiguous ? "ambiguous" : "unresolved";
+    disposition = ambiguous ? "ambiguous: more than one reading survives, and an ambiguous orientation emits nothing" : nbound ? "unresolved" : capped ? "resource-bounded: no joint binding among the candidates weighed" : "inconsistent: no word's reading holds together with another's";
+    int budget = ambiguous ? 0 : fw.emit;                                   /* an ambiguous orientation finalizes and emits nothing (Sequence 18.12) */
     int owed0 = owed(&st->open, &st->open);                                 /* what the obligations owe at the start of the turn */
 
-    for (int step = 0; step < fw.emit; step++) {
+    for (int step = 0; step < budget; step++) {
         /* PROPOSE: what follows the active trajectory as a run in what was observed, and the answers the firmware's
          * result-bearing relations (its chains) give a word still owed. An entity the coupling merely reaches is routing
          * state: it orients and is scanned from, and is not output for being renderable. */
@@ -367,6 +445,6 @@ int cmd_turn(int argc, char **argv){
         free(f[0].ev.e); free(f[1].ev.e);
     } else printf("WITNESS    %s\n", read_only ? "a read: nothing is witnessed" : "nothing emitted: nothing to witness");
     printf("\n%llu round trips, %llu for text   total %.1f ms\n", (unsigned long long)st->trips, (unsigned long long)reader_trips(st->rd), (now() - T) * 1000);
-    field_free(&fd); free(order); free(out); reader_free(st->rd); PQfinish(st->pg); free(st);
+    field_free(&fd); free(bind); free(out); reader_free(st->rd); PQfinish(st->pg); free(st);
     return 0;
 }
