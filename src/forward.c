@@ -14,17 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { lp_id *id; int n; } Run;                                    /* a trajectory's constituents in order, runs written out */
 
-static double be_f64(const char *p){ uint64_t u = 0; for (int i = 0; i < 8; i++) u = u << 8 | (uint8_t)p[i]; double d; memcpy(&d, &u, 8); return d; }
-static Run run_of(const uint8_t *ewkb, size_t len){
-    const uint8_t *vx; size_t nv = lp_ewkb_vertices(ewkb, len, &vx); int n = 0;
-    for (size_t i = 0; i < nv; i++) { double m; memcpy(&m, vx + 32 * i + 24, 8); n += (int)lp_m_run(m); }
-    Run r = { malloc(sizeof(lp_id) * (size_t)(n ? n : 1)), 0 };
-    for (size_t i = 0; i < nv; i++) { double xyz[3], m; memcpy(xyz, vx + 32 * i, 24); memcpy(&m, vx + 32 * i + 24, 8); lp_id id; lp_xyz_to_id(xyz, &id);
-        for (uint32_t k = 0; k < lp_m_run(m); k++) r.id[r.n++] = id; }
-    return r;
-}
 static void show_claim(Reader *rd, const Claim *c, const char *lead){
     printf("%s%10.3f %8.0f %6.0f %8d   [", lead, c->conf, c->r.rating, c->r.deviation, c->matches);
     for (int p = 0; p < c->np; p++) { char *tx = reader_text(rd, &c->part[p], p == c->np - 1 ? 96 : 48); printf("%s%s", p ? ", " : "", tx); free(tx); }
@@ -73,17 +63,16 @@ int cmd_pull(int argc, char **argv){
       /* the prefixes first, as the pass walks them ("The", "The dog", ...), then every other segment by how many hold it */
       PGresult *q = db_ask(pg, "SELECT i, j, paths, runs, next, times FROM laplace_forward($1::blake3[], $2::bigint) ORDER BY (i > 1), CASE WHEN i = 1 THEN j END, paths DESC, (j - i) DESC, i, times DESC NULLS LAST", 2, v, l, f);
       if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "forward: %s", PQerrorMessage(pg)); return 1; }
-      #define BE(p_, n_) ({ uint64_t u_ = 0; for (int y_ = 0; y_ < (n_); y_++) u_ = u_ << 8 | (uint8_t)(p_)[y_]; u_; })
       int nr = PQntuples(q), shown = 0, segments = 0;
       for (int r = 0; r < nr; r++) if (!PQgetisnull(q, r, 4)) { lp_id x; memcpy(x.b, PQgetvalue(q, r, 4), 16); reader_want(rd, &x); }
       for (int i = 0; i < np; i++) reader_want(rd, &ph[i]);
-      for (int r = 0; r < nr; ) { int i = (int)BE(PQgetvalue(q, r, 0), 4), j = (int)BE(PQgetvalue(q, r, 1), 4); long paths = (long)BE(PQgetvalue(q, r, 2), 8), runs = (long)BE(PQgetvalue(q, r, 3), 8); int r0 = r;
-          while (r < nr && (int)BE(PQgetvalue(q, r, 0), 4) == i && (int)BE(PQgetvalue(q, r, 1), 4) == j) r++;
+      for (int r = 0; r < nr; ) { int i = (int)lp_be(PQgetvalue(q, r, 0), 4), j = (int)lp_be(PQgetvalue(q, r, 1), 4); long paths = (long)lp_be(PQgetvalue(q, r, 2), 8), runs = (long)lp_be(PQgetvalue(q, r, 3), 8); int r0 = r;
+          while (r < nr && (int)lp_be(PQgetvalue(q, r, 0), 4) == i && (int)lp_be(PQgetvalue(q, r, 1), 4) == j) r++;
           int words = 0; for (int k = i - 1; k < j; k++) words += table_find(&ph[k]) != NULL; if (!words || !paths) continue;
           segments++; if (shown >= 32) continue; shown++;
           printf("%-10s \"", shown == 1 ? "segments" : i == 1 ? "" : "   also"); for (int k = i - 1; k < j; k++) { char *tx = reader_text(rd, &ph[k], 0); printf("%s", tx); free(tx); }
           printf("\"   %ld held, %ld as a run", paths, runs); if (paths >= fw.fan) printf(" (the fan)");
-          int shownext = 0; for (int z = r0; z < r && shownext < 6; z++) { if (PQgetisnull(q, z, 4)) continue; long times = (long)BE(PQgetvalue(q, z, 5), 8); if (times < 2 && shownext) break;
+          int shownext = 0; for (int z = r0; z < r && shownext < 6; z++) { if (PQgetisnull(q, z, 4)) continue; long times = (long)lp_be(PQgetvalue(q, z, 5), 8); if (times < 2 && shownext) break;
               lp_id x; memcpy(x.b, PQgetvalue(q, z, 4), 16); char *tx = reader_text(rd, &x, 0); printf("%s %s×%ld", shownext ? "" : "  then", strcmp(tx, " ") ? tx : "␠", times); free(tx); shownext++; }
           printf("\n"); }
       printf("%-10s %d segments observed of %d   (%.1f ms)\n", "", segments, np * (np + 1) / 2, (now() - t) * 1000);
@@ -92,8 +81,8 @@ int cmd_pull(int argc, char **argv){
        * observation is the object, the object when it is the subject, never the predicate) pulls back as hard as the
        * strand's standing, summed over every strand that reaches it. What pulls back hardest is what the prompt is about. */
       t = now(); lp_id *obs = NULL; int nobs = 0, cobs = 0;
-      for (int r = 0; r < nr; ) { int i = (int)BE(PQgetvalue(q, r, 0), 4), j = (int)BE(PQgetvalue(q, r, 1), 4); long runs = (long)BE(PQgetvalue(q, r, 3), 8);
-          while (r < nr && (int)BE(PQgetvalue(q, r, 0), 4) == i && (int)BE(PQgetvalue(q, r, 1), 4) == j) r++;
+      for (int r = 0; r < nr; ) { int i = (int)lp_be(PQgetvalue(q, r, 0), 4), j = (int)lp_be(PQgetvalue(q, r, 1), 4); long runs = (long)lp_be(PQgetvalue(q, r, 3), 8);
+          while (r < nr && (int)lp_be(PQgetvalue(q, r, 0), 4) == i && (int)lp_be(PQgetvalue(q, r, 1), 4) == j) r++;
           int words = 0; for (int k = i - 1; k < j; k++) words += table_find(&ph[k]) != NULL; if (words < 2 || !runs || nobs >= 2048) continue;
           uint8_t *sb = malloc(20 + 20 * (size_t)(j - i + 1)); size_t sl = ids_param(sb, ph + i - 1, (uint32_t)(j - i + 1)); const char *sv[1] = { (const char *)sb }; int sll[1] = { (int)sl }, sf[1] = { 1 };
           PGresult *o = db_ask(pg, "SELECT entity FROM laplace_containers($1::blake3[], '{}'::smallint[]) WHERE NOT (mask ? 0::smallint) LIMIT 128", 1, sv, sll, sf);
@@ -108,8 +97,8 @@ int cmd_pull(int argc, char **argv){
           int rl; const char *ov[3] = { (const char *)ob, fan2, refuse_param(&rl) }; int oll[3] = { (int)ol, (int)strlen(fan2), rl }, of_[3] = { 1, 0, 1 };
           PGresult *o = db_ask(pg, "SELECT i, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, '{0}'::smallint[], $3::blake3[])", 3, ov, oll, of_);     /* one call: every strand of every observation */
           if (PQresultStatus(o) != PGRES_TUPLES_OK) { fprintf(stderr, "fold: %s", PQerrorMessage(pg)); return 1; }
-          for (int z = 0; z < PQntuples(o); z++) { int oi = (int)BE(PQgetvalue(o, z, 0), 8) - 1; if (oi < 0 || oi >= nobs) continue;
-              Run rn = run_of((const uint8_t *)PQgetvalue(o, z, 1), (size_t)PQgetlength(o, z, 1)); lp_rating rt = { be_f64(PQgetvalue(o, z, 2)), be_f64(PQgetvalue(o, z, 3)), be_f64(PQgetvalue(o, z, 4)) };
+          for (int z = 0; z < PQntuples(o); z++) { int oi = (int)lp_be(PQgetvalue(o, z, 0), 8) - 1; if (oi < 0 || oi >= nobs) continue;
+              Run rn = run_of((const uint8_t *)PQgetvalue(o, z, 1), (size_t)PQgetlength(o, z, 1)); lp_rating rt = { lp_be_f64(PQgetvalue(o, z, 2)), lp_be_f64(PQgetvalue(o, z, 3)), lp_be_f64(PQgetvalue(o, z, 4)) };
               int at = -1; for (int k = 0; k < rn.n && at < 0; k++) if (!memcmp(&rn.id[k], &obs[oi], 16)) at = k;
               int other = rn.n == 2 ? 1 - at : rn.n >= 3 && at == 0 ? rn.n - 1 : rn.n >= 3 && at == rn.n - 1 ? 0 : -1;        /* the other end; an observation that is the predicate pulls nothing */
               int refused_ = 0; for (int k = 1; k + 1 < rn.n && !refused_; k++) for (int z = 0; z < fw.nrefuse_predicate; z++) if (!memcmp(&rn.id[k], &refuse[z], 16)) refused_ = 1;

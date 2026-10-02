@@ -53,7 +53,6 @@ int cmd_text(int argc, char **argv){
 /* ---- the claims that hold an entity */
 /* Claim, MAXPARTS: engine.h */
 
-static double be_f64(const char *p){ uint64_t u = 0; for (int i = 0; i < 8; i++) u = u << 8 | (uint8_t)p[i]; double d; memcpy(&d, &u, 8); return d; }
 int claim_by_conf(const void *a, const void *b){ double x = ((const Claim *)a)->conf, y = ((const Claim *)b)->conf; return x < y ? 1 : x > y ? -1 : memcmp(a, b, 16); }
 
 /* The predicates the pass's firmware refuses, as the blake3[] every claim read passes: a restriction is applied before
@@ -84,11 +83,7 @@ Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, doub
     Claim *c = malloc(sizeof(Claim) * (size_t)(rows ? rows : 1)); int m = 0;
     for (int j = 0; j < rows; j++) {
         Claim *x = &c[m]; memcpy(x->id.b, PQgetvalue(q, j, 0), 16); x->np = 0; x->position = 0;
-        const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1), &vx);
-        for (size_t i = 0; i < nv; i++) {
-            double xyz[3], run; memcpy(xyz, vx + 32 * i, 24); memcpy(&run, vx + 32 * i + 24, 8); lp_id id; lp_xyz_to_id(xyz, &id);
-            for (int r = 0; r < (int)lp_m_run(run) && x->np < MAXPARTS; r++) x->part[x->np++] = id;
-        }
+        size_t np_ = lp_path_ids((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1), x->part, MAXPARTS); x->np = np_ < MAXPARTS ? (int)np_ : MAXPARTS;
         if (x->np < 2) continue;
         /* in its place: the first part given is the claim's first, the last its last, and the middle one between them */
         int fits = 1, last = x->np - 1;
@@ -96,7 +91,7 @@ Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, doub
         if (have[2] > 1 && memcmp(&x->part[last], &part[2], 16)) fits = 0;
         if (have[1] > 1) { int in = 0; for (int i = 1; i < last || (i == 1 && x->np == 2 && i <= last); i++) if (!memcmp(&x->part[i], &part[1], 16)) in = 1; if (!in) fits = 0; }
         if (!fits) continue;
-        x->r = (lp_rating){ be_f64(PQgetvalue(q, j, 2)), be_f64(PQgetvalue(q, j, 3)), be_f64(PQgetvalue(q, j, 4)) };
+        x->r = (lp_rating){ lp_be_f64(PQgetvalue(q, j, 2)), lp_be_f64(PQgetvalue(q, j, 3)), lp_be_f64(PQgetvalue(q, j, 4)) };
         uint32_t mb; memcpy(&mb, PQgetvalue(q, j, 5), 4); x->matches = (int)ntohl(mb);
         x->conf = lp_confidence(&x->r, k); m++;
     }
@@ -133,10 +128,11 @@ void positions_of(PGconn *pg, Claim *c, int n){
         if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "records: %s", PQerrorMessage(pg)); exit(1); }
         for (int j = 0; j < PQntuples(r); j++) {
             uint64_t o; memcpy(&o, PQgetvalue(r, j, 0), 8); int i = (int)(__builtin_bswap64(o) - 1); if (i < 0 || i >= n || (c[i].position && c[i].position < (1 << 20))) { if (i < 0 || i >= n) continue; }
-            const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)PQgetvalue(r, j, 1), (size_t)PQgetlength(r, j, 1), &vx); int at = 0, place = 0;
-            { double h3[3]; lp_id head; if (!nv) continue; memcpy(h3, vx, 24); lp_xyz_to_id(h3, &head); if (memcmp(&head, &c[i].part[0], 16)) continue; }   /* the trajectory under the claim's own subject: the order its witness gave */
-            for (size_t z = 0; z < nv && !place; z++) { double xyz[3], run; memcpy(xyz, vx + 32 * z, 24); memcpy(&run, vx + 32 * z + 24, 8); lp_id id; lp_xyz_to_id(xyz, &id);
-                if (!memcmp(&id, &c[i].id, 16)) place = at + 1; at += (int)lp_m_run(run); }
+            const uint8_t *pb = (const uint8_t *)PQgetvalue(r, j, 1); size_t pl = (size_t)PQgetlength(r, j, 1), nv = lp_path_vertices(pb, pl, NULL, 0); int at = 0, place = 0;
+            if (!nv) continue; lp_vertex *vt = malloc(sizeof(lp_vertex) * nv); lp_path_vertices(pb, pl, vt, nv);
+            if (memcmp(&vt[0].id, &c[i].part[0], 16)) { free(vt); continue; }   /* the trajectory under the claim's own subject: the order its witness gave */
+            for (size_t z = 0; z < nv && !place; z++) { if (!memcmp(&vt[z].id, &c[i].id, 16)) place = at + 1; at += (int)vt[z].run; }
+            free(vt);
             if (place && (!c[i].position || place < c[i].position)) c[i].position = place;
         }
         PQclear(r);
@@ -322,14 +318,7 @@ int cmd_translate(int argc, char **argv){
 typedef struct { lp_frontier *f; lp_id origin; } Side;
 typedef struct { uint64_t trips, expanded, claims, hubs; } Work;
 
-static int decode_claim(const char *path, int len, lp_id part[3]){
-    const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)path, (size_t)len, &vx); int np = 0;
-    for (size_t i = 0; i < nv; i++) {
-        double xyz[3], run; memcpy(xyz, vx + 32 * i, 24); memcpy(&run, vx + 32 * i + 24, 8); lp_id id; lp_xyz_to_id(xyz, &id);
-        for (int r = 0; r < (int)lp_m_run(run); r++) { if (np < 3) part[np] = id; np++; }
-    }
-    return np;
-}
+static int decode_claim(const char *path, int len, lp_id part[3]){ return (int)lp_path_ids((const uint8_t *)path, (size_t)len, part, 3); }
 
 /* Close up to batch of the side's nearest open entities and reach across their claims. Returns how many it closed;
  * closed[] receives them. */
@@ -356,7 +345,7 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
         else if (!memcmp(&part[2], &at->id, 16)) other = &part[0];
         else continue;                                                                     /* held as the predicate: it names the tie */
         if (!memcmp(other, &at->id, 16)) continue;
-        lp_rating r = { be_f64(PQgetvalue(q, j, 3)), be_f64(PQgetvalue(q, j, 4)), be_f64(PQgetvalue(q, j, 5)) };
+        lp_rating r = { lp_be_f64(PQgetvalue(q, j, 3)), lp_be_f64(PQgetvalue(q, j, 4)), lp_be_f64(PQgetvalue(q, j, 5)) };
         memcpy(claim.b, PQgetvalue(q, j, 1), 16); w->claims++;
         double sw = strand_weight(way, wids, part, 3); if (sw <= 0) continue;                 /* a kind weighed at nothing is not crossed */
         lp_frontier_reach(sd->f, other, &at->id, &claim, at->cost + lp_cost(&r, k, per_hop) - log(sw), 0, at->hops + 1);

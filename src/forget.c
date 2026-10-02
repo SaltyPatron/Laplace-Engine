@@ -146,10 +146,12 @@ static uint64_t stream(PGconn *c, const char *sql, void (*row)(PGresult *, Batch
 }
 static void row_path(PGresult *r, Batch *b){
     lp_id e; memcpy(e.b, PQgetvalue(r, 0, 0), 16); batch_put(b, &e, 1);
-    const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)PQgetvalue(r, 0, 1), (size_t)PQgetlength(r, 0, 1), &vx);
+    const uint8_t *pb = (const uint8_t *)PQgetvalue(r, 0, 1); size_t pl = (size_t)PQgetlength(r, 0, 1), nv = lp_path_vertices(pb, pl, NULL, 0);
+    lp_vertex *vt = malloc(sizeof(lp_vertex) * (nv ? nv : 1)); lp_path_vertices(pb, pl, vt, nv);
     int file = 0; lp_id content; uint8_t curated = 0; memset(&content, 0, sizeof content);
-    for (size_t i = 0; i < nv; i++) { double xyz[3], m; memcpy(xyz, vx + 32 * i, 24); memcpy(&m, vx + 32 * i + 24, 8); lp_id id; lp_xyz_to_id(xyz, &id); batch_put(b, &id, 0);
-        uint32_t said = lp_m_said(m); if (said == LP_SAID_METADATA) file = 1; else if (file) { content = id; curated = said == LP_SAID_RECORD || said == LP_SAID_CLAIM; } }
+    for (size_t i = 0; i < nv; i++) { batch_put(b, &vt[i].id, 0);
+        uint32_t said = vt[i].said; if (said == LP_SAID_METADATA) file = 1; else if (file) { content = vt[i].id; curated = said == LP_SAID_RECORD || said == LP_SAID_CLAIM; } }
+    free(vt);
     if (file) {                                                                /* a file: a trunk over its metadata and its content */
         batch_put(b, &e, 3);
         pthread_mutex_lock(&kept_mu); if (nkept == ckept) { ckept = ckept ? ckept * 2 : 1024; kept = xrealloc(kept, ckept * sizeof(Kept)); }
@@ -159,19 +161,22 @@ static void row_path(PGresult *r, Batch *b){
 static void row_root(PGresult *r, Batch *b){ for (int f = 0; f < PQnfields(r); f++) if (!PQgetisnull(r, 0, f)) { lp_id id; memcpy(id.b, PQgetvalue(r, 0, f), 16); batch_put(b, &id, 2); } }
 /* A curated file's content: whether any of what it witnessed is still witnessed. */
 static void each_content(PGresult *r, int j, void *into){
-    const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)PQgetvalue(r, j, 1), (size_t)PQgetlength(r, j, 1), &vx); int still = 0;
-    for (size_t i = 0; i < nv && !still; i++) { double xyz[3], m; memcpy(xyz, vx + 32 * i, 24); memcpy(&m, vx + 32 * i + 24, 8); if (!lp_m_said(m)) continue;
-        lp_id id; lp_xyz_to_id(xyz, &id); Count *c = count_of(&cs[id.b[0]], &id, 0); still = c && c->root; }
+    const uint8_t *pb = (const uint8_t *)PQgetvalue(r, j, 1); size_t pl = (size_t)PQgetlength(r, j, 1), nv = lp_path_vertices(pb, pl, NULL, 0); int still = 0;
+    lp_vertex *vt = malloc(sizeof(lp_vertex) * (nv ? nv : 1)); lp_path_vertices(pb, pl, vt, nv);
+    for (size_t i = 0; i < nv && !still; i++) { if (!vt[i].said) continue;
+        Count *c = count_of(&cs[vt[i].id.b[0]], &vt[i].id, 0); still = c && c->root; }
+    free(vt);
     if (still) { lp_id id; memcpy(id.b, PQgetvalue(r, j, 0), 16); set_add(into, &id); }
 }
 /* What an entity that is going held: each counted down; whatever reaches nothing goes next. */
 static void each_release(PGresult *r, int j, void *into){
-    const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)PQgetvalue(r, j, 0), (size_t)PQgetlength(r, j, 0), &vx);
+    const uint8_t *pb = (const uint8_t *)PQgetvalue(r, j, 0); size_t pl = (size_t)PQgetlength(r, j, 0), nv = lp_path_vertices(pb, pl, NULL, 0);
+    lp_vertex *vt = malloc(sizeof(lp_vertex) * (nv ? nv : 1)); lp_path_vertices(pb, pl, vt, nv);
     for (size_t i = 0; i < nv; i++) {
-        double xyz[3]; memcpy(xyz, vx + 32 * i, 24); lp_id id; lp_xyz_to_id(xyz, &id);
-        Count *c = count_of(&cs[id.b[0]], &id, 0); if (!c || !c->held) continue;
-        if (!--c->held && c->entity && !c->root) set_add(into, &id);
+        Count *c = count_of(&cs[vt[i].id.b[0]], &vt[i].id, 0); if (!c || !c->held) continue;
+        if (!--c->held && c->entity && !c->root) set_add(into, &vt[i].id);
     }
+    free(vt);
 }
 static uint64_t sweep(PGconn **pg, int npg, int dry){
     double T = now(), t = now(); for (int i = 0; i < 256; i++) pthread_mutex_init(&cs[i].mu, NULL);

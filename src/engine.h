@@ -213,6 +213,8 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
 /* ---- reading the database: set-based fetches, decoded here */
 extern uint32_t id_oid;                                               /* the database's own number for the type of an ID, blake3 */
 size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n);         /* a binary blake3[] parameter; out holds 20 + 20 n bytes */
+typedef struct { lp_id *id; int n; } Run;                               /* a trajectory's constituents in order, runs written out */
+Run run_of(const uint8_t *ewkb, size_t len);                            /* ... from a path as the database sends it (lp_path_ids) */
 void   refuse_named(const Firmware *fw);                                 /* the predicates this pass's firmware refuses */
 const char *refuse_param(int *len);                                      /* ... as the blake3[] every claim read passes */
 void   id_text(const lp_id *id, char out[33]);                        /* 32 hexadecimal digits */

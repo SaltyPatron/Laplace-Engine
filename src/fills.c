@@ -39,7 +39,7 @@ static double occ_of(DNode *d, int i){
     d[i].occ = o; d[i].state = 2; return o;
 }
 /* EWKB of a path (PostGIS binary output) → its vertices. */
-static size_t vertices(const uint8_t *ewkb, size_t len, const uint8_t **v){ return lp_ewkb_vertices(ewkb, len, v); }
+
 
 typedef struct { lp_id id; double occ; uint64_t paths; } Acc;
 
@@ -86,7 +86,7 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
     lp_id *front = malloc(sizeof(lp_id) * (PQntuples(r) + 1)); int nf = 0;
     for (int i = 0; i < PQntuples(r); i++) {
         const uint8_t *e = (const uint8_t *)PQgetvalue(r, i, 1); size_t el = (size_t)PQgetlength(r, i, 1);
-        const uint8_t *vx; size_t nv = vertices(e, el, &vx); size_t cap = nv * 4 + 16; lp_id *out = malloc(sizeof(lp_id) * cap);
+        const uint8_t *vx; size_t nv = lp_ewkb_vertices(e, el, &vx); size_t cap = nv * 4 + 16; lp_id *out = malloc(sizeof(lp_id) * cap);
         size_t k = lp_follows(e, el, ph, (size_t)np, out, cap);
         if (!k) { free(out); continue; }
         lp_id eid; memcpy(eid.b, PQgetvalue(r, i, 0), 16);

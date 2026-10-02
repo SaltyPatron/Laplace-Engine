@@ -45,9 +45,9 @@ static const double *ROLE;
 static int owed(const Bits *support, const Bits *open){ double s = 0; for (int w = 0; w < MAXOCC / 64; w++) { uint64_t m = support->w[w] & open->w[w]; while (m) { int b = __builtin_ctzll(m); s += ROLE ? ROLE[w * 64 + b] : 1; m &= m - 1; } } return (int)(s * 1000 + 0.5); }
 static void bit_clear(Bits *a, const Bits *b){ for (int i = 0; i < MAXOCC / 64; i++) a->w[i] &= ~b->w[i]; }
 
-enum { R_CLAIM, R_FOLLOWS, R_DISCOURSE, R_SCAN, R_KINDS };
-static const char *RK[R_KINDS] = { "strand", "follows", "discourse", "reached" };
-typedef struct { lp_id id; double force, cost; Bits support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared; } Cell;     /* shared: how many strands hold it, up to the fan (-1: not read) */
+enum { R_CLAIM, R_FOLLOWS, R_DISCOURSE, R_SCAN, R_CONTAIN, R_KINDS };
+static const char *RK[R_KINDS] = { "strand", "follows", "discourse", "reached", "containment" };
+typedef struct { lp_id id; double force, cost; Bits support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, tier; } Cell;     /* shared: how many strands hold it, up to the fan (-1: not read) */
 typedef struct { Cell *c; int n, cap; uint32_t *map; int mcap; } Field;
 static uint64_t k64(const lp_id *id){ uint64_t k; memcpy(&k, id->b + 5, 8); return k; }
 static Cell *cell(Field *f, const lp_id *id){
@@ -60,17 +60,6 @@ static Cell *cell(Field *f, const lp_id *id){
 }
 static void field_free(Field *f){ free(f->c); free(f->map); memset(f, 0, sizeof *f); }
 
-static double be_f64(const char *p){ uint64_t u = 0; for (int i = 0; i < 8; i++) u = u << 8 | (uint8_t)p[i]; double d; memcpy(&d, &u, 8); return d; }
-static uint64_t be(const char *p, int n){ uint64_t u = 0; for (int i = 0; i < n; i++) u = u << 8 | (uint8_t)p[i]; return u; }
-typedef struct { lp_id *id; int n; } Run;
-static Run run_of(const uint8_t *ewkb, size_t len){
-    const uint8_t *vx; size_t nv = lp_ewkb_vertices(ewkb, len, &vx); int n = 0;
-    for (size_t i = 0; i < nv; i++) { double m; memcpy(&m, vx + 32 * i + 24, 8); n += (int)lp_m_run(m); }
-    Run r = { malloc(sizeof(lp_id) * (size_t)(n ? n : 1)), 0 };
-    for (size_t i = 0; i < nv; i++) { double xyz[3], m; memcpy(xyz, vx + 32 * i, 24); memcpy(&m, vx + 32 * i + 24, 8); lp_id id; lp_xyz_to_id(xyz, &id);
-        for (uint32_t k = 0; k < lp_m_run(m); k++) r.id[r.n++] = id; }
-    return r;
-}
 /* The constituents of a composition, in order, its runs written out; an atom or an unknown ID is itself. */
 static int constituents(const lp_id *id, lp_id *out, int cap){
     Node *x = table_find(id); if (!x) { out[0] = *id; return 1; }
@@ -120,10 +109,10 @@ static void couple_strands(State *st, Field *fd, const lp_id *ids, int n, int oc
     int rl; const char *v[4] = { (const char *)ab, fan, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
     PGresult *q = ask(st, "SELECT i, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "couple: %s", PQerrorMessage(st->pg)); exit(1); }
-    int *held = calloc((size_t)n, sizeof(int)); for (int r = 0; r < PQntuples(q); r++) { int i = (int)be(PQgetvalue(q, r, 0), 8) - 1; if (i >= 0 && i < n) held[i]++; }
-    for (int r = 0; r < PQntuples(q); r++) { int i = (int)be(PQgetvalue(q, r, 0), 8) - 1; if (i < 0 || i >= n) continue;
+    int *held = calloc((size_t)n, sizeof(int)); for (int r = 0; r < PQntuples(q); r++) { int i = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (i >= 0 && i < n) held[i]++; }
+    for (int r = 0; r < PQntuples(q); r++) { int i = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (i < 0 || i >= n) continue;
         Run rn = run_of((const uint8_t *)PQgetvalue(q, r, 1), (size_t)PQgetlength(q, r, 1)); if (rn.n < 2) { free(rn.id); continue; }
-        lp_rating rt = { be_f64(PQgetvalue(q, r, 2)), be_f64(PQgetvalue(q, r, 3)), be_f64(PQgetvalue(q, r, 4)) };
+        lp_rating rt = { lp_be_f64(PQgetvalue(q, r, 2)), lp_be_f64(PQgetvalue(q, r, 3)), lp_be_f64(PQgetvalue(q, r, 4)) };
         int at = -1; for (int k = 0; k < rn.n && at < 0; k++) if (!memcmp(&rn.id[k], &ids[i], 16)) at = k;
         int other = rn.n == 2 ? 1 - at : at == 0 ? rn.n - 1 : at == rn.n - 1 ? 0 : -1;               /* held as the predicate: it names the tie, it reaches nothing */
         if (at < 0 || other < 0 || refused_pred(st, rn.id, rn.n)) { free(rn.id); continue; }
@@ -135,6 +124,103 @@ static void couple_strands(State *st, Field *fd, const lp_id *ids, int n, int oc
         free(rn.id); }
     PQclear(q); free(ab); free(held);
 }
+/* COUPLE's containment channel (Sequence 19.3, 15.1): what holds each occurrence, the definitions, examples and texts it
+ * stands in, through the container index, at most the fan of them an occurrence (one holding more is a hub word: its
+ * containers are reached, the fan of them). A container is a segment the pass can return (Sequence 20.7); one holding
+ * several of the prompt's occurrences is where they meet, and grounds them together. Claims are the other channel. */
+static void couple_containers(State *st, Field *fd, const lp_id *ids, int n, const int *occ_of){
+    if (!n) return; const Firmware *fw = st->fw;
+    uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n); char fan[24]; snprintf(fan, sizeof fan, "%d", fw->fan);
+    const char *v[2] = { (const char *)ab, fan }; int l[2] = { (int)al, (int)strlen(fan) }, f[2] = { 1, 0 };
+    PGresult *q = ask(st, "SELECT u.i, k.entity, k.tier FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i), "
+                          "LATERAL (SELECT c.entity, c.tier FROM laplace_containers(ARRAY[u.id], '{}'::smallint[]) c WHERE NOT (c.mask ? 0::smallint) LIMIT $2::bigint) k", 2, v, l, f);
+    if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(st->pg)); exit(1); }
+    for (int r = 0; r < PQntuples(q); r++) { int i = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (i < 0 || i >= n) continue;
+        int occ = occ_of ? occ_of[i] : -1; double pull = occ >= 0 && occ < st->nocc ? st->role[occ] : 0.5;
+        lp_id id; memcpy(id.b, PQgetvalue(q, r, 1), 16); if (!memcmp(&id, &st->prompt, 16)) continue; Cell *x = cell(fd, &id);
+        x->segment = 1; x->tier = (int)lp_be(PQgetvalue(q, r, 2), 2); x->force += pull; x->routes[R_CONTAIN]++; if (occ >= 0) bit_set(&x->support, occ); }
+    PQclear(q); free(ab);
+}
+
+/* ---- the shape channel (Sequence 19.6, 19.7; firmware 18.11). A trajectory's realized curve is its vertices unpacked,
+ * each child's real 4D coordinate in order, runs written out: a packed path's X/Y/Z are IDs, never positions. The
+ * candidates are nominated by both indexes: the GIN (what holds the prompt's words: exact) and the GiST (what lies
+ * nearest the prompt's own coordinate: approximate, it nominates and never decides); the firmware's shape measure
+ * decides among them, natively. */
+static int id_cmp(const void *a, const void *b){ return memcmp(a, b, 16); }
+typedef struct { lp_id id; double xyzm[4]; int has; } Coord;
+static int coord_cmp(const void *a, const void *b){ return memcmp(a, b, 16); }
+static void coords_of(State *st, Coord *c, int n){                         /* every ID's real coordinate: one read */
+    if (!n) return; qsort(c, (size_t)n, sizeof(Coord), coord_cmp);
+    lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) ids[i] = c[i].id;
+    for (int b0 = 0; b0 < n; b0 += 4096) { int m = n - b0 < 4096 ? n - b0 : 4096;
+        uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(ab, ids + b0, (uint32_t)m);
+        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+        PGresult *q = ask(st, "SELECT e.id, ST_X(e.coord), ST_Y(e.coord), ST_Z(e.coord), ST_M(e.coord) FROM entity e WHERE e.id = ANY($1::blake3[])", 1, v, l, f);
+        if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "coordinates: %s", PQerrorMessage(st->pg)); exit(1); }
+        for (int r = 0; r < PQntuples(q); r++) { Coord key; memcpy(key.id.b, PQgetvalue(q, r, 0), 16); Coord *x = bsearch(&key, c, (size_t)n, sizeof(Coord), coord_cmp);
+            if (x) { for (int k = 0; k < 4; k++) x->xyzm[k] = lp_be_f64(PQgetvalue(q, r, 1 + k)); x->has = 1; } }
+        PQclear(q); free(ab); }
+    free(ids);
+}
+static double shape_of(const Firmware *fw, const double *a, size_t na, const double *b, size_t nb){
+    switch (fw->shape) {
+    case FW_OUTLIERS: return lp_frechet4_outliers(a, na, b, nb, (unsigned)fw->shape_n);
+    case FW_DTW: { size_t s; double d = lp_dtw4(a, na, b, nb, &s); return s ? d / (double)s : d; }
+    case FW_EDR: return (double)lp_edr4(a, na, b, nb, fw->shape_n);
+    default: return lp_frechet4(a, na, b, nb); }
+}
+typedef struct { lp_id id; double d; lp_id *v; int nv; } Curve;
+static int curve_by_d(const void *a, const void *b){ double x = ((const Curve *)a)->d, y = ((const Curve *)b)->d; return x < y ? -1 : x > y; }
+/* The curves nearest the prompt's: up to keep of them, nearest first. *nominated: how many the indexes nominated. */
+static int shape_near(State *st, Field *fd, Curve *out, int keep, int *nominated){
+    const Firmware *fw = st->fw; *nominated = 0;
+    /* the prompt's curve, from its occurrences' real coordinates */
+    Coord *pc = malloc(sizeof(Coord) * (size_t)st->nocc); for (int i = 0; i < st->nocc; i++) { memset(&pc[i], 0, sizeof pc[i]); pc[i].id = st->occ[i]; }
+    coords_of(st, pc, st->nocc);
+    double *pa = malloc(sizeof(double) * 4 * (size_t)st->nocc); int npa = 0;
+    for (int i = 0; i < st->nocc; i++) { Coord key; key.id = st->occ[i]; Coord *x = bsearch(&key, pc, (size_t)st->nocc, sizeof(Coord), coord_cmp); if (x && x->has) memcpy(pa + 4 * npa++, x->xyzm, 32); }
+    free(pc); if (npa < 2) { free(pa); return 0; }
+    double cen[4] = { 0 }; for (int i = 0; i < npa; i++) for (int k = 0; k < 4; k++) cen[k] += pa[4 * i + k] / npa;
+
+    /* nominated: the texts holding the prompt's words (GIN, read in COUPLE) and the entities nearest its centroid (GiST) */
+    lp_id *cand = NULL; int nc = 0, cc = 0;
+    for (int z = 0; z < fd->n; z++) if (fd->c[z].segment) { if (nc == cc) { cc = cc ? cc * 2 : 1024; cand = xrealloc(cand, sizeof(lp_id) * (size_t)cc); } cand[nc++] = fd->c[z].id; }
+    { char pt[160]; snprintf(pt, sizeof pt, "SRID=0;POINT ZM(%.17g %.17g %.17g %.17g)", cen[0], cen[1], cen[2], cen[3]); char lim[16]; snprintf(lim, sizeof lim, "%d", fw->fan < 1024 ? fw->fan : 1024);
+      const char *v[2] = { pt, lim }; int l[2] = { 0, 0 }, f[2] = { 0, 0 };
+      PGresult *q = ask(st, "SELECT e.id FROM entity e WHERE e.tier >= 3 ORDER BY e.coord <<->> $1::geometry LIMIT $2::bigint", 2, v, l, f);
+      if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "nearest: %s", PQerrorMessage(st->pg)); exit(1); }
+      for (int r = 0; r < PQntuples(q); r++) { if (nc == cc) { cc = cc ? cc * 2 : 1024; cand = xrealloc(cand, sizeof(lp_id) * (size_t)cc); } memcpy(cand[nc++].b, PQgetvalue(q, r, 0), 16); }
+      PQclear(q); }
+
+    if (nc) { qsort(cand, (size_t)nc, 16, id_cmp); int u = 0; for (int i = 0; i < nc; i++) if (!u || memcmp(&cand[i], &cand[u - 1], 16)) cand[u++] = cand[i]; nc = u; }
+    *nominated = nc;
+    /* their trajectories, realized: the paths, then every child's coordinate in one read */
+    Curve *cv = calloc((size_t)(nc ? nc : 1), sizeof(Curve)); int ncv = 0;
+    for (int b0 = 0; b0 < nc; b0 += 1024) { int m = nc - b0 < 1024 ? nc - b0 : 1024;
+        uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(ab, cand + b0, (uint32_t)m); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+        PGresult *q = ask(st, "SELECT entity, path FROM laplace_paths($1::blake3[])", 1, v, l, f);
+        if (PQresultStatus(q) == PGRES_TUPLES_OK) for (int r = 0; r < PQntuples(q); r++) {
+            Run rn = run_of((const uint8_t *)PQgetvalue(q, r, 1), (size_t)PQgetlength(q, r, 1)); if (rn.n < 2 || rn.n > 4 * MAXOCC) { free(rn.id); continue; }
+            memcpy(cv[ncv].id.b, PQgetvalue(q, r, 0), 16); cv[ncv].v = rn.id; cv[ncv].nv = rn.n; ncv++; }
+        PQclear(q); free(ab); }
+    free(cand);
+    int nall = 0; for (int i = 0; i < ncv; i++) nall += cv[i].nv;
+    Coord *cc_ = malloc(sizeof(Coord) * (size_t)(nall ? nall : 1)); int ncc = 0;
+    for (int i = 0; i < ncv; i++) for (int k = 0; k < cv[i].nv; k++) { memset(&cc_[ncc], 0, sizeof(Coord)); cc_[ncc++].id = cv[i].v[k]; }
+    qsort(cc_, (size_t)ncc, sizeof(Coord), coord_cmp); { int u = 0; for (int i = 0; i < ncc; i++) if (!u || memcmp(&cc_[i], &cc_[u - 1], 16)) cc_[u++] = cc_[i]; ncc = u; }
+    coords_of(st, cc_, ncc);
+    /* the measure, natively, on every core */
+    #pragma omp parallel for schedule(dynamic, 16)
+    for (int i = 0; i < ncv; i++) { double *b = malloc(sizeof(double) * 4 * (size_t)cv[i].nv); int nb = 0;
+        for (int k = 0; k < cv[i].nv; k++) { Coord key; key.id = cv[i].v[k]; Coord *x = bsearch(&key, cc_, (size_t)ncc, sizeof(Coord), coord_cmp); if (x && x->has) memcpy(b + 4 * nb++, x->xyzm, 32); }
+        cv[i].d = nb >= 2 ? shape_of(fw, pa, (size_t)npa, b, (size_t)nb) : INFINITY; free(b); }
+    qsort(cv, (size_t)ncv, sizeof(Curve), curve_by_d);
+    int m = ncv < keep ? ncv : keep; for (int i = 0; i < m; i++) out[i] = cv[i];
+    for (int i = m; i < ncv; i++) free(cv[i].v); free(cv); free(cc_); free(pa);
+    return m;
+}
+
 /* What follows the end of the active trajectory, as a run, in what was observed: the longest observed suffix first. */
 typedef struct { lp_id id; long times; int len; } Next;
 static int follows(State *st, Next *out, int cap){
@@ -144,9 +230,9 @@ static int follows(State *st, Next *out, int cap){
     PGresult *q = ask(st, "SELECT i, j, next, times FROM laplace_forward($1::blake3[], $2::bigint) WHERE j = array_length($1::blake3[], 1) AND next IS NOT NULL ORDER BY (j - i) DESC, times DESC", 2, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "follows: %s", PQerrorMessage(st->pg)); exit(1); }
     int m = 0, best = -1;
-    for (int r = 0; r < PQntuples(q) && m < cap; r++) { int i = (int)be(PQgetvalue(q, r, 0), 4), j = (int)be(PQgetvalue(q, r, 1), 4), len = j - i + 1;
+    for (int r = 0; r < PQntuples(q) && m < cap; r++) { int i = (int)lp_be(PQgetvalue(q, r, 0), 4), j = (int)lp_be(PQgetvalue(q, r, 1), 4), len = j - i + 1;
         if (best < 0) best = len; if (len < best) break;                                           /* the longest run observed decides; shorter ones are not consulted once it answers */
-        memcpy(out[m].id.b, PQgetvalue(q, r, 2), 16); out[m].times = (long)be(PQgetvalue(q, r, 3), 8); out[m].len = len; m++; }
+        memcpy(out[m].id.b, PQgetvalue(q, r, 2), 16); out[m].times = (long)lp_be(PQgetvalue(q, r, 3), 8); out[m].len = len; m++; }
     PQclear(q); free(ab); return m;
 }
 
@@ -157,7 +243,7 @@ static void share(State *st, Field *fd, const int *idx, int n){
     uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n); char fan[24]; snprintf(fan, sizeof fan, "%d", st->fw->fan + 1);
     int rl; const char *v[4] = { (const char *)ab, fan, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
     PGresult *q = ask(st, "SELECT i FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
-    if (PQresultStatus(q) == PGRES_TUPLES_OK) for (int r = 0; r < PQntuples(q); r++) { int i = (int)be(PQgetvalue(q, r, 0), 8) - 1; if (i >= 0 && i < n) fd->c[idx[i]].shared++; }
+    if (PQresultStatus(q) == PGRES_TUPLES_OK) for (int r = 0; r < PQntuples(q); r++) { int i = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (i >= 0 && i < n) fd->c[idx[i]].shared++; }
     for (int i = 0; i < n; i++) if (fd->c[idx[i]].shared > st->fw->fan) fd->c[idx[i]].hub = 1;
     PQclear(q); free(ab); free(ids);
 }
@@ -198,13 +284,13 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
         int rl; const char *v[4] = { (const char *)ab, fan, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
         PGresult *q = ask(st, "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
         if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "scan: %s", PQerrorMessage(st->pg)); exit(1); }
-        int held[64] = { 0 }; for (int r = 0; r < PQntuples(q); r++) { int e = (int)be(PQgetvalue(q, r, 0), 8) - 1; if (e >= 0 && e < m) held[e]++; }
-        for (int r = 0; r < PQntuples(q); r++) { int e = (int)be(PQgetvalue(q, r, 0), 8) - 1; if (e < 0 || e >= m || held[e] > fw->fan) continue;
+        int held[64] = { 0 }; for (int r = 0; r < PQntuples(q); r++) { int e = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (e >= 0 && e < m) held[e]++; }
+        for (int r = 0; r < PQntuples(q); r++) { int e = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (e < 0 || e >= m || held[e] > fw->fan) continue;
             const lp_reached *at = &batch[who[e]]; Run rn = run_of((const uint8_t *)PQgetvalue(q, r, 2), (size_t)PQgetlength(q, r, 2));
             if (rn.n < 2 || refused_pred(st, rn.id, rn.n)) { free(rn.id); continue; }
             const lp_id *other = !memcmp(&rn.id[0], &at->id, 16) ? &rn.id[rn.n - 1] : !memcmp(&rn.id[rn.n - 1], &at->id, 16) ? &rn.id[0] : NULL;
             if (!other || !memcmp(other, &at->id, 16)) { free(rn.id); continue; }
-            lp_rating rt = { be_f64(PQgetvalue(q, r, 3)), be_f64(PQgetvalue(q, r, 4)), be_f64(PQgetvalue(q, r, 5)) };
+            lp_rating rt = { lp_be_f64(PQgetvalue(q, r, 3)), lp_be_f64(PQgetvalue(q, r, 4)), lp_be_f64(PQgetvalue(q, r, 5)) };
             double sw = strand_weight(fw, st->weigh, rn.id, rn.n); if (sw <= 0) { free(rn.id); continue; }
             lp_id claim; memcpy(claim.b, PQgetvalue(q, r, 1), 16); double cost = at->cost + lp_cost(&rt, fw->k, fw->lambda) - log(sw);
             lp_frontier_reach(fr, other, &at->id, &claim, cost, 0, at->hops + 1);
@@ -237,7 +323,6 @@ static int elect(const void *a, const void *b){                               /*
 #define CAND 32
 typedef struct { int cell, occ; lp_id *nb; int nnb; } Cand;
 typedef struct { int ncand, choice, level, capped; double score; } Bind;      /* per occurrence */
-static int id_cmp(const void *a, const void *b){ return memcmp(a, b, 16); }
 static const Field *CF;
 static int cand_by_force(const void *a, const void *b){ double x = CF->c[*(const int *)a].force, y = CF->c[*(const int *)b].force; return x < y ? 1 : x > y ? -1 : 0; }
 static int has_id(const lp_id *s, int n, const lp_id *id){ return n && bsearch(id, s, (size_t)n, 16, id_cmp) != NULL; }
@@ -256,7 +341,7 @@ static int orient(State *st, Field *fd, Bind *bind, int *nambig){
     for (int i = 0; i < st->nocc; i++) { memset(&bind[i], 0, sizeof bind[i]); bind[i].choice = -1;
         if (!((st->open.w[i >> 6] >> (i & 63)) & 1)) continue;                         /* an occurrence that owes nothing orients nothing */
         int m = 0; for (int z = 0; z < fd->n; z++) { const Cell *x = &fd->c[z];
-            if (x->hub || x->force <= 0 || !((x->support.w[i >> 6] >> (i & 63)) & 1)) continue; byocc[m++] = z; }
+            if (x->hub || x->segment || x->force <= 0 || !((x->support.w[i >> 6] >> (i & 63)) & 1)) continue; byocc[m++] = z; }    /* a segment is evidence, not a reading */
         CF = fd; qsort(byocc, (size_t)m, sizeof(int), cand_by_force);
         int lead = m < 4 * CAND ? m : 4 * CAND, keep = 0;                    /* a candidate more than the fan holds (a lexicon, a language) is a hub: reached, never a reading */
         for (int b0 = 0; b0 < lead; b0 += 512) share(st, fd, byocc + b0, lead - b0 < 512 ? lead - b0 : 512);
@@ -274,7 +359,7 @@ static int orient(State *st, Field *fd, Bind *bind, int *nambig){
         PGresult *q = ask(st, "SELECT i, path FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
         if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "orient: %s", PQerrorMessage(st->pg)); exit(1); }
         int *cap = calloc((size_t)m, sizeof(int));
-        for (int r = 0; r < PQntuples(q); r++) { int k = (int)be(PQgetvalue(q, r, 0), 8) - 1; if (k < 0 || k >= m) continue;
+        for (int r = 0; r < PQntuples(q); r++) { int k = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (k < 0 || k >= m) continue;
             Run rn = run_of((const uint8_t *)PQgetvalue(q, r, 1), (size_t)PQgetlength(q, r, 1)); Cand *x = &cand[b0 + k];
             const lp_id *other = rn.n >= 2 && !memcmp(&rn.id[0], &ids[k], 16) ? &rn.id[rn.n - 1] : rn.n >= 2 && !memcmp(&rn.id[rn.n - 1], &ids[k], 16) ? &rn.id[0] : NULL;
             if (other && memcmp(other, &ids[k], 16)) { if (x->nnb == cap[k]) { cap[k] = cap[k] ? cap[k] * 2 : 16; x->nb = xrealloc(x->nb, sizeof(lp_id) * (size_t)cap[k]); } x->nb[x->nnb++] = *other; }
@@ -360,9 +445,28 @@ int cmd_turn(int argc, char **argv){
     Field fd = { 0 };
     { /* COUPLE, once for the whole observation: the strands of every occurrence, of the prompt itself, and of the discourse */
       double t = now(); couple_strands(st, &fd, st->occ, st->nocc, 0, R_CLAIM); couple_strands(st, &fd, &st->prompt, 1, -1, R_CLAIM); couple_strands(st, &fd, st->disc, st->ndisc, 0, R_DISCOURSE);
+      { lp_id cw[MAXOCC]; int co[MAXOCC], ncw = 0; for (int i = 0; i < st->nocc; i++) if (st->composed[i] && st->role[i] > 0) { cw[ncw] = st->occ[i]; co[ncw++] = i; } couple_containers(st, &fd, cw, ncw, co); }
       for (int i = 0; i < st->nocc; i++) { Cell *x = NULL; for (int z = 0; z < fd.n; z++) if (!memcmp(&fd.c[z].id, &st->occ[i], 16)) x = &fd.c[z]; if (x) x->force = 0; }      /* the prompt's own words are not what it is about */
       int routes[R_KINDS] = { 0 }; for (int z = 0; z < fd.n; z++) for (int k = 0; k < R_KINDS; k++) routes[k] += fd.c[z].routes[k];
       printf("COUPLE     %d entities respond:", fd.n); for (int k = 0; k < R_KINDS; k++) if (routes[k]) printf(" %d by %s", routes[k], RK[k]); printf("   (%.1f ms)\n", (now() - t) * 1000); }
+    /* ORIENT, the frame: the observed curves nearest the prompt's under the firmware's shape measure. The prompt's words
+     * the nearest holds are the frame the question is asked in; the words it does not hold, where the curves part, are
+     * the slots, what the question is about. While the frame holds part of the prompt and leaves a slot, the slots are
+     * what is owed. */
+    Curve near[8]; int nnear = 0, nominated = 0;
+    { double t = now(); nnear = shape_near(st, &fd, near, 8, &nominated);
+      static const char *SH[] = { "frechet", "outliers", "dtw", "edr" };
+      printf("ORIENT     the shape: %d curves nominated (GIN: what holds the words; GiST: what lies nearest), measured by %s   (%.1f ms)\n", nominated, SH[fw.shape], (now() - t) * 1000);
+      for (int i = 0; i < nnear && i < 5; i++) { reader_want(st->rd, &near[i].id); char *tx = reader_text(st->rd, &near[i].id, 90); printf("           %8.4f   %s\n", near[i].d, tx); free(tx); }
+      if (nnear) { Bits slots; memset(&slots, 0, sizeof slots); int nslot = 0, nframe = 0;
+          for (int i = 0; i < st->nocc; i++) { if (!((st->open.w[i >> 6] >> (i & 63)) & 1)) continue; int held = 0;
+              for (int k = 0; k < near[0].nv && !held; k++) held = !memcmp(&near[0].v[k], &st->occ[i], 16);
+              if (held) nframe++; else { bit_set(&slots, i); nslot++; } }
+          if (nframe && nslot) { for (int w = 0; w < MAXOCC / 64; w++) st->open.w[w] &= slots.w[w];
+              printf("           the frame holds %d of the words; it is about", nframe);
+              for (int i = 0; i < st->nocc; i++) if ((slots.w[i >> 6] >> (i & 63)) & 1) { char *tx = reader_text(st->rd, &st->occ[i], 24); printf(" %s", tx); free(tx); } printf("\n"); }
+          else printf("           %s\n", nframe ? "the nearest holds every word owed" : "the nearest holds none of the words owed: every word is owed"); } }
+    for (int i = 0; i < nnear; i++) free(near[i].v);
     /* ORIENT: the joint interpretation; its bindings are the centres SCAN starts from and what a chain answers from */
     Bind *bind = calloc((size_t)st->nocc + 1, sizeof(Bind)); int nambig = 0, nbound, ncentre = 0, capped = 0; lp_id centre[MAXOCC];
     { double t = now(); nbound = orient(st, &fd, bind, &nambig);

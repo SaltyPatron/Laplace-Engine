@@ -56,12 +56,11 @@ static size_t fetch(Reader *r){
     r->trips++;
     for (int j = 0; j < PQntuples(q); j++) {
         lp_id id; memcpy(id.b, PQgetvalue(q, j, 0), 16); Ent *x = ent(r, &id, 0); if (!x || x->state == 1) continue;
-        const uint8_t *vx; size_t nv = lp_ewkb_vertices((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1), &vx);
+        const uint8_t *pb = (const uint8_t *)PQgetvalue(q, j, 1); size_t pl = (size_t)PQgetlength(q, j, 1), nv = lp_path_vertices(pb, pl, NULL, 0);
+        lp_vertex *vt = malloc(sizeof(lp_vertex) * (nv ? nv : 1)); lp_path_vertices(pb, pl, vt, nv);
         x->kid = malloc(sizeof(lp_id) * (nv ? nv : 1)); x->run = malloc(4 * (nv ? nv : 1)); x->nv = (uint32_t)nv; x->state = 1;
-        for (size_t i = 0; i < nv; i++) {
-            double xyz[3], m; memcpy(xyz, vx + 32 * i, 24); memcpy(&m, vx + 32 * i + 24, 8);
-            lp_xyz_to_id(xyz, &x->kid[i]); x->run[i] = lp_m_run(m);
-        }
+        for (size_t i = 0; i < nv; i++) { x->kid[i] = vt[i].id; x->run[i] = vt[i].run; }
+        free(vt);
     }
     PQclear(q); free(ab); free(ids);
     return nw;
@@ -99,4 +98,9 @@ char *reader_text(Reader *r, const lp_id *id, size_t limit){
     }
     o.b = xrealloc(o.b, o.n + 1); o.b[o.n] = 0;
     return o.b;
+}
+/* A trajectory's constituents in order, runs written out, from a path as the database sends it. */
+Run run_of(const uint8_t *ewkb, size_t len){
+    size_t n = lp_path_ids(ewkb, len, NULL, 0); Run r = { malloc(sizeof(lp_id) * (n ? n : 1)), (int)n };
+    lp_path_ids(ewkb, len, r.id, n); return r;
 }
