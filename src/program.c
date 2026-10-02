@@ -73,6 +73,7 @@ typedef struct {
     Bits open;                                                                                     /* the obligations still open */
     lp_id refuse[FW_NAMES], weigh[FW_WEIGHS];
     uint64_t trips;
+    uint64_t admitted;                                                        /* the prompt's entities its admission recorded new */
 } State;
 
 static PGresult *ask(State *st, const char *sql, int n, const char **v, const int *l, const int *f){ st->trips++; return db_ask(st->pg, sql, n, v, l, f); }
@@ -108,7 +109,7 @@ typedef struct { lp_id id; double d; lp_id *v; int nv; } Curve;              /* 
 static int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_of, int kind, Curve *near, int keep){
     if (!n) return 0; const Firmware *fw = st->fw;
     uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n);
-    char fan[24], shape[8], sn[32], kp[16]; snprintf(fan, sizeof fan, "%d", fw->fan); snprintf(shape, sizeof shape, "%d", keep > 0 ? fw->shape : -1); snprintf(sn, sizeof sn, "%.17g", fw->shape_n); snprintf(kp, sizeof kp, "%d", keep);
+    char fan[24], shape[8], sn[32], kp[16]; snprintf(fan, sizeof fan, "%d", fw->fan); snprintf(shape, sizeof shape, "%d", keep > 0 ? fw->shape : -1); snprintf(sn, sizeof sn, "%.17g", fw->shape_n); snprintf(kp, sizeof kp, "%d", keep > 0 ? keep + 1 : keep);
     int rl; const char *v[6] = { (const char *)ab, fan, refuse_param(&rl), shape, sn, kp }; int l[6] = { (int)al, 0, rl, 0, 0, 0 }, f[6] = { 1, 0, 1, 0, 0, 0 };
     PGresult *q = ask(st, "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices FROM laplace_couple($1::blake3[], $2::bigint, $3::blake3[], $4::smallint, $5::float8, $6::integer)", 6, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "couple: %s", PQerrorMessage(st->pg)); exit(1); }
@@ -116,6 +117,7 @@ static int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_
     for (int r = 0; r < PQntuples(q); r++) if (lp_be(PQgetvalue(q, r, 2), 2) == 0) { int o = (int)lp_be(PQgetvalue(q, r, 1), 4); if (o >= 1 && o <= n) held[o - 1]++; }
     for (int r = 0; r < PQntuples(q); r++) {
         lp_id id; memcpy(id.b, PQgetvalue(q, r, 0), 16); int o = (int)lp_be(PQgetvalue(q, r, 1), 4) - 1, route = (int)lp_be(PQgetvalue(q, r, 2), 2);
+        if (!memcmp(&id, &st->prompt, 16)) continue;                         /* the prompt, admitted, is not its own response: not even its nearest curve */
         int occ = o >= 0 && o < n && occ_of ? occ_of[o] : -1; double pull = occ >= 0 && occ < st->nocc ? st->role[occ] : kind == R_CLAIM ? 1.0 : 0.5;
         if (route == 2) { if (nn < keep) { Curve *c = &near[nn++]; c->id = id; c->d = lp_be_f64(PQgetvalue(q, r, 9));
                 const uint8_t *a = (const uint8_t *)PQgetvalue(q, r, 10); int na = PQgetlength(q, r, 10) >= 20 ? (int)lp_be(a + 12, 4) : 0;       /* a binary array: 20-byte header, then length and bytes per element */
@@ -303,11 +305,18 @@ int cmd_turn(int argc, char **argv){
               for (int k = 0; k < tr.n && st->ndisc < MAXOCC; k++) st->disc[st->ndisc++] = tr.id[k]; free(tr.id); }
           PQclear(q); }
       free(tc); }
+    if (!read_only) {                                                         /* the prompt, admitted as content (Forward 20.1, Sessions 21.3): what follows reads a substrate that holds it */
+        const lp_trust_class *pc = lp_trust_class_named("UserPromptContent"); File pf; memset(&pf, 0, sizeof pf);
+        pf.path = "the prompt"; pf.witness = who; pf.trust = pc ? pc->prior : 0.3; pf.trunk = pr;
+        LoadStats ls = { 0 }; if (load(conninfo, 2, &pf, 1, &ls)) return 1; st->admitted = ls.ent_rows;
+        TABLE_EACH(x) x->keep = 0;                                            /* recorded now: the turn's witnessing finds it, and writes it again nowhere */
+    }
     resolve_roles(st); ROLE = st->role;
     memcpy(st->traj, st->occ, sizeof(lp_id) * (size_t)st->nocc); st->ntraj = st->nocc;
     for (int i = 0; i < st->nocc; i++) reader_want(st->rd, &st->occ[i]);
     char idt[33]; id_text(&pr.id, idt);
     printf("RESOLVE    prompt %s, tier %d, %d occurrences; session \"%s\" of %s, turn %d (%d before it, %d discourse entities)\n", idt, pr.tier, st->nocc, session, user, ordinal, nturn, st->ndisc);
+    if (!read_only) printf("           admitted as content, the user witnessing it: %llu entities new\n", (unsigned long long)st->admitted);
     printf("           obligations:"); for (int i = 0; i < st->nocc; i++) if (st->composed[i]) { char *tx = reader_text(st->rd, &st->occ[i], 32); printf(" %s%s(%.2f)", tx, (st->open.w[i >> 6] >> (i & 63)) & 1 ? "" : "~", st->role[i]); free(tx); } printf("\n");
 
     /* ---- the loop: each emitted constituent changes the state the next is chosen from */

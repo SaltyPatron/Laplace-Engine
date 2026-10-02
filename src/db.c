@@ -240,7 +240,7 @@ static int must(PGconn *pg, const char *sql){
 static int resolve_parts(PGconn *pg){
     for (int round = 0; round < 2; round++) {
         PGresult *r = PQexec(pg, "SELECT gid, split_part(gid, ' ', 3), pg_xact_status(split_part(gid, ' ', 2)::xid8) FROM pg_prepared_xacts "
-                                 "WHERE gid LIKE 'laplace %' AND database = current_database() ORDER BY split_part(gid, ' ', 3)::int");
+                                 "WHERE gid LIKE 'laplace %' AND database = current_database() AND prepared < now() - interval '2 minutes' ORDER BY split_part(gid, ' ', 3)::int");     /* a load still committing its parts takes seconds: those it leaves alone */
         if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "prepared parts: %s", PQerrorMessage(pg)); PQclear(r); return 0; }
         for (int i = 0; i < PQntuples(r); i++) { const char *gid = PQgetvalue(r, i, 0), *part = PQgetvalue(r, i, 1), *st = PQgetvalue(r, i, 2); char sql[160];
             if (round == 0 && strcmp(part, "0")) continue;                       /* part 0 first: it decides */
