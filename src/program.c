@@ -152,12 +152,15 @@ static int follows(State *st, Next *out, int cap){
 
 /* How many strands hold each of these cells, up to the fan: what more than the fan holds is a hub, reached and never
  * crossed, and among the rest the least shared meets first. One set-based read. */
-static void share(State *st, Field *fd, const int *idx, int n){
+static void share(State *st, Field *fd, const int *idx, int n, int upto){             /* counted up to upto: past it, how many more is no reason */
     if (!n) return; lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) { ids[i] = fd->c[idx[i]].id; fd->c[idx[i]].shared = 0; }
-    uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n); char fan[24]; snprintf(fan, sizeof fan, "%d", st->fw->fan + 1);
-    int rl; const char *v[4] = { (const char *)ab, fan, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
-    PGresult *q = ask(st, "SELECT i FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
-    if (PQresultStatus(q) == PGRES_TUPLES_OK) for (int r = 0; r < PQntuples(q); r++) { int i = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (i >= 0 && i < n) fd->c[idx[i]].shared++; }
+    uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n); char fan[24]; snprintf(fan, sizeof fan, "%d", upto);
+    int rl; const char *v[3] = { (const char *)ab, fan, refuse_param(&rl) }; int l[3] = { (int)al, 0, rl }, f[3] = { 1, 0, 1 };
+    /* counted where they are, up to the fan and one: one row an entity, not every strand that holds it */
+    PGresult *q = ask(st, "SELECT u.i, (SELECT count(*) FROM (SELECT 1 FROM physicality p WHERE p.tier > e.tier AND p.path @> ARRAY[u.id] AND p.mask ? 0::smallint "
+                          "AND NOT laplace_middle_any(p.path, $3::blake3[]) LIMIT $2::bigint) x) FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN entity e ON e.id = u.id", 3, v, l, f);
+    if (PQresultStatus(q) == PGRES_TUPLES_OK) for (int r = 0; r < PQntuples(q); r++) { int i = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (i >= 0 && i < n) fd->c[idx[i]].shared = (int)lp_be(PQgetvalue(q, r, 1), 8); }
+    else { fprintf(stderr, "held: %s", PQerrorMessage(st->pg)); exit(1); }
     for (int i = 0; i < n; i++) if (fd->c[idx[i]].shared > st->fw->fan) fd->c[idx[i]].hub = 1;
     PQclear(q); free(ab); free(ids);
 }
@@ -252,7 +255,7 @@ static double compat(const Cand *a, const Cand *b, const lp_id *aid, const lp_id
     return s / sqrt((double)(a->nnb > 1 ? a->nnb : 1) * (double)(b->nnb > 1 ? b->nnb : 1));
 }
 static int orient(State *st, Field *fd, Bind *bind, int *nambig){
-    const Firmware *fw = st->fw; Cand *cand = NULL; int nc = 0, cc = 0; *nambig = 0;
+    double T_ = now(); const Firmware *fw = st->fw; Cand *cand = NULL; int nc = 0, cc = 0; *nambig = 0;
     int *byocc = malloc(sizeof(int) * (size_t)(fd->n ? fd->n : 1));
     for (int i = 0; i < st->nocc; i++) { memset(&bind[i], 0, sizeof bind[i]); bind[i].choice = -1;
         if (!st->composed[i] || st->role[i] <= 0) continue;                                 /* every word has readings: the frame's constrain the slot's */
@@ -260,13 +263,14 @@ static int orient(State *st, Field *fd, Bind *bind, int *nambig){
             if (x->hub || x->segment || x->force <= 0 || !((x->support.w[i >> 6] >> (i & 63)) & 1)) continue; byocc[m++] = z; }    /* a segment is evidence, not a reading */
         CF = fd; qsort(byocc, (size_t)m, sizeof(int), cand_by_force);
         int lead = m < 4 * CAND ? m : 4 * CAND, keep = 0;                    /* a candidate more than the fan holds (a lexicon, a language) is a hub: reached, never a reading */
-        for (int b0 = 0; b0 < lead; b0 += 512) share(st, fd, byocc + b0, lead - b0 < 512 ? lead - b0 : 512);
+        for (int b0 = 0; b0 < lead; b0 += 512) share(st, fd, byocc + b0, lead - b0 < 512 ? lead - b0 : 512, fw->fan + 1);
         for (int k = 0; k < lead; k++) if (!fd->c[byocc[k]].hub) byocc[keep++] = byocc[k];
         if (m > lead) bind[i].capped = 1; m = keep;
         if (m > CAND) { bind[i].capped = 1; m = CAND; }
         for (int k = 0; k < m; k++) { if (nc == cc) { cc = cc ? cc * 2 : 256; cand = xrealloc(cand, sizeof(Cand) * (size_t)cc); } cand[nc++] = (Cand){ byocc[k], i, NULL, 0 }; }
         bind[i].ncand = m; }
     free(byocc);
+    if (getenv("LAPLACE_TIMING")) fprintf(stderr, "orient: readings chosen, %.1f ms\n", (now() - T_) * 1000);
     /* what each candidate's strands reach: one set-based read a batch, refusals out before the fan */
     for (int b0 = 0; b0 < nc; b0 += 512) { int m = nc - b0 < 512 ? nc - b0 : 512; lp_id *ids = malloc(sizeof(lp_id) * (size_t)m);
         for (int k = 0; k < m; k++) ids[k] = fd->c[cand[b0 + k].cell].id;
@@ -282,6 +286,7 @@ static int orient(State *st, Field *fd, Bind *bind, int *nambig){
             free(rn.id); }
         for (int k = 0; k < m; k++) { Cand *x = &cand[b0 + k]; if (x->nnb) qsort(x->nb, (size_t)x->nnb, 16, id_cmp); }
         PQclear(q); free(ab); free(ids); free(cap); }
+    if (getenv("LAPLACE_TIMING")) { int nb_ = 0; for (int a = 0; a < nc; a++) nb_ += cand[a].nnb; fprintf(stderr, "orient: candidates %d, their strands %d, %.1f ms\n", nc, nb_, (now() - T_) * 1000); }
     /* the entities candidates of two occurrences meet in: a hub among them is reached, never crossed */
     lp_id *meet = NULL; int nmeet = 0, cmeet = 0; double *mw = NULL;
     for (int a = 0; a < nc; a++) for (int b = a + 1; b < nc; b++) if (cand[a].occ != cand[b].occ && !memcmp(&fd->c[cand[a].cell].id, &fd->c[cand[b].cell].id, 16)) {      /* a reading two words share is a meeting too */
@@ -291,10 +296,11 @@ static int orient(State *st, Field *fd, Bind *bind, int *nambig){
             if (!c) { if (nmeet == cmeet) { cmeet = cmeet ? cmeet * 2 : 256; meet = xrealloc(meet, sizeof(lp_id) * (size_t)cmeet); } if (nmeet < 1 << 16) meet[nmeet++] = cand[a].nb[i]; i++; j++; } else if (c < 0) i++; else j++; } }
     if (nmeet) { qsort(meet, (size_t)nmeet, 16, id_cmp); int u = 0; for (int i = 0; i < nmeet; i++) if (!u || memcmp(&meet[i], &meet[u - 1], 16)) meet[u++] = meet[i]; nmeet = u;
         Field mf = { 0 }; int *idx = malloc(sizeof(int) * (size_t)nmeet); for (int i = 0; i < nmeet; i++) { cell(&mf, &meet[i]); idx[i] = i; }
-        for (int b0 = 0; b0 < nmeet; b0 += 512) share(st, &mf, idx + b0, nmeet - b0 < 512 ? nmeet - b0 : 512);
+        for (int b0 = 0; b0 < nmeet; b0 += 512) share(st, &mf, idx + b0, nmeet - b0 < 512 ? nmeet - b0 : 512, 64);     /* the least shared first: past 64, a meeting weighs next to nothing */
         mw = malloc(sizeof(double) * (size_t)nmeet);                         /* meet is sorted, and mf holds it in the same order */
         for (int i = 0; i < nmeet; i++) mw[i] = mf.c[i].hub ? 0.0 : 1.0 / (double)(mf.c[i].shared > 1 ? mf.c[i].shared : 1);
         free(idx); field_free(&mf); }
+    if (getenv("LAPLACE_TIMING")) fprintf(stderr, "orient: meetings %d, %.1f ms\n", nmeet, (now() - T_) * 1000);
     /* the joint interpretation: each occurrence's choice, given the others', until none changes */
     int *first = calloc((size_t)st->nocc + 1, sizeof(int)); for (int i = 0, at = 0; i < st->nocc; i++) { first[i] = at; at += bind[i].ncand; } first[st->nocc] = nc;
     for (int round = 0; round < 8; round++) { int changed = 0;
