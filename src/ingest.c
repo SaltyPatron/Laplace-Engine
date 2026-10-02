@@ -157,6 +157,8 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
     printf("\n%d sources in, %d absent, %d without a recipe, %d not begun for want of room%s   %'.1f s\n", went, absent, empty, short_of_room, failed ? ", and one that failed: the run stops there" : "", now() - T);
     return failed;
 }
+static const uint64_t *by_size_of;                                    /* the batch's files, longest first, ties in the order given */
+static int by_size(const void *a, const void *b){ int i = *(const int *)a, j = *(const int *)b; uint64_t x = by_size_of[i], y = by_size_of[j]; return x < y ? 1 : x > y ? -1 : i - j; }
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
     int threads = 0, do_load = 1, a = 1, show_claims = 0; const char *of = NULL;
@@ -303,9 +305,13 @@ int cmd_ingest(int argc, char **argv){
             done++; exact++; a0 = b0; continue;
         }
         double td = now();
+        /* the longest first: a long file begun last is decomposed on one core while every other waits for it */
+        int *order = malloc(sizeof(int) * (size_t)(b0 - a0)); for (int i = a0; i < b0; i++) order[i - a0] = i;
+        by_size_of = size; qsort(order, (size_t)(b0 - a0), sizeof(int), by_size);
         #pragma omp parallel
         #pragma omp single
-        for (int i = a0; i < b0; i++) {
+        for (int o = 0; o < b0 - a0; o++) {
+            int i = order[o];
             if (files[i].known || files[i].skipped) continue;
             #pragma omp task firstprivate(i)
             {
@@ -317,7 +323,7 @@ int cmd_ingest(int argc, char **argv){
                 }
             }
         }
-        t_dec += now() - td; td = now();
+        free(order); t_dec += now() - td; td = now();
         /* every file recomposed from the node table and compared with its bytes */
         #pragma omp parallel for schedule(dynamic) reduction(+:exact, mism)
         for (int i = a0; i < b0; i++) {
