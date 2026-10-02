@@ -289,6 +289,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         Node *x = table_find(&files[fi].trunk.id); if (x && !x->keep) { x->keep = 3; FPUSH(x->id); }
         if (files[fi].ev.n) { Node *w = table_find(&files[fi].witness.id); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } }
         if (files[fi].has_lineage) { Node *lin = table_find(&files[fi].lineage.id); if (lin && !lin->keep) { lin->keep = 3; FPUSH(lin->id); } }
+        for (uint64_t j = 0; j < files[fi].nsaid; j++) { Node *x = table_find(&files[fi].said[j].id); if (x && !x->keep) { x->keep = 3; FPUSH(x->id); } }   /* a long file's parts, a stretch at a time: its trunk, written after its last, holds them, and a recorded trunk has all it holds recorded */
         for (uint64_t i = 0; i < files[fi].ev.n; i++) { Node *c = table_find(&files[fi].ev.e[i].claim); if (c && !c->keep) { c->keep = 3; FPUSH(c->id); }     /* a record's claims are under it */
             if (files[fi].ev.e[i].kind == EV_RECORD) { Node *w = table_find(&files[fi].ev.e[i].witnessed); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } }
             if (files[fi].ev.e[i].own_witness) { Node *w = table_find(&files[fi].ev.e[i].witness); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } } }
