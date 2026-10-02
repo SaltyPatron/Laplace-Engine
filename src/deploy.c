@@ -80,7 +80,7 @@ int cmd_deploy(int argc, char **argv){
                 while ((c = strtok_r(NULL, "\t\n", &save))) { char *s1 = strchr(c, ':'), *s2 = s1 ? strchr(s1 + 1, ':') : NULL; if (!s2) { ok = 0; break; } *s1 = 0;
                     Ref r; lp_id id; if (c[0] == 'U') r = atom((uint32_t)strtoul(c + 1, NULL, 16)); else { if (!id_parse(c, &id)) { ok = 0; break; } Node *x = table_find(&id); if (!x) { unknown++; ok = 0; break; } memset(&r, 0, sizeof r); r.id = x->id; memcpy(r.c.m, x->m, sizeof r.c.m); r.tier = x->tier; }
                     r.said = (uint8_t)atoi(s1 + 1); uint32_t run = (uint32_t)strtoul(s2 + 1, NULL, 10);
-                    for (uint32_t q = 0; q < run; q++) { if (k == cch) { cch = cch ? cch * 2 : 4096; ch = xrealloc(ch, sizeof(Ref) * cch); } ch[k++] = r; } }
+                    for (uint32_t q = 0; q < run; q++) { lp_reserve((void **)&ch, &cch, k + 1, sizeof(Ref)); ch[k++] = r; } }
                 lp_id want; if (!ok || !id_parse(hid, &want)) { wrong++; continue; }
                 Ref r = compose(ch, (uint32_t)k, (uint8_t)atoi(tr)); if (memcmp(&r.id, &want, 16)) wrong++; n++; }
             else if (kind[0] == 'S') { char *ln = strtok_r(NULL, "\t\n", &save), *sl = strtok_r(NULL, "\t\n", &save), *c = strtok_r(NULL, "\t\n", &save); if (!ln || !sl || !c) { wrong++; continue; }

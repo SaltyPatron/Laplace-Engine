@@ -18,7 +18,7 @@ uint64_t reader_trips(const Reader *r){ return r->trips; }
 static Ent *ent(Reader *r, const lp_id *id, int add){
     if (!add) { int64_t i = lp_idmap_find(r->m, id); return i < 0 ? NULL : &r->e[i]; }
     if (!r->m) r->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(r->m, id, &fresh); if (!fresh) return &r->e[i];
-    if (r->n == r->cap) { r->cap = r->cap ? r->cap * 2 : 1024; r->e = xrealloc(r->e, r->cap * sizeof(Ent)); }
+    lp_reserve((void **)&r->e, &r->cap, r->n + 1, sizeof(Ent));
     Ent *x = &r->e[r->n++]; memset(x, 0, sizeof *x); x->id = *id; return x;
 }
 void reader_want(Reader *r, const lp_id *id){ if (lp_tier0_codepoint(T0, id) < 0) ent(r, id, 1); }
@@ -46,7 +46,7 @@ typedef struct { char *b; size_t n, cap, limit, wants; } Out;
 static void expand(Reader *r, const lp_id *id, Out *o, int depth){
     if (o->n >= o->limit) return;
     int64_t cp = lp_tier0_codepoint(T0, id);
-    if (cp >= 0) { if (o->n + 4 > o->cap) { o->cap = (o->n + 4) * 2; o->b = xrealloc(o->b, o->cap); } o->n += lp_utf8_put((uint32_t)cp, (uint8_t *)o->b + o->n); return; }
+    if (cp >= 0) { lp_reserve((void **)&o->b, &o->cap, o->n + 4, 1); o->n += lp_utf8_put((uint32_t)cp, (uint8_t *)o->b + o->n); return; }
     Ent *x = ent(r, id, 0);
     if (!x) { if (o->wants < o->limit) { ent(r, id, 1); o->wants++; } return; }
     if (x->state == 0) { o->wants++; return; }

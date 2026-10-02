@@ -48,11 +48,11 @@ static void bit_clear(Bits *a, const Bits *b){ for (int i = 0; i < MAXOCC / 64; 
 enum { R_CLAIM, R_FOLLOWS, R_DISCOURSE, R_SCAN, R_CONTAIN, R_KINDS };
 static const char *RK[R_KINDS] = { "strand", "follows", "discourse", "reached", "containment" };
 typedef struct { lp_id id; double force, cost; Bits support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, tier; } Cell;     /* shared: how many strands hold it, up to the fan (-1: not read) */
-typedef struct { Cell *c; int n, cap; lp_idmap *m; } Field;                  /* the cells, in the order they responded; found by ID */
+typedef struct { Cell *c; int n; size_t cap; lp_idmap *m; } Field;                  /* the cells, in the order they responded; found by ID */
 static Cell *cell(Field *f, const lp_id *id){
     if (!f->m) f->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(f->m, id, &fresh);
     if (!fresh) return &f->c[i];
-    if (f->n == f->cap) { f->cap = f->cap ? f->cap * 2 : 1024; f->c = xrealloc(f->c, sizeof(Cell) * (size_t)f->cap); }
+    lp_reserve((void **)&f->c, &f->cap, (size_t)f->n + 1, sizeof(Cell));
     Cell *x = &f->c[f->n++]; memset(x, 0, sizeof *x); x->id = *id; x->cost = INFINITY; return x;
 }
 static Cell *cell_find(const Field *f, const lp_id *id){ int64_t i = lp_idmap_find(f->m, id); return i < 0 ? NULL : &f->c[i]; }
@@ -215,7 +215,7 @@ static int orient(State *st, Field *fd, Bind *bind, int *nambig){
         for (int z = 0; z < fd->n; z++) { const Cell *x = &fd->c[z]; int list; uint32_t slot;
             if (!x->routes[R_CLAIM] || !((x->support.w[i >> 6] >> (i & 63)) & 1) || !reading_of(h, &x->id, &list, &slot)) continue;
             if (lp_highway_mask_bit(h, &x->rel) >= 0) continue;                       /* reached through a feature (a dependency, a part of speech): syntax, not a reading */
-            if (nc == cc) { cc = cc ? cc * 2 : 256; cand = xrealloc(cand, sizeof(Cand) * (size_t)cc); } cand[nc++] = (Cand){ z, i, list, slot }; }
+            { size_t c_ = (size_t)cc; lp_reserve((void **)&cand, &c_, (size_t)nc + 1, sizeof(Cand)); cc = (int)c_; } cand[nc++] = (Cand){ z, i, list, slot }; }
         bind[i].ncand = nc - first[i]; }
     first[st->nocc] = nc;
     for (int round = 0; round < 8; round++) { int changed = 0;
