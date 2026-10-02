@@ -5,9 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* A blake3[] written where the caller has room for it: Native's lp_pg_ids, for the writer that keeps its own buffers. */
-size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n){ lp_buf b = { out, 0, 20 + 20 * (size_t)n }; lp_pg_ids(&b, id_oid, ids, n); return b.n; }
-
 typedef struct { lp_id id; lp_id *kid; uint32_t *run; uint32_t nv; uint8_t state; } Ent;      /* state: 0 wanted, 1 fetched, 2 not recorded */
 struct Reader { PGconn *pg; Ent *e; size_t n, cap; lp_idmap *m; uint64_t trips; };
 

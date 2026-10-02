@@ -2,36 +2,12 @@
  * connection, and the semantics (witnesses, the ledger, the consensus). SQL only fetches and writes. */
 #define _GNU_SOURCE
 #include "engine.h"
-#include <arpa/inet.h>
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* ---- binary COPY */
-typedef struct { PGconn *pg; uint8_t *b; size_t n, cap; uint64_t rows, bytes; } Copy;
-static void cflush(Copy *c){ if (c->n && PQputCopyData(c->pg, (const char *)c->b, (int)c->n) != 1) { fprintf(stderr, "COPY: %s", PQerrorMessage(c->pg)); exit(1); } c->bytes += c->n; c->n = 0; }
-static void cput(Copy *c, const void *p, size_t n){ if (c->n + n > c->cap) cflush(c); if (n > c->cap) { c->cap = n * 2; c->b = xrealloc(c->b, c->cap); } memcpy(c->b + c->n, p, n); c->n += n; }
-static void c16(Copy *c, uint16_t v){ uint8_t b[2] = { v >> 8, v }; cput(c, b, 2); }
-static void c32(Copy *c, uint32_t v){ uint8_t b[4] = { v >> 24, v >> 16, v >> 8, v }; cput(c, b, 4); }
-static void c64(Copy *c, uint64_t v){ uint8_t b[8]; for (int i = 0; i < 8; i++) b[i] = (uint8_t)(v >> (56 - 8 * i)); cput(c, b, 8); }
-static void cfield(Copy *c, const void *p, uint32_t n){ c32(c, n); cput(c, p, n); }
-static void cf_i16(Copy *c, int16_t v){ c32(c, 2); c16(c, (uint16_t)v); }
-static void cf_i32(Copy *c, int32_t v){ c32(c, 4); c32(c, (uint32_t)v); }
-static void cf_i64(Copy *c, int64_t v){ c32(c, 8); c64(c, (uint64_t)v); }
-static void cf_f64(Copy *c, double v){ uint64_t u; memcpy(&u, &v, 8); c32(c, 8); c64(c, u); }
-static void cf_f32(Copy *c, float v){ uint32_t u; memcpy(&u, &v, 4); c32(c, 4); c32(c, u); }
-static void copy_begin(Copy *c, PGconn *pg, const char *sql){
-    c->pg = pg; if (!c->b) { c->cap = 1 << 22; c->b = malloc(c->cap); } c->n = 0; c->rows = 0;
-    PGresult *r = PQexec(pg, sql); if (PQresultStatus(r) != PGRES_COPY_IN) { fprintf(stderr, "%s: %s", sql, PQerrorMessage(pg)); exit(1); } PQclear(r);
-    static const uint8_t hdr[19] = { 'P','G','C','O','P','Y','\n',0xFF,'\r','\n',0, 0,0,0,0, 0,0,0,0 }; cput(c, hdr, 19);
-}
-static void copy_end(Copy *c){
-    c16(c, 0xFFFF); cflush(c);
-    if (PQputCopyEnd(c->pg, NULL) != 1) { fprintf(stderr, "COPY end: %s", PQerrorMessage(c->pg)); exit(1); }
-    PGresult *r; while ((r = PQgetResult(c->pg))) { if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "COPY: %s", PQerrorMessage(c->pg)); exit(1); } PQclear(r); }
-}
-static int64_t hsigned(uint64_t h){ return (int64_t)(h ^ 0x8000000000000000ull); }      /* bigint order = Hilbert order */
 
 /* ---- partitions: a tier each, tiers deeper than 15 in the default; the largest tiers split again 16 ways by the
  * ID's first hex digit. Which tiers are split is the schema's to say: it is read from the database, never assumed. */
@@ -54,31 +30,14 @@ static void part_name(int p, const char *table, char *out, size_t cap){
  * tier and first hex digit name the one partition it can be in. The IDs of a partition go to that partition as one
  * sorted set and come back as the ones it holds: a set question answered from the ID index, never a search of the
  * tiers. What comes back is left out of what is written, with everything under it (Ingestion: Deduplication). */
-static int by_id(const void *a, const void *b, void *ids){ return memcmp(&((const lp_id *)ids)[*(const uint64_t *)a], &((const lp_id *)ids)[*(const uint64_t *)b], 16); }
+typedef struct { const uint8_t *tiers; uint8_t *hit; } Probe;
+static int probe_group(const lp_id *ids, uint64_t i, void *ctx){ return part_of(&ids[i], ((Probe *)ctx)->tiers[i]); }
+static void probe_table(int g, int t, char *out, size_t cap, void *ctx){ (void)t; (void)ctx; part_name(g, "entity", out, cap); }
+static void probe_hit(const PGresult *q, int r, const uint64_t *place, void *ctx){ ((Probe *)ctx)->hit[place[col_int(q, r, 0) - 1]] = 1; }
 static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, const uint8_t *tiers, uint64_t n){
-    uint8_t *hit = calloc(n ? n : 1, 1); const uint64_t CH = 500000;
-    uint64_t *cnt = calloc(NPART + 1, 8); for (uint64_t i = 0; i < n; i++) cnt[part_of(&ids[i], tiers[i]) + 1]++;
-    for (int p = 0; p < NPART; p++) cnt[p + 1] += cnt[p];
-    uint64_t *at = malloc(sizeof(uint64_t) * (n + 1)), *fill = malloc(sizeof(uint64_t) * NPART); memcpy(fill, cnt, sizeof(uint64_t) * NPART);
-    for (uint64_t i = 0; i < n; i++) at[fill[part_of(&ids[i], tiers[i])]++] = i;       /* the IDs, by the partition each can be in */
-    typedef struct { int p; uint64_t lo, n; } Job; Job *job = malloc(sizeof(Job) * (n / CH + NPART + 1)); uint64_t nj = 0;
-    for (int p = 0; p < NPART; p++) { if (cnt[p + 1] == cnt[p]) continue;
-        qsort_r(at + cnt[p], cnt[p + 1] - cnt[p], sizeof(uint64_t), by_id, (void *)ids);                    /* in ID order: the index is read along, not hopped across */
-        for (uint64_t lo = cnt[p]; lo < cnt[p + 1]; lo += CH) job[nj++] = (Job){ p, lo, cnt[p + 1] - lo < CH ? cnt[p + 1] - lo : CH }; }
-    #pragma omp parallel for num_threads(npg) schedule(dynamic)
-    for (uint64_t j = 0; j < nj; j++) {
-        uint32_t k = (uint32_t)job[j].n; lp_id *part = malloc(sizeof(lp_id) * k); for (uint32_t i = 0; i < k; i++) part[i] = ids[at[job[j].lo + i]];
-        uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t len = ids_param(ab, part, k); PGconn *c = pg[omp_get_thread_num()];
-        char tn[64], sql[256]; part_name(job[j].p, "entity", tn, sizeof tn);
-        snprintf(sql, sizeof sql, "SELECT u.i FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) WHERE EXISTS (SELECT 1 FROM %s e WHERE e.id = u.id)", tn);
-        const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
-        PGresult *r = PQexecParams(c, sql, 1, NULL, v, l, f, 0);
-        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "dedup: %s", PQerrorMessage(c)); exit(1); }
-        for (int x = 0; x < PQntuples(r); x++) hit[at[job[j].lo + (uint64_t)atoll(PQgetvalue(r, x, 0)) - 1]] = 1;
-        PQclear(r); free(ab); free(part);
-    }
-    free(at); free(job); free(cnt); free(fill);
-    return hit;
+    Probe pr = { tiers, calloc(n ? n : 1, 1) }; Groups by = { NPART, probe_group, NULL, probe_table, &pr };
+    over_ids(pg, npg, ids, n, &by, 500000, "SELECT u.i FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) WHERE EXISTS (SELECT 1 FROM %s e WHERE e.id = u.id)", probe_hit, &pr);
+    return pr.hit;
 }
 static uint8_t *tiers_of(const lp_id *ids, uint64_t n){                       /* the tier the client composed each of them at */
     uint8_t *t = malloc(n ? n : 1); for (uint64_t i = 0; i < n; i++) { Node *x = table_find(&ids[i]); t[i] = x ? x->tier : 0; } return t;
@@ -95,7 +54,7 @@ static int by_hilbert(const void *a, const void *b){ uint64_t x = ((const NRef *
  * rows near each other in the 4-ball are written together, so the coordinate and Hilbert indexes take a run of
  * neighbours on the same pages instead of one row per page in hash order. */
 static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_p, int atoms_needed, int own_txn){
-    char tn[64]; Copy c = { 0 }; char sql[160]; uint8_t geo[64 * 1024];
+    char tn[64]; lp_copy c = { 0 }; char sql[160]; uint8_t geo[64 * 1024];
     lp_id *ids = NULL; uint64_t *runs = NULL; size_t idc = 0;
     qsort(bucket[p], nbucket[p], sizeof(NRef), by_hilbert);
     /* a partition's entities and their paths are one transaction: a load cut off between the two leaves no entity
@@ -103,29 +62,29 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
      * inside the transaction that holds what they attested, which is already open: that one is not begun or ended here. */
     if (own_txn) { PGresult *b = PQexec(pg, "BEGIN"); if (PQresultStatus(b) != PGRES_COMMAND_OK) { fprintf(stderr, "begin: %s", PQerrorMessage(pg)); exit(1); } PQclear(b); }
     part_name(p, "entity", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY %s (id, tier, coord, hilbert) FROM STDIN (FORMAT binary)", tn);
-    copy_begin(&c, pg, sql);
+    copy_open(&c, pg, sql);
     if (atoms_needed && p / 16 == 0)
         for (uint32_t cp = 0; cp < LP_NCP; cp++) {
             if (part_of(&T0[cp].id, 0) != p) continue;
             double x[4]; for (int d = 0; d < 4; d++) x[d] = (double)T0[cp].m[d] / LP_FIXED_ONE;
             size_t gl = lp_ewkb_point4(x, geo, sizeof geo);
-            c16(&c, 4); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(T0[cp].hilbert)); c.rows++;
+            lp_copy_row(&c, 4); lp_copy_field(&c, T0[cp].id.b, 16); lp_copy_i16(&c, 0); lp_copy_field(&c, geo, (uint32_t)gl); lp_copy_i64(&c, lp_hilbert_key(T0[cp].hilbert));
         }
     for (uint64_t b = 0; b < nbucket[p]; b++) {
         Node *x = &NODE[bucket[p][b].idx];
         double xm[4]; for (int d = 0; d < 4; d++) xm[d] = (double)x->m[d] / LP_FIXED_ONE;
         size_t gl = lp_ewkb_point4(xm, geo, sizeof geo);
-        c16(&c, 4); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(bucket[p][b].h)); c.rows++;
+        lp_copy_row(&c, 4); lp_copy_field(&c, x->id.b, 16); lp_copy_i16(&c, x->tier); lp_copy_field(&c, geo, (uint32_t)gl); lp_copy_i64(&c, lp_hilbert_key(bucket[p][b].h));
     }
-    copy_end(&c); *rows_e = c.rows;
+    copy_close(&c); *rows_e = c.rows;
     part_name(p, "physicality", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY %s (entity, tier, hilbert, path, mask) FROM STDIN (FORMAT binary)", tn);
-    uint8_t mask[4 + 32]; { uint32_t bl = htonl(256); memcpy(mask, &bl, 4); }         /* bit varying, binary: its length in bits, then its bytes, first bit first */
-    copy_begin(&c, pg, sql);
+    uint8_t mask[4 + 32]; lp_put_be(mask, 256, 4);         /* bit varying, binary: its length in bits, then its bytes, first bit first */
+    copy_open(&c, pg, sql);
     if (atoms_needed && p / 16 == 0)
         for (uint32_t cp = 0; cp < LP_NCP; cp++) {
             if (part_of(&T0[cp].id, 0) != p) continue;
             uint64_t one = 1; size_t gl = lp_ewkb_runs(&T0[cp].id, &one, 1, geo, sizeof geo); memset(mask + 4, 0, 32);
-            c16(&c, 5); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cf_i64(&c, hsigned(T0[cp].hilbert)); cfield(&c, geo, (uint32_t)gl); cfield(&c, mask, 36); c.rows++;
+            lp_copy_row(&c, 5); lp_copy_field(&c, T0[cp].id.b, 16); lp_copy_i16(&c, 0); lp_copy_i64(&c, lp_hilbert_key(T0[cp].hilbert)); lp_copy_field(&c, geo, (uint32_t)gl); lp_copy_field(&c, mask, 36);
         }
     for (uint64_t b = 0; b < nbucket[p]; b++) {
         Node *x = &NODE[bucket[p][b].idx];
@@ -136,12 +95,12 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
         /* the mask: what the row is, and the types it holds (each constituent that is a type of a mask field) */
         memset(mask + 4, 0, 32); for (int b = 0; b < 8; b++) if (x->kind & (1u << b)) mask[4 + (b >> 3)] |= (uint8_t)(0x80 >> (b & 7));
         if (HW) for (uint32_t v = 0; v < x->nv; v++) { int32_t b = lp_highway_mask_bit(HW, &ids[v]); if (b >= 0 && b < 256) mask[4 + (b >> 3)] |= (uint8_t)(0x80 >> (b & 7)); }
-        c16(&c, 5); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cf_i64(&c, hsigned(bucket[p][b].h)); cfield(&c, gp, (uint32_t)gl); cfield(&c, mask, 36); c.rows++;
+        lp_copy_row(&c, 5); lp_copy_field(&c, x->id.b, 16); lp_copy_i16(&c, x->tier); lp_copy_i64(&c, lp_hilbert_key(bucket[p][b].h)); lp_copy_field(&c, gp, (uint32_t)gl); lp_copy_field(&c, mask, 36);
         if (gp != geo) free(gp);
     }
-    copy_end(&c); *rows_p = c.rows;
+    copy_close(&c); *rows_p = c.rows;
     if (own_txn) { PGresult *e = PQexec(pg, "COMMIT"); if (PQresultStatus(e) != PGRES_COMMAND_OK) { fprintf(stderr, "commit: %s", PQerrorMessage(pg)); exit(1); } PQclear(e); }
-    free(c.b); free(ids); free(runs);
+    lp_buf_free(&c.buf); free(ids); free(runs);
 }
 
 /* ---- standings: a map from claim ID to its slot */
@@ -149,83 +108,69 @@ typedef struct { lp_id id; lp_rating r; uint32_t matches, m0; uint8_t had, enter
 static Standing *stand; static lp_idmap *smap; static uint64_t sn;          /* the standings in play, in the order met; found by claim ID */
 /* The stock default a claim enters at: Glicko-2's rating for the unrated, and the uncertainty of the witness that brings
  * it (the deviation its trust plays with), unless the recipe gives this kind of statement its own. */
-static double entry_deviation(const Event *e, double trust){
-    if (e->enter_deviation > 0) return e->enter_deviation;
-    double t = trust < 0 ? -trust : trust; if (t == 0.0) return 350.0;
-    double d = lp_trust_deviation(t); return d < 30.0 ? 30.0 : d;
-}
 static Standing *stand_get(const lp_id *id, const Event *add, double trust){
     if (!add) { int64_t i = lp_idmap_find(smap, id); return i < 0 ? NULL : &stand[i]; }
     bool fresh; size_t i = lp_idmap_put(smap, id, &fresh); if (!fresh) return &stand[i];
-    stand[i] = (Standing){ *id, { add->enter_rating, entry_deviation(add, trust), 0.06 }, 0, 0, 0 };  /* the stock default for its level of attestation */
+    stand[i] = (Standing){ *id, { add->enter_rating, add->enter_deviation > 0 ? add->enter_deviation : lp_entry_deviation(trust), LP_GLICKO_VOLATILITY }, 0, 0, 0, 0 };  /* the stock default for its level of attestation */
     sn = lp_idmap_count(smap); return &stand[i];
 }
 
 /* What the ledger already holds, by the witnessed thing and the witness that witnessed it: the same witness witnessing
  * the same thing again is the observation it made before, read again (Content 11.12: a retried job does not multiply
  * the same witnessing), and is not written again. Another witness of the same lineage is a copy, and is. */
-typedef struct { lp_id w, by; } Ledgered;
-static Ledgered *ldg; static uint8_t *ldg_used; static uint64_t ldg_cap, ldg_n;
-static uint64_t ldg_slot(const lp_id *w, const lp_id *by){ uint64_t a, b; memcpy(&a, w->b, 8); memcpy(&b, by->b + 8, 8); return (a ^ b * 0x9E3779B97F4A7C15ull) & (ldg_cap - 1); }
-static void ldg_put(const lp_id *w, const lp_id *by){
-    if ((ldg_n + 1) * 2 > ldg_cap) {                                         /* half full: twice the room */
-        Ledgered *o = ldg; uint8_t *ou = ldg_used; uint64_t oc = ldg_cap; ldg_cap = oc ? oc * 2 : 1 << 16;
-        ldg = malloc(sizeof(Ledgered) * ldg_cap); ldg_used = calloc(ldg_cap, 1);
-        for (uint64_t i = 0; i < oc; i++) if (ou[i]) { uint64_t k = ldg_slot(&o[i].w, &o[i].by); while (ldg_used[k]) k = (k + 1) & (ldg_cap - 1); ldg_used[k] = 1; ldg[k] = o[i]; }
-        free(o); free(ou); }
-    uint64_t k = ldg_slot(w, by);
-    while (ldg_used[k]) { if (!memcmp(&ldg[k].w, w, 16) && !memcmp(&ldg[k].by, by, 16)) return; k = (k + 1) & (ldg_cap - 1); }
-    ldg_used[k] = 1; ldg[k].w = *w; ldg[k].by = *by; ldg_n++;
+/* A pair of IDs as one key: side by side, 32 bytes. */
+static void pair_put(lp_strmap *m, const lp_id *a, const lp_id *b, bool *fresh){ lp_id k[2] = { *a, *b }; lp_strmap_put(m, k, sizeof k, fresh); }
+static bool pair_has(const lp_strmap *m, const lp_id *a, const lp_id *b){ lp_id k[2] = { *a, *b }; return m && lp_strmap_find(m, k, sizeof k) >= 0; }
+static lp_strmap *ldg;
+static void ldg_put(const lp_id *w, const lp_id *by){ if (!ldg) ldg = lp_strmap_sized(0); pair_put(ldg, w, by, NULL); }
+static int ldg_has(const lp_id *w, const lp_id *by){ return pair_has(ldg, w, by); }
+/* What a recorded standing says, read back into the one in play: m0, what it was recorded with. */
+static void standing_row(const PGresult *q, int r, const uint64_t *place, void *ctx){
+    (void)place; (void)ctx; Standing *s = stand_get(col_id(q, r, 0), NULL, 0); if (!s) return;
+    s->r = col_rating(q, r, 1); s->matches = s->m0 = (uint32_t)col_int(q, r, 4); s->had = 1;
 }
-static int ldg_has(const lp_id *w, const lp_id *by){
-    if (!ldg_cap) return 0; uint64_t k = ldg_slot(w, by);
-    while (ldg_used[k]) { if (!memcmp(&ldg[k].w, w, 16) && !memcmp(&ldg[k].by, by, 16)) return 1; k = (k + 1) & (ldg_cap - 1); }
-    return 0;
+/* What the ledger says was witnessed, by which witness and lineage: once per lineage, and the pair ledgered. */
+static void lineage_row(const PGresult *q, int r, const uint64_t *place, void *seen){
+    (void)place; const lp_id *wit = col_id(q, r, 0), *wid = col_id(q, r, 1);
+    pair_put(seen, wit, PQgetisnull(q, r, 2) ? wid : col_id(q, r, 2), NULL); ldg_put(wit, wid);
 }
+typedef struct { double trust; uint8_t known; } Own;                       /* a witness a source names statement by statement */
+static void known_row(const PGresult *q, int r, const uint64_t *place, void *own){ (void)place; Own *o = lp_idmap_lookup(own, col_id(q, r, 0)); if (o) o->known = 1; }
 /* One partition of the semantics, on one connection: the ledger's rows whose witnessed thing's ID begins with h, in
  * reading order (its order is the order of play), the new standings and the recorded ones updated. Each partition is
  * written by one connection, inside that connection's part of the batch's transaction (load: prepared, then committed
  * as one). Returns 0, or 1 when the database refused. */
 static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led, uint64_t *nnew, uint64_t *nupd){
-    Copy lc = { 0 }; char sql[300]; snprintf(sql, sizeof sql, "COPY attestation_%x (claim, witness, score, position) FROM STDIN (FORMAT binary)", h);
-    copy_begin(&lc, pg, sql);
+    lp_copy lc = { 0 }; char sql[300]; snprintf(sql, sizeof sql, "COPY attestation_%x (claim, witness, score, position) FROM STDIN (FORMAT binary)", h);
+    copy_open(&lc, pg, sql);
     for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i];
         if (e->kind == EV_MEMBER || (e->witnessed.b[0] >> 4) != h) continue;                /* witnessed within its record: the record's row */
         if (ldg_has(&e->witnessed, e->own_witness ? &e->witness : &files[fi].witness.id)) continue;      /* this witness's, already in the ledger */
-        c16(&lc, 4); cfield(&lc, e->witnessed.b, 16); cfield(&lc, e->own_witness ? e->witness.b : files[fi].witness.id.b, 16); cf_f32(&lc, e->score);
-        if (e->position) cf_i32(&lc, (int32_t)e->position); else c32(&lc, 0xFFFFFFFFu);
-        lc.rows++; }
-    copy_end(&lc); *led += lc.rows; free(lc.b);
-    Copy c = { 0 }; snprintf(sql, sizeof sql, "COPY consensus_%x (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)", h);
-    copy_begin(&c, pg, sql);
+        lp_copy_row(&lc, 4); lp_copy_field(&lc, e->witnessed.b, 16); lp_copy_field(&lc, e->own_witness ? e->witness.b : files[fi].witness.id.b, 16); lp_copy_f32(&lc, e->score);
+        if (e->position) lp_copy_i32(&lc, (int32_t)e->position); else lp_copy_null(&lc); }
+    copy_close(&lc); *led += lc.rows; lp_buf_free(&lc.buf);
+    lp_copy c = { 0 }; snprintf(sql, sizeof sql, "COPY consensus_%x (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)", h);
+    copy_open(&c, pg, sql);
     for (uint64_t i = 0; i < sn; i++) { const Standing *s = &stand[i]; if (s->had || (s->id.b[0] >> 4) != h) continue;
-        c16(&c, 5); cfield(&c, s->id.b, 16); cf_f64(&c, s->r.rating); cf_f64(&c, s->r.deviation); cf_f64(&c, s->r.volatility); cf_i32(&c, (int32_t)s->matches); c.rows++; }
-    copy_end(&c); *nnew += c.rows; free(c.b);
-    for (uint64_t i0 = 0; i0 < sn; ) {                                        /* recorded standings: set-based updates */
-        const uint32_t oid[5] = { id_oid, 701, 701, 701, 23 }; static const int w[5] = { 16, 8, 8, 8, 4 };
-        uint64_t *idx = malloc(sizeof(uint64_t) * 100000); uint32_t n = 0;
-        for (; i0 < sn && n < 100000; i0++) if (stand[i0].had && stand[i0].matches != stand[i0].m0 && (stand[i0].id.b[0] >> 4) == h) idx[n++] = i0;     /* moved by this batch's matchups */
-        if (!n) { free(idx); continue; }
-        uint8_t *arr[5]; int alen[5];
-        for (int f = 0; f < 5; f++) {
-            arr[f] = malloc(20 + (size_t)n * (4 + w[f])); uint8_t *q = arr[f] + 20;
-            uint32_t hdr[5] = { htonl(1), htonl(0), htonl(oid[f]), htonl(n), htonl(1) }; memcpy(arr[f], hdr, 20);
-            for (uint32_t j = 0; j < n; j++) {
-                const Standing *s = &stand[idx[j]]; uint32_t l = htonl((uint32_t)w[f]); memcpy(q, &l, 4); q += 4;
-                if (f == 0) memcpy(q, s->id.b, 16);
-                else if (f < 4) { double d = f == 1 ? s->r.rating : f == 2 ? s->r.deviation : s->r.volatility; uint64_t u; memcpy(&u, &d, 8); for (int y = 0; y < 8; y++) q[y] = (uint8_t)(u >> (56 - 8 * y)); }
-                else { uint32_t m = htonl(s->matches); memcpy(q, &m, 4); }
-                q += w[f];
-            }
-            alen[f] = (int)(q - arr[f]);
-        }
-        const char *v[5] = { (char *)arr[0], (char *)arr[1], (char *)arr[2], (char *)arr[3], (char *)arr[4] }; int fm[5] = { 1, 1, 1, 1, 1 };
+        lp_copy_row(&c, 5); lp_copy_field(&c, s->id.b, 16); lp_copy_f64(&c, s->r.rating); lp_copy_f64(&c, s->r.deviation); lp_copy_f64(&c, s->r.volatility); lp_copy_i32(&c, (int32_t)s->matches); }
+    copy_close(&c); *nnew += c.rows; lp_buf_free(&c.buf);
+    Args ua = { 0 }; lp_vec(const Standing *) chunk = { 0 }; int bad = 0;
+    for (uint64_t i0 = 0; i0 < sn && !bad; ) {                               /* recorded standings: set-based updates, five arrays side by side */
+        chunk.n = 0; for (; i0 < sn && chunk.n < 100000; i0++) if (stand[i0].had && stand[i0].matches != stand[i0].m0 && (stand[i0].id.b[0] >> 4) == h) lp_push(&chunk, &stand[i0]);     /* moved by this batch's matchups */
+        if (!chunk.n) continue;
+        lp_buf b[5] = { { 0 } }; args_reset(&ua);
+        lp_pg_array(&b[0], id_oid, chunk.n); for (int f = 1; f < 4; f++) lp_pg_array(&b[f], 701, chunk.n); lp_pg_array(&b[4], 23, chunk.n);
+        for (size_t j = 0; j < chunk.n; j++) { const Standing *x = chunk.v[j];
+            lp_pg_elem(&b[0], x->id.b, 16);
+            lp_buf_be(&b[1], 8, 4); lp_buf_be_f64(&b[1], x->r.rating); lp_buf_be(&b[2], 8, 4); lp_buf_be_f64(&b[2], x->r.deviation); lp_buf_be(&b[3], 8, 4); lp_buf_be_f64(&b[3], x->r.volatility);
+            lp_buf_be(&b[4], 4, 4); lp_buf_be(&b[4], x->matches, 4); }
+        for (int f = 0; f < 5; f++) { arg_raw(&ua, b[f].b, b[f].n); lp_buf_free(&b[f]); }
         snprintf(sql, sizeof sql, "UPDATE consensus_%x s SET rating = u.r, deviation = u.d, volatility = u.v, matches = u.m "
             "FROM unnest($1::blake3[], $2::float8[], $3::float8[], $4::float8[], $5::int[]) AS u(c, r, d, v, m) WHERE s.claim = u.c", h);
-        PGresult *u = PQexecParams(pg, sql, 5, NULL, v, alen, fm, 0); int bad = PQresultStatus(u) != PGRES_COMMAND_OK;
-        if (bad) fprintf(stderr, "standing update: %s", PQerrorMessage(pg));
-        PQclear(u); for (int f = 0; f < 5; f++) free(arr[f]); free(idx); if (bad) return 1; *nupd += n;
+        PGresult *u = ask_try(pg, sql, &ua);
+        if (!u) { fprintf(stderr, "standing update: %s", PQerrorMessage(pg)); bad = 1; } else { PQclear(u); *nupd += chunk.n; }
     }
+    args_free(&ua); lp_vec_free(&chunk); if (bad) return 1;
     return 0;
 }
 /* A statement that must succeed. */
@@ -350,67 +295,18 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) if (files[fi].ev.e[i].kind != EV_RECORD) stand_get(&files[fi].ev.e[i].claim, &files[fi].ev.e[i], files[fi].trust);
         /* claims already recorded start from their recorded standing */
         /* the statistics are partitioned by the claim's first hex digit: each read goes to its one partition */
-        lp_id *old = malloc(sizeof(lp_id) * (sn + 1)); uint64_t nold = 0, ocnt[17] = { 0 };
-        for (uint64_t i = 0; i < sn; i++) { Node *x = table_find(&stand[i].id); if (!x || x->keep != 1) { old[nold++] = stand[i].id; ocnt[(stand[i].id.b[0] >> 4) + 1]++; } }
-        for (int h = 0; h < 16; h++) ocnt[h + 1] += ocnt[h];
-        { lp_id *by = malloc(sizeof(lp_id) * (nold + 1)); uint64_t fill[16]; memcpy(fill, ocnt, sizeof fill); for (uint64_t i = 0; i < nold; i++) by[fill[old[i].b[0] >> 4]++] = old[i]; free(old); old = by; }
-        const uint64_t CH = 100000; typedef struct { int h; uint64_t lo, n; } OJob; OJob *oj = malloc(sizeof(OJob) * (nold / CH + 17)); uint64_t noj = 0;
-        for (int h = 0; h < 16; h++) for (uint64_t lo = ocnt[h]; lo < ocnt[h + 1]; lo += CH) oj[noj++] = (OJob){ h, lo, ocnt[h + 1] - lo < CH ? ocnt[h + 1] - lo : CH };
-        #pragma omp parallel for num_threads(npg) schedule(dynamic)
-        for (uint64_t j = 0; j < noj; j++) {
-            uint32_t k = (uint32_t)oj[j].n; uint8_t *ab = malloc(20 + 20 * (size_t)k);
-            size_t len = ids_param(ab, old + oj[j].lo, k); PGconn *c = pg[omp_get_thread_num()]; char sql[160]; snprintf(sql, sizeof sql, "SELECT claim, rating, deviation, volatility, matches FROM consensus_%x WHERE claim = ANY($1::blake3[])", oj[j].h);
-            const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
-            PGresult *q = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
-            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "standing: %s", PQerrorMessage(c)); exit(1); }
-            #pragma omp critical
-            for (int j = 0; j < PQntuples(q); j++) {
-                lp_id id; memcpy(id.b, PQgetvalue(q, j, 0), 16); Standing *s = stand_get(&id, NULL, 0); if (!s) continue;
-                double d[3]; for (int z = 0; z < 3; z++) { uint64_t u = 0; const uint8_t *b = (const uint8_t *)PQgetvalue(q, j, 1 + z); for (int y = 0; y < 8; y++) u = u << 8 | b[y]; memcpy(&d[z], &u, 8); }
-                const uint8_t *mb = (const uint8_t *)PQgetvalue(q, j, 4);
-                s->r = (lp_rating){ d[0], d[1], d[2] }; s->matches = s->m0 = (uint32_t)mb[0] << 24 | mb[1] << 16 | mb[2] << 8 | mb[3]; s->had = 1;
-            }
-            PQclear(q); free(ab);
-        }
-        free(old); free(oj);
+        Ids old = { 0 }; for (uint64_t i = 0; i < sn; i++) { Node *x = table_find(&stand[i].id); if (!x || x->keep != 1) lp_push(&old, stand[i].id); }
+        Groups cons = by_digit("consensus"), ledger = by_digit("attestation");
+        over_ids(pg, npg, old.v, old.n, &cons, 100000, "SELECT claim, rating, deviation, volatility, matches FROM %s WHERE claim = ANY($1::blake3[])", standing_row, NULL);
+        lp_vec_free(&old);
         /* What was witnessed plays once per lineage: a copy of it is a row in the ledger and nothing more. What this
-         * lineage witnessed before is read from the ledger; what it witnesses in this run is kept here. */
-        typedef struct { lp_id witnessed, lin; uint8_t used; } Seen;
-        uint64_t nrec = 0; for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) nrec += files[fi].ev.e[i].kind != EV_MEMBER;
-        lp_id *wold = malloc(sizeof(lp_id) * (nrec + 1)); uint64_t nwold = 0;
+         * lineage witnessed before is read from the ledger, each claim from the one partition it is in (its ID's first
+         * hex digit); what it witnesses in this run is kept here. */
+        lp_strmap *seen = lp_strmap_sized(0); Ids wold = { 0 };
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (e->kind == EV_MEMBER) continue;
-            Node *x = table_find(&e->witnessed); if (!x || x->keep != 1) wold[nwold++] = e->witnessed; }
-        uint64_t lin_at[17] = { 0 }; uint64_t pcap = 1024; while (pcap < nrec * 3) pcap <<= 1; Seen *seen = calloc(pcap, sizeof(Seen));
-        #define SEEN_AT(w, l, found) do { uint64_t h_; memcpy(&h_, (w)->b, 8); uint64_t c_; memcpy(&c_, (l)->b + 8, 8); h_ ^= c_ * 0x9E3779B97F4A7C15ull; k_ = h_ & (pcap - 1); found = 0; \
-            while (seen[k_].used) { if (!memcmp(seen[k_].witnessed.b, (w)->b, 16) && !memcmp(seen[k_].lin.b, (l)->b, 16)) { found = 1; break; } k_ = (k_ + 1) & (pcap - 1); } } while (0)
-        /* each claim read from the one partition of the ledger it is in (its ID's first hex digit): asked of the whole
-         * ledger, every one of the 16 partitions probes every claim of the batch */
-        { lp_id *by = malloc(sizeof(lp_id) * (nwold + 1)); uint64_t at[17] = { 0 };
-          for (uint64_t i = 0; i < nwold; i++) at[(wold[i].b[0] >> 4) + 1]++;
-          for (int h = 0; h < 16; h++) at[h + 1] += at[h];
-          uint64_t put[16]; memcpy(put, at, sizeof put); for (uint64_t i = 0; i < nwold; i++) by[put[wold[i].b[0] >> 4]++] = wold[i];
-          free(wold); wold = by; memcpy(lin_at, at, sizeof at); }
-        OJob *lj = malloc(sizeof(OJob) * (nwold / CH + 17)); uint64_t nlj = 0;
-        for (int h = 0; h < 16; h++) for (uint64_t lo = lin_at[h]; lo < lin_at[h + 1]; lo += CH) lj[nlj++] = (OJob){ h, lo, lin_at[h + 1] - lo < CH ? lin_at[h + 1] - lo : CH };
-        #pragma omp parallel for num_threads(npg) schedule(dynamic)
-        for (uint64_t jx = 0; jx < nlj; jx++) {
-            uint64_t i0 = lj[jx].lo; uint32_t k = (uint32_t)lj[jx].n; uint8_t *ab = malloc(20 + 20 * (size_t)k);
-            size_t len = ids_param(ab, wold + i0, k); PGconn *c = pg[omp_get_thread_num()];
-            const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 }; char sql[160];
-            snprintf(sql, sizeof sql, "SELECT a.claim, w.id, w.lineage FROM attestation_%x a JOIN witness w ON w.id = a.witness WHERE a.claim = ANY($1::blake3[])", lj[jx].h);
-            PGresult *q = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
-            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "lineage: %s", PQerrorMessage(c)); exit(1); }
-            #pragma omp critical
-            for (int j = 0; j < PQntuples(q); j++) {
-                lp_id wit, wid, lin; memcpy(wit.b, PQgetvalue(q, j, 0), 16); memcpy(wid.b, PQgetvalue(q, j, 1), 16);
-                if (PQgetisnull(q, j, 2)) lin = wid; else memcpy(lin.b, PQgetvalue(q, j, 2), 16);
-                uint64_t k_; int found; SEEN_AT(&wit, &lin, found);
-                if (!found) { seen[k_].used = 1; seen[k_].witnessed = wit; seen[k_].lin = lin; }
-                ldg_put(&wit, &wid);
-            }
-            PQclear(q); free(ab);
-        }
-        free(wold); free(lj);
+            Node *x = table_find(&e->witnessed); if (!x || x->keep != 1) lp_push(&wold, e->witnessed); }
+        over_ids(pg, npg, wold.v, wold.n, &ledger, 100000, "SELECT a.claim, w.id, w.lineage FROM %s a JOIN witness w ON w.id = a.witness WHERE a.claim = ANY($1::blake3[])", lineage_row, seen);
+        lp_vec_free(&wold);
         st->t_read += now() - tp; tp = now();
         /* The matchups, first in, first out: each attestation is played as one Glicko-2 matchup at the witness's trust.
          * A claim entering for the first time enters at its stock default and plays its first attestation from there;
@@ -428,23 +324,22 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             for (uint64_t i = 0; i < files[fi].ev.n; i++, x++) {
                 const Event *e = &files[fi].ev.e[i]; const lp_id *lin = e->own_witness ? &e->witness : flin; play[x] = 255;
                 if (e->kind != EV_MEMBER) {                                  /* what is witnessed: once per lineage */
-                    uint64_t k_; SEEN_AT(&e->witnessed, lin, copy);
-                    if (!copy) { seen[k_].used = 1; seen[k_].witnessed = e->witnessed; seen[k_].lin = *lin; }
+                    bool fresh; pair_put(seen, &e->witnessed, lin, &fresh); copy = !fresh;
                     if (e->kind == EV_RECORD) continue;
                 }
                 if (!copy) play[x] = (uint8_t)(e->claim.b[7] % NP);
             } } }
-        free(seen);
+        lp_strmap_free(seen);
         #pragma omp parallel for schedule(dynamic, 1)
         for (int p = 0; p < NP; p++) { uint64_t x = 0;
             for (int fi = 0; fi < nfiles; fi++) { double trust = files[fi].trust;
                 for (uint64_t i = 0; i < files[fi].ev.n; i++, x++) { if (play[x] != p) continue; const Event *e = &files[fi].ev.e[i];
                     Standing *s = stand_get(&e->claim, NULL, 0);
                     if (!s->had && !s->entered) s->entered = 1;
-                    lp_attest(&s->r, trust, e->score, e->enter_rating, 0.5, 30.0); s->matches++; } } }
+                    lp_attest(&s->r, trust, e->score, e->enter_rating, LP_ATTEST_TAU, LP_ATTEST_FLOOR); s->matches++; } } }
         free(play);
         st->t_play += now() - tp; tp = now();
-        Copy c = { 0 };
+        lp_copy c = { 0 };
         /* witnesses: each once, and only those the database does not know yet */
         lp_id *wid = malloc(sizeof(lp_id) * (size_t)nfiles); int *wfile = malloc(sizeof(int) * (size_t)nfiles), nw = 0;
         for (int fi = 0; fi < nfiles; fi++) if (files[fi].ev.n) {
@@ -452,35 +347,25 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             if (k == nw) { wid[nw] = files[fi].witness.id; wfile[nw++] = fi; }
         }
         /* witnesses a source names statement by statement: each is its own lineage, and plays at the source's trust */
-        lp_id *own = NULL; double *owntrust = NULL; uint64_t nown = 0, cown = 0; lp_idmap *oseen = lp_idmap_new();
+        lp_idmap *own = lp_idmap_sized(sizeof(Own));
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (!e->own_witness) continue;
-            bool fresh; lp_idmap_put(oseen, &e->witness, &fresh); if (!fresh) continue;
-            if (nown == cown) { cown = cown ? cown * 2 : 4096; own = xrealloc(own, cown * sizeof(lp_id)); owntrust = xrealloc(owntrust, cown * 8); }
-            own[nown] = e->witness; owntrust[nown] = files[fi].trust; nown++; }
-        uint8_t *oknown = calloc(nown ? nown : 1, 1);
-        for (uint64_t i0 = 0; i0 < nown; i0 += 50000) { uint32_t k = (uint32_t)(nown - i0 < 50000 ? nown - i0 : 50000); uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t len = ids_param(ab, own + i0, k);
-            const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
-            PGresult *q = PQexecParams(pg[0], "SELECT u.i FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN witness w ON w.id = u.id", 1, NULL, v, l, f, 0);
-            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg[0])); return 1; }
-            for (int j = 0; j < PQntuples(q); j++) oknown[i0 + (uint64_t)atoll(PQgetvalue(q, j, 0)) - 1] = 1;
-            PQclear(q); free(ab); }
-        uint8_t *known = calloc((size_t)(nw ? nw : 1), 1);
-        { uint8_t *ab = malloc(20 + 20 * (size_t)nw); size_t len = ids_param(ab, wid, (uint32_t)nw);
-          const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
-          PGresult *q = PQexecParams(pg[0], "SELECT id FROM witness WHERE id = ANY($1::blake3[])", 1, NULL, v, l, f, 1);
-          if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg[0])); return 1; }
-          for (int j = 0; j < PQntuples(q); j++) for (int k = 0; k < nw; k++) if (!memcmp(wid[k].b, PQgetvalue(q, j, 0), 16)) known[k] = 1;
-          PQclear(q); free(ab); }
-        copy_begin(&c, pg[0], "COPY witness (id, lineage, trust) FROM STDIN (FORMAT binary)");
+            bool fresh; Own *o = lp_idmap_get(own, &e->witness, &fresh); if (fresh) o->trust = files[fi].trust; }
+        { Groups one = whole(); over_ids(pg, 1, lp_idmap_keys(own), lp_idmap_count(own), &one, 50000, "SELECT id FROM witness WHERE id = ANY($1::blake3[])", known_row, own); }
+        uint8_t *known = calloc((size_t)(nw ? nw : 1), 1); lp_idmap *wat = lp_idmap_new(); for (int k = 0; k < nw; k++) *(uint32_t *)lp_idmap_get(wat, &wid[k], NULL) = (uint32_t)k;
+        { Args wa = { 0 }; arg_ids(&wa, wid, (size_t)nw); PGresult *q = ask_try(pg[0], "SELECT id FROM witness WHERE id = ANY($1::blake3[])", &wa); args_free(&wa);
+          if (!q) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg[0])); return 1; }
+          for (int j = 0; j < PQntuples(q); j++) { int64_t k = lp_idmap_find(wat, col_id(q, j, 0)); if (k >= 0) known[k] = 1; }
+          PQclear(q); }
+        copy_open(&c, pg[0], "COPY witness (id, lineage, trust) FROM STDIN (FORMAT binary)");
         for (int k = 0; k < nw; k++) if (!known[k]) {
             int fi = wfile[k];
-            c16(&c, 3); cfield(&c, files[fi].witness.id.b, 16);
-            if (files[fi].has_lineage) cfield(&c, files[fi].lineage.id.b, 16); else c32(&c, 0xFFFFFFFFu);
-            cf_f64(&c, files[fi].trust);
+            lp_copy_row(&c, 3); lp_copy_field(&c, files[fi].witness.id.b, 16);
+            if (files[fi].has_lineage) lp_copy_field(&c, files[fi].lineage.id.b, 16); else lp_copy_null(&c);
+            lp_copy_f64(&c, files[fi].trust);
         }
-        for (uint64_t i = 0; i < nown; i++) if (!oknown[i]) { int dup = 0; for (int k = 0; k < nw && !dup; k++) dup = !memcmp(&wid[k], &own[i], 16); if (dup) continue;
-            c16(&c, 3); cfield(&c, own[i].b, 16); c32(&c, 0xFFFFFFFFu); cf_f64(&c, owntrust[i]); }
-        copy_end(&c); free(wid); free(wfile); free(known); free(own); free(owntrust); lp_idmap_free(oseen); free(oknown);
+        for (size_t i = 0; i < lp_idmap_count(own); i++) { const Own *o = lp_idmap_at(own, i); if (o->known || lp_idmap_find(wat, lp_idmap_key(own, i)) >= 0) continue;
+            lp_copy_row(&c, 3); lp_copy_id(&c, lp_idmap_key(own, i)); lp_copy_null(&c); lp_copy_f64(&c, o->trust); }
+        copy_close(&c); free(wid); free(wfile); free(known); lp_idmap_free(own); lp_idmap_free(wat);
         st->t_wit += now() - tp; tp = now();
         /* the ledger and the standings, a partition a connection at a time on every connection: each connection's
          * part of the batch's transaction (prepared and committed as one below) */
@@ -491,7 +376,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         for (int j = 0; j < nparts; j++) for (int h = j; h < 16; h += nparts) { uint64_t a = 0, b = 0, c = 0; bad += part_write(pg[j], h, files, nfiles, &a, &b, &c); led += a; nnew += b; nupd += c; }
         if (bad) return 1;
         st->led += led; st->std_new += nnew; st->std_upd += nupd;
-        free(ldg); free(ldg_used); ldg = NULL; ldg_used = NULL; ldg_cap = ldg_n = 0;
+        lp_strmap_free(ldg); ldg = NULL;
         st->t_led += now() - tp; tp = now();
     }
     if (nev) { free(stand); lp_idmap_free(smap); stand = NULL; smap = NULL; }

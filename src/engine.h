@@ -216,7 +216,6 @@ int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers
 
 /* ---- the database, as the engine speaks to it (pg.c): a statement's parameters, its columns read back, COPY */
 extern uint32_t id_oid;                                               /* the database's own number for the type of an ID, blake3 */
-size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n);         /* a binary blake3[] parameter, out 20 + 20 n bytes (db.c's; Args elsewhere) */
 #define ARGS_MAX 8
 typedef struct { lp_buf b; int binary; } Arg;
 typedef struct { Arg a[ARGS_MAX]; int n; } Args;                       /* zeroed to begin; args_free when done */
