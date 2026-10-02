@@ -240,20 +240,23 @@ typedef struct { int ncand, choice, level, capped; double score; } Bind;      /*
 static const Field *CF;
 static int cand_by_force(const void *a, const void *b){ double x = CF->c[*(const int *)a].force, y = CF->c[*(const int *)b].force; return x < y ? 1 : x > y ? -1 : 0; }
 static int has_id(const lp_id *s, int n, const lp_id *id){ return n && bsearch(id, s, (size_t)n, 16, id_cmp) != NULL; }
-/* How strongly two candidates of different occurrences hold together: a strand that ties them counts twice, each
- * entity a strand of each meets in (no hub) once. */
-static int compat(const Cand *a, const Cand *b, const lp_id *aid, const lp_id *bid, const lp_id *hubs, int nhubs){
-    int s = 0; if (!memcmp(aid, bid, 16)) return 4;
-    if (has_id(a->nb, a->nnb, bid) || has_id(b->nb, b->nnb, aid)) s += 2;
+/* How strongly two candidates of different occurrences hold together, the least shared meeting first (Sequence 18.9):
+ * a strand that ties them counts one; each entity a strand of each meets in counts one over how many strands share it,
+ * a hub nothing; the sum over the breadth of the two (the root of how many each reaches), so a reading that touches
+ * everything cannot win by reach. Popularity is never a reason (20.8). */
+static double compat(const Cand *a, const Cand *b, const lp_id *aid, const lp_id *bid, const lp_id *meet, const double *mw, int nmeet){
+    if (!memcmp(aid, bid, 16)) { const lp_id *m = nmeet ? bsearch(aid, meet, (size_t)nmeet, 16, id_cmp) : NULL; return m ? mw[m - meet] : 0.0; }    /* one entity both reach: as least-shared as it is */
+    double s = 0;
+    if (has_id(a->nb, a->nnb, bid) || has_id(b->nb, b->nnb, aid)) s += 1.0;
     for (int i = 0, j = 0; i < a->nnb && j < b->nnb; ) { int c = memcmp(&a->nb[i], &b->nb[j], 16);
-        if (!c) { if (!has_id(hubs, nhubs, &a->nb[i])) s++; i++; j++; } else if (c < 0) i++; else j++; }
-    return s;
+        if (!c) { const lp_id *m = nmeet ? bsearch(&a->nb[i], meet, (size_t)nmeet, 16, id_cmp) : NULL; if (m) s += mw[m - meet]; i++; j++; } else if (c < 0) i++; else j++; }
+    return s / sqrt((double)(a->nnb > 1 ? a->nnb : 1) * (double)(b->nnb > 1 ? b->nnb : 1));
 }
 static int orient(State *st, Field *fd, Bind *bind, int *nambig){
     const Firmware *fw = st->fw; Cand *cand = NULL; int nc = 0, cc = 0; *nambig = 0;
     int *byocc = malloc(sizeof(int) * (size_t)(fd->n ? fd->n : 1));
     for (int i = 0; i < st->nocc; i++) { memset(&bind[i], 0, sizeof bind[i]); bind[i].choice = -1;
-        if (!((st->open.w[i >> 6] >> (i & 63)) & 1)) continue;                         /* an occurrence that owes nothing orients nothing */
+        if (!st->composed[i] || st->role[i] <= 0) continue;                                 /* every word has readings: the frame's constrain the slot's */
         int m = 0; for (int z = 0; z < fd->n; z++) { const Cell *x = &fd->c[z];
             if (x->hub || x->segment || x->force <= 0 || !((x->support.w[i >> 6] >> (i & 63)) & 1)) continue; byocc[m++] = z; }    /* a segment is evidence, not a reading */
         CF = fd; qsort(byocc, (size_t)m, sizeof(int), cand_by_force);
@@ -281,15 +284,18 @@ static int orient(State *st, Field *fd, Bind *bind, int *nambig){
         for (int k = 0; k < m; k++) { Cand *x = &cand[b0 + k]; if (x->nnb) qsort(x->nb, (size_t)x->nnb, 16, id_cmp); }
         PQclear(q); free(ab); free(ids); free(cap); }
     /* the entities candidates of two occurrences meet in: a hub among them is reached, never crossed */
-    lp_id *meet = NULL; int nmeet = 0, cmeet = 0, nhubs = 0; lp_id *hubs = NULL;
+    lp_id *meet = NULL; int nmeet = 0, cmeet = 0; double *mw = NULL;
+    for (int a = 0; a < nc; a++) for (int b = a + 1; b < nc; b++) if (cand[a].occ != cand[b].occ && !memcmp(&fd->c[cand[a].cell].id, &fd->c[cand[b].cell].id, 16)) {      /* a reading two words share is a meeting too */
+        if (nmeet == cmeet) { cmeet = cmeet ? cmeet * 2 : 256; meet = xrealloc(meet, sizeof(lp_id) * (size_t)cmeet); } meet[nmeet++] = fd->c[cand[a].cell].id; }
     for (int a = 0; a < nc; a++) for (int b = a + 1; b < nc; b++) { if (cand[a].occ == cand[b].occ) continue;
         for (int i = 0, j = 0; i < cand[a].nnb && j < cand[b].nnb; ) { int c = memcmp(&cand[a].nb[i], &cand[b].nb[j], 16);
             if (!c) { if (nmeet == cmeet) { cmeet = cmeet ? cmeet * 2 : 256; meet = xrealloc(meet, sizeof(lp_id) * (size_t)cmeet); } if (nmeet < 1 << 16) meet[nmeet++] = cand[a].nb[i]; i++; j++; } else if (c < 0) i++; else j++; } }
     if (nmeet) { qsort(meet, (size_t)nmeet, 16, id_cmp); int u = 0; for (int i = 0; i < nmeet; i++) if (!u || memcmp(&meet[i], &meet[u - 1], 16)) meet[u++] = meet[i]; nmeet = u;
         Field mf = { 0 }; int *idx = malloc(sizeof(int) * (size_t)nmeet); for (int i = 0; i < nmeet; i++) { cell(&mf, &meet[i]); idx[i] = i; }
         for (int b0 = 0; b0 < nmeet; b0 += 512) share(st, &mf, idx + b0, nmeet - b0 < 512 ? nmeet - b0 : 512);
-        hubs = malloc(sizeof(lp_id) * (size_t)nmeet); for (int i = 0; i < mf.n; i++) if (mf.c[i].hub) hubs[nhubs++] = mf.c[i].id;
-        if (nhubs) qsort(hubs, (size_t)nhubs, 16, id_cmp); free(idx); field_free(&mf); }
+        mw = malloc(sizeof(double) * (size_t)nmeet);                         /* meet is sorted, and mf holds it in the same order */
+        for (int i = 0; i < nmeet; i++) mw[i] = mf.c[i].hub ? 0.0 : 1.0 / (double)(mf.c[i].shared > 1 ? mf.c[i].shared : 1);
+        free(idx); field_free(&mf); }
     /* the joint interpretation: each occurrence's choice, given the others', until none changes */
     int *first = calloc((size_t)st->nocc + 1, sizeof(int)); for (int i = 0, at = 0; i < st->nocc; i++) { first[i] = at; at += bind[i].ncand; } first[st->nocc] = nc;
     for (int round = 0; round < 8; round++) { int changed = 0;
@@ -297,15 +303,15 @@ static int orient(State *st, Field *fd, Bind *bind, int *nambig){
             for (int a = first[i]; a < first[i] + bind[i].ncand; a++) { double s = 0;
                 for (int j = 0; j < st->nocc; j++) { if (j == i || !bind[j].ncand) continue; int lo = first[j], hi = first[j] + bind[j].ncand, bj = bind[j].choice;
                     double w = st->role[j], top = 0;                              /* before the others have chosen, the best any of their candidates gives */
-                    if (round && bj >= 0) top = compat(&cand[a], &cand[bj], &fd->c[cand[a].cell].id, &fd->c[cand[bj].cell].id, hubs, nhubs);
-                    else if (!round) for (int b = lo; b < hi; b++) { int c = compat(&cand[a], &cand[b], &fd->c[cand[a].cell].id, &fd->c[cand[b].cell].id, hubs, nhubs); if (c > top) top = c; }
+                    if (round && bj >= 0) top = compat(&cand[a], &cand[bj], &fd->c[cand[a].cell].id, &fd->c[cand[bj].cell].id, meet, mw, nmeet);
+                    else if (!round) for (int b = lo; b < hi; b++) { double c = compat(&cand[a], &cand[b], &fd->c[cand[a].cell].id, &fd->c[cand[b].cell].id, meet, mw, nmeet); if (c > top) top = c; }
                     s += w * top; }
                 if (s > best) { second = best; best = s; pick = a; } else if (s > second) second = s; }
             bind[i].level = pick >= 0 && second == best;
             if (pick != bind[i].choice) { bind[i].choice = pick; changed = 1; } bind[i].score = best; }
         if (round && !changed) break; }
-    int bound = 0; for (int i = 0; i < st->nocc; i++) { if (bind[i].choice >= 0) { bound++; if (bind[i].level) (*nambig)++; bind[i].choice = cand[bind[i].choice].cell; } }
-    for (int a = 0; a < nc; a++) free(cand[a].nb); free(cand); free(meet); free(hubs); free(first);
+    int bound = 0; for (int i = 0; i < st->nocc; i++) { int owes = (st->open.w[i >> 6] >> (i & 63)) & 1; if (bind[i].choice >= 0) { bound += owes; if (bind[i].level && owes) (*nambig)++; bind[i].choice = cand[bind[i].choice].cell; } }
+    for (int a = 0; a < nc; a++) free(cand[a].nb); free(cand); free(meet); free(mw); free(first);
     return bound;
 }
 int cmd_turn(int argc, char **argv){
@@ -425,6 +431,8 @@ int cmd_turn(int argc, char **argv){
         if (!np) { free(pp); if (!nemit) disposition = ncentre ? "unresolved: nothing follows and nothing grounds what is open" : disposition; break; }
         /* STEER, SELECT */
         qsort(pp, (size_t)np, sizeof(Prop), elect);
+        if (!pp[0].grounds && bit_count_and(&st->open, &st->open)) {            /* while obligations are open, what grounds none of them is not emitted (Sequence 20.8) */
+            free(pp); if (!nemit) disposition = "unresolved: what follows grounds nothing that is owed"; break; }
         int pick = 0; if (fw.top_within > 0) { int tied = 0; while (tied + 1 < np && pp[tied + 1].grounds == pp[0].grounds && pp[tied + 1].cont == pp[0].cont && pp[0].conf - pp[tied + 1].conf <= fw.top_within) tied++; pick = (int)(rand_r(&st->seed) % (unsigned)(tied + 1)); }
         Prop sel = pp[pick]; free(pp);
         /* REALIZE */
