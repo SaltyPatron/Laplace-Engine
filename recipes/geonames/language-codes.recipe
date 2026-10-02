@@ -4,9 +4,11 @@ name geonames-language-codes
 # The file has a header row: "ISO 639-3	ISO 639-2	ISO 639-1	Language Name". Language Name is the one column no row
 # leaves empty; every row says of it the codes the other columns hold.
 match iso-languagecodes.txt
-grammar table
-header
 
-claims
-subject in "Language Name"
-attest "ISO 639-3" "ISO 639-2" "ISO 639-1"
+tier row by \n
+header
+tier field by \t
+
+thing row "Language Name"
+content "Language Name" "ISO 639-3" "ISO 639-2" "ISO 639-1"
+attest row "ISO 639-3" "ISO 639-2" "ISO 639-1"

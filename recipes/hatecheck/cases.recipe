@@ -4,19 +4,21 @@ name hatecheck-cases
 #   label (hateful/non-hateful) of the test case"; ref_case_id "the ID of the simpler hateful case which was
 #   perturbed to generate them", or "of the hateful case which is contrasted"; ref_templ_id "The equivalent, but for
 #   template IDs."; templ_id "The unique ID of the template from which the test case was generated"
-# Every column is said of the case, under the column's own name. The first column has no name and says nothing.
+# A case is its test case, the sentence itself; case_id, templ_id and ref_templ_id are HateCheck's keys; ref_case_id
+# points at another case by its key, read as that case's sentence. What a row says of its case it says together.
+# The first column has no name and says nothing.
 match all_cases.csv test_suite_cases.csv
-grammar table
-separator ,
+
+tier row by \n
 header
 quoted
-# A case is its test case, the sentence itself; case_id and templ_id are HateCheck's keys to the case and to the
-# template it was made from (case_templ, said of the case as written), recorded nowhere; ref_case_id and
-# ref_templ_id point at another case by those keys, read as that case's sentence and template.
-key case_id templ_id ref_templ_id
-refer ref_case_id hatecheck-cases
+tier field by ,
 
-claims
-together
-subject in test_case
-attest functionality label_gold target_ident direction focus_words focus_lemma ref_case_id case_templ
+thing row test_case
+key row case_id
+key row templ_id
+key row ref_templ_id
+refer ref_case_id hatecheck-cases
+content test_case functionality label_gold target_ident direction focus_words focus_lemma case_templ
+together row
+attest row functionality label_gold target_ident direction focus_words focus_lemma ref_case_id case_templ

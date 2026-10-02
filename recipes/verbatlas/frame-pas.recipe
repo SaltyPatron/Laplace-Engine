@@ -1,9 +1,13 @@
 name va-frame-pas
-# A frame (by its id, read as the frame) and its predicate-argument structure: the roles, in order, as one tuple.
+# A frame (by its id, read as the frame) and its predicate-argument structure: the roles, in order. The row is the
+# tuple of them, attested as it is. The first line is the release's banner, not a row.
 match VA_frame_pas.tsv
-grammar table
+
+tier row by \n
 skip 1
-columns frame
+names frame
+tier field by \t
+
+thing row .
 type frame vaframe
-claims
-row tuple
+itself row

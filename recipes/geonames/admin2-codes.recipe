@@ -1,13 +1,15 @@
 name geonames-admin2-codes
 # readme.txt:
 #   "admin2Codes.txt          : names for administrative subdivision 'admin2 code' (UTF8), Format : concatenated codes <tab>name <tab> asciiname <tab> geonameId"
+# The geonameId is read as the place; the concatenated codes are GeoNames's key to the division.
 match admin2Codes.txt
-grammar table
-columns "concatenated codes" name asciiname geonameId
-# the geonameId is read as the place; the concatenated codes are GeoNames's key to the division, recorded nowhere
-key "concatenated codes"
-refer geonameId geonames-geoname
 
-claims
-subject in geonameId
-attest name asciiname
+tier row by \n
+names "concatenated codes" name asciiname geonameId
+tier field by \t
+
+thing row geonameId
+key row "concatenated codes"
+refer geonameId geonames-geoname
+content name asciiname
+attest row name asciiname

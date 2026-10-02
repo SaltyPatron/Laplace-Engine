@@ -1,11 +1,13 @@
 name iso-639-3-macrolanguages
 # ISO 639-3's macrolanguage mappings: each row says of an individual language its macrolanguage and its status.
 match iso-639-3-macrolanguages.tab
-grammar table
-header
 # The table does not name who publishes it; the pages kept beside it in sil/ are signed "Copyright © 2026 SIL Global".
 witness SIL Global
 
-claims
-subject in I_Id
-attest M_Id I_Status
+tier row by \n
+header
+tier field by \t
+
+thing row I_Id
+content I_Id M_Id I_Status
+attest row M_Id I_Status

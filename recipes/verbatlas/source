@@ -1,8 +1,7 @@
 name verbatlas
-# VerbAtlas 1.1.0: WordNet synsets clustered into frames, and what the package says of them. The mappings it ships
-# (bn2wn, VA_bn2va, pb2va, wn2sense) are the highway's own input and are read there, not here; VA_va2sp names
-# selectional preferences only by their ids (va:0081p), keys of VA_preference_info's rows, and is not read.
-# The witness is named as the README's title names it: "VerbAtlas 1.1.0".
+# VerbAtlas 1.1.0: WordNet synsets clustered into frames, and what the package says of them: the frames, their
+# selectional preferences and argument structures, and its mappings from BabelNet, WordNet and PropBank, which the
+# highway reads for its keys and edges. The witness is named as the README's title names it: "VerbAtlas 1.1.0".
 witness VerbAtlas 1.1.0
 class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/VerbAtlas-1.1/extracted/VerbAtlas-1.1.0

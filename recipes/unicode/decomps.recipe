@@ -5,17 +5,15 @@ name unicode-uca-decomps
 #   "# Field 2: decomposition"
 # The decomposition is recorded as the text it is.
 match decomps.txt
-grammar table
-separator ;
-comment #
-remark #
-columns "code point" "decomposition tag" decomposition
 
-claims
-subject in "code point".cps
-attest "decomposition tag"
+tier row by \n
+comment hash
+remark hash
+padded
+names "code point" "decomposition tag" decomposition
+tier field by ;
 
-claims
-subject in "code point".cps
-predicate decomposition
-object in decomposition.cps
+thing row "code point"
+codepoints "code point" decomposition
+content "decomposition tag"
+attest row "decomposition tag" decomposition

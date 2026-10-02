@@ -3,12 +3,13 @@ name hatecheck-placeholders
 # are replaced with for generating the test cases. Two columns, Placeholder and Values; a field of Values holds
 # several, parted by commas.
 match template_placeholders.csv
-grammar table
-separator ,
+
+tier row by \n
 header
 quoted
-list Values ,
+tier field by ,
+part Values by ,
 
-claims
-subject in Placeholder
-attest Values
+thing row Placeholder
+content Placeholder Values
+attest row Values

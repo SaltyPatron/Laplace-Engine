@@ -1,16 +1,18 @@
 name civil-comments-comments
-# The set's files are Parquet; each is written out beside it as a table (extracted/, by parquet-to-text.py): the
-# first row the columns' own names, every value as the file holds it.
+# The set's files are Parquet; each is written out beside it as a table (extracted/): the first row the columns' own
+# names, every value as the file holds it.
 # The set's card (README.md, "Data Fields"): text, toxicity, severe_toxicity, obscene, threat, insult,
 # identity_attack, sexual_explicit. It says nothing of what a number stands for, so each is recorded as the number
 # the set gives the comment under that name, and is not taken for a score.
-# A comment has no name of its own in the set: it is the text it is.
+# A comment has no name of its own in the set: it is the text it is. What a row says of it, it says together.
 match train-*.tsv validation-*.tsv test-*.tsv
-grammar table
+
+tier row by \n
 header
 escaped \
+tier field by \t
 
-claims
-together
-subject in text
-attest toxicity severe_toxicity obscene threat insult identity_attack sexual_explicit
+thing row text
+content text toxicity severe_toxicity obscene threat insult identity_attack sexual_explicit
+together row
+attest row toxicity severe_toxicity obscene threat insult identity_attack sexual_explicit

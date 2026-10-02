@@ -1,14 +1,15 @@
 name toxigen-prompts
-# The prompts, a file for each group and label (hate_asian_1k, neutral_women_1k): one column, text. The card says
-# nothing of these files; what the file's name begins with (hate_asian_1k) is what is said of each of its texts,
-# nothing between the two.
-# The file is Parquet, written out beside it as a table (extracted/, by parquet-to-text.py).
+# The prompts, one file for each kind (hate_asian_1k, neutral_black_1k, ...), written out from Parquet as a table
+# whose first row names its column. What the file's name says up to its first hyphen is said of each text in it,
+# nothing written between the two.
 match prompts/*.tsv
-grammar table
+
+tier row by \n
 header
 escaped \
+tier field by \t
 
-claims
-pair
-predicate-in-name ^ -
-subject in text
+stem -
+thing row text
+content text
+pair row {file}

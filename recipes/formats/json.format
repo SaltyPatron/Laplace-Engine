@@ -1,0 +1,15 @@
+# JSON, as the tree-sitter grammar json gives it: what each kind of its nodes is in the file's tree. A recipe for a
+# JSON file says "format json" and then only what its source's parts are.
+#   an object and an array hold nodes; a member names what its value is
+#   a string is text, its quotes off and JSON's escapes resolved; a number, true and false are text as written
+#   null says nothing
+grammar json
+resolve json
+node object group
+node array group list
+node pair member name key value value
+node string text
+node number text raw
+node true text raw
+node false text raw
+node null skip

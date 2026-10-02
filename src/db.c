@@ -90,7 +90,8 @@ typedef struct { uint32_t shard; uint32_t idx; uint64_t h; } NRef;        /* h: 
 static NRef *bucket[NPART]; static uint64_t nbucket[NPART];
 static NRef nref(uint32_t s, uint32_t i){ lp_coord co; memcpy(co.m, shard[s].node[i].m, 32); return (NRef){ s, i, lp_hilbert4(&co) }; }
 static int by_hilbert(const void *a, const void *b){ uint64_t x = ((const NRef *)a)->h, y = ((const NRef *)b)->h; return x < y ? -1 : x > y; }
-/* A partition's new rows go in Hilbert order (Atoms: the Hilbert value is for locality, partitioning, and ordering):
+/* A partition's new rows go in Hilbert order (Atoms: the Hilbert value is for locality, ordering, and indexing; it is
+ * never what partitions go by):
  * rows near each other in the 4-ball are written together, so the coordinate and Hilbert indexes take a run of
  * neighbours on the same pages instead of one row per page in hash order. */
 static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_p, int atoms_needed, int own_txn){
@@ -165,6 +166,9 @@ static Standing *stand_get(const lp_id *id, const Event *add, double trust){
 int load_whole;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     table_kinds();                                                           /* what each child is said to be: on the child, for its mask */
+    /* what a witness attested is a claim, whatever holds it or nothing does: its row says so, so every read finds it */
+    for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { if (files[fi].ev.e[i].kind == EV_RECORD) continue;
+        Node *c = table_find(&files[fi].ev.e[i].claim); if (c) c->kind |= (uint8_t)(1u << LP_KIND_CLAIM); }
     PGconn **pg = malloc(sizeof(PGconn *) * npg);
     for (int i = 0; i < npg; i++) {
         pg[i] = db_connect(conninfo);

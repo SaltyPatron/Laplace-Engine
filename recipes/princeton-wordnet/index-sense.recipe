@@ -1,0 +1,34 @@
+name wordnet-index-sense
+# senseidx.5: "Each line in index.sense is of the form:   sense_key  synset_offset  sense_number  tag_cnt"; a sense
+# key is lemma%ss_type:lex_filenum:lex_id:head_word:head_id, and "ss_type is a one digit decimal integer representing
+# the synset type for the sense": 1 NOUN, 2 VERB, 3 ADJECTIVE, 4 ADVERB, 5 ADJECTIVE SATELLITE.
+# A table of WordNet's keys: each sense key names the synset at its offset, which CILI names by its offset and the
+# letter of its type (00001740-a). The highway keeps every sense key, written with its last :: and without it (as
+# VerbNet writes them), as a key of the concept the synset is. Nothing else is said here: the tag counts are cntlist's.
+match index.sense
+
+tier line by \n
+names sense_key synset_offset sense_number tag_cnt
+tier field by space
+
+omit sense_key synset_offset sense_number tag_cnt
+
+when sense_key matches %1:
+alias ili line sense_key to synset_offset as \0-n
+alias ili line sense_key matching ^(.*)::$ to synset_offset as \0-n
+always
+when sense_key matches %2:
+alias ili line sense_key to synset_offset as \0-v
+alias ili line sense_key matching ^(.*)::$ to synset_offset as \0-v
+always
+when sense_key matches %3:
+alias ili line sense_key to synset_offset as \0-a
+alias ili line sense_key matching ^(.*)::$ to synset_offset as \0-a
+always
+when sense_key matches %4:
+alias ili line sense_key to synset_offset as \0-r
+alias ili line sense_key matching ^(.*)::$ to synset_offset as \0-r
+always
+when sense_key matches %5:
+alias ili line sense_key to synset_offset as \0-s
+alias ili line sense_key matching ^(.*)::$ to synset_offset as \0-s

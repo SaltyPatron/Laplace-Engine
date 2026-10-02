@@ -1,13 +1,14 @@
 name unicode-property-aliases
 # The standard's own list of what each property's short name stands for: the two names, as written side by side.
 match PropertyAliases.txt
-grammar table
-separator ;
-comment #
-remark #
-columns short long
 
-claims
-pair
-subject in short
-object in long
+tier row by \n
+comment hash
+remark hash
+padded
+names short long
+tier field by ;
+
+thing row short
+content short long
+pair row long

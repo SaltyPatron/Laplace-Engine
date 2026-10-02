@@ -1,0 +1,13 @@
+name verbatlas-wn2sense
+# wn2sense.tsv: "A mapping from a WordNet synset to a WordNet sense key. Each line contains a WordNet synset ID and a
+# WordNet sense key, separated by a tab", wn:00001740v breathe%2:29:00::. A table of keys: the sense key is a key of
+# the concept the synset is, as WordNet's own index.sense says too; the highway keeps it. Nothing is said here.
+match wn2sense.tsv
+
+tier row by \n
+names wn sense
+tier field by \t
+
+omit wn sense
+
+alias ili row sense to wn matching ^wn:([0-9]+)([a-z])$ as \1-\2

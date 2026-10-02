@@ -2,17 +2,18 @@ name social-bias-frames-aggregated
 # The set's README ("Aggregation"): the files "aggregated per post": for a post, the mean of whoTarget, intentYN,
 # sexYN and offensiveYN over its annotations, the set of what was written as targetMinority, targetCategory and
 # targetStereotype, each written as a JSON list ("To load the list of implications, use json.loads"), and
-# hasBiasedImplication. A post has no HITId here: it is the text it is. The first column has no name and says nothing.
+# hasBiasedImplication. A post has no HITId here: it is the text it is. What a row says of it, it says together.
 match SBIC.v2.agg.*.csv
-grammar table
-separator ,
+
+tier row by \n
 header
 quoted
-list targetMinority json
-list targetCategory json
-list targetStereotype json
+tier field by ,
+part targetMinority by json
+part targetCategory by json
+part targetStereotype by json
 
-claims
-together
-subject in post
-attest targetMinority targetCategory targetStereotype whoTarget intentYN sexYN offensiveYN dataSource hasBiasedImplication
+thing row post
+content post targetMinority targetCategory targetStereotype whoTarget intentYN sexYN offensiveYN dataSource hasBiasedImplication
+together row
+attest row targetMinority targetCategory targetStereotype whoTarget intentYN sexYN offensiveYN dataSource hasBiasedImplication

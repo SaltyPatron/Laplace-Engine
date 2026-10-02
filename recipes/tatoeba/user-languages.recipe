@@ -1,17 +1,16 @@
 name tatoeba-user-languages
-# "Indicates the self-reported skill levels of members in individual languages."
-# Fields and structure: Lang [tab] Skill level [tab] Username [tab] Details
-# Self-reported: what the row says, the member says, of the member in that language.
+# "Contains the self-reported skill levels of members in individual languages."
+# Fields: Lang [tab] Skill level [tab] Username [tab] Details
+# A member says of themself, in a language, a skill level and details: the thing is the member with the language.
 match user_languages.csv
-grammar table
-escaped \
-# "\N: Unknown (rare)."
-empty-matches ^\\N$
-columns Lang "Skill level" Username Details
-kinds own
-kind Username Username
 
-claims
-subject in Username Lang
-attest "Skill level" Details
-witness in Username
+tier row by \n
+escaped \
+names Lang "Skill level" Username Details
+tier field by \t
+empty \N
+
+thing row Username Lang
+own Username
+content Lang "Skill level" Details
+attest row "Skill level" Details by Username

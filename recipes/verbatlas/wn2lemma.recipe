@@ -1,9 +1,12 @@
 name verbatlas-wn2lemma
 # A WordNet 3.0 synset (wn:00001740v, VerbAtlas's key of it, read as the ILI concept) and one of its lemmas.
 match wn2lemma.tsv
-grammar table
-columns WordNet_synset_ID lemma
+
+tier row by \n
+names WordNet_synset_ID lemma
+tier field by \t
+
+thing row WordNet_synset_ID
 type WordNet_synset_ID ili
-claims
-subject in WordNet_synset_ID
-attest lemma
+content lemma
+attest row lemma

@@ -13,6 +13,9 @@
 #                              another strand can be taken (the temperature of that choice)
 #   refuse predicate NAME...   kinds of strand refused before they are scored
 #   refuse witness NAME...
+#   emit N                     how many constituents a turn may emit: the emission budget STEER is given
+#   enough N                   a turn is complete when no more than N (0 to 1) of what its obligations owed at the
+#                              start, each word as hard as it pulls, is still owed; 0 unless said: all of it answered
 #   fact N                     a member of the set curated by a witness of at least this trust is returned as one
 #                              fact, the rest of the set held back; without the line, no such branch fires
 #   order witness | standing   on a claim with a part left open: the witness's own order before the standing, or not
@@ -30,6 +33,11 @@
 #   take segment               the rest of the branch the prompt is a run of, followed along what was observed
 #   take attestations N        the N strongest strands of the prompt itself
 #   take constituents N        the N strongest strands of each of its constituents
+#   up RELATION...             for translate: the relations from a word up to its concept, followed back down in
+#                              another language
+#   language HELD SAYS         for translate: the language of what stands below the concept, read from what holds it
+#                              under HELD and what that says under SAYS
+#   gloss RELATION             for translate: what is shown of a concept
 #   take chain N RELATION...   from each of the N words that pull hardest, the relations followed in order, each by its
 #                              witness's order then its standing: where the chain ends is the answer. Chains
 #                              parted by | are tried in turn until one reaches its end (a form through its lemma)
@@ -39,35 +47,19 @@ hops 8
 top always
 order witness
 
-# Role weights, as drafted by hand (Semantics: Personality firmware, "Weights that are not standings"; Research: Trust):
-# the relations that carry what a sentence is about pull hardest, and the function-word relations a fraction as hard,
-# so filler does not drown everything.
-weigh 0.9 nsubj obj
-weigh 0.8 iobj csubj ccomp compound flat
-weigh 0.7 obl nmod appos
-weigh 0.6 amod conj
-weigh 0.5 advmod
-weigh 0.2 aux cop discourse
-weigh 0.15 case mark
-weigh 0.1 det cc
-weigh 0.05 punct
-# What a treebank says of a word's form (its tags, lemma and morphological features) is grammar, not what the word
-# is about: weighed with the function-word relations. The program's default; another firmware weighs otherwise.
-weigh 0.1 UPOS XPOS LEMMA FEATS MISC SpaceAfter Number Tense PronType Mood VerbForm Person Case Gender Definite Degree Poss Reflex NumType Voice Aspect Polarity Abbr Foreign Typo Animacy
-
-# How hard a word pulls, by its part of speech, as drafted by hand (Research: Trust, role trust): a name or a noun
-# carries what a sentence is about; a determiner, an auxiliary or a pronoun a fraction of it.
+# How hard a context word pulls, by its part of speech: the role trust fitted on SemCor's held-out documents, each
+# divided by the largest (Research: Trust, "Role trust in word sense disambiguation"). These are measured values, not
+# drafted ones; a part of speech the fit does not give has no line. They are this firmware's reading, never a change
+# to a standing, and another firmware weighs otherwise.
 role by UPOS
-role 1 PROPN
-role 0.9 NOUN
-role 0.8 VERB
-role 0.7 ADJ NUM
-role 0.5 ADV
-role 0.3 PRON INTJ SYM
-role 0.2 AUX SCONJ X
-role 0.15 ADP
-role 0.1 DET CCONJ PART
-role 0.05 PUNCT
+role 1 NOUN ADJ NUM
+role 0.75 PROPN
+role 0.5 VERB ADV ADP PART
+role 0.25 PRON DET CCONJ PUNCT
+role 0.05 SCONJ
+role 0 AUX
+# No strand is weighed by its relation: with part of speech in place, per-relation weights did not improve held-out
+# accuracy (the same measurement), so every kind of strand pulls as its standing says.
 
 for hop
   fan 4096
@@ -77,6 +69,12 @@ for search
 
 for translate
   fan 4096
+  # a word up to its concept along the claims the wordnets make, as WN-LMF names them: its sense, the sense's
+  # synset, the synset's interlingual concept; and back down in another language. A synset's language is its
+  # lexicon's; what is shown of a concept is its synset's definition. Another firmware may go up another way.
+  up Sense synset ili
+  language Synset language
+  gloss Definition
 
 for pull
   fan 4096
@@ -84,6 +82,10 @@ for pull
   # arguments pull back their tags, not what the sentence is about. A default to be ruled on; the firmware is the inventor's.
   refuse predicate BNC PENN GF PT NER WSL Target Other Sent Verb Noun Adj Prep Adv UPOS XPOS DEPREL FEATS MISC LEMMA type n f itype
   take chain 1 Sense Definition | LEMMA Sense Definition
+  # how much of what a prompt's words owe a turn leaves open once it has answered: half, so a word that pulls a
+  # quarter as hard (a determiner, a pronoun) is not answered for its own sake once the words that carry the prompt
+  # are. A default to be ruled on; the firmware is the inventor's.
+  enough 0.5
   take segment
   take attestations 3
   take constituents 1

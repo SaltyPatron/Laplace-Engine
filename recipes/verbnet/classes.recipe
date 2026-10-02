@@ -1,20 +1,49 @@
 name verbnet-classes
 # A class file. A class and a subclass are their IDs as VerbNet writes them (leave-51.2), the types the highway lists
-# from these files; a thematic role is its type (Theme), listed the same way. A member is the verb it names; its
-# verbnet_key (abandon#1) is a key, recorded nowhere; its grouping names PropBank rolesets, its wn WordNet senses and
-# its fn_mapping a FrameNet frame, each read as the type those resources' keys point at (None names no frame and says
-# nothing). Everything else speaks of the class, the role or the member it is inside.
+# from these files; a thematic role is its type (Theme), listed the same way; the content of each is that text. A
+# member is the verb it names; its verbnet_key (abandon#1) is a key, recorded nowhere; its grouping names PropBank
+# rolesets, its wn WordNet senses and its fn_mapping a FrameNet frame, each read as the type those resources' keys
+# point at (None names no frame and says nothing). A frame is its content: its description, examples, syntax and
+# semantics, whole. What is no thing speaks of the nearest thing it is inside.
 match *.xml
-grammar xml
-key verbnet_key
-# bookkeeping, read by nothing
-omit xtag descriptionNumber
-identity VNCLASS ID
-identity VNSUBCLASS ID
-identity THEMROLE type
-identity MEMBER name
-list grouping space
-list wn space
+format xml
+
+thing VNCLASS ID
+thing VNSUBCLASS ID
+thing THEMROLE type
+thing MEMBER name
+thing FRAME .
+part grouping by space
+part wn by space
 type grouping pbroleset
-type wn ili
+type wn ili matching ^[?]*(.*)$
 type fn_mapping fnframe
+# "None" is what VerbNet writes where a member maps to no frame
+empty None
+content ID type name Value value primary secondary features bool logic EXAMPLE
+# bookkeeping, read by nothing
+omit verbnet_key xtag descriptionNumber xmlns:xsi xsi:noNamespaceSchemaLocation
+
+holds VNCLASS VNSUBCLASS THEMROLE MEMBER FRAME
+holds VNSUBCLASS VNSUBCLASS THEMROLE MEMBER FRAME
+attest MEMBER grouping wn fn_mapping features
+attest SELRESTRS logic
+attest SELRESTR Value type
+attest DESCRIPTION primary secondary
+attest EXAMPLE .
+attest NP value
+attest PRED value bool
+attest ARG type value
+
+# the highway: classes and subclasses, by their IDs as VerbNet writes them and by their numbers as PropBank, SemLink
+# and the Predicate Matrix write them (51.2); thematic roles; and what members map their class to
+types vnclass "VerbNet class" VNCLASS
+types vnclass "VerbNet class" VNSUBCLASS
+keyed vnclass VNCLASS ID
+keyed vnclass VNSUBCLASS ID
+keyed vnclass VNCLASS ID matching -([0-9].*)$
+keyed vnclass VNSUBCLASS ID matching -([0-9].*)$
+types vnrole "VerbNet thematic role" THEMROLE
+keyed vnrole THEMROLE type
+maps MEMBER ^/^/ID vnclass to wn ili matching ^[?]*(.*)$
+maps MEMBER ^/^/ID vnclass to fn_mapping fnframe

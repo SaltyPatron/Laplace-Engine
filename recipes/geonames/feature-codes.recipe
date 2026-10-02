@@ -2,12 +2,13 @@ name geonames-feature-codes
 # readme.txt:
 #   "featureCodes.txt         : name and description for feature classes and feature codes"
 # The file here is featureCodes_en.txt. The readme names what the second and third fields are (name, description) and
-# what they are said of (feature classes and feature codes); it gives the first column no name of its own. That column
-# is the subject, so whatever it is called here is never recorded.
+# what they are said of (feature classes and feature codes); it gives the first column no name of its own.
 match featureCodes_*.txt
-grammar table
-columns "feature classes and feature codes" name description
 
-claims
-subject in "feature classes and feature codes"
-attest name description
+tier row by \n
+names "feature classes and feature codes" name description
+tier field by \t
+
+thing row "feature classes and feature codes"
+content "feature classes and feature codes" name description
+attest row name description

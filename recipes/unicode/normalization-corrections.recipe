@@ -8,23 +8,16 @@ name unicode-normalization-corrections
 # The decompositions are recorded as the text they are. Field 3 is described by a sentence, not a name: it is
 # recorded as the pair of the code point and the version.
 match NormalizationCorrections.txt
-grammar table
-separator ;
-comment #
-remark #
-columns "Unicode code point" 1 2 3
 
-claims
-subject in "Unicode code point".cps
-predicate Original (erroneous) decomposition
-object in 1.cps
+tier row by \n
+comment hash
+remark hash
+padded
+names "Unicode code point" "Original (erroneous) decomposition" "Corrected decomposition" 3
+tier field by ;
 
-claims
-subject in "Unicode code point".cps
-predicate Corrected decomposition
-object in 2.cps
-
-claims
-pair
-subject in "Unicode code point".cps
-object in 3
+thing row "Unicode code point"
+codepoints "Unicode code point" "Original (erroneous) decomposition" "Corrected decomposition"
+content 3
+attest row "Original (erroneous) decomposition" "Corrected decomposition"
+pair row 3

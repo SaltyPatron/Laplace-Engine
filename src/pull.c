@@ -5,7 +5,7 @@
  *
  * This is not yet the forward pass. It is the lookups the forward pass is made of: what is attested about an entity
  * (hop), a claim with a part left open (hop a b ?), a word up to its concepts and down into another language
- * (translate), and how far one entity is from another (degrees).
+ * (translate, along the relations the firmware names), and how far one entity is from another (degrees).
  *
  *   laplace text  text
  *   laplace hop   [-d conninfo] [-n N] [--firmware FILE] text | subject predicate object (? for a part left open)
@@ -229,23 +229,34 @@ int cmd_hop(int argc, char **argv){
     return 0;
 }
 
-/* ---- translation through the ILI: a word bubbles up to its concepts and down into other languages, along the claims
- * the wordnets make, in the names WN-LMF writes them with:
- *   [word, Sense, sense]  [sense, synset, synset]  [synset, ili, ILI]  [lexicon, Synset, synset]  [lexicon, language, code]
- *   laplace translate [-d conninfo] [-n N] word from to...        laplace translate dog en de fr ja */
+/* ---- translation through the concepts: a word bubbles up to its concepts and down into other languages, along the
+ * relations the firmware names (for translate: up, language, gloss), never along a resource's names written here:
+ *   up R1 R2 ... Rn        from a word, [word, R1, x1], [x1, R2, x2], ... [x(n-1), Rn, concept]; and back down from the
+ *                          concept, in the other direction, to the words of another language
+ *   language HELD SAYS     the language of x(n-1): what holds it under HELD, [h, HELD, x(n-1)], and what h says
+ *                          under SAYS, [h, SAYS, code]
+ *   gloss R                what is shown of a concept: [x(n-1), R, text]
+ *   laplace translate [-d conninfo] [-n N] [--firmware FILE] word from to...        laplace translate dog en de fr ja */
 static double read_k = 2.0;                                                  /* the firmware's k, for the lookups below */
 static Claim *one_open(PGconn *pg, Ctx *c, const lp_id *first, const char *middle, const lp_id *last, int fan, int *n){
     lp_id p[3]; int h[3] = { first ? 2 : 0, 2, last ? 2 : 0 }, capped; if (first) p[0] = *first; if (last) p[2] = *last;
     p[1] = entity_named(c, middle, NULL, 0, NULL).id; return claims_like(pg, p, h, fan, read_k, n, &capped);
 }
-typedef struct { lp_id lexicon; char code[24]; } Lang;
-static const char *language_of(PGconn *pg, Ctx *c, Reader *rd, const lp_id *synset, Lang **known, int *nknown){
-    int n; Claim *lx = one_open(pg, c, NULL, "Synset", synset, 8, &n); if (!n) { free(lx); return ""; }
-    lp_id lex = lx[0].part[0]; free(lx);
-    for (int i = 0; i < *nknown; i++) if (!memcmp(&(*known)[i].lexicon, &lex, 16)) return (*known)[i].code;
-    Claim *lg = one_open(pg, c, &lex, "language", NULL, 8, &n); *known = xrealloc(*known, sizeof(Lang) * (size_t)(*nknown + 1)); Lang *k = &(*known)[(*nknown)++]; k->lexicon = lex; k->code[0] = 0;
+typedef struct { lp_id held; char code[24]; } Lang;
+static const char *language_of(PGconn *pg, Ctx *c, Reader *rd, const Firmware *fw, const lp_id *x, Lang **known, int *nknown){
+    int n; Claim *lx = one_open(pg, c, NULL, fw->language[0], x, 8, &n); if (!n) { free(lx); return ""; }
+    lp_id h = lx[0].part[0]; free(lx);
+    for (int i = 0; i < *nknown; i++) if (!memcmp(&(*known)[i].held, &h, 16)) return (*known)[i].code;
+    Claim *lg = one_open(pg, c, &h, fw->language[1], NULL, 8, &n); *known = xrealloc(*known, sizeof(Lang) * (size_t)(*nknown + 1)); Lang *k = &(*known)[(*nknown)++]; k->held = h; k->code[0] = 0;
     if (n) { char *t = reader_text(rd, &lg[0].part[lg[0].np - 1], 20); snprintf(k->code, sizeof k->code, "%s", t); free(t); }
     free(lg); return k->code;
+}
+/* Down from x along the steps up[from..0], in the other direction: the words at the bottom, at most cap of them. */
+static int down(PGconn *pg, Ctx *c, Reader *rd, const Firmware *fw, const lp_id *x, int from, int fan, int *lookups, int cap, int any){
+    if (from < 0) { char *tx = reader_text(rd, x, 40); printf("%s%s", any ? ", " : " ", tx); free(tx); return 1; }
+    int n, shown = 0; Claim *cl = one_open(pg, c, NULL, fw->up[from], x, from ? 256 : 8, &n); (*lookups)++;
+    for (int i = 0; i < n && any + shown < cap; i++) shown += down(pg, c, rd, fw, &cl[i].part[0], from - 1, fan, lookups, cap, any + shown);
+    free(cl); return shown;
 }
 int cmd_translate(int argc, char **argv){
     const char *conninfo = laplace_db(), *fwp = NULL; int limit = 4, a = 1;
@@ -255,39 +266,36 @@ int cmd_translate(int argc, char **argv){
         else if (!strcmp(argv[a], "--firmware") && a + 1 < argc) fwp = argv[++a];
     }
     Firmware fw = firmware_for(fwp, FW_TRANSLATE); int fan = fw.fan; read_k = fw.k;
-    if (argc - a < 3) { fprintf(stderr, "usage: laplace translate [-d conninfo] [-n concepts] word from to...\n       languages as the wordnets write them: en de fr ja\n"); return 2; }
+    if (argc - a < 3) { fprintf(stderr, "usage: laplace translate [-d conninfo] [-n concepts] word from to...\n       languages as the resources write them: en de fr ja\n"); return 2; }
+    if (fw.nup < 2 || !fw.language[0][0]) { fprintf(stderr, "%s: for translate, the firmware names no way up to a concept and back down (up RELATION..., language HELD SAYS)\n", fw.path); return 2; }
     double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_connect(conninfo); Reader *rd = reader_new(pg);
-    lp_id word = entity_named(c, argv[a], NULL, 0, NULL).id; const char *from = argv[a + 1]; Lang *known = NULL; int nknown = 0, n, lookups = 0, shown = 0;
-    Claim *senses = one_open(pg, c, &word, "Sense", NULL, fan, &n); lookups++; positions_of(pg, senses, n); qsort(senses, (size_t)n, sizeof(Claim), claim_by_position);
+    lp_id word = entity_named(c, argv[a], NULL, 0, NULL).id; const char *from = argv[a + 1]; Lang *known = NULL; int nknown = 0, n, lookups = 0, shown = 0, last = fw.nup - 1;
+    Claim *first = one_open(pg, c, &word, fw.up[0], NULL, fan, &n); lookups++; positions_of(pg, first, n); qsort(first, (size_t)n, sizeof(Claim), claim_by_position);
     lp_id seen[64]; int nseen = 0;
     for (int i = 0; i < n && shown < limit; i++) {
-        int ny; Claim *sy = one_open(pg, c, &senses[i].part[senses[i].np - 1], "synset", NULL, 8, &ny); lookups++; if (!ny) { free(sy); continue; }
-        lp_id synset = sy[0].part[sy[0].np - 1]; free(sy);
-        if (strcmp(language_of(pg, c, rd, &synset, &known, &nknown), from)) continue;
-        int ni; Claim *il = one_open(pg, c, &synset, "ili", NULL, 8, &ni); lookups += 3; if (!ni) { free(il); continue; }
-        lp_id ili = il[0].part[il[0].np - 1]; lp_rating ir = il[0].r; free(il);
-        int dup = 0; for (int z = 0; z < nseen; z++) dup |= !memcmp(&seen[z], &ili, 16); if (dup) continue; if (nseen < 64) seen[nseen++] = ili;
-        int nd; Claim *df = one_open(pg, c, &synset, "Definition", NULL, 8, &nd); lookups++;
-        char *it = reader_text(rd, &ili, 24), *dt = nd ? reader_text(rd, &df[0].part[df[0].np - 1], 100) : strdup(""); free(df);
-        printf("\n  %-10s %4.0f \xC2\xB1 %-3.0f  %s\n", it, ir.rating, ir.deviation, dt); free(it); free(dt); shown++;
-        int no; Claim *others = one_open(pg, c, NULL, "ili", &ili, fan, &no); lookups++;
+        lp_id x = first[i].part[first[i].np - 1]; int ok = 1;
+        for (int s = 1; s < last && ok; s++) { int ny; Claim *st = one_open(pg, c, &x, fw.up[s], NULL, 8, &ny); lookups++; if (ny) x = st[0].part[st[0].np - 1]; else ok = 0; free(st); }
+        if (!ok || strcmp(language_of(pg, c, rd, &fw, &x, &known, &nknown), from)) continue;
+        int ni; Claim *il = one_open(pg, c, &x, fw.up[last], NULL, 8, &ni); lookups += 3; if (!ni) { free(il); continue; }
+        lp_id concept = il[0].part[il[0].np - 1]; lp_rating ir = il[0].r; free(il);
+        int dup = 0; for (int z = 0; z < nseen; z++) dup |= !memcmp(&seen[z], &concept, 16); if (dup) continue; if (nseen < 64) seen[nseen++] = concept;
+        int nd = 0; Claim *df = fw.gloss[0] ? one_open(pg, c, &x, fw.gloss, NULL, 8, &nd) : NULL; lookups += fw.gloss[0] != 0;
+        char *it = reader_text(rd, &concept, 60), *dt = nd ? reader_text(rd, &df[0].part[df[0].np - 1], 100) : strdup(""); free(df);
+        printf("\n  %4.0f \xC2\xB1 %-3.0f  %s\n            %s\n", ir.rating, ir.deviation, it, dt); free(it); free(dt); shown++;
+        int no; Claim *others = one_open(pg, c, NULL, fw.up[last], &concept, fan, &no); lookups++;
         for (int g = a + 2; g < argc; g++) {
             printf("    %-6s", argv[g]); int any = 0;
-            for (int o = 0; o < no; o++) { lp_id y = others[o].part[0];
-                if (strcmp(language_of(pg, c, rd, &y, &known, &nknown), argv[g])) continue;
-                int ns; Claim *ss = one_open(pg, c, NULL, "synset", &y, 256, &ns); lookups++;
-                for (int q = 0; q < ns && any < 8; q++) { int nw; Claim *ws = one_open(pg, c, NULL, "Sense", &ss[q].part[0], 8, &nw); lookups++;
-                    for (int w = 0; w < nw && any < 8; w++) { char *tx = reader_text(rd, &ws[w].part[0], 40); printf("%s%s %.0f\xC2\xB1%.0f", any ? ", " : " ", tx, ws[w].r.rating, ws[w].r.deviation); free(tx); any++; }
-                    free(ws); }
-                free(ss); }
+            for (int o = 0; o < no && any < 8; o++) { lp_id y = others[o].part[0];
+                if (strcmp(language_of(pg, c, rd, &fw, &y, &known, &nknown), argv[g])) continue;
+                any += down(pg, c, rd, &fw, &y, last - 1, fan, &lookups, 8, any); }
             if (!any) printf(" (nothing attested)");
             printf("\n");
         }
         free(others);
     }
-    if (!shown) printf("%s: no sense of it is attested in a wordnet whose language is written %s\n", argv[a], from);
+    if (!shown) printf("%s: no concept of it is attested in a language written %s\n", argv[a], from);
     printf("\n%d lookups   total %.1f ms\n", lookups, (now() - T) * 1000);
-    free(senses); free(known); reader_free(rd); PQfinish(pg);
+    free(first); free(known); reader_free(rd); PQfinish(pg);
     return 0;
 }
 

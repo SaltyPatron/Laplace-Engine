@@ -33,6 +33,8 @@ typedef struct {
     char path[4200];
     double k, lambda;                                 /* how far below its rating a standing must hold; the tax on a hop */
     int fan, hops;
+    int emit;                                         /* how many constituents a turn may emit (the emission budget STEER is given) */
+    double enough;                                    /* a turn is complete when no more than this of what its obligations owed is still owed (0: all of it answered) */
     double top_within;                                /* 0: the top every time; else how near a tie has to be */
     double fact;                                      /* the trust at which a curated member is returned as one fact; above 1: never */
     int order_witness;                                /* on an open claim, the witness's own order before the standing */
@@ -41,7 +43,8 @@ typedef struct {
     struct { int what, n; } take[FW_TAKES]; int ntake; /* a pull's steps, in order */
     char weigh_name[FW_WEIGHS][96]; double weigh[FW_WEIGHS]; int nweigh;
     char role_by[96], role_name[FW_WEIGHS][96]; double role[FW_WEIGHS]; int nrole;      /* how hard a word pulls, by what is attested of it under role_by (its part of speech) */
-    char chain[FW_ALTS][FW_CHAIN][96]; int nchain[FW_ALTS], nalt;                                             /* the relations a pull follows from the word that pulls hardest, in order */   /* role weights: how hard a strand of a kind is allowed to pull, 1 unless said */
+    char chain[FW_ALTS][FW_CHAIN][96]; int nchain[FW_ALTS], nalt;                                             /* the relations a pull follows from the word that pulls hardest, in order */
+    char up[FW_CHAIN][96]; int nup; char language[2][96], gloss[96];                                          /* translation: the relations from a word up to its concept (followed back down in another language); how what stands below the concept says its language (what holds it under the first, and what that says under the second); what is shown of a concept */
 } Firmware;
 /* ---- the lookups the forward pass is made of (pull.c) */
 #define MAXPARTS 12
@@ -67,6 +70,7 @@ int cmd_hop(int argc, char **argv);
 int cmd_translate(int argc, char **argv);
 int cmd_degrees(int argc, char **argv);
 int cmd_pull(int argc, char **argv);
+int cmd_turn(int argc, char **argv);
 int cmd_text(int argc, char **argv);
 int cmd_tree(int argc, char **argv);
 int cmd_deploy(int argc, char **argv);
@@ -80,6 +84,7 @@ int cmd_flags(int argc, char **argv);
 int cmd_highway(int argc, char **argv);
 int cmd_bench(int argc, char **argv);
 int cmd_model(int argc, char **argv);
+int cmd_structure(int argc, char **argv);
 
 /* ---- the bits a row must have (physicality.mask): what it is, by LP_KIND_*; as the text of a smallint[] parameter */
 #define CLAIM_BITS "{0}"
@@ -121,97 +126,24 @@ typedef lp_text Ctx;
 extern Ctx **CTX;                                                     /* one per thread */
 void   ctx_open(int threads);
 Ref    text_ref(Ctx *, const uint8_t *s, size_t n);                  /* UAX #29, recorded in the node table */
-Ref    notation_ref(Ctx *, const uint8_t *bytes, size_t n);          /* bytes that are not text: <0xAB> of each, composed */
-Ref    vocabulary_ref(Ctx *, const uint8_t *src, size_t n, uint64_t *tokens, uint64_t *byte_tokens);   /* a tokenizer's vocabulary */
 
 /* ---- recipes */
 typedef struct TSLanguage TSLanguage;
-typedef struct TSQuery TSQuery;
-/* A block of a recipe's patterns: a map (key to value, read before anything is attested), or the claims one kind of
- * statement attests, with the stock default such claims enter at. */
-typedef struct {
-    int is_map; char name[32];
-    char predicate[64];                               /* the claims' predicate, when the source states it by position */
-    float enter_rating, enter_deviation;             /* the stock default for this level of attestation */
-    int ordered, distinct;                            /* record each claim's position in its record; subject and object differ */
-    char subj[8][96]; int nsubj;                      /* in a table: further columns of the subject, which is then the path of them all */
-    int rest;                                         /* in a table: the fields after the named columns: 1 pairs of predicate and object, 2 objects */
-    int row_tuple;                                    /* in a table: the row itself is the claim, the path of its fields in order */
-    char field_pair;                                  /* in a table: every field is written A, this character, B, and is the pair [A, B] */
-    char line[512]; void *line_re;                    /* grammar lines: the pattern a line must match to say something, its parts between parentheses */
-    char witness_in[64];                              /* in a table: the column that names who says the row */
-    double score_from, score_to; int score_mapped;    /* the score is written on a scale of its own: from the lowest to the highest */
-    int itself;                                       /* what the row attests is its subject itself */
-    char json[64];                                    /* in a table: the column whose field is a JSON object that speaks of the row's claim */
-    char witnesses[8][64]; int nwitnesses;            /* in that object: the path of keys to who witnessed the claim */
-    char subject_kind[64];                            /* in a table: the subject's name stands only among things of this kind ({dir}: within the file's directory) */
-    int together;                                     /* in a table: what a row says it says together: the row is one record */
-    int pair;                                         /* the claims are pairs: the source writes no predicate between the two */
-    char voices[16][64]; int nvoices;                 /* in a table: columns that are each a witness, named by the column, saying its field of the subject */
-    char attest[64][64]; int nattest;                 /* in a table: columns that are each a predicate, by the name the table gives them */
-    char name_after, name_before;                     /* the predicate is in the file's name, between these two characters */
-    char from[512]; const TSLanguage *lang;           /* a map read from another file, with that file's grammar */
-    void *cache;                                      /* that map, read once */
-    char in[6][96];                                   /* in a table: the column each part is in (subject, predicate, object, key, value, score), with its resolvers */
-    struct { char col[64]; int op; char val[128]; void *re; } where[8]; int nwhere;   /* in a table: the rows it speaks of */
-    char column[64][64]; int ncolumn; char separator; /* a map kept in another table: its columns */
-    char *query_src; TSQuery *query;
-} Block;
+/* A recipe: which files it reads (match), the grammar or layout that gives each file its tree, and what every named
+ * part of that tree is (say.c). Configuration only: there is one decomposer, and no code for a format or a source. */
 typedef struct {
     char name[64];
     char match[16][128]; int nmatch;                 /* filename globs */
-    char grammar[64];                                 /* "text", "vocabulary", or a tree-sitter grammar name */
+    char grammar[64];                                 /* "text" (UAX #29), "layout" (the recipe's tiers), or a tree-sitter grammar name */
     const TSLanguage *lang;
     double trust;                                    /* the witness's trust, -1 .. 1 */
-    int records;
-    uint32_t unit;                                   /* queries run inside parts of the tree no larger than this */
-    char itself;                                      /* a character that, in an object, stands for the subject's codepoint */
-    struct { char col[64], kind[64]; } kinds[16]; int nkinds;   /* a table: columns whose values name things of a kind */
-    int quoted;                                       /* a table whose fields may stand between double quotes (a quote inside is doubled) */
-    int skip;                                         /* a table: lines at its head that are not rows */
-    struct { char col[64], sep; } list[16]; int nlist;  /* a table: columns whose field is several values, and what parts them (* every column) */
-    char remark;                                      /* in a table's row: what follows this character is not the row */
-    char separator, comment; int header;              /* a table: what parts its fields, what begins a line that is not a row, whether its first row names its columns */
-    char column[64][64]; int ncolumn;                 /* a table's columns, when no row names them */
-    char predicate[64];
     char witness[128];                                /* the witness's name, recorded as content */
-    struct { char el[64], attr[64], as[64]; int res, within, child, kind, own; } identity[48]; int nidentity;   /* within: the name stands only within the thing it is inside; child: the name is the text of an element inside it */     /* XML: the elements that are things, and the attribute that names each (res: 1 a codepoint, 2 codepoints) */
-    struct { char el[64], attr[64], kind[64]; int within; } refer[48]; int nrefer;      /* XML: attributes whose values are keys of things of element KIND: each resolves to that thing (within: to the thing it is inside) */
-    char omit[48][64]; int nomit;                                                        /* XML attributes and elements, JSON members, that are a file's bookkeeping (dates, colours, versions, licences): not testimony, read by nothing */
-    char key[16][64]; int nkey;                                                          /* XML attributes, JSON members, that are a source's keys: how it points at its things; resolved, never recorded */
-    struct { char el[64], attr[64], list[32]; } type[16]; int ntype;                     /* XML attributes, table columns, whose value is a source's key of a type in a highway list: read as the type */
-    struct { char el[64], start[32], end[32], text[64]; int inclusive; char val[32], par_el[64], par_attr[64]; } stretch[8]; int nstretch;   /* XML: elements that speak of a stretch of a text; val under par_el.par_attr: the attribute VAL is said under the value of the enclosing element's attribute (a label's tag under its layer's name) */
-    struct { char rec[64], word[8][64]; int nword; } words[4]; int nwords;      /* XML: an element that is a record of words, and the elements inside it that are its words */
-    struct { char el[64], pred[64], obj[64], kind[64]; } link[16]; int nlink;             /* XML: elements that are relations of what they are inside */
-    char codepoints[32][32]; int ncodepoints;          /* XML: attributes whose values are codepoints written in hex */
-    char about_line[512]; void *about_re;              /* grammar lines: the pattern of the line that names what the file is about */
-    char named_key[64], named[8][64]; int nnamed;       /* JSON: an object that holds named_key is the thing these members name together, in this order */
-    int kinds_own, voices_file;                        /* a table: a kind stands within the source, [witness, kind, value]; a voice within the file */
-    char escaped;                                      /* a table: the character after this one is itself, a line's end included */
-    struct { char col[64]; int thing, says[4], nsays; } address[8]; int naddress;   /* a column of the source's addresses: which part is the thing, which parts are said of it; the rest are keys */
-    char path_sep, path_join;                          /* a value that begins with path_sep is a path of parts, a part's words joined by path_join */
-    int specifics; char claims_under[8][64]; int nclaims_under;   /* what is held with a claim is its specifics: pairs, witnessed with it; but under these keys, claims of their own */
-    int linkage, tuples;                               /* JSON: what a thing inside another says, it says of being there; a list of values inside a list is one tuple */
-    int keys_things, members;                          /* JSON: the keys of an object inside nothing are things; read natively (members.c) */
-    void *empty_like;                                 /* a table: a field that matches this is one the source leaves empty */
-    char like[64];                                    /* the recipe it reads as: that recipe's grammar and statements */
     char lineage[128];                                /* the witness this one derives from; copies of it are one consensus */
-    char subject_attr[3][48];                         /* subject from a sibling attribute: codepoint, first, last */
-    /* a table whose rows come in records (a treebank's sentences): see records.c */
-    int record_blank;                                 /* rows up to an empty line are one record */
-    char record_line[16], field_is[8];                /* fields: the line that parts records; what parts a field's key from its value */
-    char empty[8];                                    /* what the source writes in a field it leaves empty */
-    char note_is[8];                                  /* what parts a note's key from its value (a comment line "KEY = VALUE") */
-    char about[64];                                   /* the note that holds what the record is about */
-    char word[64], number[64];                        /* the column that holds each row's word; the column that numbers the rows */
-    char span;                                        /* in the numbering column, what parts the first and last row of a span */
-    struct { char col[64], part, is, list; } pairs[8]; int npairs;          /* a field of KEY is VALUE parts */
-    struct { char rel[64], head[64]; } relation;      /* each row's relation to the row its head column numbers */
-    struct { char col[64], part, is; } relations[4]; int nrelations;       /* a field of HEAD is RELATION parts */
+    char like[64];                                    /* the recipe it reads as: that recipe's layout and dispositions */
     int source;                                       /* the source it belongs to, or -1: a format any file may be read as */
     int broken; char file[512];                       /* it did not load: it stops the source it belongs to, and no other */
-    TSQuery *query;                                   /* set when the recipe attests: a curated source */
-    Block *block; int nblock;
+    int curated;                                      /* it attests: a curated source, mined for what it says, not kept byte for byte */
+    void *say;                                        /* the file's layout and the disposition of its parts, as the recipe configures them (say.c) */
 } Recipe;
 /* A source: a body of content with one identity, however many files it comes in. Its recipes say how each kind of
  * its files reads; the source says who the witness is, where the source is kept, and which sources it comes after. */
@@ -240,30 +172,40 @@ typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviat
 typedef struct { Event *e; uint64_t n, cap; } Events;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */
-typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; int has_lineage; uint64_t bytes, tokens, incomplete; int exact, skipped, known; Events ev;
+typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; int has_lineage; uint64_t bytes, incomplete; int exact, skipped, known; Events ev;
                  const Source *source;                 /* the source it is a file of, or NULL for a file given by itself */
                  double trust;                         /* how far its witness is trusted */
                  Ref file; int has_file;               /* the file in the DAG: its trunk, over its metadata and its content */
                  Ref *said; uint64_t nsaid, csaid;     /* what it witnessed, in the order it was read: a curated file's content */
                  int partial;                          /* more of it is still to come: it is not yet a recorded source */
-                 void *columns; int ncolumns;          /* a table read a stretch at a time: its columns, from its head */
-                 uint64_t records; } File;             /* records read so far: a stretch's positions go on from the last */
+                 uint64_t records;
+                 int laid; } File;                     /* laid: its trunk, metadata tree and content tree came from the recipe's layout (say.c) */
+int  say_says(Recipe *, const char *path, char *tok);                       /* a recipe's line, if it lays the file out or disposes of a part */
+int  say_lays(const Recipe *);
+int  say_stretches(const Recipe *);                                         /* 1: a file it lays out can be read a line at a time; 2: a record ending at an empty line at a time; 0: whole */
+void comment_off(char *line);                                               /* a recipe line without its comment */
+const char *say_refers(const Recipe *, int i);                              /* the i-th recipe whose rows' keys this one's parts refer to, or NULL */
+/* A source's keys across its files: what a key names, kept for the files read after (recipe.c). */
+void keys_put(const char *recipe, const uint8_t *k, size_t n, Ref x);
+int  keys_get(const char *recipe, const uint8_t *k, size_t n, Ref *out);
+void attest_layout(const Recipe *, File *, const uint8_t *src, size_t n);             /* records read so far: a stretch's positions go on from the last */
+/* The highway, read from the resources by their recipes (types, keyed, alias, maps lines): what a file says of its
+ * types, handed over in the file's order (highway.c keeps them). */
+typedef struct Hw Hw;
+void say_highway(const Recipe *, File *, const uint8_t *src, size_t n, Hw *);
+int  say_has_highway(const Recipe *);
+void hw_type(Hw *, const char *list, const char *say, Ref thing);                 /* a type of the list: the thing it is */
+void hw_key(Hw *, const char *list, Ref thing, const char *key);                  /* a resource's key of that type */
+void hw_alias(Hw *, const char *list, const char *key, const char *to);           /* a key that names the type another key names */
+void hw_edge(Hw *, const char *la, const char *ka, const char *lb, const char *kb);  /* a mapping: the type one key names to the type another names */
+void highway_file(Ctx *, File *, Hw *);                                             /* a file read for the highway (recipe.c) */
+int  source_files(const Source *, Recipe *rec, int nrec, char ***paths, Recipe ***of);   /* a source's files its recipes read, in the order they are read (ingest.c) */
 void decompose_file(Ctx *, File *);
 void decompose_bytes(Ctx *, File *, uint8_t *src, size_t n, int first);     /* a stretch of a file that is read a stretch at a time */
 int  reads_in_stretches(const Recipe *, char *boundary);                    /* whether a file of this recipe can be: 1 at a line's end, 2 at an empty line */
 void table_reset(void);                                                      /* what was decomposed is recorded: the table is emptied for what comes next */
 Ref  string_ref(const uint8_t *s, size_t n);                          /* text as its entity, remembered per thread */
 void ev_push(Events *, const Event *);
-void attest_records(const Recipe *, File *, const uint8_t *src, size_t n);      /* records.c */
-void attest_fields(const Recipe *, File *, const uint8_t *src, size_t n);
-Ref path_ref(const uint8_t *p, size_t n, char sep, char join);
-void attest_lines(const Recipe *, File *, const uint8_t *src, size_t n);
-void attest_members(const Recipe *, File *, const uint8_t *src, size_t n);       /* members.c */
-/* A JSON value that speaks of a thing: every claim it makes of it, and the values at the path of keys wpath. */
-typedef struct { Ref *c; int n, cap; } RefList;
-int  json_said_of(const Recipe *, Ctx *, const uint8_t *p, size_t n, Ref thing, RefList *claims, const Ref *wpath, int nwpath, RefList *found);
-void attest_elements(const Recipe *, File *, void *root_node, const uint8_t *src, size_t n);
-void dir_of(const char *path, char *out, size_t cap);                 /* the name of the directory a file is in */      /* elements.c */
 
 typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, led, std_new, std_upd, known; double t_dedup, t_copy, t_sem; } LoadStats;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
@@ -272,9 +214,9 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
 extern uint32_t id_oid;                                               /* the database's own number for the type of an ID, blake3 */
 size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n);         /* a binary blake3[] parameter; out holds 20 + 20 n bytes */
 void   id_text(const lp_id *id, char out[33]);                        /* 32 hexadecimal digits */
+int    id_parse(const char *s, lp_id *out);                         /* the 32 hexadecimal digits back to the ID; 0 when they are not */
 
 /* ---- a file in the DAG (file.c) */
-void file_take(File *);                                               /* what was just read of it, into its content */
 void file_close(File *);                                              /* the file is whole: its metadata, its content, its trunk */
 
 /* Entities back to their text: paths fetched one level at a time for every entity at once, expanded here down to tier 0. */

@@ -3,13 +3,15 @@ name tatoeba-tags
 # been assigned the "proverb" tag."   Fields and structure: Sentence id [tab] Tag name
 # The id is a key of sentences.csv's rows, read as the sentence.
 match tags.csv
-grammar table
-escaped \\
-# "\\N: Unknown (rare)."
-empty-matches ^\\\\N$
-columns "Sentence id" "Tag name"
-refer "Sentence id" tatoeba-sentences
 
-claims
-subject in "Sentence id"
-attest "Tag name"
+tier row by \n
+escaped \
+names "Sentence id" "Tag name"
+tier field by \t
+# "\\N: Unknown (rare)."
+empty \\N
+
+thing row "Sentence id"
+refer "Sentence id" tatoeba-sentences
+content "Tag name"
+attest row "Tag name"

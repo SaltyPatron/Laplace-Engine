@@ -1,0 +1,9 @@
+name ud-upos
+# upos.json: the validator's list of the universal parts of speech, { "upos": ["ADJ", "ADP", ...] }. Each is the
+# text it is, the type the highway lists, in the validator's order.
+match upos.json
+format json
+
+content upos
+types upos "Universal part of speech" upos
+keyed upos upos .

@@ -1,48 +1,87 @@
 name framenet
 # FrameNet's XML. Its things are what it names them: a frame its name (Abandonment), a frame element its frame and
 # its name ([Abandonment, Agent]), a lexical unit its frame and its name ([Abandonment, abandon.v]), a sentence its
-# text, a corpus and a document their names, a semantic type its name. These are the types the highway lists from
-# FrameNet's own indexes (Semantics: Claims), so an element that carries only a number (FE ID="12338", lexUnit
-# ID="14839", feID, luID, frameID) is read as the type that number is FrameNet's key of; the numbers themselves, with
-# the ids of sentences, annotation sets, corpora, documents and the user who made an entry, are keys, recorded nowhere.
-# Every other name and value is as the files write them.
+# text, a corpus and a document their names, a semantic type its name. Frames, frame elements and lexical units are
+# the types the highway lists, and their numbers (ID) are FrameNet's keys of them: where FrameNet points at one by its
+# number (frameID, feID, luID, subID, supID, a member, required or excluded frame element) the number is read as the
+# type it is the key of. The numbers of sentences, annotation sets, corpora, documents and the user who made an entry
+# are keys. Every other name and value is as the files write them. What is no thing speaks of the nearest thing it is
+# inside.
 match *.xml
-grammar xml
-key ID id corpID docID lemmaID cBy
-# the file's bookkeeping, read by nothing: when an entry was made, display colours, annotation status and counts, where a
-# sentence sat in its corpus, the schema declaration
-omit cDate mDate bgColor fgColor status totalAnnotated numAnnotInstances hasAnnotation XMLCreated sentNo paragNo aPos sentenceCount header layer.name layer.rank
+format xml
 
-# the things, and what names each
-identity frame name
-identity FE ID
-identity lexUnit ID
-identity lu ID
-identity semType name
-identity superType superTypeName
-identity corpus name
-identity document name within
-identity sentence >text
-identity memberFE ID
-identity requiresFE ID
-identity excludesFE ID
-
-# the numbers FrameNet points at its types with, each read as the type
-type frame.ID fnframe
-type frameID fnframe
-type FE.ID fnfe
+# the types, by the names FrameNet gives them; a frame element named in a lexical unit's own file is of that unit's frame
+thing frame name
+thing FE ^lexUnit/frame name
+thing FE name within
+# a lexical unit's own file names its frame; within a frame's file it is inside the frame
+thing lexUnit frame name
+thing lexUnit name within
+thing lu frameName name
+# what points at a type by FrameNet's number
+thing memberFE ID
+thing requiresFE ID
+thing excludesFE ID
 type memberFE.ID fnfe
 type requiresFE.ID fnfe
 type excludesFE.ID fnfe
+type frameID fnframe
 type feID fnfe
-type subID fnfe
-type supID fnfe
-type lexUnit.ID fnlu
-type lu.ID fnlu
 type luID fnlu
-
-# a frame's relation to another frame: <frameRelation type="Inherits from"><relatedFrame>Name</relatedFrame>
-link frameRelation type >relatedFrame
-
+type frameRelation.subID fnframe
+type frameRelation.supID fnframe
+type FERelation.subID fnfe
+type FERelation.supID fnfe
+thing frameRelation subID
+thing FERelation subID
+# the things FrameNet names by their names
+thing semType name
+thing superType superTypeName
+thing corpus name
+thing document name within
+thing sentence text
 # a label speaks of the stretch of its sentence's text from start to end; FrameNet's end is the last character
-span label start end text inclusive name under layer.name
+thing label span start end text inclusive
+
+# the file's bookkeeping, read by nothing: who made an entry and when, display colours, annotation status and counts,
+# where a sentence sat in its corpus, the schema declaration; and the numbers that are keys
+omit cBy cDate mDate bgColor fgColor status totalAnnotated numAnnotInstances hasAnnotation XMLCreated sentNo paragNo aPos sentenceCount header xmlns xmlns:* xsi:* ID corpID docID lemmaID
+content *
+
+holds frame FE lexUnit semType frameRelation
+holds FE requiresFE excludesFE semType
+holds lexUnit semType sentence
+holds frameRelationType frameRelation
+attest frame definition
+attest FE coreType abbrev definition
+attest lexUnit POS definition incorporatedFE
+attest lu POS
+attest lexeme name POS breakBefore headword order
+attest semType superType
+relate frameRelation ^/name to supID
+relate FERelation ^/^/name to supID
+relate frameRelation type to relatedFrame
+attest valenceUnit GF PT FE
+together valenceUnit
+relate label ^/name to name
+# an FE label names its frame element by FrameNet's number too: the stretch is said to be that element
+attest label itype feID
+attest annotationSet cxnName luName frameName
+
+# the highway: frames, frame elements and lexical units, by their numbers and (a frame) by its name, as VerbNet and
+# PropBank write it; a frame element (as its frame defines it: with its core type) and a lexical unit map to their frame
+types fnframe "FrameNet frame" frame
+keyed fnframe frame ID
+keyed fnframe frame name
+when coreType matches .
+types fnfe "FrameNet frame element" FE
+keyed fnfe FE ID
+maps FE ID fnfe to ^frame/ID fnframe
+always
+types fnlu "FrameNet lexical unit" lu
+types fnlu "FrameNet lexical unit" lexUnit
+keyed fnlu lu ID
+keyed fnlu lexUnit ID
+maps lu ID fnlu to frameID fnframe
+maps lexUnit ID fnlu to frameID fnframe
+maps lexUnit ID fnlu to ^frame/ID fnframe

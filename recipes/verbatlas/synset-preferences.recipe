@@ -1,11 +1,14 @@
 name verbatlas-synset-preferences
-# A verb synset (BabelNet's key, read as the ILI concept) and its preference class (CONCRETE): a pair.
+# A verb synset (BabelNet's key, read as the ILI concept) and its preference class (CONCRETE): a pair. The first line
+# is the release's banner, not a row.
 match VA_synset_preferences.tsv
-grammar table
-comment V
-columns synset class
+
+tier row by \n
+skip 1
+names synset class
+tier field by \t
+
+thing row synset
 type synset ili
-claims
-pair
-subject in synset
-object in class
+content class
+pair row class

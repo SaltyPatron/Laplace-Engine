@@ -1,0 +1,24 @@
+name verbatlas-pb2va
+# pb2va.tsv: "A mapping from PropBank to VerbAtlas. Each line maps a PropBank predicate sense and its corresponding
+# argument structure to a VerbAtlas frame and its argument structure as follows:
+#   [PB predicate sense]>[VA frame]    [PB role]>[VA role]    ..."
+# The roleset is the PropBank roleset its id names, and that it is in the frame is said of it, as the pair of the two;
+# each of its roles is said of it under the role's PropBank name, as the VerbAtlas role it is ([abandon.01, A0, Agent],
+# each part as the type or text it is); the highway maps the roleset to the frame. The first line is the release's
+# banner.
+match pb2va.tsv
+
+tier row by \n
+skip 1
+names pbva r1 r2 r3 r4 r5 r6 r7
+tier field by \t
+part pbva by >
+part r* by \t is >
+
+thing row pbva/1
+type pbva pbroleset vaframe
+content r*
+pair row pbva/2
+attest row r*
+
+maps row pbva/1 pbroleset to pbva/2 vaframe

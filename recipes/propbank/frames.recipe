@@ -1,18 +1,38 @@
 name propbank-frames
-# A frame file. A predicate is its lemma; a roleset is the predicate's lemma and the name PropBank writes for it,
-# [abandon, leave behind], the type the highway lists from these files, and its id (abandon.01) the key PropBank points
-# at it with, recorded nowhere. A role's links name a VerbNet class or a FrameNet frame as those resources write them:
-# each is read as that type. An example is its text; what is marked in it speaks of it.
+# A frame file. A predicate is its lemma; a roleset is its predicate's lemma and the name PropBank writes for it
+# ([abandon, leave behind]), the type the highway lists from these files, as a frame element is its frame and its
+# name; its id (abandon.01) is the key PropBank and the resources that point at it write. A role's links name a
+# VerbNet class or a FrameNet frame as those resources write them: each is read as that type. An example is its text;
+# what is marked in it speaks of it. A part that is no thing (a role, a link, an alias) speaks of the nearest thing it
+# is inside: the roleset.
 match *.xml
-grammar xml
-key id
+format xml
+
+thing predicate lemma
+thing roleset ^predicate/lemma name
+thing example text
+key roleset id
+type class vnclass fnframe
+content lemma name pos descr f n resource rolelink alias type note text arg rel slots slot head dep
 # bookkeeping, read by nothing: which releases a roleset is in use in, a link's version, confidence and how it was made
 omit usagenotes version confidence src start end relloc
-identity predicate lemma
-identity roleset id
-type roleset.id pbroleset
-type rolelink.class vnclass
-type rolelink.class fnframe
-type lexlink.class vnclass
-type lexlink.class fnframe
-identity example >text
+
+holds predicate roleset
+attest alias pos .
+attest role descr f n
+attest rolelink class resource .
+attest lexlink class resource
+attest example type
+attest arg type f .
+attest rel .
+
+# the highway: rolesets by their ids, and the VerbNet classes and FrameNet frames their links name
+types pbroleset "PropBank roleset" roleset
+keyed pbroleset roleset id
+when resource is VerbNet
+maps rolelink ^roleset/id pbroleset to class vnclass
+maps lexlink ^roleset/id pbroleset to class vnclass
+always
+when resource is FrameNet
+maps rolelink ^roleset/id pbroleset to class fnframe
+maps lexlink ^roleset/id pbroleset to class fnframe

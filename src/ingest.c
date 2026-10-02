@@ -17,11 +17,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* How many recipes a recipe's keys are reached through: 0 when it refers to none (refer COLUMN RECIPE), else one more
+/* How many recipes a recipe's keys are reached through: 0 when it refers to none (refer NAME RECIPE), else one more
  * than the recipes it refers to. The files of a deeper recipe are read after the shallower ones' */
 static int refer_depth(const Recipe *rec, int nrec, const Recipe *r, int guard){
-    if (!r || guard > 16 || strcmp(r->grammar, "table")) return 0; int d = 0;
-    for (int z = 0; z < r->nrefer; z++) for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, r->refer[z].kind)) { int x = 1 + refer_depth(rec, nrec, &rec[k], guard + 1); if (x > d) d = x; }
+    if (!r || guard > 16) return 0; int d = 0;
+    const char *nm; for (int z = 0; (nm = say_refers(r, z)); z++) for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, nm)) { int x = 1 + refer_depth(rec, nrec, &rec[k], guard + 1); if (x > d) d = x; }
     return d;
 }
 /* ---- recomposition: an entity back to its bytes, from the node table and tier 0 */
@@ -89,6 +89,22 @@ static uint64_t source_bytes(const Source *sc, Recipe *rec, int nrec){
     walking = was; uint64_t sum = 0;
     for (int i = from; i < npaths; i++) { struct stat st; if (recipe_for(rec, nrec, paths[i], sc) && !stat(paths[i], &st)) { size_t l = strlen(paths[i]); sum += (uint64_t)st.st_size * (l > 3 && !strcmp(paths[i] + l - 3, ".gz") ? 8 : 1); } free(paths[i]); }
     npaths = from; return sum;
+}
+/* A source's files its recipes read, in the order they are read: what refers to another recipe's keys after it, and
+ * otherwise by name, so that whatever is made of them in order comes out the same on any machine. */
+static const Recipe *rec_now; static int nrec_now;
+static int by_depth(const void *x, const void *y){ const char *a = *(char *const *)x, *b = *(char *const *)y;
+    int da = refer_depth(rec_now, nrec_now, recipe_for((Recipe *)rec_now, nrec_now, a, walking), 0), db = refer_depth(rec_now, nrec_now, recipe_for((Recipe *)rec_now, nrec_now, b, walking), 0);
+    return da != db ? da - db : strcmp(a, b); }
+int source_files(const Source *sc, Recipe *rec, int nrec, char ***out, Recipe ***of){
+    int from = npaths; const Source *was = walking; walking = sc;
+    if (sc->nfiles) for (int z = 0; z < sc->nfiles; z++) { glob_t g; if (!glob(sc->files[z], 0, NULL, &g)) for (size_t y = 0; y < g.gl_pathc; y++) add_path(g.gl_pathv[y]); globfree(&g); }
+    else nftw(sc->found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+    int n = 0; char **p = malloc(sizeof(char *) * (size_t)(npaths - from + 1));
+    for (int i = from; i < npaths; i++) { if (recipe_for(rec, nrec, paths[i], sc)) p[n++] = paths[i]; else free(paths[i]); }
+    npaths = from; rec_now = rec; nrec_now = nrec; qsort(p, (size_t)n, sizeof(char *), by_depth);
+    Recipe **r = malloc(sizeof(Recipe *) * (size_t)(n + 1)); for (int i = 0; i < n; i++) r[i] = recipe_for(rec, nrec, p[i], sc);
+    walking = was; *out = p; *of = r; return n;
 }
 /* The room left where the database keeps its data, or -1 when that cannot be seen from here (another machine). */
 static double room_left(const char *conninfo){
@@ -243,7 +259,7 @@ int cmd_ingest(int argc, char **argv){
         if (x_->own_witness) { printf("   by "); show_tuple(&x_->witness); } \
         putchar('\n'); } } while (0)
     /* What was read of a file is kept for its content; a file read to its end gets its trunk. */
-    #define WHOLE(F) do { File *f_ = (F); file_take(f_); if (!f_->partial) file_close(f_); } while (0)
+    #define WHOLE(F) do { File *f_ = (F); if (!f_->partial) file_close(f_); } while (0)
     for (int a0 = 0; a0 < nfiles; ) {
         int b0 = a0; uint64_t sum = 0; char boundary = 0;
         while (b0 < nfiles && (b0 == a0 || (sum + size[b0] <= batch && depth[b0] == depth[a0]))) { sum += size[b0]; b0++; }     /* a batch is a barrier: what refers waits for what is referred to */
@@ -255,7 +271,7 @@ int cmd_ingest(int argc, char **argv){
             for (int pass = do_load ? 0 : 1; pass < 2 && !failed && !f->known; pass++) {
                 gzFile g = gzopen(f->path, "rb"); if (!g) { f->skipped = 1; break; } gzbuffer(g, 1 << 20);
                 size_t cap = (size_t)batch / 2 + (64u << 20), have = 0; uint8_t *buf = malloc(cap + 1); int first = 1, last = 0;
-                f->bytes = 0; f->records = 0; f->incomplete = 0; f->has_file = 0; free(f->columns); f->columns = NULL; f->ncolumns = 0;
+                f->bytes = 0; f->records = 0; f->incomplete = 0; f->has_file = 0;
                 while (!last) {
                     double td = now(); int got; while (have < cap - (1u << 20) && (got = gzread(g, buf + have, (unsigned)((cap - have) > (1u << 30) ? (1u << 30) : (cap - have)))) > 0) have += (size_t)got;
                     last = have < cap - (1u << 20); size_t end = have;
@@ -283,7 +299,7 @@ int cmd_ingest(int argc, char **argv){
                     PQclear(r); PQfinish(pg);
                 }
             }
-            free(f->columns); f->columns = NULL; done++; exact++; a0 = b0; continue;
+            done++; exact++; a0 = b0; continue;
         }
         double td = now();
         #pragma omp parallel
@@ -305,8 +321,7 @@ int cmd_ingest(int argc, char **argv){
         #pragma omp parallel for schedule(dynamic) reduction(+:exact, mism)
         for (int i = a0; i < b0; i++) {
             if (files[i].known || files[i].skipped) continue;
-            if (files[i].recipe && files[i].recipe->query) { exact++; continue; }      /* a curated source is not kept as a file */
-            if (files[i].tokens) { exact++; continue; }                                  /* a vocabulary is the text its tokens stand for */
+            if (files[i].recipe && files[i].recipe->curated) { exact++; continue; }      /* a curated source is not kept as a file */
             FILE *f = fopen(files[i].path, "rb"); uint8_t *src = malloc(files[i].bytes + 1);
             size_t got = fread(src, 1, files[i].bytes, f); fclose(f);
             Buf o = { 0 }; int ok = expand(&files[i].trunk.id, &o) && got == files[i].bytes && o.n == got && !memcmp(o.b, src, got);

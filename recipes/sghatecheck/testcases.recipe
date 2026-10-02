@@ -2,14 +2,15 @@ name sghatecheck-testcases
 # The README, "/testcases": "This folder contains test cases that were generated using the techniques described in
 # the paper." It does not describe the columns; their names are the files' own, in the first row:
 #   p_label, p_value, p_target, c_testcase, t_case_local, t_function, t_gold, t_direction, t_id
-# A test case has no name of its own here: it is the text it is (c_testcase). A column without a name says nothing.
+# A test case has no name of its own here: it is the text it is (c_testcase). What a row says of it, it says together.
 match testcases/*_testcases_all.csv
-grammar table
-separator ,
+
+tier row by \n
 header
 quoted
+tier field by ,
 
-claims
-together
-subject in c_testcase
-attest p_label p_value p_target t_function t_gold t_direction
+thing row c_testcase
+content c_testcase p_label p_value p_target t_case_local t_function t_gold t_direction t_id
+together row
+attest row p_label p_value p_target t_case_local t_function t_gold t_direction t_id

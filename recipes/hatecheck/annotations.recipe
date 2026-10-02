@@ -4,17 +4,19 @@ name hatecheck-annotations
 #   annotators. Each test case was annotated by exactly five annotators."
 #   count_label_h "The number of annotators who labeled a given test case as hateful."   count_label_nh, likewise
 #   label_annot_maj "The majority label."
-# Each of the ten columns is an annotator, and its field what that annotator says of the case: nothing is written
-# between the case and the label. The other columns are said of the case by the set, under their own names.
+# Each of the ten label columns is an annotator, and its field what that annotator says of the case: nothing is
+# written between the case and the label. The other columns are said of the case by the set, under their own names.
+# The case is its test case, the sentence; case_id and templ_id are keys.
 match all_annotations.csv test_suite_annotations.csv
-grammar table
-separator ,
+
+tier row by \n
 header
 quoted
-# The case is its test case, the sentence; case_id and templ_id are keys, recorded nowhere.
-key case_id templ_id
+tier field by ,
 
-claims
-subject in test_case
-attest functionality label_gold count_label_h count_label_nh label_annot_maj
-voices label_1 label_2 label_3 label_4 label_5 label_6 label_7 label_8 label_9 label_10
+thing row test_case
+key row case_id
+key row templ_id
+content test_case functionality label_gold count_label_h count_label_nh label_annot_maj label_*
+attest row functionality label_gold count_label_h count_label_nh label_annot_maj
+voices row label_1 label_2 label_3 label_4 label_5 label_6 label_7 label_8 label_9 label_10

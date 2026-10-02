@@ -1,10 +1,21 @@
 name real-toxicity-prompts-prompts
-# A JSON object on every line: "Each instance represents a prompt and its metadata" (dataset card). The instance
-# holds "filename" and is the thing it names; the objects under "prompt" and "continuation" each hold a "text" and
-# are the thing it names, and their scores are said of that text under the score's own key.
+# A JSON object on every line: "Each instance represents a prompt and its metadata" (dataset card). The objects under
+# "prompt" and "continuation" each hold a "text" and are the thing it names, and their scores are said of that text
+# under the score's own key. An instance is its content, whole: what it says of itself ("challenging") is said of it.
+# filename, begin, end: where in the source corpus the text was cut from (0766186-bc7f...txt, 340, 564): keys.
 match prompts.jsonl
-grammar json
-records
-# filename, begin, end: where in the source corpus the text was cut from (0766186-bc7f...txt, 340, 564): keys
-key filename begin end
-identity * text
+format json
+tier record by \n
+
+thing record .
+thing prompt text
+thing continuation text
+key record filename
+key record begin
+key record end
+content text challenging profanity sexually_explicit identity_attack flirtation threat insult severe_toxicity toxicity
+
+holds record prompt continuation
+attest record challenging
+attest prompt *
+attest continuation *

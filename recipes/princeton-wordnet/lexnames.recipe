@@ -1,0 +1,21 @@
+name wordnet-lexnames
+# lexnames.5: "The lexnames file contains a list of the lexicographer files ... Each line is of the form:
+#   file_number  lexicographer_file  syntactic_category"
+# A lexicographer file is its name (noun.animal): the types the highway lists as WordNet's lexicographer files, by
+# their names and by their numbers, which are WordNet's keys of them (a synset's lex_filenum). The syntactic category
+# (1 a noun, 2 a verb, 3 an adjective, 4 an adverb) is said of the file.
+match lexnames
+
+tier line by \n
+names file_number lexicographer_file syntactic_category
+padded
+tier field by \t
+
+thing line lexicographer_file
+key line file_number
+content lexicographer_file syntactic_category
+attest line syntactic_category
+
+types lexfile "WordNet lexicographer file" line
+keyed lexfile line lexicographer_file
+keyed lexfile line file_number

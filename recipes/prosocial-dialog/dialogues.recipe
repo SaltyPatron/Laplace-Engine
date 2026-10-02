@@ -2,9 +2,13 @@ name prosocial-dialog-dialogues
 # A JSON object on every line. The dataset card: `context` "the potentially unsafe utterance"; `safety_label` "the
 # final verdict of the context"; `safety_annotations` "raw annotations from three workers". So an object is the
 # thing its "context" names, and every other member is said of it under its own key.
+# dialogue_id, response_id: the numbering of the turns, keys.
 match train.json test.json valid.json
-grammar json
-records
-identity * context
-# dialogue_id, response_id: the numbering of the turns, keys
-key dialogue_id response_id
+format json
+tier record by \n
+
+thing record context
+key record dialogue_id
+key record response_id
+content context response rots safety_label safety_annotations safety_annotation_reasons source etc episode_done
+attest record response rots safety_label safety_annotations safety_annotation_reasons source etc episode_done

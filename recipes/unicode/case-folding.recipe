@@ -2,19 +2,20 @@ name unicode-case-folding
 # CaseFolding.txt. The header names the fields:
 #   "# <code>; <status>; <mapping>; # <name>"
 #   "# T: special case for uppercase I and dotted uppercase I"
-# Only the rows of status T are read here: the rows of status C, F and S are the mappings the XML gives as cf and
-# scf. A row says its status and its mapping, as the text it is, together.
+# Only the rows of status T attest here: the rows of status C, F and S are the mappings the XML gives as cf and
+# scf. A row says its status and its mapping, as the text it is.
 match CaseFolding.txt
-grammar table
-separator ;
-comment #
-remark #
-columns code status mapping
 
-claims
-together
-where status matches ^ *T *$
-subject in code.range
-predicate mapping
-object in mapping.cps
-attest status
+tier row by \n
+comment hash
+remark hash
+padded
+names code status mapping
+tier field by ;
+
+thing row code
+range code
+codepoints mapping
+content status
+when status is T
+attest row mapping status

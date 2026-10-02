@@ -5,11 +5,12 @@ name unicode-index
 # What is recorded is the pair the row writes, in the row's order: the index entry and the character. The columns
 # are numbered here only to say where a part is; no name is recorded.
 match Index.txt
-grammar table
-separator tab
-columns 0 1
 
-claims
-pair
-subject in 0
-object in 1.cps
+tier row by \n
+names 0 1
+tier field by \t
+
+thing row 0
+content 0
+codepoints 1
+pair row 1

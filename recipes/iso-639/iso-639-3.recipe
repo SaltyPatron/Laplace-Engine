@@ -2,11 +2,14 @@ name iso-639-3
 # ISO 639-3's code table: every row says of its identifier what each column holds, under the column's own name, as the
 # header spells it. The Comment column is the editors' note on the row, read by nothing.
 match iso-639-3.tab
-grammar table
-header
 # The tables do not name who publishes them; the pages kept beside them in sil/ are signed "Copyright © 2026 SIL Global".
 witness SIL Global
 
-claims
-subject in Id
-attest Part2b Part2t Part1 Scope Language_Type Ref_Name
+tier row by \n
+header
+tier field by \t
+
+thing row Id
+content Id Part2b Part2t Part1 Scope Language_Type Ref_Name
+omit Comment
+attest row Part2b Part2t Part1 Scope Language_Type Ref_Name

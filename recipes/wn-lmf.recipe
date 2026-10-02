@@ -1,35 +1,57 @@
 name wn-lmf
-# WN-LMF, the Global WordNet Association's XML for wordnets, read as what it says. A wordnet does not own a word: it
-# says things of it. Its identifiers are its keys: how the file points at its entries, senses and synsets; they
-# resolve to the things and are recorded nowhere (Semantics: Claims; Storage: Identity).
-#   a lexical entry   is the word its Lemma writes
-#   a synset          is the composition of the words its members are, in the order it lists them (members are sense
-#                     ids in OMW's files, entry ids in OEWN's: either names the word): every wordnet that lists the same
-#                     words has the same synset, and their attestations meet there
-#   a sense           is the word it is inside, with its synset
-#   the lexicon       is named as it names itself (its label)
-#   ili               is a type of the highway's interlingual index: read as the concept's content, never as i46360
-# What is inside a thing is said of it, every name and value as the wordnet writes it: [word, partOfSpeech, n],
-# [synset, Definition, text], [synset, partOfSpeech, n], [synset, lexfile, noun.animal], [synset, ili, concept],
-# [word, Sense, sense], [sense, synset, synset]; a relation is its type and what it targets: [synset, hypernym, synset].
-grammar xml
-# every entry stands on lines of its own: a long file is read in parts, on every core
-records
-key id
-# the file's bookkeeping, read by nothing: where a row came from, its status, confidence and notes, the lexicon's version,
-# licence, contact and citation
-omit dc:source dc:type dc:contributor dc:creator dc:identifier dc:publisher dc:relation dc:rights dc:subject dc:title status note confidenceScore version url email license citation logo
-identity Lexicon label
-identity LexicalEntry >Lemma.writtenForm
-identity Synset members
-identity Sense synset within
-identity SyntacticBehaviour subcategorizationFrame
-refer members Sense within
-refer members LexicalEntry
+# A wordnet in WN-LMF (globalwordnet.github.io/schemas, WN-LMF-1.3.dtd). Read for each wordnet that is written in it
+# (Open English WordNet, the Open Multilingual Wordnet's lexicons), each recipe naming its own witness.
+#   A lexicon is its label. A lexical entry is its lemma's written form. A synset is the words it lists, in the order
+#   listed (so every wordnet listing the same members lands on one entity); a sense is the word with its synset.
+#   A syntactic behaviour is its frame, as written.
+#   ids are the wordnet's keys: how it points at its things. Each resolves to the thing; members, synset, target and
+#   senses are such keys. An ili is CILI's key of a concept, read as the concept; a lexfile is read as the lexicographer
+#   file the highway lists.
+#   What is no thing (a lemma, a relation, a definition) speaks of the nearest thing it is inside.
+format xml
+
+key LexicalEntry id
+key Sense id
+key Synset id
+key SyntacticBehaviour id
+thing Lexicon label
+thing LexicalEntry Lemma/writtenForm
+thing Sense synset within
+thing Synset members
+thing SyntacticBehaviour subcategorizationFrame
+part members by space
+part senses by space
+# a member is written as the key of a lexical entry, or (as the Open Multilingual Wordnet writes it) of a sense, which
+# stands for the entry it is inside
+refer members LexicalEntry Sense within
 refer synset Synset
-refer SynsetRelation.target Synset
 refer SenseRelation.target Sense
-refer SyntacticBehaviour.senses Sense
+refer SynsetRelation.target Synset
+refer senses Sense
+# a sense's subcat names the syntactic behaviours it takes, by their keys
+part subcat by space
+refer subcat SyntacticBehaviour
 type ili ili
-link SenseRelation relType target
-link SynsetRelation relType target
+type lexfile lexfile
+content label language writtenForm partOfSpeech relType subcategorizationFrame Definition ILIDefinition Example Pronunciation variety script Tag category Count ref lexicalized
+# a file's bookkeeping, read by nothing: who made it, under what licence, at what version, how confident
+# n (a sense's place among its entry's senses) and index (an entry's place among its homographs) number what the file
+# already holds in order: the order is the path's, and the numbers are not read
+omit n index
+omit dc:* xmlns:* status note confidenceScore version url email license citation logo lexicographer adjposition
+
+holds Lexicon Synset LexicalEntry SyntacticBehaviour
+attest Lexicon language
+attest Requires ref
+holds LexicalEntry Sense
+attest Lemma partOfSpeech script
+attest Form writtenForm script
+attest Pronunciation variety .
+attest Tag category .
+attest Sense synset subcat lexicalized
+attest Count .
+relate SenseRelation relType to target
+# an ili written "in" is WN-LMF's mark for a concept proposed to CILI and not yet in it: it names no concept, and is said so
+attest Synset ili partOfSpeech lexfile lexicalized Definition ILIDefinition Example
+relate SynsetRelation relType to target
+attest SyntacticBehaviour senses

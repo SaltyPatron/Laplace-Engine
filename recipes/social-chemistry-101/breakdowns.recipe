@@ -1,28 +1,28 @@
 name social-chemistry-101-breakdowns
 # "The dataset is tab-separated with the following columns" (README), and its first row names them. A row is one
-# worker's breakdown of one rule of thumb: it is said of the row's rot-id ("ID of the rule of thumb"), and what the
-# row says it says together, so the worker (breakdown-worker-id) and the worker's answers stay in one record.
+# worker's breakdown of one rule of thumb. A rule of thumb is its text; its situation is the text it was written for.
+# What the row says it says together, so the worker's answers stay in one record.
 # README: rot-categorization, rot-moral-foundations and characters are each a '"|" separated list'.
-# The file writes a field that holds a double quote between double quotes, with the quote doubled (4,927 rows).
-# The table reader does not read that notation, so those rows are left unread rather than recorded as written.
+# A field that holds a double quote is written between double quotes, with the quote doubled.
+# The ids and worker ids are the set's keys; the split and the counts are its bookkeeping.
 match social-chem-101.v1.0.tsv
-grammar table
+
+tier row by \n
 header
-list rot-categorization |
-list rot-moral-foundations |
-list characters |
+quoted
+tier field by \t
+part rot-categorization by |
+part rot-moral-foundations by |
+part characters by |
 
-# the ids and worker ids are the set's keys, read by nothing
-key rot-id situation-short-id rot-worker-id breakdown-worker-id
-
-claims
-together
-# A rule of thumb is its text; its situation is the text it was written for. The ids, worker ids, split and counts are
-# the set's bookkeeping, read by nothing.
-subject in rot
-attest situation area rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-bad rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical characters
-where situation matches ^($|[^"])
-where characters matches ^($|[^"])
-where rot matches ^($|[^"])
-where action matches ^($|[^"])
-where rot-judgment matches ^($|[^"])
+thing row rot
+key row rot-id
+key row situation-short-id
+key row rot-worker-id
+key row breakdown-worker-id
+# m is a column the README does not describe; it is in the file's tree as written and attests nothing
+omit split n-characters rot-bad
+content m
+content rot situation area rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical characters
+together row
+attest row situation area rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical characters

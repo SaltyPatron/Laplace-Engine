@@ -1,0 +1,22 @@
+name semlink-pb-vn
+# instances/pb-vn2.json: SemLink's mapping of PropBank rolesets to VerbNet classes, an object whose keys are rolesets
+# (abandon.01), each an object whose keys are the class numbers it maps to (51.2), each an object of the roleset's
+# arguments (ARG0) and the thematic role each is in the class (theme):
+#   {"abandon.01": {"51.2": {"ARG0": "theme"}}, ...}
+# A mapping is the pair of the roleset and the class, each the type its key names, and SemLink says it; what it says
+# of an argument it says within the mapping, [[abandon.01, 51.2], ARG0, theme]. The highway maps the roleset to the
+# class.
+match pb-vn2.json
+format json
+levels roleset class argument
+
+thing roleset key
+thing class ^roleset/key key
+type roleset.key pbroleset
+type class.key vnclass
+content argument.key value
+
+itself class
+relate argument key to value
+
+maps class ^roleset/key pbroleset to key vnclass

@@ -1,28 +1,18 @@
 name toxigen-annotations
-# The set's card names this file's columns (dataset_info, config "annotations") and says nothing more of them. A row
-# is one worker's answers about one text: the columns named Input. hold what the worker was shown, the columns named
-# Answer. what the worker answered, and HashedWorkerId who answered.
-# What was answered of the text, the worker says, of the text; what the worker answered of themself
-# (Answer.annotator...) is said of the worker. What the row holds of the text that was shown, the set says.
-# The texts are written as Python writes bytes (b'...'); they are recorded as written.
-# The file is Parquet, written out beside it as a table (extracted/, by parquet-to-text.py).
+# The raw annotations, written out from Parquet as a table whose first row names its columns. A row is one hashed
+# worker's reading of one text: what the set says of the text (Input.*) it says; what the worker answered of the text
+# (Answer.*) the worker says; what the row holds of the worker (Answer.annotator*) is said of the worker.
+# A worker stands within the set: [the set, HashedWorkerId, the id].
 match annotations/train-*.tsv
-grammar table
+
+tier row by \n
 header
 escaped \
-kinds own
-kind HashedWorkerId HashedWorkerId
+tier field by \t
 
-claims
-subject in Input.text
-attest Input.prompt Input.time Input.generation_method Input.prompt_label Input.target_group Input.binary_prompt_label
-
-claims
-subject in Input.text
-attest Answer.factSelect Answer.framingQ Answer.inGroup* Answer.ingroup* Answer.intent* Answer.lewd* Answer.refTarget Answer.stateFrame Answer.stateGroup Answer.stereo* Answer.toAI* Answer.toPER* Answer.writer*
-witness in HashedWorkerId
-
-claims
-subject in HashedWorkerId
-attest Answer.annotator*
-witness in HashedWorkerId
+thing row Input.text
+own HashedWorkerId
+content Input.* Answer.*
+attest row Input.prompt Input.time Input.generation_method Input.prompt_label Input.target_group Input.binary_prompt_label
+attest row Answer.factSelect Answer.framingQ Answer.inGroup* Answer.ingroup* Answer.intent* Answer.lewd* Answer.refTarget Answer.stateFrame Answer.stateGroup Answer.stereo* Answer.toAI* Answer.toPER* Answer.writer* by HashedWorkerId
+attest row Answer.annotator* of HashedWorkerId

@@ -4,25 +4,10 @@ name wiktextract
 #   word - the word form;  pos - part-of-speech;  lang_code - Wiktionary language code;
 #   etymology_number - "the number of the etymology under which this entry appeared"
 # so an entry is the thing the first three name together: [en, free, noun]; the etymology number is where on the
-# page it appeared, a key, and the entries under each etymology say what they say of that one word. A translation or a linked word holds
-# "word", and "lang_code" when it is in another language: [fi, vapari]. A redirect holds "title" and no "word".
-# A sense is the thing its glosses name ("glosses - list of gloss strings for the word sense"), a form the thing its
-# "form" names, an example the thing its "text" names ("each example being a dictionary with text field
-# containing the example text"). What a sense, a form, a translation or a linked word holds it says of its being there in the entry
-# ("sense - optional sense indicating the meaning for which this is a translation"), not of the word alone.
-# Lists of pairs are pairs ("links in the etymology as [display text, target] pairs").
-# Every key and value is recorded as written.
-# The edition read is the dated one; the undated file beside it is the same witness saying the same entries earlier.
+# page it appeared, a key. A translation or a linked word holds "word", and "lang_code" when it is in another
+# language: [fi, vapari]. A redirect holds "title" and no "word". A sense is the thing its glosses name ("glosses -
+# list of gloss strings for the word sense"), a form the thing its "form" names, an example the thing its "text"
+# names. Lists of pairs are pairs ("links in the etymology as [display text, target] pairs").
+# Every key and value is recorded as written. The raw file and kaikki.org's extracts of it are read the same way.
 match raw-wiktextract-data-*
-grammar json
-records
-named word by lang_code word pos
-key etymology_number id senseid wikidata
-# the extract's machinery, read by nothing: the templates and categories the page was rendered from, disambiguation weights
-omit head_templates etymology_templates inflection_templates categories _dis _dis1 topics source
-identity * title
-identity senses glosses
-identity forms form
-identity examples text
-specifics claims under senses
-tuples
+like wiktextract-kaikki

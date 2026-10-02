@@ -1,15 +1,17 @@
 name tatoeba-sentences
 # "Contains all the sentences in the selected language. Each sentence is associated with a unique id and an
 # ISO 639-3 language code."   Fields and structure: Sentence id [tab] Lang [tab] Text
-# A sentence is its text; its id is Tatoeba's key to it, recorded nowhere, by which the other files point at it.
+# A sentence is its text; its id is Tatoeba's key to it, by which the other files point at it.
 match sentences.csv
-grammar table
-escaped \\
-# "\\N: Unknown (rare)."
-empty-matches ^\\\\N$
-columns "Sentence id" Lang Text
-key "Sentence id"
 
-claims
-subject in Text
-attest Lang
+tier row by \n
+escaped \
+names "Sentence id" Lang Text
+tier field by \t
+# "\\N: Unknown (rare)."
+empty \\N
+
+thing row Text
+content Text Lang
+key row "Sentence id"
+attest row Lang

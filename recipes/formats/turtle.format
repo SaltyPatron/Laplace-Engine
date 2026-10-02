@@ -1,0 +1,32 @@
+# RDF Turtle, as the tree-sitter grammar turtle gives it: what each kind of its nodes is in the file's tree. A recipe
+# for a Turtle file says "format turtle" and then only what its source's parts are.
+#   a triple holds its subject and its properties; a property, its predicate and its objects
+#   an IRI is its text without the angle brackets; a prefixed name, as written; a literal holds its text (quotes off,
+#   escapes resolved) and its language tag (without the @) or its datatype
+#   prefix and base directives, blank nodes and collections are not of the tree
+grammar turtle
+resolve turtle
+node triple group kind
+node subject group kind
+node property group kind
+node predicate group kind
+node object_list group kind
+node rdf_literal group kind
+node iri_reference text
+node prefixed_name text
+node string text
+node lang_tag text kind
+node integer text raw
+node decimal text raw
+node double text raw
+node boolean_literal text raw
+node directive skip
+node prefix_id skip
+node base skip
+node sparql_prefix skip
+node sparql_base skip
+node blank_node_property_list skip
+node anon skip
+node collection skip
+node blank_node_label skip
+node comment skip

@@ -1,0 +1,35 @@
+name predicate-matrix
+# PredicateMatrix.v1.3.txt: "Each row of this Predicate Matrix represents the mapping of a role over the different
+# resources and includes all the aligned knowledge about its corresponding verb sense ... Each row is indetified by
+# the unique index formed by the first four columns." A tab parts the fields; the first row names them. Every value is
+# written after the resource it is of (vn:51.3.1, fn:Body_movement, pb:drop.01, mcr:ili-30-01976841-v, wn:drop%2:38:00),
+# and NULL is what the matrix writes where a resource has nothing for the row.
+# A row is the role it maps: its predicate and its role ([id:abaixar.1.default, id:arg0]); what each other column says
+# is said of it under the column's name, a VerbNet class, a FrameNet frame, a PropBank roleset or a WordNet synset as
+# the type the matrix's key names. The highway maps the concepts, classes, frames and rolesets a row aligns.
+match PredicateMatrix.v*.txt
+
+tier row by \n
+header
+tier field by \t
+empty id:NULL vn:NULL wn:NULL mcr:NULL fn:NULL pb:NULL eso:NULL
+
+thing row 3_ID_PRED 4_ID_ROLE
+type 5_VN_CLASS vnclass matching ^vn:(.*)$
+type 7_VN_SUBCLASS vnclass matching ^vn:(.*)$
+type 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$
+type 23_MCR_BLC ili matching ^mcr:ili-30-([0-9]+-[a-z])$
+type 13_FN_FRAME fnframe matching ^fn:(.*)$
+type 16_PB_ROLESET pbroleset matching ^pb:(.*)$
+content *
+attest row *
+
+maps row 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$ to 5_VN_CLASS vnclass matching ^vn:(.*)$
+maps row 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$ to 13_FN_FRAME fnframe matching ^fn:(.*)$
+maps row 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$ to 16_PB_ROLESET pbroleset matching ^pb:(.*)$
+maps row 11_WN_SENSE ili matching ^wn:(.*)$ to 5_VN_CLASS vnclass matching ^vn:(.*)$
+maps row 11_WN_SENSE ili matching ^wn:(.*)$ to 13_FN_FRAME fnframe matching ^fn:(.*)$
+maps row 11_WN_SENSE ili matching ^wn:(.*)$ to 16_PB_ROLESET pbroleset matching ^pb:(.*)$
+maps row 5_VN_CLASS vnclass matching ^vn:(.*)$ to 13_FN_FRAME fnframe matching ^fn:(.*)$
+maps row 16_PB_ROLESET pbroleset matching ^pb:(.*)$ to 5_VN_CLASS vnclass matching ^vn:(.*)$
+maps row 16_PB_ROLESET pbroleset matching ^pb:(.*)$ to 13_FN_FRAME fnframe matching ^fn:(.*)$

@@ -1,16 +1,16 @@
 name wordnet-cntlist-rev
 # cntlist.5: "The cntlist.rev file contains the same fields described above, in the following order:
 #   sense_key  sense_number  tag_cnt"
+# The sense key is WordNet's key of the sense, read as the ILI concept it is mapped to; the sense number is where the
+# sense stands in the lemma's list, a key; the tag count is what the file says of the sense.
 match cntlist.rev
-grammar table
-separator space
-columns sense_key sense_number tag_cnt
-# the sense key is WordNet's key of the sense, read as the ILI concept it is mapped to; the sense number is where the sense
-# stands in the lemma's list, a key, recorded nowhere; the tag count is what the file says of the sense
-type sense_key ili
-key sense_number
 
-claims
-together
-subject in sense_key
-attest tag_cnt
+tier row by \n
+names sense_key sense_number tag_cnt
+tier field by space
+
+thing row sense_key
+type sense_key ili
+key row sense_number
+content tag_cnt
+attest row tag_cnt

@@ -1,52 +1,21 @@
 name loc-feed
-# The Library of Congress's Atom feed of changes to its ISO 639-5 list. A feed and each entry is the thing its id
-# element names. Of it is said: [id, element, text] for each element inside it that holds text (title, published,
-# updated, subtitle, generator; name and email inside author; p inside content's div); [id, attribute, value] for the
-# attributes of category, content and div; [id, rel, href] for each link, where what it links is not the id itself.
-# A text that carries an attribute says so: [text, attribute, value].
-# An id that has several entries has all of them said of it; which published goes with which p is not recorded.
+# The Library of Congress's Atom feed of changes to ISO 639-5. The feed and each entry are the thing their id names.
+# Each element inside one says of it, under its own name, its text; a link says of it the resource it points at,
+# under the link's rel; the author's name and email, the category's term, and the change described in the entry's
+# content are said of it. The dates are when the Library of Congress published the change.
 match iso639-5.atom10.xml
-grammar xml
 witness Library of Congress
-unit 262144
+format xml
 
-claims
-query
-((element (STag (Name) @_e)
-   (content . (CharData)? . (element (STag (Name) @_i) (content) @subject.xml)
-            (element (STag (Name) @predicate) (content) @object.xml)))
- (#any-of? @_e "feed" "entry") (#eq? @_i "id") (#not-match? @object.xml "<"))
-((element (STag (Name) @_e)
-   (content . (CharData)? . (element (STag (Name) @_i) (content) @subject.xml)
-            (element (STag (Name) @_a)
-              (content (element (STag (Name) @predicate) (content) @object.xml)))))
- (#any-of? @_e "feed" "entry") (#eq? @_i "id") (#eq? @_a "author") (#not-match? @object.xml "<"))
-((element (STag (Name) @_e)
-   (content . (CharData)? . (element (STag (Name) @_i) (content) @subject.xml)
-            (element (STag (Name) @_c)
-              (content (element (STag (Name) @_d)
-                (content (element (STag (Name) @predicate) (content) @object.xml)))))))
- (#eq? @_e "entry") (#eq? @_i "id") (#eq? @_c "content") (#eq? @_d "div") (#not-match? @object.xml "<"))
-((element (STag (Name) @_e)
-   (content . (CharData)? . (element (STag (Name) @_i) (content) @subject.xml)
-            (element [(EmptyElemTag (Name) @_c (Attribute (Name) @predicate (AttValue) @object.xml))
-                      (STag (Name) @_c (Attribute (Name) @predicate (AttValue) @object.xml))])))
- (#eq? @_e "entry") (#eq? @_i "id") (#any-of? @_c "category" "content"))
-((element (STag (Name) @_e)
-   (content . (CharData)? . (element (STag (Name) @_i) (content) @subject.xml)
-            (element (STag (Name) @_c)
-              (content (element (STag (Name) @_d (Attribute (Name) @predicate (AttValue) @object.xml)))))))
- (#eq? @_e "entry") (#eq? @_i "id") (#eq? @_c "content") (#eq? @_d "div") (#not-match? @predicate "^xmlns"))
-((element (STag (Name) (Attribute (Name) @predicate (AttValue) @object.xml)) (content) @subject.xml)
- (#not-match? @predicate "^xmlns") (#not-match? @subject.xml "<"))
-end
-
-claims
-distinct
-query
-((element (STag (Name) @_e)
-   (content . (CharData)? . (element (STag (Name) @_i) (content) @subject.xml)
-            (element (EmptyElemTag (Name) @_l (Attribute (Name) @_r (AttValue) @predicate.xml)
-                                              (Attribute (Name) @_h (AttValue) @object.xml)))))
- (#any-of? @_e "feed" "entry") (#eq? @_i "id") (#eq? @_l "link") (#eq? @_r "rel") (#eq? @_h "href"))
-end
+thing feed id
+thing entry id
+omit xmlns xmlns:* xml:lang length
+content *
+attest feed */
+attest entry */
+relate link rel to href
+attest link title type
+attest author */
+attest category term
+attest div class
+attest p .

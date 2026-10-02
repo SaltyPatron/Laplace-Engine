@@ -1,14 +1,14 @@
 name toxigen-annotated
-# The set's card names this file's columns (dataset_info, config "annotated") and says nothing more of them: text,
-# target_group, factual?, ingroup_effect, lewd, framing, predicted_group, stereotyping, intent, toxicity_ai,
-# toxicity_human, predicted_author, actual_method. Each is recorded of the text under the column's own name.
-# The file is Parquet, written out beside it as a table (extracted/, by parquet-to-text.py).
+# The annotated set, written out from Parquet as a table whose first row names its columns. A text is the text it is;
+# every other column is said of it, under the column's own name, together.
 match annotated/train-*.tsv annotated/test-*.tsv
-grammar table
+
+tier row by \n
 header
 escaped \
+tier field by \t
 
-claims
-together
-subject in text
-attest *
+thing row text
+content *
+together row
+attest row *

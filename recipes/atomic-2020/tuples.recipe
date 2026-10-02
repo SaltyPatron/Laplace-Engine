@@ -1,19 +1,13 @@
 name atomic-2020-tuples
-# The set's README.md says of its tables:
-#   All data `*.tsv` files are formatted as follows:
-#   - each line represents a distinct commonsense tuple
-#   - column 1: head node/concept
-#   - column 2: edge relation (e.g., xWant,xAttr,AtLocation)
-#   - column 3: tail node/concept
-# The tables have no header row. The three columns are told apart here by the README's words for them; the words only
-# say which column is which, and are never recorded. Every row is recorded in its own order, as written:
-# [head, relation, tail].
-# A tail written "none" is recorded as written: the README does not say what it stands for.
+# ATOMIC 2020: a tuple on every line, three fields parted by tabs, no header row. The set's README:
+#   "The data is in the form of tab-separated tuples: head, relation, tail"
+# Each row is the claim of its head, its relation and its tail, every one as written.
 match train.tsv dev.tsv test.tsv
-grammar table
-columns head relation tail
 
-claims
-subject in head
-predicate in relation
-object in tail
+tier row by \n
+names head relation tail
+tier field by \t
+
+thing row head
+content head relation tail
+relate row relation to tail

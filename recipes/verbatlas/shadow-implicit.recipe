@@ -1,21 +1,21 @@
 name va-shadow-implicit
 # A verb synset (BabelNet's key of it, read as the ILI concept), a role of its frame, and the synsets that fill the
-# role as a shadow argument (VA_bn2shadow) or an implicit one (VA_bn2implicit), as the file's name says: the row says
-# together that the synset has the role as such an argument, and what fills it.
+# role as a shadow argument (VA_bn2shadow) or an implicit one (VA_bn2implicit), as the file's name says after its "2":
+# the row says together that the synset has the role as such an argument, and what fills it. The fillers are written
+# with | between them. The first line is the release's banner, not a row.
 match VA_bn2shadow.tsv VA_bn2implicit.tsv
-grammar table
+
+tier row by \n
 skip 1
-columns synset role filler
-list filler |
+names synset role filler
+tier field by \t
+part filler by |
+
+stem 2 .
+thing row synset
 type synset ili
 type filler ili
-claims
-together
-predicate-in-name 2 .
-subject in synset
-object in role
-claims
-together
-subject in synset
-predicate in role
-object in filler
+content role
+together row
+relate row {file} to role
+relate row role to filler

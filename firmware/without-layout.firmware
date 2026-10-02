@@ -16,6 +16,9 @@ for search
 
 for translate
   fan 4096
+  up Sense synset ili
+  language Synset language
+  gloss Definition
 
 for pull
   fan 4096

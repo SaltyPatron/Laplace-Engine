@@ -3,18 +3,40 @@ name cldr-supplemental-data
 # its other attributes hold, under the attribute's own name, and what the elements inside it say (a territory's
 # languagePopulation, a region's currency, a calendar's calendarSystem and era) is said of it, each such element
 # together as one record.
-match supplementalData.xml
-grammar xml
 # "Copyright © 1991-2026 Unicode, Inc." and "CLDR data files are interpreted according to the LDML specification"
+match supplementalData.xml
 witness CLDR
-identity language type
-identity territory type
-identity group type
-identity region iso3166
-identity info iso4217
-identity territoryCodes type
-identity currencyCodes type
-identity calendar type
-identity scriptVariant id
-identity parentLocale parent
-identity reference type
+format xml
+
+thing language type
+thing territory type
+thing group type
+thing region iso3166
+thing info iso4217
+thing territoryCodes type
+thing currencyCodes type
+thing calendar type
+thing scriptVariant id
+thing parentLocale parent
+thing reference type
+omit xmlns xmlns:*
+content *
+
+attest language *
+attest territory *
+attest group *
+attest region *
+attest info *
+attest territoryCodes *
+attest currencyCodes *
+attest calendar *
+attest scriptVariant *
+attest parentLocale *
+attest reference * .
+attest languagePopulation *
+together languagePopulation
+attest currency *
+together currency
+attest calendarSystem *
+attest era *
+together era

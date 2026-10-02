@@ -6,14 +6,17 @@ name unicode-arabic-shaping
 #   "#   and does not constitute a formal property value."
 #   "# Field 2: defines the joining type (property name: Joining_Type)"
 #   "# Field 3: defines the joining group (property name: Joining_Group)"
-# Only the schematic name is read here: Joining_Type and Joining_Group are what the XML gives as jt and jg.
+# Only the schematic name is attested here: Joining_Type and Joining_Group are what the XML gives as jt and jg.
 match ArabicShaping.txt
-grammar table
-separator ;
-comment #
-remark #
-columns "code point" "schematic name" Joining_Type Joining_Group
 
-claims
-subject in "code point".cps
-attest "schematic name"
+tier row by \n
+comment hash
+remark hash
+padded
+names "code point" "schematic name" Joining_Type Joining_Group
+tier field by ;
+
+thing row "code point"
+codepoints "code point"
+content "schematic name" Joining_Type Joining_Group
+attest row "schematic name"

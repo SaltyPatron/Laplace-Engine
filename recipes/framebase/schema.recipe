@@ -1,4 +1,13 @@
 name framebase-schema
-# FrameBase's three files: one statement on every line, every identifier written in full between angle brackets.
+# FrameBase's schema: Turtle, a statement on every line. Every statement is recorded as written: its subject, its
+# predicate and its object, an identifier without its angle brackets and a text with its quotes off; a text says, as a
+# pair, its language tag or its datatype. Statements of blank nodes and collections are not read.
 match FrameBase_schema_*.ttl
-like turtle
+format turtle
+tier statement by \n
+
+thing triple subject
+thing rdf_literal value
+content *
+relate property predicate to object_list
+pair rdf_literal lang_tag datatype

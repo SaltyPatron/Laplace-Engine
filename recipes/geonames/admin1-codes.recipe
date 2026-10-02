@@ -1,13 +1,15 @@
 name geonames-admin1-codes
 # readme.txt:
 #   "admin1CodesASCII.txt     : names in English for admin divisions. Columns: code, name, name ascii, geonameid"
+# The geonameid is read as the place; the code (US.CA) is GeoNames's key to the division.
 match admin1CodesASCII.txt
-grammar table
-columns code name "name ascii" geonameid
-# the geonameid is read as the place; the code (US.CA) is GeoNames's key to the division, recorded nowhere
-key code
-refer geonameid geonames-geoname
 
-claims
-subject in geonameid
-attest name "name ascii"
+tier row by \n
+names code name "name ascii" geonameid
+tier field by \t
+
+thing row geonameid
+key row code
+refer geonameid geonames-geoname
+content name "name ascii"
+attest row name "name ascii"

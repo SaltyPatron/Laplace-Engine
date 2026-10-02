@@ -1,19 +1,19 @@
 name tatoeba-sentences-with-audio
-# "Contains the ids of the sentences, for which audio is available" with the audio's id, "the username of the
-# user who recorded the sentence, the license of the audio and the attribution url".
-# Fields and structure: Sentence id [tab] Audio id [tab] Username [tab] License [tab] Attribution URL
-# The sentence id is read as the sentence; the audio id is a key to a recording not in the data, recorded nowhere.
+# "Contains the ids of the sentences ... for which audio is available ... the username of the contributor".
+# Fields: Sentence id [tab] Audio id [tab] Username [tab] License [tab] Attribution URL
+# The sentence id is read as the sentence; the audio id is Tatoeba's key to the recording. Of the sentence, the row
+# says who recorded it. The licence and the attribution URL are the recording's bookkeeping.
 match sentences_with_audio.csv
-grammar table
-escaped \\
-# "\\N: Unknown (rare)."
-empty-matches ^\\\\N$
-columns "Sentence id" "Audio id" Username License "Attribution URL"
-refer "Sentence id" tatoeba-sentences
-key "Audio id"
-kinds own
-kind Username Username
 
-claims
-subject in "Sentence id"
-attest Username
+tier row by \n
+escaped \
+names "Sentence id" "Audio id" Username License "Attribution URL"
+tier field by \t
+empty \\N
+
+thing row "Sentence id"
+refer "Sentence id" tatoeba-sentences
+key row "Audio id"
+own Username
+omit License "Attribution URL"
+attest row Username

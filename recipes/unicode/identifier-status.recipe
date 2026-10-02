@@ -4,12 +4,15 @@ name unicode-identifier-status
 #   "# Field 1: Identifier_Status value"
 # A row whose code point is a range speaks of the range, recorded as the range it is: the path of its first and its last.
 match IdentifierStatus.txt
-grammar table
-separator ;
-comment #
-remark #
-columns "code point" Identifier_Status
 
-claims
-subject in "code point".cps
-attest Identifier_Status
+tier row by \n
+comment hash
+remark hash
+padded
+names "code point" Identifier_Status
+tier field by ;
+
+thing row "code point"
+range "code point"
+content Identifier_Status
+attest row Identifier_Status

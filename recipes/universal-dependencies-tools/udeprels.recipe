@@ -1,0 +1,9 @@
+name ud-deprels
+# udeprels.json: the validator's list of the universal dependency relations, { "udeprels": ["acl", "advcl", ...] }.
+# Each is the text it is, the type the highway lists, in the validator's order.
+match udeprels.json
+format json
+
+content udeprels
+types deprel "Universal dependency relation" udeprels
+keyed deprel udeprels .

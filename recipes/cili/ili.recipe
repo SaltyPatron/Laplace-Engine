@@ -1,0 +1,24 @@
+name cili
+# The Collaborative Interlingual Index (ili.ttl): one language-neutral concept per meaning, each a statement of its own,
+#   <i1>	a	<Concept> ;
+#   	skos:definition	"(usually followed by `to') having the necessary means or skill ..."@en ;
+#   	dc:source	pwn30:00001740-a .
+# A concept is its definition, the content CILI gives it: its number (i1) is CILI's key of it, and the WordNet 3.0
+# synset it was made from (dc:source, pwn30:00001740-a) is WordNet's key of it, both recorded nowhere. The concepts
+# are the highway's interlingual index, by both keys. What a concept is said to be (a Concept, an Instance) is said of
+# it, and so is the language its definition is written in.
+match ili.ttl
+format turtle
+tier statement by \n\n
+
+thing triple property[predicate=skos:definition]/object_list/rdf_literal/value
+content *
+
+when predicate is a
+relate property predicate to object_list
+always
+pair rdf_literal lang_tag
+
+types ili "Interlingual index concept" triple
+keyed ili triple subject
+keyed ili triple property[predicate=dc:source]/object_list matching ^pwn30:(.*)$

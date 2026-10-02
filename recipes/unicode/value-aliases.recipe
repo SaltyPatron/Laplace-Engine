@@ -1,13 +1,14 @@
 name unicode-property-value-aliases
 # The standard's own list of what each property's values stand for: the property, the value's short name, its long name.
 match PropertyValueAliases.txt
-grammar table
-separator ;
-comment #
-remark #
-columns property short long
 
-claims
-subject in property
-predicate in short
-object in long
+tier row by \n
+comment hash
+remark hash
+padded
+names property short long
+tier field by ;
+
+thing row property
+content property short long
+relate row short to long

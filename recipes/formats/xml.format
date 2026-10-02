@@ -1,0 +1,21 @@
+# XML, as the tree-sitter grammar xml gives it: what each kind of its nodes is in the file's tree. A recipe for an XML
+# file says "format xml" and then only what its source's parts are.
+#   an element holds nodes, and is named by its tag's name
+#   an attribute is a name and its text, the text with XML's references resolved and its quotes off
+#   character data, a reference and a CDATA section are text, side by side one text
+#   the prolog (declaration, document type), comments, processing instructions and end tags are how the file is
+#   written down, and not of its tree
+grammar xml
+resolve xml
+trim
+node element group name STag/Name EmptyElemTag/Name
+node Attribute value name Name text AttValue
+node CharData text join
+node EntityRef text join
+node CharRef text join
+node CData text raw join
+node prolog skip
+node Comment skip
+node PI skip
+node ETag skip
+node CDStart skip

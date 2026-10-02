@@ -1,19 +1,33 @@
 name wiktextract-kaikki
-# The entries of one language, as kaikki.org gives them: the same JSON object on every line as in the raw file
-# (see wiktextract.recipe for what Wiktextract's README says of it), and read the same way, so that what two
-# editions say of the same entry, they say of the same thing. Here a sense also holds an "id" of its own
+# The entries of one language, as kaikki.org gives them: the same JSON object on every line as Wiktextract's raw file
+# (see wiktionary/wiktextract.recipe for what Wiktextract's README says of it), read the same way, so that what two
+# editions say of the same entry they say of the same thing. Here a sense also holds an "id" of its own
 # (en-dictionary-en-noun-hIt8uVcE), a "senseid" and a "wikidata" number: keys, how the source and Wikidata point at
-# the sense, and recorded nowhere.
+# the sense.
+#   An entry is the thing its lang_code, word and pos name together: [en, free, noun]. A sense is the thing its
+#   glosses name; a form, the thing its form names; an example, the thing its text names; a translation, or a word
+#   linked from the entry (a synonym, a hypernym), the thing its lang_code and word, or its word, name.
+#   What an entry or a sense holds of these it holds under the member's name (senses, forms, synonyms, ...); every
+#   other member is said of it under its own name, a list of values each, a list of pairs each as the pair.
 match kaikki.org-dictionary-*.jsonl
-grammar json
-records
-named word by lang_code word pos
-key etymology_number id senseid wikidata
-# the extract's machinery, read by nothing: the templates and categories the page was rendered from, disambiguation weights
-omit head_templates etymology_templates inflection_templates categories _dis _dis1 topics source
-identity * title
-identity senses glosses
-identity forms form
-identity examples text
-specifics claims under senses
-tuples
+format json
+tier record by \n
+
+thing record lang_code word pos
+thing senses glosses
+thing forms form
+thing examples text
+thing * lang_code word
+thing * word
+thing redirect title
+# keys: where an entry stood on its page, and how Wiktionary and Wikidata point at a sense
+omit etymology_number id senseid wikidata
+# the extract's machinery, read by nothing: the templates and categories the page was rendered from, disambiguation
+# weights, where bold text sat in an example
+omit head_templates etymology_templates inflection_templates categories _dis _dis1 topics source bold_text_offsets italic_text_offsets
+content *
+
+holds record * via
+holds senses * via
+attest * *
+together sounds

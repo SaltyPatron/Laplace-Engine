@@ -5,12 +5,8 @@ name conceptnet-relations
 # What a row says of a relation is said under the heading of its column. A relation's URI, /r/IsA, is ConceptNet's
 # address for the relation IsA: the relation is its name.
 match Relations.md
-grammar lines
 
-claims
-predicate Description
-line ^\| */r/([^ |]+) *\| *([^|]*[^| ]) *\|
+tier line by \n
 
-claims
-predicate Examples
-line ^\| */r/([^ |]+) *\|[^|]*\| *([^|]*[^| ]) *$
+line ^\| */r/([^ |]+) *\| *([^|]*[^| ]) *\| :: predicate Description
+line ^\| */r/([^ |]+) *\|[^|]*\| *([^|]*[^| ]) *$ :: predicate Examples

@@ -1,16 +1,17 @@
 name tatoeba-sentences-cc0
-# "Contains all the sentences that are released under CC0" with "the date of the last modification".
-# Fields and structure: Sentence id [tab] Lang [tab] Text [tab] Date last modified
-# A sentence is its text; the id is a key, recorded nowhere.
+# "Contains all the sentences available under CC0."   Fields: Sentence id [tab] Lang [tab] Text [tab] Date last modified
+# A sentence is its text; its id is Tatoeba's key to it. The date is Tatoeba's bookkeeping.
 match sentences_CC0.csv
-grammar table
-escaped \\
-# "\\N: Unknown (rare)."
-empty-matches ^\\\\N$
-columns "Sentence id" Lang Text "Date last modified"
-# the date is bookkeeping, read by nothing
-key "Sentence id"
 
-claims
-subject in Text
-attest Lang
+tier row by \n
+escaped \
+names "Sentence id" Lang Text "Date last modified"
+tier field by \t
+# "\\N: Unknown (rare)."
+empty \\N
+
+thing row Text
+key row "Sentence id"
+content Text Lang
+omit "Date last modified"
+attest row Lang

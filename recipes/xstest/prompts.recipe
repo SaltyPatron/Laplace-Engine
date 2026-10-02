@@ -1,15 +1,13 @@
 name xstest-prompts
-# The readme: "xstest_prompts.csv contains all test prompts"; "unsafe prompts ... are those where the "type" starts
-# with "contrast_"". The columns' names are the file's own: id, prompt, type, label, focus, note.
-# A prompt is the text it is; the two kinds of file number the prompts differently (1, v2-1).
+# XSTest's prompts: each row says of its prompt its type, its label and its focus, together.
 match xstest_prompts.csv
-grammar table
-separator ,
+
+tier row by \n
 header
 quoted
+tier field by ,
 
-claims
-together
-subject in prompt
-# id and note are the set's bookkeeping, read by nothing
-attest type label focus
+thing row prompt
+content *
+together row
+attest row type label focus note

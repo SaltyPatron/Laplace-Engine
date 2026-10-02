@@ -1,37 +1,15 @@
 name loc-iso639
-# The Library of Congress's lists of ISO 639-1, 639-2 and 639-5 in RDF/XML, the fullest of the four formats it
-# publishes them in. Every statement is recorded as written: the subject is what rdf:about names, the predicate the
-# property element's own name, the object its text, or what its rdf:resource names, or what the rdf:about of the
-# element inside it names. An element that carries rdf:about says its own name of what it names: [subject, name], the
-# file writes nothing between the two. A text that carries an attribute says so: [text, attribute, value].
-# rdf:about is the first attribute wherever these files write it; the patterns name it by position.
+# The Library of Congress's ISO 639 lists as RDF/XML (MADS/RDF). An element that names a resource (rdf:about) is the
+# thing its URI names. Each element inside it says of it, under the element's own name, its text, or the resource
+# it points at (rdf:resource), or the thing written inside it. An element's attributes other than rdf:about are said
+# of the thing the element is.
+# rdf:parseType="Literal" elements hold XHTML, a page and not a value: they are in the file's tree and attest nothing.
 match iso639-?.rdf
-grammar xml
 witness Library of Congress
-unit 1048576
+format xml
 
-claims
-query
-((element (STag (Name) . (Attribute (Name) @_k (AttValue) @subject.xml))
-   (content (element (STag (Name) @predicate) (content) @object.xml)))
- (#eq? @_k "rdf:about") (#not-match? @object.xml "<"))
-((element (STag (Name) . (Attribute (Name) @_k (AttValue) @subject.xml))
-   (content (element (EmptyElemTag (Name) @predicate (Attribute (Name) @_r (AttValue) @object.xml)))))
- (#eq? @_k "rdf:about") (#eq? @_r "rdf:resource"))
-((element (STag (Name) . (Attribute (Name) @_k (AttValue) @subject.xml))
-   (content (element (STag (Name) @predicate)
-     (content (element (STag (Name) . (Attribute (Name) @_j (AttValue) @object.xml)))))))
- (#eq? @_k "rdf:about") (#eq? @_j "rdf:about"))
-((element (STag (Name) . (Attribute (Name) @_k (AttValue) @subject.xml))
-   (content (element (STag (Name) @predicate (Attribute (Name) @_p (AttValue) @_v)) (content) @object.node)))
- (#eq? @_k "rdf:about") (#eq? @_p "rdf:parseType") (#eq? @_v "Literal"))
-((element (STag (Name) (Attribute (Name) @predicate (AttValue) @object.xml)) (content) @subject.xml)
- (#not-match? @predicate "^xmlns") (#not-match? @subject.xml "<"))
-end
-
-claims
-pair
-query
-((STag (Name) @object . (Attribute (Name) @_k (AttValue) @subject.xml))
- (#eq? @_k "rdf:about") (#not-eq? @object "rdf:Description"))
-end
+thing * rdf:about
+omit xmlns xmlns:* rdf:datatype lclang xml:lang rdf:parseType
+content *
+attest * */
+holds * * via

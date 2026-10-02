@@ -1,19 +1,19 @@
 name tatoeba-sentences-detailed
-# "Same as the above, but with additional information: the username of the user who added the sentence (or the
-# last user to have modified it), the date added and the date of the last modification."
-# Fields and structure: Sentence id [tab] Lang [tab] Text [tab] Username [tab] Date added [tab] Date last modified
-# A sentence is its text; the id is a key, recorded nowhere. The user named is the witness of what the row says.
+# "Contains all the sentences ... with the name of the member who added it and the date."
+# Fields: Sentence id [tab] Lang [tab] Text [tab] Username [tab] Date added [tab] Date last modified
+# A sentence is its text; the member who added it says its language. A member stands within Tatoeba:
+# [Tatoeba, Username, the name]. The dates are Tatoeba's bookkeeping.
 match sentences_detailed.csv
-grammar table
-escaped \\
-# "\\N: Unknown (rare)."
-empty-matches ^\\\\N$
-columns "Sentence id" Lang Text Username "Date added" "Date last modified"
-key "Sentence id"
-kinds own
-kind Username Username
 
-claims
-subject in Text
-attest Lang
-witness in Username
+tier row by \n
+escaped \
+names "Sentence id" Lang Text Username "Date added" "Date last modified"
+tier field by \t
+empty \\N
+
+thing row Text
+key row "Sentence id"
+own Username
+content Text Lang
+omit "Date added" "Date last modified"
+attest row Lang by Username

@@ -1,6 +1,6 @@
 name measuring-hate-speech-annotations
-# The set's file is Parquet; it is written out beside it as a table (extracted/, by parquet-to-text.py): the first
-# row the columns' own names, every value as the file holds it.
+# The set's file is Parquet; it is written out beside it as a table (extracted/): the first row the columns' own
+# names, every value as the file holds it.
 # The set's card (README.md): "39,565 comments annotated by 7,912 annotators, for 135,556 combined rows", and
 # ("Key dataset columns"):
 #   comment_id - unique ID for each comment          annotator_id - unique ID for each annotator
@@ -11,37 +11,22 @@ name measuring-hate-speech-annotations
 #   annotator_severity - annotator's estimated survey interpretation bias
 # A row is one annotator's reading of one comment. What the annotator answered of the comment (the ten labels, and
 # whom the comment targets) the annotator says, of the comment. What the set measured of the comment, and what it
-# holds of the annotator, the set says.
-# The card does not say which of the columns it does not list belong to the comment and which to the reading:
-# infitms, outfitms, std_err and hypothesis are recorded of the comment, as the columns beside hate_speech_score.
+# holds of the annotator, the set says. The card does not say which of the columns it does not list belong to the
+# comment and which to the reading: infitms, outfitms, std_err and hypothesis are recorded of the comment, as the
+# columns beside hate_speech_score.
+# A comment is its text; comment_id is the set's key to it. An annotator stands within the set: [the set, annotator_id, the id].
 match train-*.tsv
-grammar table
+
+tier row by \n
 header
 escaped \
-# A comment is its text; comment_id is the data set's key to it, recorded nowhere. The annotator_id names the
-# annotator, the witness of what the row says of the comment, and of what the row says of the annotator.
-key comment_id
-kinds own
-kind annotator_id annotator_id
+tier field by \t
 
-claims
-subject in text
-attest platform hate_speech_score infitms outfitms std_err hypothesis
+thing row text
+key row comment_id
+own annotator_id
+content text platform hate_speech_score infitms outfitms std_err hypothesis sentiment respect insult humiliate status dehumanize violence genocide attack_defend hatespeech target_* annotator_*
 
-claims
-subject in text
-attest sentiment respect insult humiliate status dehumanize violence genocide attack_defend hatespeech
-witness in annotator_id
-
-claims
-subject in text
-attest target_*
-witness in annotator_id
-
-claims
-subject in annotator_id
-attest annotator_severity annotator_infitms annotator_outfitms
-
-claims
-subject in annotator_id
-attest annotator_gender* annotator_trans* annotator_educ* annotator_income* annotator_ideology* annotator_age* annotator_race* annotator_religion* annotator_sexuality*
+attest row platform hate_speech_score infitms outfitms std_err hypothesis
+attest row sentiment respect insult humiliate status dehumanize violence genocide attack_defend hatespeech target_* by annotator_id
+attest row annotator_* of annotator_id

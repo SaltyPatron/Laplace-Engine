@@ -93,15 +93,6 @@ void ctx_open(int threads){
 }
 Ref text_ref(Ctx *c, const uint8_t *s, size_t n){ Ref r = lp_text_decompose(c, s, n, compose_sink, NULL); r.said = 0; return r; }
 
-/* Bytes that are not text by themselves: each byte as its notation, <0xAB>, composed. */
-Ref notation_ref(Ctx *c, const uint8_t *b, size_t n){
-    Ref stack[64], *r = n <= 64 ? stack : malloc(sizeof(Ref) * n); char tmp[8];
-    for (size_t i = 0; i < n; i++) { snprintf(tmp, sizeof tmp, "<0x%02X>", b[i]); r[i] = text_ref(c, (const uint8_t *)tmp, 6); }
-    Ref out = compose(r, (uint32_t)n, 3);
-    if (r != stack) free(r);
-    return out;
-}
-
 static uint64_t nodes_before, hits_before;
 void strings_forget(void);
 void table_reset(void){

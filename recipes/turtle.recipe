@@ -4,17 +4,10 @@ name turtle
 # escapes resolved; a name written with a prefix keeps it; "a" is recorded as the "a" the file writes.
 # A text that carries a language tag says so, [text, tag], and one that carries a datatype says that: [text, datatype].
 # Not read: statements of a node the file does not name (a blank node), and collections.
-grammar turtle
+format turtle
 
-claims
-query
-(triple (subject [(iri_reference) (prefixed_name)] @subject.term)
-  (property_list (property (predicate) @predicate.term (object_list [(iri_reference) (prefixed_name) (rdf_literal) (integer) (decimal) (double) (boolean_literal)] @object.term))))
-end
-
-claims
-pair
-query
-(rdf_literal value: (string) @subject.term (lang_tag) @object.tag)
-(rdf_literal value: (string) @subject.term datatype: (_) @object.term)
-end
+thing triple subject
+thing rdf_literal value
+content *
+relate property predicate to object_list
+pair rdf_literal lang_tag datatype

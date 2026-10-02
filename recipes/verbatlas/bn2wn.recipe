@@ -1,0 +1,16 @@
+name verbatlas-bn2wn
+# bn2wn.tsv: "A mapping from BabelNet synset to WordNet synset for verbs. Each line contains a BabelNet synset ID and
+# its corresponding WordNet synset ID, separated by a tab", bn:00082116v wn:00865776v. A table of keys: both name the
+# one WordNet synset, which CILI names by its offset and the letter of its type (00865776-v). The highway keeps both as
+# keys of that concept; nothing is said here. Its first line is BabelNet's banner, written as a comment.
+match bn2wn.tsv
+
+tier row by \n
+comment hash
+names bn wn
+tier field by \t
+
+omit bn wn
+
+alias ili row bn to wn matching ^wn:([0-9]+)([a-z])$ as \1-\2
+alias ili row wn to wn matching ^wn:([0-9]+)([a-z])$ as \1-\2

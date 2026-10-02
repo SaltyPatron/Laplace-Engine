@@ -1,9 +1,20 @@
 name wsd-data
 # A data set of the framework: texts of sentences, each sentence the words it is made of. The file does not write a
 # sentence as text: a sentence is the path of its words, in order. What is said of a word (its lemma, its pos) is said
-# of the word, within its sentence. The ids (d000.s000.t000) are the framework's keys to its texts, sentences and
-# instances, recorded nowhere; the gold keys and system answers that point at them by those ids are not read.
+# of the word within its sentence: a sentence's claims are said together. The ids (d000.s000.t000) are the framework's
+# keys to its texts, sentences and instances; the gold keys and system answers that point at them by those ids are
+# not read.
 match *.data.xml
-grammar xml
-key id
-words sentence wf instance
+format xml
+
+thing wf wf
+thing instance instance
+thing sentence of wf instance
+key sentence id
+key instance id
+key text id
+content wf instance lemma pos lang source
+attest corpus lang source
+attest wf lemma pos
+attest instance lemma pos
+together sentence

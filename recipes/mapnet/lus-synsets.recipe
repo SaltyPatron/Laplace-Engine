@@ -1,11 +1,14 @@
 name mapnet-lus-synsets
 # README: "mapping_lus_synsets.txt" holds a frame, a lexical unit and a WordNet 1.6 synset on each row. The frame is
 # as FrameNet names it, the lexical unit as written (bejewelled.a); the synset is a WordNet 1.6 offset, a key of an
-# edition no other source here has, and is recorded nowhere.
+# edition no other source here has.
 match mapping_lus_synsets.txt
-grammar table
-columns frames lus synsets
-key synsets
-claims
-subject in frames
-attest lus
+
+tier row by \n
+names frames lus synsets
+tier field by \t
+
+thing row frames
+key row synsets
+content frames lus
+attest row lus

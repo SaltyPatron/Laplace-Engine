@@ -1,25 +1,45 @@
 name ucd
 # The Unicode Character Database in XML (UAX #42), flat form: every codepoint, and every range of codepoints, with
 # everything the standard says of it: [codepoint, property, value], the property and the value as the standard writes
-# them. A character is recorded as the character it is, and a value that is itself codepoints as the text they are.
-# The standard writes # for the codepoint itself. What the standard leaves empty attests nothing.
-# A character's other names, the named sequences, the standardized variants, the radicals and the blocks are read
-# the same way: each is the thing its own attribute names.
+# them. A character is the character it is; a range, the path of its first and its last; a value that is itself
+# codepoints, the text they are. The standard writes # for the codepoint itself. What the standard leaves empty
+# attests nothing. A character's other names, the named sequences, the standardized variants, the radicals and the
+# blocks are read the same way: each is the thing its own attribute names.
+# Every record is an element on lines of its own: the file is parted before each, and read on every core.
 match ucd.all.flat.xml
-grammar xml
-itself #
-# Every thing is on lines of its own: the file is read in parts, on every core.
-records
-identity char cp.cp
-identity char first-cp..last-cp
-identity reserved cp.cp
-identity reserved first-cp..last-cp
-identity noncharacter cp.cp
-identity noncharacter first-cp..last-cp
-identity surrogate cp.cp
-identity surrogate first-cp..last-cp
-identity named-sequence cps.cps
-identity standardized-variant cps.cps
-identity cjk-radical radical.cps
-identity block name
-codepoints bmg bpb cf dm FC_NFKC lc NFKC_CF NFKC_SCF scf slc stc suc tc uc EqUIdeo ideograph first-cp last-cp
+format xml
+split char reserved noncharacter surrogate named-sequence provisional-named-sequence normalization-correction standardized-variant cjk-radical emoji-source block do-not-emit instead
+itself-mark hash
+
+thing char cp
+thing char first-cp last-cp
+thing reserved cp
+thing reserved first-cp last-cp
+thing noncharacter cp
+thing noncharacter first-cp last-cp
+thing surrogate cp
+thing surrogate first-cp last-cp
+thing named-sequence cps
+thing provisional-named-sequence cps
+thing standardized-variant cps
+thing cjk-radical radical
+thing block name
+codepoints cp first-cp last-cp cps bmg bpb cf dm FC_NFKC lc NFKC_CF NFKC_SCF scf slc stc suc tc uc EqUIdeo ideograph radical-ideograph of use code
+omit xmlns
+content *
+
+attest char *
+attest reserved *
+attest noncharacter *
+attest surrogate *
+attest name-alias alias type
+together name-alias
+attest named-sequence name
+attest provisional-named-sequence name
+attest standardized-variant desc when
+attest cjk-radical ideograph
+attest block first-cp last-cp
+attest emoji-source unicode docomo kddi softbank
+attest normalization-correction old new version
+attest instead of use because
+attest description .

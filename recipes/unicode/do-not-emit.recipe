@@ -3,21 +3,20 @@ name unicode-do-not-emit
 #   "#    Field 0  A sequence of Unicode code point values"
 #   "#    Field 1  A replacement sequence of Unicode code point values"
 #   "#    Field 2  DoNotEmit type of the original character sequence"
-# The XML gives the same rows as its "instead" elements (of, use, because), which the recipe for the XML does not
-# read. Field 1 is described, not named: the sequence and its replacement are recorded as the pair the row writes,
+# Field 1 is described, not named: the sequence and its replacement are recorded as the pair the row writes,
 # each as the text it is. A row whose sequence is a range speaks of the range.
 match DoNotEmit.txt
-grammar table
-separator ;
-comment #
-remark #
-columns 0 1 "DoNotEmit type"
 
-claims
-pair
-subject in 0.range
-object in 1.cps
+tier row by \n
+comment hash
+remark hash
+padded
+names 0 1 "DoNotEmit type"
+tier field by ;
 
-claims
-subject in 0.range
-attest "DoNotEmit type"
+thing row 0
+range 0
+codepoints 1
+content "DoNotEmit type"
+pair row 1
+attest row "DoNotEmit type"

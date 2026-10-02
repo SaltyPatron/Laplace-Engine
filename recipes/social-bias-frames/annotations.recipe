@@ -10,27 +10,20 @@ name social-bias-frames-annotations
 #   targetCategory: high-level category of the demographic group(s) targeted;  targetStereotype: implied statement;
 #   dataSource: source of the post
 # A line is one worker's reading of one post. What the worker answered of the post, the worker says, of the post;
-# what the line holds of the worker is said of the worker; the post's text and source, the set says.
+# what the line holds of the worker is said of the worker; the post's source, the set says.
+# A post is its text; the HITId is the crowdsourcing task's key. A worker stands within the set: [the set, WorkerId, the id].
 match SBIC.v2.trn.csv SBIC.v2.dev.csv SBIC.v2.tst.csv
-grammar table
-separator ,
+
+tier row by \n
 header
 quoted
-# A post is its text; the HITId is the crowdsourcing task's key, recorded nowhere. The WorkerId names the annotator,
-# the witness of what the row says of the post, and of what the row says of the annotator.
-key HITId
-kinds own
-kind WorkerId WorkerId
+tier field by ,
 
-claims
-subject in post
-attest dataSource
+thing row post
+key row HITId
+own WorkerId
+content post dataSource whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype annotator*
 
-claims
-subject in post
-attest whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype
-witness in WorkerId
-
-claims
-subject in WorkerId
-attest annotator*
+attest row dataSource
+attest row whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype by WorkerId
+attest row annotator* of WorkerId

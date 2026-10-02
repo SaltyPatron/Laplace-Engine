@@ -15,6 +15,10 @@ void id_text(const lp_id *id, char out[33]){
     static const char hex[] = "0123456789abcdef";
     for (int i = 0; i < 16; i++) { out[2 * i] = hex[id->b[i] >> 4]; out[2 * i + 1] = hex[id->b[i] & 15]; } out[32] = 0;
 }
+int id_parse(const char *s, lp_id *out){
+    for (int i = 0; i < 16; i++) { int v = 0; for (int j = 0; j < 2; j++) { char c = s[2 * i + j]; int d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; if (d < 0) return 0; v = v * 16 + d; } out->b[i] = (uint8_t)v; }
+    return s[32] == 0 || s[32] == '\t' || s[32] == '\n';
+}
 
 typedef struct { lp_id id; lp_id *kid; uint32_t *run; uint32_t nv; uint8_t state; } Ent;      /* state: 0 wanted, 1 fetched, 2 not recorded */
 struct Reader { PGconn *pg; Ent *e; size_t n, cap; uint32_t *slot; size_t scap; uint64_t trips; };

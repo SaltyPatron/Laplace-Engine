@@ -68,22 +68,28 @@ int cmd_deploy(int argc, char **argv){
     if (!run(pg, "SELECT laplace_schema_indexes()", "every index, made where one is missing")) return 1;
     PQfinish(pg);
     /* the highway's contents as entities: a type's content (a definition, a frame's name, a lemma and a roleset's name)
-     * is what a claim that holds the type renders and pulls through, whether or not any file wrote it as content */
-    { char tp[4300]; snprintf(tp, sizeof tp, "%s.texts", lp_highway_path()); FILE *f = fopen(tp, "r");
+     * is what a claim that holds the type renders and pulls through, whether or not any file wrote it as content. Each
+     * is recomposed here as the composition laplace highway wrote beside the highway, and its ID checked */
+    { char tp[4300]; snprintf(tp, sizeof tp, "%s.nodes", lp_highway_path()); FILE *f = fopen(tp, "r");
       if (!f) printf("  %-52s %s\n", "the highway's contents", "not beside the highway: laplace highway writes them");
-      else { double t = now(); int threads = omp_get_num_procs(); table_init(); ctx_open(threads); Ctx *cx = CTX[0]; char *line = NULL; size_t cap = 0; uint64_t n = 0, wrong = 0; const lp_highway *h = lp_highway_map(NULL);
-        while (getline(&line, &cap, f) > 0) { if (line[0] == '#') continue; char *save = NULL, *ln = strtok_r(line, "\t", &save), *sl = strtok_r(NULL, "\t", &save), *rest = save; if (!ln || !sl || !rest) continue;
-            size_t L = strlen(rest); while (L && (rest[L - 1] == '\n' || rest[L - 1] == '\r')) rest[--L] = 0;
-            char *fld[3]; int nf = 0; int is_pair = !strncmp(rest, "P\t", 2); char *p = is_pair ? rest + 2 : rest;
-            for (char *q = p; nf < 3; ) { fld[nf++] = q; char *tab = NULL; for (char *z = q; *z; z++) { if (*z == '\\' && z[1]) { z++; continue; } if (*z == '\t') { tab = z; break; } } if (!tab) break; *tab = 0; q = tab + 1; }
-            for (int i = 0; i < nf; i++) { char *w = fld[i]; for (char *z = fld[i]; *z; z++) { if (*z == '\\' && z[1]) { z++; *w++ = *z == 't' ? '\t' : *z == 'n' ? '\n' : *z == 'r' ? '\r' : *z; } else *w++ = *z; } *w = 0; }
-            Ref r; if (!is_pair) r = text_ref(cx, (const uint8_t *)fld[0], strlen(fld[0]));
-            else { if (nf < 2) continue; Ref two[2] = { text_ref(cx, (const uint8_t *)fld[0], strlen(fld[0])), text_ref(cx, (const uint8_t *)fld[1], strlen(fld[1])) }; r = compose(two, 2, (uint8_t)((two[0].tier > two[1].tier ? two[0].tier : two[1].tier) + 1)); }
-            const lp_list *l = h ? lp_highway_list(h, ln) : NULL; const lp_tier0_record *x = l ? lp_highway_at(h, l, (uint32_t)strtoul(sl, NULL, 10)) : NULL; if (!x || memcmp(&x->id, &r.id, 16)) wrong++; n++; }
-        free(line); fclose(f);
+      else { double t = now(); int threads = omp_get_num_procs(); table_init(); ctx_open(threads); char *line = NULL; size_t cap = 0; uint64_t n = 0, wrong = 0, types = 0, unknown = 0; const lp_highway *h = lp_highway_map(NULL);
+        Ref *ch = NULL; size_t cch = 0;
+        while (getline(&line, &cap, f) > 0) { if (line[0] == '#') continue; char *save = NULL, *kind = strtok_r(line, "\t\n", &save); if (!kind) continue;
+            if (kind[0] == 'N') { char *hid = strtok_r(NULL, "\t\n", &save), *tr = strtok_r(NULL, "\t\n", &save), *nv = strtok_r(NULL, "\t\n", &save), *c; if (!hid || !tr || !nv) { wrong++; continue; }
+                size_t k = 0; int ok = 1;
+                while ((c = strtok_r(NULL, "\t\n", &save))) { char *s1 = strchr(c, ':'), *s2 = s1 ? strchr(s1 + 1, ':') : NULL; if (!s2) { ok = 0; break; } *s1 = 0;
+                    Ref r; lp_id id; if (c[0] == 'U') r = atom((uint32_t)strtoul(c + 1, NULL, 16)); else { if (!id_parse(c, &id)) { ok = 0; break; } Node *x = table_find(&id); if (!x) { unknown++; ok = 0; break; } memset(&r, 0, sizeof r); r.id = x->id; memcpy(r.c.m, x->m, sizeof r.c.m); r.tier = x->tier; }
+                    r.said = (uint8_t)atoi(s1 + 1); uint32_t run = (uint32_t)strtoul(s2 + 1, NULL, 10);
+                    for (uint32_t q = 0; q < run; q++) { if (k == cch) { cch = cch ? cch * 2 : 4096; ch = xrealloc(ch, sizeof(Ref) * cch); } ch[k++] = r; } }
+                lp_id want; if (!ok || !id_parse(hid, &want)) { wrong++; continue; }
+                Ref r = compose(ch, (uint32_t)k, (uint8_t)atoi(tr)); if (memcmp(&r.id, &want, 16)) wrong++; n++; }
+            else if (kind[0] == 'S') { char *ln = strtok_r(NULL, "\t\n", &save), *sl = strtok_r(NULL, "\t\n", &save), *c = strtok_r(NULL, "\t\n", &save); if (!ln || !sl || !c) { wrong++; continue; }
+                lp_id id; if (c[0] == 'U') id = atom((uint32_t)strtoul(c + 1, NULL, 16)).id; else if (!id_parse(c, &id)) { wrong++; continue; }
+                const lp_list *l = h ? lp_highway_list(h, ln) : NULL; const lp_tier0_record *x = l ? lp_highway_at(h, l, (uint32_t)strtoul(sl, NULL, 10)) : NULL; if (!x || memcmp(&x->id, &id, 16)) wrong++; types++; } }
+        free(line); free(ch); fclose(f);
         extern int load_whole; load_whole = 1; File one = { 0 }; one.path = "the highway's contents"; LoadStats st = { 0 };
         if (load(conn_arg(argc, argv), threads, &one, 1, &st)) return 1;
-        printf("  %-52s %'llu types, %'llu entities new, %'llu of them not the highway's ID   %.1f s\n", "the highway's contents, as entities", (unsigned long long)n, (unsigned long long)st.ent_rows, (unsigned long long)wrong, now() - t); }
+        printf("  %-52s %'llu types, %'llu compositions, %'llu entities new, %'llu not as written%s   %.1f s\n", "the highway's contents, as entities", (unsigned long long)types, (unsigned long long)n, (unsigned long long)st.ent_rows, (unsigned long long)wrong, unknown ? ", some naming a node not written before them" : "", now() - t); }
     }
     pg = db_connect(conn_arg(argc, argv));
     { char *db = PQescapeIdentifier(pg, PQdb(pg), strlen(PQdb(pg))), q[256]; snprintf(q, sizeof q, "ALTER DATABASE %s SET enable_parallel_append = off", db); PQclear(PQexec(pg, q)); PQfreemem(db); }

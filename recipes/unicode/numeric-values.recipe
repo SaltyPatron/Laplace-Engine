@@ -8,21 +8,19 @@ name unicode-derived-numeric-values
 #   "#  Field 3:"
 #   "#    expressing the same numeric value either as a whole integer"
 #   "#    where possible, or as a rational fraction such as "1/6"."
-# Both writings of the value are said of the code point under the property's name. The XML gives the value once, as
-# nv, written as UnicodeData.txt writes it. A row whose code point is a range speaks of the range.
+# Both writings of the value are said of the code point under the property's name. A row whose code point is a
+# range speaks of the range.
 match DerivedNumericValues.txt
-grammar table
-separator ;
-comment #
-remark #
-columns 0 1 2 3
 
-claims
-subject in 0.range
-predicate Numeric_Value
-object in 1
+tier row by \n
+comment hash
+remark hash
+padded
+names 0 Numeric_Value 2 Numeric_Value
+tier field by ;
 
-claims
-subject in 0.range
-predicate Numeric_Value
-object in 3
+thing row 0
+range 0
+content Numeric_Value
+omit 2
+attest row Numeric_Value

@@ -1,21 +1,36 @@
 name conllu
-# CoNLL-U. A sentence is a record: its notes, then a row for every word. The columns are named as Universal
-# Dependencies' format names them; every value is recorded as the treebank writes it. What the treebank says of the
-# words, column by column, is a layer down the sentence; of each word, the value it gives it. How it numbers its
-# sentences, documents and paragraphs (sent_id, newdoc id, newpar id) is how it points at them: recorded nowhere.
+# A treebank file of Universal Dependencies (the CoNLL-U format page, universaldependencies.org/format.html):
+#   "Word lines containing the annotation of a word/token/node in 10 fields separated by single tab characters"
+#   "Blank lines marking sentence boundaries"; "Sentence-level comments starting with hash (#)"
+#   fields: ID FORM LEMMA UPOS XPOS FEATS HEAD DEPREL DEPS MISC; "_" for an unspecified field
+#   FEATS: "list of morphological features ... separated by |"; each written Name=Value
+# The layout is the file's own: records parted by an empty line, rows by a line's end, fields by a tab.
 match *.conllu
-grammar table
-columns ID FORM LEMMA UPOS XPOS FEATS HEAD DEPREL DEPS MISC
-comment #
-record blank
+tier record by \n\n
+tier row by \n
+note hash =
+names ID FORM LEMMA UPOS XPOS FEATS HEAD DEPREL DEPS MISC
+tier field by \t
 empty _
-note =
-about text
-key sent_id "newdoc id" "newpar id" newdoc newpar
-word FORM
-number ID -
-attest LEMMA UPOS XPOS
-pairs FEATS | = ,
-pairs MISC | =
-relation DEPREL to HEAD
-relations DEPS | :
+part FEATS by | is =
+part MISC by | is =
+part DEPS by | is :
+
+# A record is the sentence its text note writes; a row is the word its FORM writes.
+thing record text
+thing row FORM
+content text FORM LEMMA XPOS DEPREL DEPS FEATS MISC
+type UPOS upos
+# ID numbers the rows of one record and HEAD points at a row by it: keys, written nowhere.
+key row ID
+refer HEAD row
+# What the file writes about its own parts, not as their content: the file's metadata tree.
+metadata "newdoc id" "newpar id" sent_id note:newdoc* note:newpar* note:doc_* note:doc* note:meta::* note:meta_* note:global.* note:title note:author note:url note:date* note:file note:archive note:channel note:udpipe_model note:lang note:rtl note:document_authorship note:reference
+# every other note is what the treebank says of the sentence under the note's name: a translation (text_en), a
+# transliteration, who spoke it and when, its genre (the format: "# key = value")
+content note:*
+
+attest row LEMMA UPOS XPOS FEATS MISC
+attest record note:*
+# a HEAD that numbers no row (0, the root) names nothing: the word's relation alone
+relate row DEPREL to HEAD alone

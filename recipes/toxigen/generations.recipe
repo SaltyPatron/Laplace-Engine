@@ -1,24 +1,16 @@
 name toxigen-generations
-# The set's card (README.md, "Data Fields"): "We release TOXIGEN as a dataframe with the following fields:
-#   prompt is the prompt used for generation.   generation is the TOXIGEN generated text.
-#   generation_method denotes whether or not ALICE was used to generate the corresponding generation.
-#   prompt_label is the binary value indicating whether or not the prompt is toxic (1 is toxic, 0 is benign).
-#   group indicates the target group of the prompt.
-#   roberta_prediction is the probability predicted by our corresponding RoBERTa model for each instance."
-# A generation has no name of its own: it is the text it is. What the row says of the prompt (prompt_label, group)
-# is said of the prompt; the rest, of the generation. The row is said together.
-# The file is Parquet, written out beside it as a table (extracted/, by parquet-to-text.py).
+# The generations, written out from Parquet as a table whose first row names its columns. Of a generation the row says
+# its prompt, how it was generated and the classifier's prediction; of the prompt, its label and group. Each said
+# together.
 match train/train-*.tsv
-grammar table
+
+tier row by \n
 header
 escaped \
+tier field by \t
 
-claims
-together
-subject in generation
-attest prompt generation_method roberta_prediction
-
-claims
-together
-subject in prompt
-attest prompt_label group
+thing row generation
+content *
+together row
+attest row prompt generation_method roberta_prediction
+attest row prompt_label group of prompt

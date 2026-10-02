@@ -1,0 +1,17 @@
+name verbatlas-bn2va
+# VA_bn2va.tsv: "Each line contains a BabelNet synset ID and its corresponding VerbAtlas frame ID, separated by a
+# tab": the synsets in each frame. The synset is the ILI concept its key names; that it is in the frame is said of
+# it, as the pair of the two; and the highway maps the concept to the frame. The first line is the release's banner.
+match VA_bn2va.tsv
+
+tier row by \n
+skip 1
+names bn va
+tier field by \t
+
+thing row bn
+type bn ili
+type va vaframe
+pair row va
+
+maps row bn ili to va vaframe

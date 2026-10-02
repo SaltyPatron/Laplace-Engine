@@ -7,12 +7,15 @@ name unicode-emoji-sequences
 # The code points are recorded as the text they are. A row whose code_point(s) is a range (231A..231B) speaks
 # of the range, recorded as the range it is: the path of its first and its last.
 match emoji-sequences.txt emoji-zwj-sequences.txt
-grammar table
-separator ;
-comment #
-remark #
-columns code_point(s) type_field description
 
-claims
-subject in code_point(s).range
-attest type_field description
+tier row by \n
+comment hash
+remark hash
+padded
+names code_point(s) type_field description
+tier field by ;
+
+thing row code_point(s)
+range code_point(s)
+content type_field description
+attest row type_field description

@@ -4,23 +4,16 @@ name unicode-idna-mapping
 # as code points) as the text it is. The columns are numbered here only to say where a part is; no name is recorded.
 # A row whose code point is a range speaks of the range, recorded as the range it is: the path of its first and its last.
 match IdnaMappingTable.txt
-grammar table
-separator ;
-comment #
-remark #
-columns 0 1 2 3
 
-claims
-pair
-subject in 0.range
-object in 1
+tier row by \n
+comment hash
+remark hash
+padded
+names 0 1 2 3
+tier field by ;
 
-claims
-pair
-subject in 0.range
-object in 2.cps
-
-claims
-pair
-subject in 0.range
-object in 3
+thing row 0
+range 0
+content 1 3
+codepoints 2
+pair row 1 2 3

@@ -1,13 +1,11 @@
 name ud-documentation
-# A page documents one tag, relation or feature, named by its title. The page's head says what it is, shortly
-# (shortdef: 'number'), and a feature's page says what each of its values is:
-#   ### <a name="Sing">`Sing`</a>: singular number        is        [Number, Sing, singular number]
+# A page of the Universal Dependencies documentation. Its front matter names what the page is about (title: 'NOUN')
+# and gives a short definition of it (shortdef: 'noun'), said of it under the field's own name. A heading that names a
+# value (### <a name="Number">`Number`</a>: number) says the value and what it is called.
 match *.md
-grammar lines
+
+tier line by \n
+
 about ^title: '(.*)'$
-
-claims
 line ^(shortdef): '(.*)'$
-
-claims
-line ^### <a name="[^"]*">`([^`]+)`</a>: (.*)$
+line ^### <a name="[^"]*">`([^`]+)`</a>: (.*)$ :: pair

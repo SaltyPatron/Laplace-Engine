@@ -1,0 +1,32 @@
+name verbatlas-va2sp
+# VA_va2sp.tsv: "Each line contains the ID of a VerbAtlas frame F followed by the selectional preferences of the roles
+# in F ... If a role supports multiple selectional preferences, they are separated by a pipe (|). Some frames support
+# two types of selectional preferences: Concrete (C) and Abstract (A)." After the frame and the type, a role and its
+# preferences, in turn. A preference id (va:0081p) is the key of a row of VA_preference_info, read as the preference
+# that row is. What a line says it says together: the frame's role's preferences, of that type. The first line is the
+# release's banner.
+match VA_va2sp.tsv
+
+tier row by \n
+skip 1
+names frame type role1 sp1 role2 sp2 role3 sp3 role4 sp4 role5 sp5 role6 sp6 role7 sp7 role8 sp8 role9 sp9 role10 sp10
+tier field by \t
+part sp* by |
+
+thing row frame
+type frame vaframe
+refer sp* verbatlas-preference-info
+content type role*
+
+together row
+attest row type
+relate row role1 to sp1
+relate row role2 to sp2
+relate row role3 to sp3
+relate row role4 to sp4
+relate row role5 to sp5
+relate row role6 to sp6
+relate row role7 to sp7
+relate row role8 to sp8
+relate row role9 to sp9
+relate row role10 to sp10

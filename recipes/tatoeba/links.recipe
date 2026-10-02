@@ -4,14 +4,15 @@ name tatoeba-links
 # Both ids are keys of sentences.csv's rows: each is read as the sentence it points at, so a row says of one
 # sentence that another is its translation.
 match links.csv
-grammar table
-escaped \\
+
+tier row by \n
+escaped \
+names "Sentence id" "Translation id"
+tier field by \t
 # "\\N: Unknown (rare)."
-empty-matches ^\\\\N$
-columns "Sentence id" "Translation id"
+empty \\N
+
+thing row "Sentence id"
 refer "Sentence id" tatoeba-sentences
 refer "Translation id" tatoeba-sentences
-
-claims
-subject in "Sentence id"
-attest "Translation id"
+attest row "Translation id"
