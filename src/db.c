@@ -145,7 +145,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
 }
 
 /* ---- standings: a map from claim ID to its slot */
-typedef struct { lp_id id; lp_rating r; uint32_t matches; uint8_t had, entered; } Standing;
+typedef struct { lp_id id; lp_rating r; uint32_t matches, m0; uint8_t had, entered; } Standing;     /* m0: the matches it was recorded with */
 static Standing *stand; static lp_idmap *smap; static uint64_t sn;          /* the standings in play, in the order met; found by claim ID */
 /* The stock default a claim enters at: Glicko-2's rating for the unrated, and the uncertainty of the witness that brings
  * it (the deviation its trust plays with), unless the recipe gives this kind of statement its own. */
@@ -182,7 +182,7 @@ static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led,
     for (uint64_t i0 = 0; i0 < sn; ) {                                        /* recorded standings: set-based updates */
         const uint32_t oid[5] = { id_oid, 701, 701, 701, 23 }; static const int w[5] = { 16, 8, 8, 8, 4 };
         uint64_t *idx = malloc(sizeof(uint64_t) * 100000); uint32_t n = 0;
-        for (; i0 < sn && n < 100000; i0++) if (stand[i0].had && (stand[i0].id.b[0] >> 4) == h) idx[n++] = i0;
+        for (; i0 < sn && n < 100000; i0++) if (stand[i0].had && stand[i0].matches != stand[i0].m0 && (stand[i0].id.b[0] >> 4) == h) idx[n++] = i0;     /* moved by this batch's matchups */
         if (!n) { free(idx); continue; }
         uint8_t *arr[5]; int alen[5];
         for (int f = 0; f < 5; f++) {
@@ -345,7 +345,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
                 lp_id id; memcpy(id.b, PQgetvalue(q, j, 0), 16); Standing *s = stand_get(&id, NULL, 0); if (!s) continue;
                 double d[3]; for (int z = 0; z < 3; z++) { uint64_t u = 0; const uint8_t *b = (const uint8_t *)PQgetvalue(q, j, 1 + z); for (int y = 0; y < 8; y++) u = u << 8 | b[y]; memcpy(&d[z], &u, 8); }
                 const uint8_t *mb = (const uint8_t *)PQgetvalue(q, j, 4);
-                s->r = (lp_rating){ d[0], d[1], d[2] }; s->matches = (uint32_t)mb[0] << 24 | mb[1] << 16 | mb[2] << 8 | mb[3]; s->had = 1;
+                s->r = (lp_rating){ d[0], d[1], d[2] }; s->matches = s->m0 = (uint32_t)mb[0] << 24 | mb[1] << 16 | mb[2] << 8 | mb[3]; s->had = 1;
             }
             PQclear(q); free(ab);
         }

@@ -299,10 +299,10 @@ int cmd_ingest(int argc, char **argv){
                     if (pass) { SHOW(f); if (do_load && load(conninfo, threads, f, 1, &st)) return 1; }
                     free(f->ev.e); memset(&f->ev, 0, sizeof f->ev); table_reset();
                     memmove(buf, buf + end, have - end); have -= end;
-                    if (unrecorded) { fprintf(stderr, "\n  %s: what it holds is not all recorded: it is recorded now\n", f->path); break; }
+                    if (unrecorded && !pass) { fprintf(stderr, "\n  %s: what it holds is not all recorded: it is recorded now\n", f->path); break; }
                 }
                 gzclose(g); free(buf);
-                if (unrecorded) { free(f->said); f->said = NULL; f->nsaid = f->csaid = 0; continue; }
+                if (unrecorded && !pass) { free(f->said); f->said = NULL; f->nsaid = f->csaid = 0; continue; }
                 if (!pass && !failed && f->has_file) {                          /* is its trunk recorded */
                     PGconn *pg = db_connect(conninfo); uint8_t ab[40]; size_t al = ids_param(ab, &f->file.id, 1);
                     const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, fm[1] = { 1 };
