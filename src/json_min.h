@@ -15,12 +15,6 @@ static uint32_t j_new(jdoc *d, jtype t){
     memset(&d->v[d->n], 0, sizeof(jnode)); d->v[d->n].t = t; return d->n++;
 }
 static void j_ws(jdoc *d){ while (d->p < d->end && (*d->p == ' ' || *d->p == '\n' || *d->p == '\r' || *d->p == '\t')) d->p++; }
-static size_t j_utf8(uint32_t c, char *o){
-    if (c < 0x80) { o[0] = (char)c; return 1; }
-    if (c < 0x800) { o[0] = (char)(0xC0 | c >> 6); o[1] = (char)(0x80 | (c & 63)); return 2; }
-    if (c < 0x10000) { o[0] = (char)(0xE0 | c >> 12); o[1] = (char)(0x80 | (c >> 6 & 63)); o[2] = (char)(0x80 | (c & 63)); return 3; }
-    o[0] = (char)(0xF0 | c >> 18); o[1] = (char)(0x80 | (c >> 12 & 63)); o[2] = (char)(0x80 | (c >> 6 & 63)); o[3] = (char)(0x80 | (c & 63)); return 4;
-}
 static uint32_t j_hex4(const char *s){ uint32_t v = 0; for (int i = 0; i < 4; i++) { char c = s[i]; v = v * 16 + (uint32_t)(c <= '9' ? c - '0' : (c | 32) - 'a' + 10); } return v; }
 static char *j_string(jdoc *d){
     d->p++; const char *s = d->p; size_t cap = 16; char *o = malloc(cap); size_t n = 0;
@@ -31,7 +25,7 @@ static char *j_string(jdoc *d){
             if (e == 'u') {
                 uint32_t c = j_hex4(d->p); d->p += 4;
                 if (c >= 0xD800 && c < 0xDC00 && d->p[0] == '\\' && d->p[1] == 'u') { uint32_t lo = j_hex4(d->p + 2); d->p += 6; c = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00); }
-                n += j_utf8(c, o + n);
+                n += lp_utf8_put(c, (uint8_t *)o + n);
             } else o[n++] = e == 'n' ? '\n' : e == 't' ? '\t' : e == 'r' ? '\r' : e == 'b' ? '\b' : e == 'f' ? '\f' : e;
         } else o[n++] = *d->p++;
     }
