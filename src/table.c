@@ -76,14 +76,14 @@ static void full(const char *what){
  * counts, are here too. The table emptied between batches empties these: a cache holds only what the table holds now
  * (its epoch). */
 #define SEEN (1u << 15)
-typedef struct Seen { uint64_t epoch, hits, added, n_at, n_end, v_at, v_end; struct Seen *next; lp_id id[SEEN]; } Seen;
+typedef struct Seen { uint64_t epoch, hits, added, n_at, n_end, v_at, v_end; struct Seen *next; lp_id id[SEEN]; uint8_t tier[SEEN]; } Seen;
 static uint64_t epoch = 1; static Seen *seen_all; static pthread_mutex_t seen_mu = PTHREAD_MUTEX_INITIALIZER;
 static __thread Seen *seen_here;
 static Seen *seen_of(void){
     Seen *c = seen_here;
     if (!c) { c = calloc(1, sizeof *c); if (!c) { perror("calloc"); exit(1); } pthread_mutex_lock(&seen_mu); c->next = seen_all; seen_all = c; pthread_mutex_unlock(&seen_mu); seen_here = c; }
     uint64_t e = __atomic_load_n(&epoch, __ATOMIC_ACQUIRE);
-    if (c->epoch != e) { memset(c->id, 0, sizeof c->id); c->n_at = c->n_end = c->v_at = c->v_end = 0; c->epoch = e; }
+    if (c->epoch != e) { memset(c->id, 0, sizeof c->id); memset(c->tier, 0, sizeof c->tier); c->n_at = c->n_end = c->v_at = c->v_end = 0; c->epoch = e; }
     return c;
 }
 static Node *node_new(Seen *c){
@@ -103,13 +103,20 @@ static uint64_t vtx_room(Seen *c, uint32_t n, int *own){
     c->v_at = a; c->v_end = a + VCHUNK; return a;
 }
 
+/* A node is recorded at the lowest tier it is composed at (Compositions: a node can fill a higher tier, never a lower
+ * one): [a,n] repeated inside "banana" is a tier 1 block and the word "an" is tier 2; whichever thread composed it first
+ * no longer decides. */
+static inline void tier_floor(Node *x, uint8_t tier){
+    uint8_t t = __atomic_load_n(&x->tier, __ATOMIC_RELAXED);
+    while (tier < t && !__atomic_compare_exchange_n(&x->tier, &t, tier, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) ;
+}
 /* A composition, recorded: Laplace-Native gives its ID and coordinate; the table keeps it, once, with its path. */
 Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     if (n == 1) return ch[0];
     Ref r = lp_ref_compose(ch, n, tier); r.said = 0;
     Seen *c = seen_of(); uint64_t h = hkey(&r.id); uint32_t at = (uint32_t)(h >> 17) & (SEEN - 1);
-    if (!memcmp(&c->id[at], &r.id, 16)) { c->hits++; return r; }       /* already in the table, as this thread found */
-    c->id[at] = r.id;                                                   /* in the table once this returns, found or added */
+    if (!memcmp(&c->id[at], &r.id, 16) && c->tier[at] <= tier) { c->hits++; return r; }   /* in the table, as this thread found, at this tier or lower */
+    c->id[at] = r.id; c->tier[at] = tier;                               /* in the table once this returns, found or added, at this tier or lower */
     uint64_t tag = tag_of(&r.id), k = h & smask;
     for (;;) {
         uint64_t w = __atomic_load_n(&slot[k], __ATOMIC_ACQUIRE);
@@ -129,7 +136,7 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
         }
         if ((w & ~IDX_MASK) == tag) {
             if ((w & IDX_MASK) == BUSY) w = published(&slot[k]);
-            if (!memcmp(&NODE[(w & IDX_MASK) - 1].id, &r.id, 16)) { c->hits++; return r; }
+            if (!memcmp(&NODE[(w & IDX_MASK) - 1].id, &r.id, 16)) { tier_floor(&NODE[(w & IDX_MASK) - 1], tier); c->hits++; return r; }
         }
         k = (k + 1) & smask;
     }
