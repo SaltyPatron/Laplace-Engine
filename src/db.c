@@ -285,15 +285,25 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         lp_id *wold = malloc(sizeof(lp_id) * (nrec + 1)); uint64_t nwold = 0;
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (e->kind == EV_MEMBER) continue;
             Node *x = table_find(&e->witnessed); if (!x || x->keep != 1) wold[nwold++] = e->witnessed; }
-        uint64_t pcap = 1024; while (pcap < nrec * 3) pcap <<= 1; Seen *seen = calloc(pcap, sizeof(Seen));
+        uint64_t lin_at[17] = { 0 }; uint64_t pcap = 1024; while (pcap < nrec * 3) pcap <<= 1; Seen *seen = calloc(pcap, sizeof(Seen));
         #define SEEN_AT(w, l, found) do { uint64_t h_; memcpy(&h_, (w)->b, 8); uint64_t c_; memcpy(&c_, (l)->b + 8, 8); h_ ^= c_ * 0x9E3779B97F4A7C15ull; k_ = h_ & (pcap - 1); found = 0; \
             while (seen[k_].used) { if (!memcmp(seen[k_].witnessed.b, (w)->b, 16) && !memcmp(seen[k_].lin.b, (l)->b, 16)) { found = 1; break; } k_ = (k_ + 1) & (pcap - 1); } } while (0)
+        /* each claim read from the one partition of the ledger it is in (its ID's first hex digit): asked of the whole
+         * ledger, every one of the 16 partitions probes every claim of the batch */
+        { lp_id *by = malloc(sizeof(lp_id) * (nwold + 1)); uint64_t at[17] = { 0 };
+          for (uint64_t i = 0; i < nwold; i++) at[(wold[i].b[0] >> 4) + 1]++;
+          for (int h = 0; h < 16; h++) at[h + 1] += at[h];
+          uint64_t put[16]; memcpy(put, at, sizeof put); for (uint64_t i = 0; i < nwold; i++) by[put[wold[i].b[0] >> 4]++] = wold[i];
+          free(wold); wold = by; memcpy(lin_at, at, sizeof at); }
+        OJob *lj = malloc(sizeof(OJob) * (nwold / CH + 17)); uint64_t nlj = 0;
+        for (int h = 0; h < 16; h++) for (uint64_t lo = lin_at[h]; lo < lin_at[h + 1]; lo += CH) lj[nlj++] = (OJob){ h, lo, lin_at[h + 1] - lo < CH ? lin_at[h + 1] - lo : CH };
         #pragma omp parallel for num_threads(npg) schedule(dynamic)
-        for (uint64_t i0 = 0; i0 < nwold; i0 += CH) {
-            uint32_t k = (uint32_t)(nwold - i0 < CH ? nwold - i0 : CH); uint8_t *ab = malloc(20 + 20 * (size_t)k);
+        for (uint64_t jx = 0; jx < nlj; jx++) {
+            uint64_t i0 = lj[jx].lo; uint32_t k = (uint32_t)lj[jx].n; uint8_t *ab = malloc(20 + 20 * (size_t)k);
             size_t len = ids_param(ab, wold + i0, k); PGconn *c = pg[omp_get_thread_num()];
-            const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
-            PGresult *q = PQexecParams(c, "SELECT a.claim, w.id, w.lineage FROM attestation a JOIN witness w ON w.id = a.witness WHERE a.claim = ANY($1::blake3[])", 1, NULL, v, l, f, 1);
+            const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 }; char sql[160];
+            snprintf(sql, sizeof sql, "SELECT a.claim, w.id, w.lineage FROM attestation_%x a JOIN witness w ON w.id = a.witness WHERE a.claim = ANY($1::blake3[])", lj[jx].h);
+            PGresult *q = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
             if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "lineage: %s", PQerrorMessage(c)); exit(1); }
             #pragma omp critical
             for (int j = 0; j < PQntuples(q); j++) {
@@ -304,7 +314,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             }
             PQclear(q); free(ab);
         }
-        free(wold);
+        free(wold); free(lj);
         /* The matchups, first in, first out: each attestation is played as one Glicko-2 matchup at the witness's trust.
          * A claim entering for the first time enters at its stock default and plays its first attestation from there;
          * every attestation plays the witness at the rating its record would enter at, with the deviation its trust
