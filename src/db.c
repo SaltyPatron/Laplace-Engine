@@ -319,23 +319,33 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
          * A claim entering for the first time enters at its stock default and plays its first attestation from there;
          * every attestation plays the witness at the rating its record would enter at, with the deviation its trust
          * gives, and the outcome it attests. */
-        for (int fi = 0; fi < nfiles; fi++) {
-            double trust = files[fi].trust; int copy = 0;
-            const lp_id *flin = files[fi].has_lineage ? &files[fi].lineage.id : &files[fi].witness.id;
-            for (uint64_t i = 0; i < files[fi].ev.n; i++) {
-                const Event *e = &files[fi].ev.e[i]; const lp_id *lin = e->own_witness ? &e->witness : flin;
+        /* Which attestations play, in reading order (what is witnessed plays once per lineage; a claim within a record
+         * plays as its record does); then the plays, a claim's in its reading order, the claims on every core: a
+         * standing is moved by its own claim's matchups and by nothing else, so the standings are those of one
+         * reading in order. play: the core that plays each attestation, or none. */
+        const int NP = 64; uint64_t ne = 0; for (int fi = 0; fi < nfiles; fi++) ne += files[fi].ev.n;
+        uint8_t *play = malloc(ne ? ne : 1);
+        { uint64_t x = 0;
+          for (int fi = 0; fi < nfiles; fi++) {
+            int copy = 0; const lp_id *flin = files[fi].has_lineage ? &files[fi].lineage.id : &files[fi].witness.id;
+            for (uint64_t i = 0; i < files[fi].ev.n; i++, x++) {
+                const Event *e = &files[fi].ev.e[i]; const lp_id *lin = e->own_witness ? &e->witness : flin; play[x] = 255;
                 if (e->kind != EV_MEMBER) {                                  /* what is witnessed: once per lineage */
                     uint64_t k_; SEEN_AT(&e->witnessed, lin, copy);
                     if (!copy) { seen[k_].used = 1; seen[k_].witnessed = e->witnessed; seen[k_].lin = *lin; }
                     if (e->kind == EV_RECORD) continue;
                 }
-                if (copy) continue;
-                Standing *s = stand_get(&e->claim, NULL, 0);
-                if (!s->had && !s->entered) s->entered = 1;
-                lp_attest(&s->r, trust, e->score, e->enter_rating, 0.5, 30.0); s->matches++;
-            }
-        }
+                if (!copy) play[x] = (uint8_t)(e->claim.b[7] % NP);
+            } } }
         free(seen);
+        #pragma omp parallel for schedule(dynamic, 1)
+        for (int p = 0; p < NP; p++) { uint64_t x = 0;
+            for (int fi = 0; fi < nfiles; fi++) { double trust = files[fi].trust;
+                for (uint64_t i = 0; i < files[fi].ev.n; i++, x++) { if (play[x] != p) continue; const Event *e = &files[fi].ev.e[i];
+                    Standing *s = stand_get(&e->claim, NULL, 0);
+                    if (!s->had && !s->entered) s->entered = 1;
+                    lp_attest(&s->r, trust, e->score, e->enter_rating, 0.5, 30.0); s->matches++; } } }
+        free(play);
         st->t_play += now() - tp; tp = now();
         Copy c = { 0 };
         /* witnesses: each once, and only those the database does not know yet */
