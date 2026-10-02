@@ -99,16 +99,11 @@ static inline Ref said_claim(Ref r){ r.said = LP_SAID_CLAIM; return r; }
 static inline Ref said_tuple(Ref r){ r.said = LP_SAID_TUPLE; return r; }
 static inline Ref said_metadata(Ref r){ r.said = LP_SAID_METADATA; return r; }
 static inline Ref said_record(Ref r){ if (r.said != LP_SAID_CLAIM && r.said != LP_SAID_TUPLE) r.said = LP_SAID_RECORD; return r; }
-typedef struct { lp_id id; int64_t m[4]; uint64_t voff; uint32_t nv, len; uint8_t tier, keep, kind; } Node;   /* kind: bits of what it is said to be (LP_KIND_*), by whatever holds it */
-typedef struct {
-    pthread_mutex_t mu;
-    Node *node; uint64_t n, cap;
-    uint32_t *slot; uint64_t scap;                   /* open addressing: node index + 1 */
-    Vtx *vtx; uint64_t nv, vcap;
-    uint64_t hits;
-} Shard;
-#define NSHARD 256
-extern Shard shard[NSHARD];
+typedef struct { lp_id id; int64_t m[4]; uint64_t voff; uint32_t nv, len; uint8_t tier, keep, kind, live; } Node;   /* kind: bits of what it is said to be (LP_KIND_*), by whatever holds it; live: a node, not a chunk's unused tail */
+extern Node *NODE;                                                    /* every node of the table: NODE[0, table_end()), each with live set */
+extern Vtx *VTX;                                                      /* a node's vertices: VTX[voff, voff + nv) */
+uint64_t table_end(void);
+#define TABLE_EACH(x) for (Node *x = NODE, *x##_end = NODE + table_end(); x < x##_end; x++) if (x->live)
 extern const lp_tier0_record *T0;
 extern const lp_highway *HW;                                          /* the highway, when it is there: types and their mask bits */
 Ref    highway_typed(const char *list, const uint8_t *key, size_t n, int *has);   /* a type by a source's key of it: the highway's record as a reference; has = 0 when the list does not know the key */
@@ -119,6 +114,8 @@ void   table_kinds(void);                                             /* after a
 Ref    atom(uint32_t cp);
 Ref    compose(const Ref *ch, uint32_t n, uint8_t tier);             /* one child is that child */
 Node  *table_find(const lp_id *id);                                   /* NULL for atoms and unknown IDs */
+size_t table_parts(const lp_id *id, lp_id *out, size_t cap);         /* a composition's constituents in order, its runs written out; 0 when it is not in the table */
+void   table_size(uint64_t bytes);                                    /* while the table is empty: room for what a batch of this many bytes makes */
 uint64_t table_count(void);
 
 /* ---- decomposition (each thread keeps its own working state) */

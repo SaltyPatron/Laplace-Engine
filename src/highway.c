@@ -75,10 +75,9 @@ static int seen_add(Seen *s, const lp_id *id){ if (!s->m) s->m = lp_idmap_new();
 static void hexid(const lp_id *id, char out[33]){ id_text(id, out); }
 static void node_write(FILE *o, Seen *s, const lp_id *id, int depth){
     if (lp_tier0_codepoint(T0, id) >= 0 || depth > 256) return; Node *x = table_find(id); if (!x || !seen_add(s, id)) return;
-    Shard *sh = &shard[id->b[0]];
-    for (uint32_t v = 0; v < x->nv; v++) node_write(o, s, &sh->vtx[x->voff + v].id, depth + 1);
+    for (uint32_t v = 0; v < x->nv; v++) node_write(o, s, &VTX[x->voff + v].id, depth + 1);
     char h[33]; hexid(id, h); fprintf(o, "N\t%s\t%u\t%u", h, x->tier, x->nv);
-    for (uint32_t v = 0; v < x->nv; v++) { const Vtx *w = &sh->vtx[x->voff + v]; int64_t cp = lp_tier0_codepoint(T0, &w->id); char c[33];
+    for (uint32_t v = 0; v < x->nv; v++) { const Vtx *w = &VTX[x->voff + v]; int64_t cp = lp_tier0_codepoint(T0, &w->id); char c[33];
         if (cp >= 0) snprintf(c, sizeof c, "U%llX", (long long)cp); else hexid(&w->id, c);
         fprintf(o, "\t%s:%u:%u", c, VSAID(w->m), VRUN(w->m)); }
     fputc('\n', o);

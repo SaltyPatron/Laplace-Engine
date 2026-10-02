@@ -34,8 +34,7 @@ static int expand(const lp_id *id, Buf *o){
         return 1;
     }
     Node *x = table_find(id); if (!x) return 0;
-    Shard *s = &shard[id->b[0]];
-    for (uint32_t v = 0; v < x->nv; v++) for (uint32_t r = 0; r < VRUN(s->vtx[x->voff + v].m); r++) if (!expand(&s->vtx[x->voff + v].id, o)) return 0;
+    for (uint32_t v = 0; v < x->nv; v++) for (uint32_t r = 0; r < VRUN(VTX[x->voff + v].m); r++) if (!expand(&VTX[x->voff + v].id, o)) return 0;
     return 1;
 }
 
@@ -55,12 +54,12 @@ static int walk_cb(const char *p, const struct stat *st, int type, struct FTW *f
 /* A claim or a tuple as text: its parts between brackets, a part that is itself a tuple the same way. */
 static void show_tuple(const lp_id *id){
     Node *c = table_find(id); if (!c) { Buf o = { 0 }; expand(id, &o); fwrite(o.b, 1, o.n, stdout); free(o.b); return; }
-    Shard *sh = &shard[c->id.b[0]]; int first = 1; putchar('[');
-    for (uint32_t v = 0; v < c->nv; v++) for (uint32_t r = 0; r < VRUN(sh->vtx[c->voff + v].m); r++) {
+    int first = 1; putchar('[');
+    for (uint32_t v = 0; v < c->nv; v++) for (uint32_t r = 0; r < VRUN(VTX[c->voff + v].m); r++) {
         if (!first) printf(", "); first = 0;
-        if (VSAID(sh->vtx[c->voff + v].m) == LP_SAID_TUPLE && table_find(&sh->vtx[c->voff + v].id)) show_tuple(&sh->vtx[c->voff + v].id);
-        else { Buf o = { 0 }; expand(&sh->vtx[c->voff + v].id, &o);
-               if (!o.n && HW) { int64_t at = lp_highway_slot(HW, NULL, &sh->vtx[c->voff + v].id); const char *ln = "type";
+        if (VSAID(VTX[c->voff + v].m) == LP_SAID_TUPLE && table_find(&VTX[c->voff + v].id)) show_tuple(&VTX[c->voff + v].id);
+        else { Buf o = { 0 }; expand(&VTX[c->voff + v].id, &o);
+               if (!o.n && HW) { int64_t at = lp_highway_slot(HW, NULL, &VTX[c->voff + v].id); const char *ln = "type";
                    if (at >= 0) for (size_t i = 0; i < HW->nlists; i++) if ((size_t)at >= HW->list[i].first && (size_t)at < (size_t)HW->list[i].first + HW->list[i].count) ln = HW->list[i].name;
                    printf("<%s>", ln); }
                else fwrite(o.b, 1, o.n, stdout); free(o.b); } }
@@ -68,10 +67,10 @@ static void show_tuple(const lp_id *id){
 }
 /* What a record holds besides its claims: the things and specifics said with them, and the records inside it. */
 static void show_held(const lp_id *id, int depth){
-    Node *c = table_find(id); if (!c || depth > 6) return; Shard *sh = &shard[c->id.b[0]];
-    for (uint32_t v = 0; v < c->nv; v++) { uint64_t said = VSAID(sh->vtx[c->voff + v].m);
-        if (said == LP_SAID_TUPLE) { printf("%*s+ ", depth * 2 + 2, ""); show_tuple(&sh->vtx[c->voff + v].id); putchar('\n'); }
-        else if (said == LP_SAID_RECORD) { printf("%*s(\n", depth * 2 + 2, ""); show_held(&sh->vtx[c->voff + v].id, depth + 1); printf("%*s)\n", depth * 2 + 2, ""); } }
+    Node *c = table_find(id); if (!c || depth > 6) return;
+    for (uint32_t v = 0; v < c->nv; v++) { uint64_t said = VSAID(VTX[c->voff + v].m);
+        if (said == LP_SAID_TUPLE) { printf("%*s+ ", depth * 2 + 2, ""); show_tuple(&VTX[c->voff + v].id); putchar('\n'); }
+        else if (said == LP_SAID_RECORD) { printf("%*s(\n", depth * 2 + 2, ""); show_held(&VTX[c->voff + v].id, depth + 1); printf("%*s)\n", depth * 2 + 2, ""); } }
 }
 /* Every source there is, in the order they go in, each in a process of its own with the options given, its output
  * kept in a log of its own. A source none of whose files is here is said so and passed over; a source that fails
@@ -263,7 +262,9 @@ int cmd_ingest(int argc, char **argv){
     for (int a0 = 0; a0 < nfiles; ) {
         int b0 = a0; uint64_t sum = 0; char boundary = 0;
         while (b0 < nfiles && (b0 == a0 || (sum + size[b0] <= batch && depth[b0] == depth[a0]))) { sum += size[b0]; b0++; }     /* a batch is a barrier: what refers waits for what is referred to */
+        table_size(sum);                                                                                                  /* the table is empty here: room for what this batch makes */
         if (b0 == a0 + 1 && size[a0] > batch && reads_in_stretches(files[a0].recipe, &boundary)) {
+            table_size(batch);                                                                                    /* a stretch at a time: room for one stretch */
             /* One long file, a stretch at a time. It is read twice: first for what it is, its trunk, with nothing
              * recorded; and, if that trunk is not recorded, again to record it. A file already recorded costs its
              * decomposition and one lookup, and nothing is written. */

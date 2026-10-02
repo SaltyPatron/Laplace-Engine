@@ -60,9 +60,7 @@ static void field_free(Field *f){ free(f->c); lp_idmap_free(f->m); memset(f, 0, 
 
 /* The constituents of a composition, in order, its runs written out; an atom or an unknown ID is itself. */
 static int constituents(const lp_id *id, lp_id *out, int cap){
-    Node *x = table_find(id); if (!x) { out[0] = *id; return 1; }
-    Shard *s = &shard[id->b[0]]; int n = 0;
-    for (uint32_t v = 0; v < x->nv && n < cap; v++) for (uint32_t r = 0; r < VRUN(s->vtx[x->voff + v].m) && n < cap; r++) out[n++] = s->vtx[x->voff + v].id;
+    int n = (int)table_parts(id, out, (size_t)cap); if (!n) { out[0] = *id; return 1; }
     return n;
 }
 

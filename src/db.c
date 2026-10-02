@@ -86,9 +86,9 @@ static uint8_t *tiers_of(const lp_id *ids, uint64_t n){                       /*
 
 
 
-typedef struct { uint32_t shard; uint32_t idx; uint64_t h; } NRef;        /* h: the node's Hilbert value, computed once */
+typedef struct { uint64_t idx, h; } NRef;                                /* h: the node's Hilbert value, computed once */
 static NRef *bucket[NPART]; static uint64_t nbucket[NPART];
-static NRef nref(uint32_t s, uint32_t i){ lp_coord co; memcpy(co.m, shard[s].node[i].m, 32); return (NRef){ s, i, lp_hilbert4(&co) }; }
+static NRef nref(const Node *x){ lp_coord co; memcpy(co.m, x->m, 32); return (NRef){ (uint64_t)(x - NODE), lp_hilbert4(&co) }; }
 static int by_hilbert(const void *a, const void *b){ uint64_t x = ((const NRef *)a)->h, y = ((const NRef *)b)->h; return x < y ? -1 : x > y; }
 /* A partition's new rows go in Hilbert order (Atoms: the Hilbert value is for locality, ordering, and indexing; it is
  * never what partitions go by):
@@ -112,7 +112,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
             c16(&c, 4); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(T0[cp].hilbert)); c.rows++;
         }
     for (uint64_t b = 0; b < nbucket[p]; b++) {
-        int s = (int)bucket[p][b].shard; Node *x = &shard[s].node[bucket[p][b].idx];
+        Node *x = &NODE[bucket[p][b].idx];
         double xm[4]; for (int d = 0; d < 4; d++) xm[d] = (double)x->m[d] / LP_FIXED_ONE;
         size_t gl = lp_ewkb_point4(xm, geo, sizeof geo);
         c16(&c, 4); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(bucket[p][b].h)); c.rows++;
@@ -128,9 +128,9 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
             c16(&c, 5); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cf_i64(&c, hsigned(T0[cp].hilbert)); cfield(&c, geo, (uint32_t)gl); cfield(&c, mask, 36); c.rows++;
         }
     for (uint64_t b = 0; b < nbucket[p]; b++) {
-        int s = (int)bucket[p][b].shard; Node *x = &shard[s].node[bucket[p][b].idx];
+        Node *x = &NODE[bucket[p][b].idx];
         if (x->nv > idc) { idc = x->nv * 2; ids = xrealloc(ids, idc * sizeof(lp_id)); runs = xrealloc(runs, idc * 8); }
-        for (uint32_t v = 0; v < x->nv; v++) { ids[v] = shard[s].vtx[x->voff + v].id; runs[v] = shard[s].vtx[x->voff + v].m; }
+        for (uint32_t v = 0; v < x->nv; v++) { ids[v] = VTX[x->voff + v].id; runs[v] = VTX[x->voff + v].m; }
         size_t gl = lp_ewkb_runs(ids, runs, x->nv, NULL, 0); uint8_t *gp = gl > sizeof geo ? malloc(gl) : geo;
         lp_ewkb_runs(ids, runs, x->nv, gp, gl);
         /* the mask: what the row is, and the types it holds (each constituent that is a type of a mask field) */
@@ -181,7 +181,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     uint64_t cap = 1 << 20, nf = 0; lp_id *front = malloc(cap * sizeof(lp_id));
     #define FPUSH(x) do { if (nf == cap) { cap *= 2; front = xrealloc(front, cap * sizeof(lp_id)); } front[nf++] = (x); } while (0)
     if (load_whole)                                                          /* every node is looked for: nothing is taken to be recorded because what holds it is */
-        for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) if (!shard[s].node[i].keep) { shard[s].node[i].keep = 3; FPUSH(shard[s].node[i].id); }
+        TABLE_EACH(x) if (!x->keep) { x->keep = 3; FPUSH(x->id); }
     /* The files first, by their trunks: a file whose trunk is recorded is recorded, with everything under it and
      * everything it attested, and nothing of it is looked for, played or written again. */
     { lp_id *trunk = malloc(sizeof(lp_id) * (size_t)(nfiles + 1)); int *of = malloc(sizeof(int) * (size_t)(nfiles + 1)); uint64_t nt = 0;
@@ -209,9 +209,8 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             Node *x = table_find(&front[i]);
             if (hit[i]) { x->keep = 2; st->found++; continue; }
             x->keep = 1; st->new_nodes++;
-            Shard *s = &shard[x->id.b[0]];
             for (uint32_t v = 0; v < x->nv; v++) {
-                Node *ch = table_find(&s->vtx[x->voff + v].id);
+                Node *ch = table_find(&VTX[x->voff + v].id);
                 if (ch && !ch->keep) { ch->keep = 3; if (nn == ncap) { ncap *= 2; next = xrealloc(next, ncap * sizeof(lp_id)); } next[nn++] = ch->id; }
             }
         }
@@ -228,10 +227,10 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     /* ---- every leaf partition on its own connection; new nodes bucketed by partition once */
     t = now();
     { uint64_t cnt[NPART] = { 0 };
-      for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) if (shard[s].node[i].keep == 1) cnt[part_of(&shard[s].node[i].id, shard[s].node[i].tier)]++;
+      TABLE_EACH(x) if (x->keep == 1) cnt[part_of(&x->id, x->tier)]++;
       for (int p = 0; p < NPART; p++) { bucket[p] = malloc(sizeof(NRef) * (cnt[p] + 1)); nbucket[p] = 0; }
-      for (int s = 0; s < NSHARD; s++) for (uint64_t i = 0; i < shard[s].n; i++) if (shard[s].node[i].keep == 1) {
-          int p = part_of(&shard[s].node[i].id, shard[s].node[i].tier); bucket[p][nbucket[p]++] = nref((uint32_t)s, (uint32_t)i); } } uint64_t re[NPART] = { 0 }, rp[NPART] = { 0 };
+      TABLE_EACH(x) if (x->keep == 1) {
+          int p = part_of(&x->id, x->tier); bucket[p][nbucket[p]++] = nref(x); } } uint64_t re[NPART] = { 0 }, rp[NPART] = { 0 };
     /* A tier at a time, from the lowest: what a composition is made of is always of a lower tier than it, so whatever
      * is recorded has everything under it recorded, even if the writing is cut off. Trunk-to-leaf deduplication
      * rests on that. */
@@ -426,7 +425,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (x && x->keep == 5) cnt[part_of(&x->id, x->tier)]++; }
         for (int p = 0; p < NPART; p++) { bucket[p] = malloc(sizeof(NRef) * (cnt[p] + 1)); nbucket[p] = 0; }
         for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (!x || x->keep != 5) continue;
-            int p = part_of(&x->id, x->tier), sh = x->id.b[0]; bucket[p][nbucket[p]++] = nref((uint32_t)sh, (uint32_t)(x - shard[sh].node)); x->keep = 1; }
+            int p = part_of(&x->id, x->tier); bucket[p][nbucket[p]++] = nref(x); x->keep = 1; }
         for (int p = 0; p < NPART; p++) { uint64_t e = 0, ph = 0; if (nbucket[p]) { write_node_rows(pg[0], p, &e, &ph, 0, 0); st->ent_rows += e; st->phy_rows += ph; } free(bucket[p]); bucket[p] = NULL; }
     }
     { PGresult *e = PQexec(pg[0], "COMMIT"); if (PQresultStatus(e) != PGRES_COMMAND_OK) { fprintf(stderr, "commit: %s", PQerrorMessage(pg[0])); return 1; } PQclear(e); }
