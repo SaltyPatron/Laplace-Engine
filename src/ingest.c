@@ -269,9 +269,10 @@ int cmd_ingest(int argc, char **argv){
             table_size(batch);                                                                                    /* a stretch at a time: room for one stretch */
             /* One long file, a stretch at a time. It is read twice: first for what it is, its trunk, with nothing
              * recorded; and, if that trunk is not recorded, again to record it. A file already recorded costs its
-             * decomposition and one lookup, and nothing is written. The first pass ends at the first stretch holding a
-             * thing that is not recorded: a recorded trunk has everything under it recorded, so that file's is not, and a
-             * new file is read once more, not twice. */
+             * decomposition and one lookup, and nothing is written.  The first pass ends at the first stretch attesting a
+             * claim that is not recorded: a trunk is written after every claim of every stretch, so that file's is not, and
+             * a new file is read once more, not twice. (Its stretches' parts, the content under the trunk, are not what is
+             * asked: a stretch writes what it attests, and its parts only where they are claims.) */
             File *f = &files[a0]; int failed = 0;
             int unrecorded = 0;                                               /* a stretch held something not recorded: the trunk is not looked for */
             for (int pass = do_load ? 0 : 1; pass < 2 && !failed && !f->known; pass++) {
@@ -284,14 +285,13 @@ int cmd_ingest(int argc, char **argv){
                     if (!last) { end = 0; for (size_t i = have; i > 1; i--) if (buf[i - 1] == '\n' && (boundary == 1 || (i >= 2 && buf[i - 2] == '\n') || (i >= 3 && buf[i - 2] == '\r' && buf[i - 3] == '\n'))) { end = i; break; }
                                  if (!end) { fprintf(stderr, "\n  %s: a record longer than a stretch (%zu MB): the file cannot be read in stretches of this length\n", f->path, cap >> 20); mism++; failed = 1; break; } }
                     f->partial = !last;
-                    uint64_t s0 = f->nsaid;                                       /* where this stretch's things begin among the file's */
                     #pragma omp parallel
                     #pragma omp single
                     decompose_bytes(CTX[omp_get_thread_num()], f, buf, end, first);
                     first = 0; f->bytes += end; WHOLE(f); t_dec += now() - td;
-                    if (!pass && !last && f->nsaid > s0) {                        /* a thing of its content not recorded: its trunk is not, and it is recorded now */
-                        uint64_t k = 0, want = f->nsaid - s0 < 4096 ? f->nsaid - s0 : 4096; lp_id *ids = malloc(sizeof(lp_id) * want); uint8_t *tt = malloc(want);
-                        for (uint64_t j = s0; j < f->nsaid && k < want; j++) if (f->said[j].said != LP_SAID_METADATA) { const Node *x = table_find(&f->said[j].id); ids[k] = f->said[j].id; tt[k++] = x ? x->tier : f->said[j].tier; }     /* the tier it is recorded at: the lowest it is composed at */
+                    if (!pass && !last && f->ev.n) {                                   /* a claim it attests not recorded: its trunk is not (a trunk is written after every claim of every stretch), and it is recorded now */
+                        uint64_t k = 0, want = f->ev.n < 4096 ? f->ev.n : 4096; lp_id *ids = malloc(sizeof(lp_id) * want); uint8_t *tt = malloc(want);
+                        for (uint64_t j = 0; j < f->ev.n && k < want; j++) if (f->ev.e[j].kind != EV_RECORD) { const Node *x = table_find(&f->ev.e[j].claim); if (!x) continue; ids[k] = x->id; tt[k++] = x->tier; }     /* at the tier it is recorded at: the lowest it is composed at */
                         if (!db_all_recorded(conninfo, ids, tt, k)) unrecorded = 1;
                         free(ids); free(tt); }
                     if (pass) { bytes += end; nev += f->ev.n; batches++; }
