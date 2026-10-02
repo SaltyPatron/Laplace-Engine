@@ -236,7 +236,10 @@ static int elect(const void *a, const void *b){                               /*
  * no hub (a hub is reached, never crossed). Each occurrence takes the candidate the others' choices support most, round
  * after round until no choice changes: a candidate in turn changes what makes sense for the other constituents. An
  * occurrence whose best two stand level is ambiguous; one no other occurrence's choice supports binds nothing. */
-#define CAND 32
+#define CAND 8                                                                   /* readings weighed per word */
+#define MEETS 512                                                                /* meetings weighed: those the most pairs of readings meet in */
+typedef struct { lp_id id; int n; } Meet;
+static int meet_by_n(const void *a, const void *b){ int x = ((const Meet *)a)->n, y = ((const Meet *)b)->n; return x != y ? y - x : memcmp(a, b, 16); }
 typedef struct { int cell, occ; lp_id *nb; int nnb; } Cand;
 typedef struct { int ncand, choice, level, capped; double score; } Bind;      /* per occurrence */
 static const Field *CF;
@@ -294,9 +297,13 @@ static int orient(State *st, Field *fd, Bind *bind, int *nambig){
     for (int a = 0; a < nc; a++) for (int b = a + 1; b < nc; b++) { if (cand[a].occ == cand[b].occ) continue;
         for (int i = 0, j = 0; i < cand[a].nnb && j < cand[b].nnb; ) { int c = memcmp(&cand[a].nb[i], &cand[b].nb[j], 16);
             if (!c) { if (nmeet == cmeet) { cmeet = cmeet ? cmeet * 2 : 256; meet = xrealloc(meet, sizeof(lp_id) * (size_t)cmeet); } if (nmeet < 1 << 16) meet[nmeet++] = cand[a].nb[i]; i++; j++; } else if (c < 0) i++; else j++; } }
-    if (nmeet) { qsort(meet, (size_t)nmeet, 16, id_cmp); int u = 0; for (int i = 0; i < nmeet; i++) if (!u || memcmp(&meet[i], &meet[u - 1], 16)) meet[u++] = meet[i]; nmeet = u;
+    if (nmeet) { qsort(meet, (size_t)nmeet, 16, id_cmp);                   /* each once, with how many pairs of readings meet in it */
+        Meet *mm = malloc(sizeof(Meet) * (size_t)nmeet); int u = 0;
+        for (int i = 0; i < nmeet; i++) if (!u || memcmp(&meet[i], &mm[u - 1].id, 16)) mm[u++] = (Meet){ meet[i], 1 }; else mm[u - 1].n++;
+        if (u > MEETS) { qsort(mm, (size_t)u, sizeof(Meet), meet_by_n); u = MEETS; qsort(mm, (size_t)u, sizeof(Meet), id_cmp); }   /* a meeting one pair passes through decides nothing */
+        for (int i = 0; i < u; i++) meet[i] = mm[i].id; nmeet = u; free(mm);
         Field mf = { 0 }; int *idx = malloc(sizeof(int) * (size_t)nmeet); for (int i = 0; i < nmeet; i++) { cell(&mf, &meet[i]); idx[i] = i; }
-        for (int b0 = 0; b0 < nmeet; b0 += 512) share(st, &mf, idx + b0, nmeet - b0 < 512 ? nmeet - b0 : 512, 64);     /* the least shared first: past 64, a meeting weighs next to nothing */
+        for (int b0 = 0; b0 < nmeet; b0 += 512) share(st, &mf, idx + b0, nmeet - b0 < 512 ? nmeet - b0 : 512, 32);     /* the least shared first: past 32, a meeting weighs next to nothing */
         mw = malloc(sizeof(double) * (size_t)nmeet);                         /* meet is sorted, and mf holds it in the same order */
         for (int i = 0; i < nmeet; i++) mw[i] = mf.c[i].hub ? 0.0 : 1.0 / (double)(mf.c[i].shared > 1 ? mf.c[i].shared : 1);
         free(idx); field_free(&mf); }
@@ -394,7 +401,7 @@ int cmd_turn(int argc, char **argv){
     /* ORIENT: the joint interpretation; its bindings are the centres SCAN starts from and what a chain answers from */
     Bind *bind = calloc((size_t)st->nocc + 1, sizeof(Bind)); int nambig = 0, nbound, ncentre = 0, capped = 0; lp_id centre[MAXOCC];
     { double t = now(); nbound = orient(st, &fd, bind, &nambig);
-      for (int i = 0; i < st->nocc; i++) { capped |= bind[i].capped; if (bind[i].choice >= 0 && !bind[i].level) centre[ncentre++] = fd.c[bind[i].choice].id; }
+      for (int i = 0; i < st->nocc; i++) { capped |= bind[i].capped; if (bind[i].choice >= 0 && !bind[i].level && ((st->open.w[i >> 6] >> (i & 63)) & 1)) centre[ncentre++] = fd.c[bind[i].choice].id;    /* the program routes from what is owed (Sequence 20.4) */ }
       int ambiguous_ = nambig > 0;
       printf("ORIENT     %s", !nbound ? (capped ? "resource-bounded: no joint binding among the candidates weighed" : "inconsistent: no reading of one word is compatible with a reading of another")
                                     : ambiguous_ ? "ambiguous" : "unique enough to execute");
