@@ -49,6 +49,14 @@ endif()
 set_target_properties(laplace_engine PROPERTIES BUILD_RPATH "${LAPLACE_ICU_DIR}/lib;${LAPLACE_PG_DIR}/lib${ENGINE_MKL_RPATH}"
                                                 INSTALL_RPATH "${LAPLACE_ICU_DIR}/lib;${LAPLACE_PG_DIR}/lib${ENGINE_MKL_RPATH}")
 target_link_options(laplace_engine PRIVATE -rdynamic)
+# oneTBB's scalable allocator in place of malloc for the whole program (Research/Performance.md: tree-sitter allocates
+# every node of every parse; with glibc's arenas twelve threads parsing at once waited on malloc). Unicode's parse:
+# 21.8 s -> 13.4 s.
+find_library(TBBMALLOC_PROXY tbbmalloc_proxy HINTS $ENV{TBBROOT}/lib/intel64/gcc4.8 /opt/intel/oneapi/tbb/latest/lib/intel64/gcc4.8 REQUIRED)
+get_filename_component(TBBMALLOC_DIR ${TBBMALLOC_PROXY} DIRECTORY)
+target_link_options(laplace_engine PRIVATE -Wl,--no-as-needed ${TBBMALLOC_PROXY} -Wl,--as-needed)
+set_property(TARGET laplace_engine APPEND PROPERTY BUILD_RPATH ${TBBMALLOC_DIR})
+set_property(TARGET laplace_engine APPEND PROPERTY INSTALL_RPATH ${TBBMALLOC_DIR})
 
 include(GNUInstallDirs)
 install(TARGETS laplace_engine RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

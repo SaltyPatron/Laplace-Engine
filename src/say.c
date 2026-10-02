@@ -258,6 +258,7 @@ static int named_as(const SNode *x, const char *name){
 /* The tree being read, for a name scoped to what holds it (ELEMENT.NAME: that part of that element only). */
 static __thread const STree *TT;
 #define BUSY_MAX 256
+#define FAN 4096                                                        /* a part holding this many parts has them read on every core */
 static __thread int32_t busy[BUSY_MAX]; static __thread int nbusy, busy_base;     /* the things this thread is composing, innermost last; from busy_base, the reading it is in now */
 static inline int composing(int32_t g){ for (int i = busy_base; i < nbusy; i++) if (busy[i] == g) return 1; return 0; }
 /* named_as, for a name split when the recipe was read */
@@ -389,6 +390,7 @@ static int spoken_thing(Sink *k, const STree *t, int32_t g, Ref *out){
     return 0;
 }
 static int entity_of(Sink *k, const STree *t, int32_t c, Ref *out);
+static uint32_t entities_wide(Sink *k, const STree *t, int32_t g, Ref *kid);
 static int thing_of(Sink *k, const STree *t, int32_t g, Ref *out, int depth){
     int memo = k->tc_tree == t && (uint32_t)g < k->tc_n;                     /* each thing is composed once in a tree; the threads reading one tree share what is composed */
     if (memo) { uint8_t st = __atomic_load_n(&k->ts[g], __ATOMIC_ACQUIRE); if (st == 1) { *out = k->tc[g]; return 1; } if (st == 2) return 0; }
@@ -479,7 +481,9 @@ static int entity_of(Sink *k, const STree *t, int32_t c, Ref *out){
     }
     const Dis *d = x->nlen ? dis_of(s, x) : NULL; if (d && (d->what == D_OMIT || d->what == D_METADATA)) return 0;
     Ref stack[64], *kid = x->nkids <= 64 ? stack : malloc(sizeof(Ref) * x->nkids); uint32_t n = 0;
+    if (x->nkids >= FAN && !k->worker) { n = entities_wide(k, t, c, kid); goto composed; }       /* its parts on every core, kept in order */
     for (int32_t q = x->first; q >= 0; q = t->n[q].next) { Ref v; if (entity_of(k, t, q, &v)) { if (v.said != LP_SAID_TUPLE) v.said = 0; kid[n++] = v; } }
+    composed:
     if (n == 1) *out = kid[0]; else if (n > 1) *out = compose(kid, n, over(kid, n));
     if (kid != stack) free(kid);
     return n > 0;
@@ -569,7 +573,6 @@ static void unit_highway(Sink *k, const STree *t, int32_t root){
 /* ---- a wide part (Unicode's repertoire, a wordnet's lexicon): the parts inside it read on every core, each into a sink
  * of its own, and kept in the file's order, so what is said is what one thread reading the tree in order says. The
  * things composed of the tree (tc) and its key index are shared: each is the same whoever composes it. */
-#define FAN 4096
 typedef struct { int32_t end; uint64_t e0; Ref about; int has; } Pend;
 static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int speaks, Pend *pend, int *npp);
 static void worker_of(Sink *w, const Sink *k){
@@ -608,6 +611,20 @@ static uint32_t wide(Sink *k, const STree *t, int32_t g, int speaks){
     for (size_t i = 0; i < n; i++) sink_merge(k, &w[i]);
     free(w); free(a); free(b);
     return last;
+}
+/* The parts of a wide part, whole (entity_of), on every core: each run of them into a sink of its own, in order. */
+static uint32_t entities_wide(Sink *k, const STree *t, int32_t g, Ref *kid){
+    uint32_t nk = 0; for (int32_t q = t->n[g].first; q >= 0; q = t->n[q].next) nk++;
+    int32_t *ch = malloc(sizeof(int32_t) * nk); uint8_t *ok = calloc(nk, 1); { uint32_t i = 0; for (int32_t q = t->n[g].first; q >= 0; q = t->n[q].next) ch[i++] = q; }
+    if (k->ix_tree != t || k->ix_count != t->count) index_keys(k, t);
+    uint32_t per = nk / (uint32_t)(omp_get_max_threads() * 16) + 1, nr = (nk + per - 1) / per; Sink *w = calloc(nr, sizeof(Sink));
+    #pragma omp taskloop grainsize(1)
+    for (uint32_t r = 0; r < nr; r++) { Tls was = tls_save(t); worker_of(&w[r], k);
+        for (uint32_t i = r * per; i < nk && i < (r + 1) * per; i++) { Ref v; if (entity_of(&w[r], t, ch[i], &v)) { if (v.said != LP_SAID_TUPLE) v.said = 0; kid[i] = v; ok[i] = 1; } }
+        tls_back(&was); }
+    for (uint32_t r = 0; r < nr; r++) sink_merge(k, &w[r]);
+    uint32_t n = 0; for (uint32_t i = 0; i < nk; i++) if (ok[i]) kid[n++] = kid[i];
+    free(w); free(ch); free(ok); return n;
 }
 /* A tree read from node g0 up to g1, in the file's order. pend: the parts whose claims are said together, still open. */
 static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int speaks, Pend *pend, int *npp){
