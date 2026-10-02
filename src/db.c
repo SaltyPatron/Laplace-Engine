@@ -307,9 +307,10 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             PQclear(q); free(ab);
         }
         free(wold);
-        /* The matchups, first in, first out. A claim entering for the first time enters at its stock default: there is
-         * nothing recorded for it to play. After that, every incoming record plays the recorded one: the witness at
-         * the rating its record would enter at, with the deviation its trust gives, and the outcome it attests. */
+        /* The matchups, first in, first out: each attestation is played as one Glicko-2 matchup at the witness's trust.
+         * A claim entering for the first time enters at its stock default and plays its first attestation from there;
+         * every attestation plays the witness at the rating its record would enter at, with the deviation its trust
+         * gives, and the outcome it attests. */
         for (int fi = 0; fi < nfiles; fi++) {
             double trust = files[fi].trust; int copy = 0;
             const lp_id *flin = files[fi].has_lineage ? &files[fi].lineage.id : &files[fi].witness.id;
@@ -322,7 +323,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
                 }
                 if (copy) continue;
                 Standing *s = stand_get(&e->claim, NULL, 0);
-                if (!s->had && !s->entered) { s->entered = 1; continue; }
+                if (!s->had && !s->entered) s->entered = 1;
                 lp_attest(&s->r, trust, e->score, e->enter_rating, 0.5, 30.0); s->matches++;
             }
         }
