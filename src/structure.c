@@ -278,16 +278,23 @@ uint64_t s_decompose(const Layout *l, const uint8_t *s, size_t n, s_unit_fn fn, 
 /* ---- a grammar's tree as the file's tree, by what the recipe says each kind of node is */
 #include <tree_sitter/api.h>
 size_t xml_unescape(const uint8_t *s, size_t n, uint8_t *o);
-typedef struct { const Layout *l; STree *t; const uint8_t *src; int level; } GW;      /* level: how many members of objects the node being read is inside (levels) */
+typedef struct { const Layout *l; STree *t; const uint8_t *src; int level; const GRule **rs; uint32_t nrs; } GW;      /* level: how many members of objects the node being read is inside (levels); rs: the rule of each of the grammar's symbols */
 static const GRule *rule_of(const GMap *g, const char *type){ for (int i = 0; i < g->n; i++) if (!strcmp(g->rule[i].type, type)) return &g->rule[i]; return NULL; }
 /* The node a path names under a node: A, or A/B (the B in its A); a field of the node by its name where it has one. */
 static int at_path(TSNode nd, const char *path, TSNode *out){
-    char buf[64]; snprintf(buf, sizeof buf, "%s", path); char *save = NULL; TSNode cur = nd;
-    for (char *step = strtok_r(buf, "/", &save); step; step = strtok_r(NULL, "/", &save)) {
-        TSNode f = ts_node_child_by_field_name(cur, step, (uint32_t)strlen(step)); int found = !ts_node_is_null(f);
-        if (!found) { uint32_t nc = ts_node_named_child_count(cur); for (uint32_t i = 0; i < nc && !found; i++) { TSNode c = ts_node_named_child(cur, i); if (!strcmp(ts_node_type(c), step)) { f = c; found = 1; } } }
-        if (!found) return 0; cur = f; }
+    TSNode cur = nd;
+    for (const char *p = path; *p; ) { const char *e = strchr(p, '/'); size_t l = e ? (size_t)(e - p) : strlen(p);     /* a step at a time, as written: no copy of the path */
+        if (l) { TSNode f = ts_node_child_by_field_name(cur, p, (uint32_t)l); int found = !ts_node_is_null(f);
+            if (!found) { uint32_t nc = ts_node_named_child_count(cur); for (uint32_t i = 0; i < nc && !found; i++) { TSNode c = ts_node_named_child(cur, i); const char *ty = ts_node_type(c); if (strlen(ty) == l && !memcmp(ty, p, l)) { f = c; found = 1; } } }
+            if (!found) return 0; cur = f; }
+        p = e ? e + 1 : p + l; }
     *out = cur; return 1;
+}
+/* The rule of a node, by its symbol: each symbol's rule found by name once for the grammar being read. */
+static const GRule *rule_at(GW *w, TSNode nd){
+    if (!w->rs) { const TSLanguage *lg = ts_node_language(nd); w->nrs = ts_language_symbol_count(lg); w->rs = malloc(sizeof(GRule *) * (w->nrs + 1));
+        for (uint32_t i = 0; i < w->nrs; i++) { const char *nm = ts_language_symbol_name(lg, (TSSymbol)i); w->rs[i] = nm ? rule_of(&w->l->g, nm) : NULL; } }
+    TSSymbol sy = ts_node_symbol(nd); return sy < w->nrs ? w->rs[sy] : rule_of(&w->l->g, ts_node_type(nd));
 }
 /* A node's text as it means: its quotes off, and what the grammar's texts write for what they cannot write plainly
  * resolved (an XML reference, a JSON escape). */
@@ -302,7 +309,7 @@ static void g_text(GW *w, TSNode nd, int raw, const uint8_t **p, uint32_t *n){
     *p = s; *n = (uint32_t)len;
 }
 static void g_node(GW *w, TSNode nd, int32_t in, const uint8_t *name, uint32_t nlen, int depth){
-    const GRule *r = rule_of(&w->l->g, ts_node_type(nd)); uint8_t tier = (uint8_t)(depth < 255 ? depth : 255);
+    const GRule *r = rule_at(w, nd); uint8_t tier = (uint8_t)(depth < 255 ? depth : 255);
     if (r && r->what == G_SKIP) return;
     if (r && r->what == G_MEMBER) {                                           /* it names what its other part is */
         TSNode kn, vn; const uint8_t *np; uint32_t nn; if (!at_path(nd, r->name[0], &kn) || !at_path(nd, r->text, &vn)) return;
@@ -338,7 +345,7 @@ static void g_node(GW *w, TSNode nd, int32_t in, const uint8_t *name, uint32_t n
     TSTreeCursor cur = ts_tree_cursor_new(nd);                               /* children by cursor: asking for the i-th costs i */
     if (ts_tree_cursor_goto_first_child(&cur)) do { TSNode c = ts_tree_cursor_current_node(&cur); if (!ts_node_is_named(c)) continue;
         const char *fld = ts_tree_cursor_current_field_name(&cur);                /* the grammar's own name for the child's place (value, datatype), for what has no name of its own */
-        { const GRule *cr = rule_of(&w->l->g, ts_node_type(c)); if (cr && (cr->what == G_GROUP || cr->what == G_SKIP) && (cr->nname || cr->kind)) fld = NULL; }
+        { const GRule *cr = rule_at(w, c); if (cr && (cr->what == G_GROUP || cr->what == G_SKIP) && (cr->nname || cr->kind)) fld = NULL; }
         g_node(w, c, into, fld ? (const uint8_t *)fld : NULL, fld ? (uint32_t)strlen(fld) : 0, depth); } while (ts_tree_cursor_goto_next_sibling(&cur));
     ts_tree_cursor_delete(&cur);
     if (r && r->what == G_GROUP && w->t->n[into].first < 0 && !ts_node_named_child_count(nd)) {     /* a group that holds nothing named holds its own text (Turtle's a) */
@@ -360,7 +367,7 @@ void s_grammar(const Layout *l, const void *ts_root, const uint8_t *src, size_t 
     g_node(&w, *(const TSNode *)ts_root, root, NULL, 0, 1);
     if (l->ntier) for (int32_t c = t.n[root].first; c >= 0; c = t.n[c].next)  /* a part of a tier that is one tree: the tree's top is the part, named as the tier */
         if (t.n[c].kind == S_GROUP && !t.n[c].nlen) { t.n[c].name = (const uint8_t *)l->tier[0].name; t.n[c].nlen = (uint32_t)strlen(l->tier[0].name); }
-    fn(sink, &t, root, 0); tree_free(&t);
+    free(w.rs); fn(sink, &t, root, 0); tree_free(&t);
 }
 
 /* ---- laplace structure LAYOUT FILE [-n NODES]: a file's tree as a layout parts it, for writing recipes. LAYOUT is a
@@ -395,7 +402,7 @@ static void part_tree(const Layout *l, const TSLanguage *lang, SPartTree *p){
     TSTree *tt = ts_parser_parse_string(ps, NULL, (const char *)p->doc, (uint32_t)p->len); TSNode root = ts_tree_root_node(tt);
     if (ts_node_has_error(root)) p->bad++;                                   /* what parses is read */
     int32_t r = node(&p->t, S_GROUP, 0, -1, 0); p->t.n[r].end = p->len; GW w = { l, &p->t, p->doc, 0 };
-    g_node(&w, root, r, NULL, 0, 1); ts_tree_delete(tt); ts_parser_delete(ps);
+    g_node(&w, root, r, NULL, 0, 1); free(w.rs); ts_tree_delete(tt); ts_parser_delete(ps);
 }
 static int32_t copy_node(STree *m, const SNode *x, int32_t parent, uint8_t tier, uint64_t at, uint64_t end){
     int32_t i = node(m, x->kind, tier, parent, at); SNode *y = &m->n[i];
