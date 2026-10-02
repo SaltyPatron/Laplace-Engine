@@ -238,7 +238,7 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  const STree *tc_tree; uint32_t tc_n, tc_cap; Ref *tc; uint8_t *ts;
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
-                 Hw *hw; struct HwRec *hr; size_t nhr, chr; } Sink;          /* reading for the highway (laplace highway): what the part says of its types, in order */
+                 Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; } Sink;          /* reading for the highway (laplace highway): what the part says of its types, in order */
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
     if (k->nhr == k->chr) { k->chr = k->chr ? k->chr * 2 : 1024; k->hr = xrealloc(k->hr, sizeof(HwRec) * k->chr); }
@@ -257,6 +257,9 @@ static int named_as(const SNode *x, const char *name){
     size_t l = strlen(name); if (l && name[l - 1] == '*') return x->nlen >= l - 1 && !memcmp(x->name, name, l - 1); return s_named(x, name, l); }
 /* The tree being read, for a name scoped to what holds it (ELEMENT.NAME: that part of that element only). */
 static __thread const STree *TT;
+#define BUSY_MAX 256
+static __thread int32_t busy[BUSY_MAX]; static __thread int nbusy, busy_base;     /* the things this thread is composing, innermost last; from busy_base, the reading it is in now */
+static inline int composing(int32_t g){ for (int i = busy_base; i < nbusy; i++) if (busy[i] == g) return 1; return 0; }
 /* named_as, for a name split when the recipe was read */
 static inline int name_is(const SNode *x, const char *n, uint8_t off, uint8_t len, uint8_t wild, uint8_t note){
     if (note && x->kind != S_NOTE) return 0; return wild ? x->nlen >= len && !memcmp(x->name, n + off, len) : s_named(x, n + off, len); }
@@ -332,7 +335,7 @@ static int value_of(Sink *k, const STree *t, int32_t c, Ref *out, int depth){
         Ref pc[64]; uint32_t np = 0; for (int32_t q = x->first; q >= 0 && np < 64; q = t->n[q].next) { if (t->n[q].kind == S_GROUP) return 0; if (value_of(k, t, q, &pc[np], depth)) { pc[np].said = 0; np++; } }
         if (!np) return 0; *out = np == 1 ? pc[0] : said_tuple(compose(pc, np, over(pc, np))); return 1; }
     if (x->kind == S_GROUP && depth < 16) {                                    /* a part that is a thing: that thing */
-        if (k->tc_tree == t && (uint32_t)c < k->tc_n && k->ts[c] != 3) { Ref v; if (thing_of(k, t, c, &v, depth + 1)) { *out = v; return 1; } }
+        if (k->tc_tree == t && (uint32_t)c < k->tc_n && !composing(c)) { Ref v; if (thing_of(k, t, c, &v, depth + 1)) { *out = v; return 1; } }
         int32_t only = x->first; if (only >= 0 && t->n[only].next < 0 && t->n[only].kind == S_GROUP) return value_of(k, t, only, out, depth + 1); }     /* holding one part: what that part is */
     if (x->kind == S_GROUP) {                                                 /* a part that holds only its text: that text, as the part is disposed of */
         int32_t only = x->first; if (only < 0 || t->n[only].next >= 0 || t->n[only].kind != S_TEXT) return 0;
@@ -387,11 +390,13 @@ static int spoken_thing(Sink *k, const STree *t, int32_t g, Ref *out){
 }
 static int entity_of(Sink *k, const STree *t, int32_t c, Ref *out);
 static int thing_of(Sink *k, const STree *t, int32_t g, Ref *out, int depth){
-    if (k->tc_tree == t && (uint32_t)g < k->tc_n) {                          /* each thing is composed once in a tree */
-        if (k->ts[g] == 1) { *out = k->tc[g]; return 1; } if (k->ts[g] == 2 || k->ts[g] == 3) return 0; }
-    int r = 0; if (k->tc_tree == t && (uint32_t)g < k->tc_n) k->ts[g] = 3;   /* being composed: a thing named by itself names nothing */
-    r = thing_compose(k, t, g, out, depth);
-    if (k->tc_tree == t && (uint32_t)g < k->tc_n) { k->ts[g] = r ? 1 : 2; if (r) k->tc[g] = *out; }
+    int memo = k->tc_tree == t && (uint32_t)g < k->tc_n;                     /* each thing is composed once in a tree; the threads reading one tree share what is composed */
+    if (memo) { uint8_t st = __atomic_load_n(&k->ts[g], __ATOMIC_ACQUIRE); if (st == 1) { *out = k->tc[g]; return 1; } if (st == 2) return 0; }
+    if (memo && composing(g)) return 0;                                            /* being composed by this thread: a thing named by itself names nothing */
+    int pushed = memo && nbusy < BUSY_MAX; if (pushed) busy[nbusy++] = g;
+    int r = thing_compose(k, t, g, out, depth);
+    if (pushed) nbusy--;
+    if (memo) { if (r) k->tc[g] = *out; __atomic_store_n(&k->ts[g], (uint8_t)(r ? 1 : 2), __ATOMIC_RELEASE); }
     return r;
 }
 /* A part as one way its kind is named: 0 when it is not named that way. */
@@ -561,23 +566,53 @@ static void unit_highway(Sink *k, const STree *t, int32_t root){
             keys_at(s, t, (int32_t)g, &h->a, &A); if (!A.n) continue; keys_at(s, t, (int32_t)g, &h->b, &B);
             for (int a = 0; a < A.n; a++) for (int b = 0; b < B.n; b++) hw_rec(k, h->what, i, NULL, A.k[a], strlen(A.k[a]), B.k[b], strlen(B.k[b])); } }
 }
-static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
-    Sink *k = sink; const Say *s = k->s; (void)ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f; TT = t;
-    if (k->tc_cap < t->count) { k->tc_cap = t->count * 2; k->tc = xrealloc(k->tc, sizeof(Ref) * k->tc_cap); k->ts = xrealloc(k->ts, k->tc_cap); }
-    k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); k->ix_tree = NULL;      /* a new tree: nothing of the last is known of it */
-    if (k->hw) { unit_highway(k, t, root); keep_keys(k, t, root); return; }     /* read for the highway: its types, not what it attests */
-    if (s->nline && t->n[root].kind == S_TEXT) {                             /* a line of a page: where it matches a pattern, it says the pattern's parts */
-        const SNode *x = &t->n[root]; char stack[4096], *ln = x->vlen < sizeof stack ? stack : malloc(x->vlen + 1); memcpy(ln, x->val, x->vlen); ln[x->vlen] = 0;
-        for (int i = 0; i < s->nline; i++) { regmatch_t m[5]; if (regexec(&s->line[i].re, ln, 5, m, 0)) continue;
-            Ref part[4]; int np = 0; for (int q = 1; q < 5 && np < 4; q++) if (m[q].rm_so >= 0 && m[q].rm_eo > m[q].rm_so) part[np++] = text_of((const uint8_t *)ln + m[q].rm_so, (size_t)(m[q].rm_eo - m[q].rm_so));
-            if (s->line[i].mode == 3 && np == 2) { Ref p[3] = { part[0], string_ref((const uint8_t *)s->line[i].pred, strlen(s->line[i].pred)), part[1] }; claim(k, p, 3); }
-            else if (s->line[i].mode == 2 && np == 2) claim(k, part, 2);
-            else if (s->line[i].mode == 1 && np >= 2) claim(k, part, np);
-            else if (s->line[i].mode == 0 && np == 2 && k->has_fabout) { Ref p[3] = { k->fabout, part[0], part[1] }; claim(k, p, 3); } }
-        if (ln != stack) free(ln); }
-    int speaks = spoken_of(s, t, root, s->whole);
-    struct { int32_t end; uint64_t e0; Ref about; int has; } pend[64]; int np_ = 0;      /* the parts whose claims are said together, still open */
-    for (uint32_t g = 0; g < t->count; g++) { const SNode *x = &t->n[g];
+/* ---- a wide part (Unicode's repertoire, a wordnet's lexicon): the parts inside it read on every core, each into a sink
+ * of its own, and kept in the file's order, so what is said is what one thread reading the tree in order says. The
+ * things composed of the tree (tc) and its key index are shared: each is the same whoever composes it. */
+#define FAN 4096
+typedef struct { int32_t end; uint64_t e0; Ref about; int has; } Pend;
+static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int speaks, Pend *pend, int *npp);
+static void worker_of(Sink *w, const Sink *k){
+    *w = *k; memset(&w->ev, 0, sizeof w->ev); memset(&w->things, 0, sizeof w->things); memset(&w->meta, 0, sizeof w->meta); memset(&w->grp, 0, sizeof w->grp);
+    memset(w->open, 0, sizeof w->open); w->nopen = 0; w->unknown = 0; w->nunk = 0; w->hr = NULL; w->nhr = w->chr = 0; w->worker = 1;
+}
+static void sink_merge(Sink *k, Sink *w){
+    for (uint64_t i = 0; i < w->ev.n; i++) ev_push(&k->ev, &w->ev.e[i]);
+    for (size_t i = 0; i < w->meta.n; i++) push(&k->meta, &w->meta.c[i]);
+    for (size_t i = 0; i < w->things.n; i++) push(&k->things, &w->things.c[i]);
+    for (int i = 0; i < 256; i++) k->open[i] += w->open[i];
+    for (int i = 0; i < w->nopen; i++) { int dup = 0; for (int j = 0; j < k->nopen && !dup; j++) dup = !strcmp(k->opennm[j], w->opennm[i]); if (!dup && k->nopen < 16) strcpy(k->opennm[k->nopen++], w->opennm[i]); }
+    k->unknown += w->unknown; for (int i = 0; i < w->nunk && k->nunk < 8; i++) strcpy(k->unknm[k->nunk++], w->unknm[i]);
+    free(w->ev.e); free(w->meta.c); free(w->things.c); free(w->grp.c);
+}
+/* A thread may take up a part while it waits inside its own reading: what it was in the middle of is put back after. */
+typedef struct { const STree *tt; int base, nbusy; long self_cp; char self_mark; } Tls;
+static Tls tls_save(const STree *t){ Tls x = { TT, busy_base, nbusy, self_cp, self_mark }; TT = t; busy_base = nbusy; return x; }
+static void tls_back(const Tls *x){ TT = x->tt; busy_base = x->base; nbusy = x->nbusy; self_cp = x->self_cp; self_mark = x->self_mark; }
+/* Parts of g in runs of about the same number of nodes; returns the last node inside g. */
+static size_t runs_of(const STree *t, int32_t g, uint32_t **a, uint32_t **b){
+    uint32_t end = (uint32_t)subtree_end(t, g) + 1, total = end - (uint32_t)g - 1, want = total / (uint32_t)(omp_get_max_threads() * 16) + 1, from = (uint32_t)g + 1;
+    size_t n = 0, cap = 64; *a = malloc(sizeof(uint32_t) * cap); *b = malloc(sizeof(uint32_t) * cap);
+    for (int32_t c = t->n[g].first; c >= 0; c = t->n[c].next) { uint32_t ce = (uint32_t)subtree_end(t, c) + 1;
+        if (ce - from >= want || t->n[c].next < 0) { if (n == cap) { cap *= 2; *a = xrealloc(*a, sizeof(uint32_t) * cap); *b = xrealloc(*b, sizeof(uint32_t) * cap); } (*a)[n] = from; (*b)[n++] = ce; from = ce; } }
+    return n;
+}
+static uint32_t wide(Sink *k, const STree *t, int32_t g, int speaks){
+    uint32_t last = (uint32_t)subtree_end(t, g); if (last <= (uint32_t)g) return (uint32_t)g;
+    if (k->ix_tree != t || k->ix_count != t->count) index_keys(k, t);      /* built once, read by every thread */
+    uint32_t *a, *b; size_t n = runs_of(t, g, &a, &b); Sink *w = calloc(n, sizeof(Sink));
+    #pragma omp taskloop grainsize(1)
+    for (size_t i = 0; i < n; i++) { Tls was = tls_save(t); worker_of(&w[i], k); Pend pd[64]; int np = 0;
+        unit_range(&w[i], t, a[i], b[i], speaks, pd, &np); while (np) { np--; together(&w[i], pd[np].e0, pd[np].has ? &pd[np].about : NULL); }
+        tls_back(&was); }
+    for (size_t i = 0; i < n; i++) sink_merge(k, &w[i]);
+    free(w); free(a); free(b);
+    return last;
+}
+/* A tree read from node g0 up to g1, in the file's order. pend: the parts whose claims are said together, still open. */
+static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int speaks, Pend *pend, int *npp){
+    const Say *s = k->s; int np_ = *npp;
+    for (uint32_t g = g0; g < g1; g++) { const SNode *x = &t->n[g];
         while (np_ && pend[np_ - 1].end < (int32_t)g) { np_--; together(k, pend[np_].e0, pend[np_].has ? &pend[np_].about : NULL); }
         if (x->kind == S_NOTE || x->kind == S_VALUE) { const Dis *d = dis_of(s, x);
             if (d && d->what == D_METADATA && !left_empty(s, x)) { Ref p[2] = { string_ref(x->name, x->nlen), text_of(x->val, x->vlen) }; Ref m = said_tuple(compose(p, 2, over(p, 2))); push(&k->meta, &m); }
@@ -676,7 +711,27 @@ static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
             k->voiced = was; k->voice = wv; }
         for (int a = 0; a < s->ntogether; a++) if (s_named(x, s->together[a].tier, strlen(s->together[a].tier)) && spoken_of(s, t, (int32_t)g, s->together[a].when)) {
             if (np_ < 64) { pend[np_].end = subtree_end(t, (int32_t)g); pend[np_].e0 = e0; pend[np_].has = thing_of(k, t, (int32_t)g, &pend[np_].about, 0); np_++; } break; }      /* closed when the reading passes the last node inside it */
+        if (x->nkids >= FAN && !k->worker) g = wide(k, t, (int32_t)g, speaks);      /* its parts, each read on its own, on every core */
     }
+    *npp = np_;
+}
+static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
+    Sink *k = sink; const Say *s = k->s; (void)ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f; TT = t;
+    if (k->tc_cap < t->count) { k->tc_cap = t->count * 2; k->tc = xrealloc(k->tc, sizeof(Ref) * k->tc_cap); k->ts = xrealloc(k->ts, k->tc_cap); }
+    k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); k->ix_tree = NULL;      /* a new tree: nothing of the last is known of it */
+    if (k->hw) { unit_highway(k, t, root); keep_keys(k, t, root); return; }     /* read for the highway: its types, not what it attests */
+    if (s->nline && t->n[root].kind == S_TEXT) {                             /* a line of a page: where it matches a pattern, it says the pattern's parts */
+        const SNode *x = &t->n[root]; char stack[4096], *ln = x->vlen < sizeof stack ? stack : malloc(x->vlen + 1); memcpy(ln, x->val, x->vlen); ln[x->vlen] = 0;
+        for (int i = 0; i < s->nline; i++) { regmatch_t m[5]; if (regexec(&s->line[i].re, ln, 5, m, 0)) continue;
+            Ref part[4]; int np = 0; for (int q = 1; q < 5 && np < 4; q++) if (m[q].rm_so >= 0 && m[q].rm_eo > m[q].rm_so) part[np++] = text_of((const uint8_t *)ln + m[q].rm_so, (size_t)(m[q].rm_eo - m[q].rm_so));
+            if (s->line[i].mode == 3 && np == 2) { Ref p[3] = { part[0], string_ref((const uint8_t *)s->line[i].pred, strlen(s->line[i].pred)), part[1] }; claim(k, p, 3); }
+            else if (s->line[i].mode == 2 && np == 2) claim(k, part, 2);
+            else if (s->line[i].mode == 1 && np >= 2) claim(k, part, np);
+            else if (s->line[i].mode == 0 && np == 2 && k->has_fabout) { Ref p[3] = { k->fabout, part[0], part[1] }; claim(k, p, 3); } }
+        if (ln != stack) free(ln); }
+    int speaks = spoken_of(s, t, root, s->whole);
+    Pend pend[64]; int np_ = 0;      /* the parts whose claims are said together, still open */
+    unit_range(k, t, 0, t->count, speaks, pend, &np_);
     while (np_) { np_--; together(k, pend[np_].e0, pend[np_].has ? &pend[np_].about : NULL); }
     keep_keys(k, t, root);
     /* the part itself, whole, into the file's content tree; where it is the very tuple it attests (a row that is a
