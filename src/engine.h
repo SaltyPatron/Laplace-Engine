@@ -213,6 +213,8 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
 /* ---- reading the database: set-based fetches, decoded here */
 extern uint32_t id_oid;                                               /* the database's own number for the type of an ID, blake3 */
 size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n);         /* a binary blake3[] parameter; out holds 20 + 20 n bytes */
+void   refuse_named(const Firmware *fw);                                 /* the predicates this pass's firmware refuses */
+const char *refuse_param(int *len);                                      /* ... as the blake3[] every claim read passes */
 void   id_text(const lp_id *id, char out[33]);                        /* 32 hexadecimal digits */
 int    id_parse(const char *s, lp_id *out);                         /* the 32 hexadecimal digits back to the ID; 0 when they are not */
 

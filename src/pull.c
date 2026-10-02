@@ -56,14 +56,29 @@ int cmd_text(int argc, char **argv){
 static double be_f64(const char *p){ uint64_t u = 0; for (int i = 0; i < 8; i++) u = u << 8 | (uint8_t)p[i]; double d; memcpy(&d, &u, 8); return d; }
 int claim_by_conf(const void *a, const void *b){ double x = ((const Claim *)a)->conf, y = ((const Claim *)b)->conf; return x < y ? 1 : x > y ? -1 : memcmp(a, b, 16); }
 
+/* The predicates the pass's firmware refuses, as the blake3[] every claim read passes: a restriction is applied before
+ * the sort (Sequence 15.5), so a refused strand never takes a place the fan leaves. The firmware names them when it is
+ * loaded; their IDs are computed here, once, on the first read. */
+static char refuse_names[FW_NAMES][96]; static int nrefuse_names, refuse_len = -1; static uint8_t refuse_ab[20 + 20 * FW_NAMES];
+void refuse_named(const Firmware *fw){ nrefuse_names = fw->nrefuse_predicate; memcpy(refuse_names, fw->refuse_predicate, sizeof refuse_names); refuse_len = -1; }
+const char *refuse_param(int *len){
+    if (refuse_len < 0) {
+        if (!nrefuse_names) { uint32_t h[3] = { htonl(0), htonl(0), htonl(id_oid) }; memcpy(refuse_ab, h, 12); refuse_len = 12; }   /* '{}': nothing refused */
+        else { lp_text *c = lp_text_new(T0); lp_id id[FW_NAMES];
+               for (int i = 0; i < nrefuse_names; i++) id[i] = entity_named(c, refuse_names[i], NULL, 0, NULL).id;
+               refuse_len = (int)ids_param(refuse_ab, id, (uint32_t)nrefuse_names); lp_text_free(c); }
+    }
+    *len = refuse_len; return (const char *)refuse_ab;
+}
+
 /* The claims that hold the given parts in their places (a part not given is open): at most fan of them; *capped says
  * there were more. k: how many deviations below its rating a claim is read at. */
 Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, double k, int *n, int *capped){
     lp_id keys[3]; uint32_t nk = 0; for (int i = 0; i < 3; i++) if (have[i]) keys[nk++] = part[i];
     uint8_t ab[80]; size_t al = ids_param(ab, keys, nk); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
-    const char *v[3] = { (const char *)ab, lim, CLAIM_BITS }; int l[3] = { (int)al, 0, 0 }, f[3] = { 1, 0, 0 };
+    int rl; const char *v[4] = { (const char *)ab, lim, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
     PGresult *q = db_ask(pg,
-        "SELECT entity, path, rating, deviation, volatility, matches FROM laplace_claims($1::blake3[], $2::bigint, $3::smallint[])", 3, v, l, f);
+        "SELECT entity, path, rating, deviation, volatility, matches FROM laplace_claims($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
     int rows = PQntuples(q); *capped = rows > fan; if (rows > fan) rows = fan;
     Claim *c = malloc(sizeof(Claim) * (size_t)(rows ? rows : 1)); int m = 0;
@@ -325,9 +340,9 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
     for (int i = 0; i < n; i++) if ((int)closed[i].hops < hops) { ids[m] = closed[i].id; who[m++] = i; }
     if (!m) { free(ids); free(who); return n; }
     uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(ab, ids, (uint32_t)m); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
-    const char *v[3] = { (const char *)ab, lim, CLAIM_BITS }; int l[3] = { (int)al, 0, 0 }, f[3] = { 1, 0, 0 };
+    int rl; const char *v[4] = { (const char *)ab, lim, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
     PGresult *q = db_ask(pg,
-        "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[])", 3, v, l, f);
+        "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
     w->trips++; w->expanded += (uint64_t)m;
     int rows = PQntuples(q), *held = calloc((size_t)m, sizeof(int));

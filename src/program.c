@@ -117,8 +117,8 @@ static void resolve_roles(State *st){
 static void couple_strands(State *st, Field *fd, const lp_id *ids, int n, int occ0, int kind){
     if (!n) return; const Firmware *fw = st->fw;
     uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n); char fan[24]; snprintf(fan, sizeof fan, "%d", fw->fan + 1);
-    const char *v[3] = { (const char *)ab, fan, CLAIM_BITS }; int l[3] = { (int)al, 0, 0 }, f[3] = { 1, 0, 0 };
-    PGresult *q = ask(st, "SELECT i, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[])", 3, v, l, f);
+    int rl; const char *v[4] = { (const char *)ab, fan, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
+    PGresult *q = ask(st, "SELECT i, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "couple: %s", PQerrorMessage(st->pg)); exit(1); }
     int *held = calloc((size_t)n, sizeof(int)); for (int r = 0; r < PQntuples(q); r++) { int i = (int)be(PQgetvalue(q, r, 0), 8) - 1; if (i >= 0 && i < n) held[i]++; }
     for (int r = 0; r < PQntuples(q); r++) { int i = (int)be(PQgetvalue(q, r, 0), 8) - 1; if (i < 0 || i >= n) continue;
@@ -155,8 +155,8 @@ static int follows(State *st, Next *out, int cap){
 static void share(State *st, Field *fd, const int *idx, int n){
     if (!n) return; lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) { ids[i] = fd->c[idx[i]].id; fd->c[idx[i]].shared = 0; }
     uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n); char fan[24]; snprintf(fan, sizeof fan, "%d", st->fw->fan + 1);
-    const char *v[3] = { (const char *)ab, fan, CLAIM_BITS }; int l[3] = { (int)al, 0, 0 }, f[3] = { 1, 0, 0 };
-    PGresult *q = ask(st, "SELECT i FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[])", 3, v, l, f);
+    int rl; const char *v[4] = { (const char *)ab, fan, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
+    PGresult *q = ask(st, "SELECT i FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
     if (PQresultStatus(q) == PGRES_TUPLES_OK) for (int r = 0; r < PQntuples(q); r++) { int i = (int)be(PQgetvalue(q, r, 0), 8) - 1; if (i >= 0 && i < n) fd->c[idx[i]].shared++; }
     for (int i = 0; i < n; i++) if (fd->c[idx[i]].shared > st->fw->fan) fd->c[idx[i]].hub = 1;
     PQclear(q); free(ab); free(ids);
@@ -192,8 +192,8 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
         lp_id ids[64]; int m = 0, who[64]; for (int i = 0; i < n; i++) if ((int)batch[i].hops < fw->hops) { ids[m] = batch[i].id; who[m++] = i; }
         if (!m) break;
         uint8_t ab[20 + 20 * 64]; size_t al = ids_param(ab, ids, (uint32_t)m); char fan[24]; snprintf(fan, sizeof fan, "%d", fw->fan + 1);
-        const char *v[3] = { (const char *)ab, fan, CLAIM_BITS }; int l[3] = { (int)al, 0, 0 }, f[3] = { 1, 0, 0 };
-        PGresult *q = ask(st, "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[])", 3, v, l, f);
+        int rl; const char *v[4] = { (const char *)ab, fan, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
+        PGresult *q = ask(st, "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
         if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "scan: %s", PQerrorMessage(st->pg)); exit(1); }
         int held[64] = { 0 }; for (int r = 0; r < PQntuples(q); r++) { int e = (int)be(PQgetvalue(q, r, 0), 8) - 1; if (e >= 0 && e < m) held[e]++; }
         for (int r = 0; r < PQntuples(q); r++) { int e = (int)be(PQgetvalue(q, r, 0), 8) - 1; if (e < 0 || e >= m || held[e] > fw->fan) continue;

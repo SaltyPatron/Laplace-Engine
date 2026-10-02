@@ -87,7 +87,7 @@ Firmware firmware_for(const char *path, int op){
         #undef NUMBER
     }
     fclose(f);
-    return fw;
+    refuse_named(&fw); return fw;
 }
 void firmware_say(const Firmware *fw, int op){
     printf("firmware   %s   for %s: k %g, lambda %g, fan %d, hops %d, top %s", fw->path, OPS[op], fw->k, fw->lambda, fw->fan, fw->hops, fw->top_within > 0 ? "within" : "always");

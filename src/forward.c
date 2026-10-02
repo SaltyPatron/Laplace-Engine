@@ -105,8 +105,8 @@ int cmd_pull(int argc, char **argv){
       lp_id wids[FW_WEIGHS]; weights_named(c, &fw, wids);
       lp_id refuse[FW_NAMES]; for (int z = 0; z < fw.nrefuse_predicate; z++) refuse[z] = entity_named(c, fw.refuse_predicate[z], NULL, 0, NULL).id;     /* the firmware's refusals: strands of a kind it does not navigate */
       if (nobs) { uint8_t *ob = malloc(20 + 20 * (size_t)nobs); size_t ol = ids_param(ob, obs, (uint32_t)nobs); char fan2[24]; snprintf(fan2, sizeof fan2, "%d", 64);
-          const char *ov[2] = { (const char *)ob, fan2 }; int oll[2] = { (int)ol, (int)strlen(fan2) }, of_[2] = { 1, 0 };
-          PGresult *o = db_ask(pg, "SELECT i, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, '{0}'::smallint[])", 2, ov, oll, of_);     /* one call: every strand of every observation */
+          int rl; const char *ov[3] = { (const char *)ob, fan2, refuse_param(&rl) }; int oll[3] = { (int)ol, (int)strlen(fan2), rl }, of_[3] = { 1, 0, 1 };
+          PGresult *o = db_ask(pg, "SELECT i, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, '{0}'::smallint[], $3::blake3[])", 3, ov, oll, of_);     /* one call: every strand of every observation */
           if (PQresultStatus(o) != PGRES_TUPLES_OK) { fprintf(stderr, "fold: %s", PQerrorMessage(pg)); return 1; }
           for (int z = 0; z < PQntuples(o); z++) { int oi = (int)BE(PQgetvalue(o, z, 0), 8) - 1; if (oi < 0 || oi >= nobs) continue;
               Run rn = run_of((const uint8_t *)PQgetvalue(o, z, 1), (size_t)PQgetlength(o, z, 1)); lp_rating rt = { be_f64(PQgetvalue(o, z, 2)), be_f64(PQgetvalue(o, z, 3)), be_f64(PQgetvalue(o, z, 4)) };
