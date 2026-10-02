@@ -238,7 +238,7 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  const STree *tc_tree; uint32_t tc_n, tc_cap; Ref *tc; uint8_t *ts;
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
-                 Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; } Sink;          /* reading for the highway (laplace highway): what the part says of its types, in order */
+                 Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int16_t *dm; uint32_t dm_cap; } Sink;          /* reading for the highway (laplace highway): what the part says of its types, in order */
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
     if (k->nhr == k->chr) { k->chr = k->chr ? k->chr * 2 : 1024; k->hr = xrealloc(k->hr, sizeof(HwRec) * k->chr); }
@@ -264,13 +264,20 @@ static inline int composing(int32_t g){ for (int i = busy_base; i < nbusy; i++) 
 /* named_as, for a name split when the recipe was read */
 static inline int name_is(const SNode *x, const char *n, uint8_t off, uint8_t len, uint8_t wild, uint8_t note){
     if (note && x->kind != S_NOTE) return 0; return wild ? x->nlen >= len && !memcmp(x->name, n + off, len) : s_named(x, n + off, len); }
-static const Dis *dis_of(const Say *s, const SNode *x){
+static const Dis *dis_scan(const Say *s, const SNode *x){
     if (TT && x->parent >= 0) {                                              /* ELEMENT.NAME first: it says more than NAME */
         const SNode *el = &TT->n[x->parent]; if (el->nlen == x->nlen && !memcmp(el->name, x->name, x->nlen) && el->parent >= 0) el = &TT->n[el->parent];   /* a piece of a part: the part's element */
         for (int i = 0; i < s->ndis; i++) { const Dis *d = &s->dis[i]; if (!d->el_l) continue;
             if (el->nlen == d->el_l && !memcmp(el->name, d->name, d->el_l) && name_is(x, d->name, d->part.off, d->part.len, d->part.wild, d->part.note)) return d; } }
     for (int i = 0; i < s->ndis; i++) { const Dis *d = &s->dis[i]; if (name_is(x, d->name, d->whole.off, d->whole.len, d->whole.wild, d->whole.note)) return d; }
     return NULL;
+}
+/* A part's disposition, found once for each node of the tree being read (DM, shared by the threads reading it). */
+static __thread int16_t *DM;
+static const Dis *dis_of(const Say *s, const SNode *x){
+    if (!DM || !TT || x < TT->n || x >= TT->n + TT->count) return dis_scan(s, x);
+    size_t i = (size_t)(x - TT->n); int16_t m = __atomic_load_n(&DM[i], __ATOMIC_RELAXED); if (m) return m > 0 ? &s->dis[m - 1] : NULL;
+    const Dis *d = dis_scan(s, x); __atomic_store_n(&DM[i], (int16_t)(d ? d - s->dis + 1 : -1), __ATOMIC_RELAXED); return d;
 }
 /* One step of a path from a part: ^ what it is inside; N (a number) its Nth part, counted from 1 (a piece of a part
  * parted by its separator: /c/en/ice_cream/n, its 3 is ice_cream); otherwise its first part of that name. */
@@ -589,9 +596,9 @@ static void sink_merge(Sink *k, Sink *w){
     free(w->ev.e); free(w->meta.c); free(w->things.c); free(w->grp.c);
 }
 /* A thread may take up a part while it waits inside its own reading: what it was in the middle of is put back after. */
-typedef struct { const STree *tt; int base, nbusy; long self_cp; char self_mark; } Tls;
-static Tls tls_save(const STree *t){ Tls x = { TT, busy_base, nbusy, self_cp, self_mark }; TT = t; busy_base = nbusy; return x; }
-static void tls_back(const Tls *x){ TT = x->tt; busy_base = x->base; nbusy = x->nbusy; self_cp = x->self_cp; self_mark = x->self_mark; }
+typedef struct { const STree *tt; int16_t *dm; int base, nbusy; long self_cp; char self_mark; } Tls;
+static Tls tls_save(const STree *t, int16_t *dm){ Tls x = { TT, DM, busy_base, nbusy, self_cp, self_mark }; TT = t; DM = dm; busy_base = nbusy; return x; }
+static void tls_back(const Tls *x){ TT = x->tt; DM = x->dm; busy_base = x->base; nbusy = x->nbusy; self_cp = x->self_cp; self_mark = x->self_mark; }
 /* Parts of g in runs of about the same number of nodes; returns the last node inside g. */
 static size_t runs_of(const STree *t, int32_t g, uint32_t **a, uint32_t **b){
     uint32_t end = (uint32_t)subtree_end(t, g) + 1, total = end - (uint32_t)g - 1, want = total / (uint32_t)(omp_get_max_threads() * 16) + 1, from = (uint32_t)g + 1;
@@ -605,7 +612,7 @@ static uint32_t wide(Sink *k, const STree *t, int32_t g, int speaks){
     if (k->ix_tree != t || k->ix_count != t->count) index_keys(k, t);      /* built once, read by every thread */
     uint32_t *a, *b; size_t n = runs_of(t, g, &a, &b); Sink *w = calloc(n, sizeof(Sink));
     #pragma omp taskloop grainsize(1)
-    for (size_t i = 0; i < n; i++) { Tls was = tls_save(t); worker_of(&w[i], k); Pend pd[64]; int np = 0;
+    for (size_t i = 0; i < n; i++) { Tls was = tls_save(t, k->dm); worker_of(&w[i], k); Pend pd[64]; int np = 0;
         unit_range(&w[i], t, a[i], b[i], speaks, pd, &np); while (np) { np--; together(&w[i], pd[np].e0, pd[np].has ? &pd[np].about : NULL); }
         tls_back(&was); }
     for (size_t i = 0; i < n; i++) sink_merge(k, &w[i]);
@@ -619,7 +626,7 @@ static uint32_t entities_wide(Sink *k, const STree *t, int32_t g, Ref *kid){
     if (k->ix_tree != t || k->ix_count != t->count) index_keys(k, t);
     uint32_t per = nk / (uint32_t)(omp_get_max_threads() * 16) + 1, nr = (nk + per - 1) / per; Sink *w = calloc(nr, sizeof(Sink));
     #pragma omp taskloop grainsize(1)
-    for (uint32_t r = 0; r < nr; r++) { Tls was = tls_save(t); worker_of(&w[r], k);
+    for (uint32_t r = 0; r < nr; r++) { Tls was = tls_save(t, k->dm); worker_of(&w[r], k);
         for (uint32_t i = r * per; i < nk && i < (r + 1) * per; i++) { Ref v; if (entity_of(&w[r], t, ch[i], &v)) { if (v.said != LP_SAID_TUPLE) v.said = 0; kid[i] = v; ok[i] = 1; } }
         tls_back(&was); }
     for (uint32_t r = 0; r < nr; r++) sink_merge(k, &w[r]);
@@ -734,6 +741,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
 }
 static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
     Sink *k = sink; const Say *s = k->s; (void)ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f; TT = t;
+    if (k->dm_cap < t->count) { k->dm_cap = t->count * 2; k->dm = xrealloc(k->dm, sizeof(int16_t) * k->dm_cap); } memset(k->dm, 0, sizeof(int16_t) * t->count); DM = k->dm;
     if (k->tc_cap < t->count) { k->tc_cap = t->count * 2; k->tc = xrealloc(k->tc, sizeof(Ref) * k->tc_cap); k->ts = xrealloc(k->ts, k->tc_cap); }
     k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); k->ix_tree = NULL;      /* a new tree: nothing of the last is known of it */
     if (k->hw) { unit_highway(k, t, root); keep_keys(k, t, root); return; }     /* read for the highway: its types, not what it attests */
@@ -851,7 +859,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         for (size_t j = 0; j < part[i].things.n; j++) push(&things, &part[i].things.c[j]);
         for (size_t j = 0; j < part[i].meta.n; j++) push(&meta, &part[i].meta.c[j]);
         open += part[i].open[0]; free(part[i].ev.e); free(part[i].things.c); free(part[i].meta.c);
-        free(part[i].tc); free(part[i].ts); free(part[i].ix_h); free(part[i].ix_g); free(part[i].grp.c); }
+        free(part[i].tc); free(part[i].ts); free(part[i].dm); free(part[i].ix_h); free(part[i].ix_g); free(part[i].grp.c); }
     if (open) { fprintf(stderr, "\n  %s: %llu named parts of %s have no disposition in the recipe: they are left open, not read:", r->name, (unsigned long long)open, f->path);
         char seen[64][64]; int ns = 0;
         for (size_t i = 0; i < nc; i++) for (int j = 0; j < part[i].nopen; j++) { int dup = 0; for (int z = 0; z < ns && !dup; z++) dup = !strcmp(seen[z], part[i].opennm[j]); if (dup || ns == 64) continue; snprintf(seen[ns++], 64, "%s", part[i].opennm[j]); fprintf(stderr, " %s", part[i].opennm[j]); }
