@@ -1,6 +1,7 @@
 name open-english-wordnet
 # Open English WordNet. The witness is named as the lexicon names itself.
 witness {first label}
+called Open English WordNet
 lineage WordNet
 class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/OpenEnglishWordNet-2025-plus

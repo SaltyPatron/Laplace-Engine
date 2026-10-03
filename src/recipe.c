@@ -13,6 +13,8 @@
  *   files PATTERN                 the files it is, when it is not everything under a root (several may be given)
  *   except PATTERN...             files under its root that are not the source
  *   room N                        what it takes in the database, in times what its files hold, as it was measured
+ *   called NAME                   the source's record, where its witness is named file by file: its trunk is
+ *                                 [record, its files' trunks] (file.c)
  *   after SOURCE...               the sources it comes after. The order of all the sources is the file "order" in
  *                                 the recipes directory: their names, one on a line
  *   reads FORMAT...               its files are ordinary content, read as these formats
@@ -116,7 +118,7 @@ static int recipe_parse(const char *path, Recipe *r){
     if (say_lays(r)) {                                                       /* configured: a grammar named gives the tree, else the layout's tiers do */
         if (r->grammar[0] && strcmp(r->grammar, "layout")) { r->lang = grammar_load(r->grammar); if (!r->lang) return 0; } else snprintf(r->grammar, sizeof r->grammar, "layout");
         r->curated = 1; return 1; }
-    if (r->say) { fprintf(stderr, "%s: it says what parts are, but lays out no tree for them to be parts of (tier, format or node)\n", path); return 0; }
+    if (r->say && !say_only_disposes(r)) { fprintf(stderr, "%s: it says what parts are, but lays out no tree for them to be parts of (tier, format or node)\n", path); return 0; }
     if (!r->grammar[0]) snprintf(r->grammar, sizeof r->grammar, "text");
     if (strcmp(r->grammar, "text")) { r->lang = grammar_load(r->grammar); if (!r->lang) return 0; }
     return 1;
@@ -136,6 +138,7 @@ static int source_parse(const char *path, Source *s){
         else if (!strcmp(tok, "root")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nroot < 8) path_expand(tok, s->root[s->nroot++], 512); }
         else if (!strcmp(tok, "files")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nfiles < 8) path_expand(tok, s->files[s->nfiles++], 512); }
         else if (!strcmp(tok, "room")) { tok = strtok(NULL, " \t\r\n"); if (tok) s->room = atof(tok); }
+        else if (!strcmp(tok, "called")) { char *v = strtok(NULL, "\r\n"); while (v && (*v == ' ' || *v == '\t')) v++; if (v) snprintf(s->called, sizeof s->called, "%s", v); }
         else if (!strcmp(tok, "after")) while ((tok = strtok(NULL, " \t\r\n")) && s->nafter < 16) snprintf(s->after[s->nafter++], 64, "%s", tok);
         else if (!strcmp(tok, "except")) while ((tok = strtok(NULL, " \t\r\n")) && s->nexcept < 8) snprintf(s->except[s->nexcept++], 128, "%s", tok);
         else if (!strcmp(tok, "reads")) while ((tok = strtok(NULL, " \t\r\n")) && s->nreads < 8) snprintf(s->reads[s->nreads++], 64, "%s", tok);

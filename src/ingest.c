@@ -113,7 +113,7 @@ static double room_left(const char *conninfo){
         PQclear(r); }
     PQfinish(pg); return gb;
 }
-static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int nrec){
+static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int nrec, const int *want){
     char self[4096]; ssize_t sl = readlink("/proc/self/exe", self, sizeof self - 1); if (sl <= 0) { perror("/proc/self/exe"); return 1; } self[sl] = 0;
     const char *work = getenv("LAPLACE_WORK"); char dir[4096]; snprintf(dir, sizeof dir, "%s/logs/ingest", work && *work ? work : "."); 
     { char cmd[4200]; snprintf(cmd, sizeof cmd, "%s", dir); for (char *c = cmd + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(cmd, 0775); *c = '/'; } mkdir(cmd, 0775); }
@@ -123,13 +123,18 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
     /* What a source takes in the database is what its source file says was measured (room N, in times what its files
      * hold), or 65 times, the most measured of any, when it says nothing (LAPLACE_ROOM_FACTOR). A source is not begun when the volume would be
      * left with less than a tenth of itself, and that is said. */
-    double factor = getenv("LAPLACE_ROOM_FACTOR") ? atof(getenv("LAPLACE_ROOM_FACTOR")) : 65.0; int short_of_room = 0;
-    printf("laplace ingest   every source, in order   logs in %s\n\n", dir);
+    double factor = getenv("LAPLACE_ROOM_FACTOR") ? atof(getenv("LAPLACE_ROOM_FACTOR")) : 65.0; int short_of_room = 0, short_of_order = 0;
+    int *wentin = calloc((size_t)nsrc, sizeof(int));                       /* 1: it went in in this run, or has nothing to go in */
+    printf("laplace ingest   %s, in order   logs in %s\n\n", want ? "the sources named" : "every source", dir);
     printf("%-4s %-38s %-10s %10s   %s\n", "", "source", "", "seconds", "");
     double T = now(); int failed = 0, absent = 0, empty = 0, went = 0;
     for (int i = 0; i < nsrc && !failed; i++) {
+        if (want && !want[i]) continue;
+        { const char *b = NULL;                                              /* recipes/order: what it comes after went in first, in this run */
+          for (int a = 0; a < src[i].nafter && !b; a++) for (int j = 0; j < i; j++) if (!strcmp(src[j].name, src[i].after[a]) && wentin[j] != 1) b = src[j].name;
+          if (b) { printf("%-4d %-38s %-10s %10s   it comes after %s, which did not go in\n", i + 1, src[i].name, "not begun", "", b); short_of_order++; continue; } }
         int mine = 0; for (int k = 0; k < nrec; k++) mine += rec[k].source == i; mine += src[i].nreads;
-        if (!mine) { printf("%-4d %-38s %-10s %10s   no recipe reads it yet\n", i + 1, src[i].name, "passed", ""); empty++; continue; }
+        if (!mine) { printf("%-4d %-38s %-10s %10s   no recipe reads it yet\n", i + 1, src[i].name, "passed", ""); empty++; wentin[i] = 1; continue; }
         if (!src[i].found[0]) { printf("%-4d %-38s %-10s %10s   it is at none of its roots\n", i + 1, src[i].name, "absent", ""); absent++; continue; }
         if (loads) { double have = room_left(conninfo), need = (double)source_bytes(&src[i], rec, nrec) * (src[i].room > 0 ? src[i].room : factor) / 1e9; struct statvfs v; double whole = 0;
             { PGconn *pg = PQconnectdb(conninfo); if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SHOW data_directory"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !statvfs(PQgetvalue(r, 0, 0), &v)) whole = (double)v.f_blocks * (double)v.f_frsize / 1e9; PQclear(r); } PQfinish(pg); }
@@ -141,7 +146,7 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
         if (pid < 0) { perror("fork"); return 1; }
         if (!pid) {
             int fd = open(log, O_WRONLY | O_CREAT | O_TRUNC, 0664); if (fd < 0) { perror(log); _exit(127); }
-            dup2(fd, 1); dup2(fd, 2); close(fd);
+            dup2(fd, 1); dup2(fd, 2); close(fd); setenv("LAPLACE_INGEST_ONE", "1", 1);   /* the child takes this source alone: what it comes after went in before it */
             char **av = malloc(sizeof(char *) * (size_t)(argc + 3)); int n = 0; av[n++] = self; av[n++] = "ingest";
             for (int a = 1; a < argc; a++) av[n++] = argv[a];                            /* the options, as they were given */
             av[n++] = (char *)src[i].name; av[n] = NULL;
@@ -152,10 +157,10 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
         char last[256] = ""; { FILE *f = fopen(log, "r"); char line[4096]; while (f && fgets(line, sizeof line, f)) { char *cr = strrchr(line, '\r'); const char *c = cr && cr[1] && cr[1] != '\n' ? cr + 1 : line; while (*c == ' ') c++;
               if (strstr(c, "attestations") || strstr(c, "already recorded") || (code && *c && *c != '\n')) { snprintf(last, sizeof last, "%.200s", c); char *nl = strchr(last, '\n'); if (nl) *nl = 0; } } if (f) fclose(f); }
         printf("%-10s %'10.1f   %s\n", code ? "FAILED" : "in", now() - t, last); fflush(stdout);
-        if (code) { failed = 1; fprintf(stderr, "\n%s did not go in (exit %d); what it said is in %s\n", src[i].name, code, log); } else went++;
+        if (code) { failed = 1; fprintf(stderr, "\n%s did not go in (exit %d); what it said is in %s\n", src[i].name, code, log); } else { went++; wentin[i] = 1; }
     }
-    printf("\n%d sources in, %d absent, %d without a recipe, %d not begun for want of room%s   %'.1f s\n", went, absent, empty, short_of_room, failed ? ", and one that failed: the run stops there" : "", now() - T);
-    return failed;
+    printf("\n%d sources in, %d absent, %d without a recipe, %d not begun for want of room, %d not begun because what they come after is not in%s   %'.1f s\n", went, absent, empty, short_of_room, short_of_order, failed ? ", and one that failed: the run stops there" : "", now() - T);
+    free(wentin); return failed || short_of_order;
 }
 static const uint64_t *by_size_of;                                    /* the batch's files, longest first, ties in the order given */
 static int by_size(const void *a, const void *b){ int i = *(const int *)a, j = *(const int *)b; uint64_t x = by_size_of[i], y = by_size_of[j]; return x < y ? 1 : x > y ? -1 : i - j; }
@@ -175,7 +180,13 @@ int cmd_ingest(int argc, char **argv){
         else { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] file...\n"); return 2; }
     }
     Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec), nsrc; Source *src = sources_loaded(&nsrc);
+    for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, "file")) file_record_stock(&rec[k]);   /* what the OS keeps of every file: the stock recipe file */
     if (of) { int k = 0; while (k < nsrc && strcmp(src[k].name, of)) k++; if (k == nsrc) { fprintf(stderr, "%s is not a source\n", of); return 2; } walking = &src[k]; }
+    { int named = 0; for (int i = a; i < argc; i++) { struct stat st_; int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++; named += k < nsrc && stat(argv[i], &st_); }
+      if (named && named == argc - a && !of && !getenv("LAPLACE_INGEST_ONE")) {   /* sources by name: each its own run, in recipes/order, after everything it comes after */
+          int *want = calloc((size_t)nsrc, sizeof(int)); for (int i = a; i < argc; i++) for (int k = 0; k < nsrc; k++) if (!strcmp(src[k].name, argv[i])) want[k] = 1;
+          for (int k = nsrc - 1; k >= 0; k--) if (want[k]) for (int x = 0; x < src[k].nafter; x++) for (int j = 0; j < k; j++) if (!strcmp(src[j].name, src[k].after[x])) want[j] = 1;   /* sources is in order: what one comes after is before it */
+          int rc = ingest_every(a, argv, src, nsrc, rec, nrec, want); free(want); return rc; } }
     for (int i = a; i < argc; i++) {                                         /* a source by its name, or files and directories */
         struct stat st; int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++;
         if (k < nsrc && stat(argv[i], &st)) {
@@ -193,7 +204,7 @@ int cmd_ingest(int argc, char **argv){
             walking = was;
         }
     }
-    if (a >= argc && !of) return ingest_every(argc, argv, src, nsrc, rec, nrec);         /* nothing named: every source, in order */
+    if (a >= argc && !of) return ingest_every(argc, argv, src, nsrc, rec, nrec, NULL);         /* nothing named: every source, in order */
     int nfiles = npaths; if (nfiles <= 0) { fprintf(stderr, "no files\n"); return 2; }
     { int stop = 0, direct = 0; const Source *seen[64]; int ns = 0;          /* a recipe that did not load stops its own source only */
       for (int i = 0; i < nfiles; i++) { if (!path_of[i]) { direct = 1; continue; } int k = 0; while (k < ns && seen[k] != path_of[i]) k++; if (k == ns && ns < 64) seen[ns++] = path_of[i]; }
@@ -375,14 +386,32 @@ int cmd_ingest(int argc, char **argv){
                     (unsigned long long)st.led, (unsigned long long)st.std_new, (unsigned long long)st.std_upd);
     if (nev) printf("    %-42s %8.2f s\n    %-42s %8.2f s\n    %-42s %8.2f s\n    %-42s %8.2f s\n",
                     "standings and lineages read", st.t_read, "matchups played", st.t_play, "witnesses", st.t_wit, "the ledger and standings, every partition", st.t_led);
+    { const Source *one = NULL; int many = 0; Ref trunk;                    /* one source, every file of it recorded: its trunk, last of all */
+      for (int i = 0; i < nfiles; i++) { if (files[i].skipped) continue; if (!files[i].source) { many = 1; break; } if (!one) one = files[i].source; else if (one != files[i].source) many = 1; }
+      if (one && !many && !mism && !of) { table_reset(); table_size(64u << 20);   /* the last batch is written: an empty table for the trunk alone */
+          if (source_trunk(one, files, nfiles, &trunk)) { File sf; memset(&sf, 0, sizeof sf); sf.path = one->name; sf.source = one; sf.trunk = trunk; sf.file = trunk; sf.has_file = 1;
+              LoadStats ss = { 0 }; double ts = now(); if (load(conninfo, threads, &sf, 1, &ss)) return 1;
+              printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded"); }
+          else printf("  the source's trunk: none, since its source file names no record (witness or called)\n");
+          table_reset(); } }
     /* What the container index was handed during the load it keeps in a list of its own until it is merged, and
      * every lookup reads that list through: it is merged here, once, so no lookup pays for a load. Where the index
      * is not built yet (a bulk load: laplace index comes after) there is nothing to merge. */
-    { double tm = now(); PGconn *pg = db_connect(conninfo);
-      PGresult *r = PQexec(pg, "SELECT count(*), coalesce(sum(gin_clean_pending_list(i.indexrelid)), 0) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
-                               "JOIN pg_am a ON a.oid = c.relam WHERE a.amname = 'gin' AND c.relkind = 'i'");
+    { double tm = now(); PGconn *pg = db_connect(conninfo);                 /* one index a connection at a time, every connection at once */
+      PGresult *r = PQexec(pg, "SELECT i.indexrelid::regclass::text FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am a ON a.oid = c.relam "
+                               "WHERE a.amname = 'gin' AND c.relkind = 'i' ORDER BY pg_relation_size(i.indexrelid) DESC");
       if (PQresultStatus(r) != PGRES_TUPLES_OK) fprintf(stderr, "merging the container index: %s", PQerrorMessage(pg));
-      else if (atoll(PQgetvalue(r, 0, 0))) printf("  %-44s %8.2f s   %'lld pages merged in %s indexes\n", "container index, merged", now() - tm, atoll(PQgetvalue(r, 0, 1)), PQgetvalue(r, 0, 0));
+      else if (PQntuples(r)) {
+          int ni = PQntuples(r), nc = threads < ni ? threads : ni; long long pages = 0; int bad = 0;
+          PGconn **mc = calloc((size_t)nc, sizeof(PGconn *));
+          #pragma omp parallel for num_threads(nc) schedule(dynamic, 1) reduction(+:pages, bad)
+          for (int k = 0; k < ni; k++) {
+              PGconn **c = &mc[omp_get_thread_num()]; if (!*c) *c = db_connect(conninfo);
+              const char *v[1] = { PQgetvalue(r, k, 0) }; PGresult *q = PQexecParams(*c, "SELECT gin_clean_pending_list($1::regclass)", 1, NULL, v, NULL, NULL, 0);
+              if (PQresultStatus(q) == PGRES_TUPLES_OK) pages += atoll(PQgetvalue(q, 0, 0)); else { bad++; fprintf(stderr, "merging %s: %s", v[0], PQerrorMessage(*c)); }
+              PQclear(q); }
+          for (int k = 0; k < nc; k++) if (mc[k]) PQfinish(mc[k]); free(mc);
+          if (!bad) printf("  %-44s %8.2f s   %'lld pages merged in %d indexes on %d connections\n", "container index, merged", now() - tm, pages, ni, nc); }
       PQclear(r); PQfinish(pg); }
     printf("\n== total %.1f s\n", now() - T);
     return mism ? 1 : 0;

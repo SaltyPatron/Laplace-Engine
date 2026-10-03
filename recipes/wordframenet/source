@@ -1,4 +1,5 @@
 name wordframenet
+called WordFrameNet
 # WordFrameNet (WFN/WordFrameNet) and its extension (XWFN/eXtendedWFN): under a line "Frame: NAME", rows of words with
 # a part of speech and a synset offset.
 # The set has no documentation: no README, no format page, in its directory or in its two archives. Nothing in it says

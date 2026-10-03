@@ -147,6 +147,7 @@ typedef struct {
 typedef struct {
     char name[64];
     char witness[128], lineage[128]; double trust;
+    char called[128];                                 /* what the source is, where its witness is named file by file (called NAME) */
     char root[8][512]; int nroot;                     /* where it may be kept: the first that exists, newest of a pattern */
     double room;                                      /* what it takes in the database, in times what its files hold, as measured (0: not measured) */
     char after[16][64]; int nafter;                   /* the sources it comes after */
@@ -219,7 +220,12 @@ void   id_text(const lp_id *id, char out[33]);                        /* 32 hexa
 int    id_parse(const char *s, lp_id *out);                         /* the 32 hexadecimal digits back to the ID; 0 when they are not */
 
 /* ---- a file in the DAG (file.c) */
-void file_close(File *);                                              /* the file is whole: its metadata, its content, its trunk */
+void file_close(File *);
+int  source_trunk(const Source *, const File *, int nfiles, Ref *out);  /* the source's trunk: [its record, its files' trunks] */
+const char *source_called(const Source *);                            /* its record: its witness, or its called line */
+size_t file_record(const Recipe *, const File *, Ref *out, size_t cap);   /* the OS's record of a file, its parts as its recipes dispose of them */
+void file_record_stock(const Recipe *);                                /* the stock recipe that disposes of them where a file's own does not */
+int  say_only_disposes(const Recipe *);                                              /* the file is whole: its metadata, its content, its trunk */
 
 /* Entities back to their text: paths fetched one level at a time for every entity at once, expanded here down to tier 0. */
 typedef struct Reader Reader;

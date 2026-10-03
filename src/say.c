@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /* What a recipe says each part of a file's tree is. The decomposer (structure.c) gives the tree the recipe's layout
  * parts the file into; this gives every named part its disposition, as the recipe's configuration writes it, and
  * composes what follows from that: the file's trunk over its metadata tree and its content tree, and what the file
@@ -28,6 +29,8 @@
  * A named part the recipe gives no disposition is an obligation left open: it is counted and said, never taken for
  * content and never dropped in silence. */
 #define _GNU_SOURCE
+#include <fcntl.h>
+#include <sys/stat.h>
 #include "engine.h"
 #include "structure.h"
 #include <omp.h>
@@ -144,7 +147,7 @@ int say_says(Recipe *r, const char *path, char *tok){
         while (at && (*at == ' ' || *at == '\t')) at++; snprintf(x->val, sizeof x->val, "%s", at ? at : ""); { size_t l = strlen(x->val); while (l && (x->val[l - 1] == '\n' || x->val[l - 1] == '\r' || x->val[l - 1] == ' ')) x->val[--l] = 0; }
         if (x->op < 0 || (x->op == 2 && regcomp(&x->re, x->val, REG_EXTENDED | REG_NOSUB))) { fprintf(stderr, "%s: where NAME is VALUE | is-not VALUE | matches PATTERN (the pattern must compile)\n", path); return -1; }
         return 1; }
-    if (!strcmp(tok, "content") || !strcmp(tok, "metadata") || (!strcmp(tok, "omit") && LAID)) { int what = tok[0] == 'c' ? D_CONTENT : tok[0] == 'm' ? D_METADATA : D_OMIT; at = strtok(NULL, "\r\n"); int any = 0;
+    if (!strcmp(tok, "content") || !strcmp(tok, "metadata") || !strcmp(tok, "omit")) { int what = tok[0] == 'c' ? D_CONTENT : tok[0] == 'm' ? D_METADATA : D_OMIT; at = strtok(NULL, "\r\n"); int any = 0;
         while (name_next(&at, nm, sizeof nm)) { if (dis_add(s, path, nm, what, NULL) < 0) return -1; any = 1; }
         if (!any) { fprintf(stderr, "%s: %s NAME...\n", path, tok); return -1; } return 1; }
     if ((!strcmp(tok, "codepoints") || !strcmp(tok, "range")) && LAID) { int what = tok[0] == 'c' ? D_CODEPOINTS : D_RANGE; at = strtok(NULL, "\r\n"); int any = 0;
@@ -804,6 +807,43 @@ static Ref blocks_of(Ref *r, size_t n){
         if ((b & (BLOCK - 1)) == 0 || i == n - 1) { Ref x = i - from + 1 == 1 ? r[from] : compose(r + from, (uint32_t)(i - from + 1), over(r + from, i - from + 1)); if (x.said != LP_SAID_TUPLE && x.said != LP_SAID_CLAIM) x.said = 0; up[m++] = x; from = i + 1; } }
     Ref out = m == n ? compose(r, (uint32_t)n, over(r, n)) : blocks_of(up, m); free(up); return out;
 }
+/* The OS's record of a file, as parts named as the OS names them: its pathname and filename (POSIX), and what statx
+ * returns. Each is disposed of by the file's recipe, else by the stock recipe file, as any part is: metadata, a
+ * [name, value] in the file's metadata tree; omit, nowhere; neither, an obligation left open and said once. A pathname's
+ * value is its filenames, one composition: a path is a Merkle DAG of its folders. */
+static const Recipe *stock_file;
+void file_record_stock(const Recipe *r){ stock_file = r; }
+int say_only_disposes(const Recipe *r){ const Say *s = r->say; return s && s->ndis && !s->nthing && !s->natt && !s->nrel && !s->nhw && !s->npair && !s->nhold && !s->nkey; }
+static const Dis *dis_named(const Say *s, const char *name){
+    if (!s) return NULL; SNode x; memset(&x, 0, sizeof x); x.kind = S_VALUE; x.name = (const uint8_t *)name; x.nlen = (uint32_t)strlen(name); x.parent = -1;
+    const STree *was = TT; TT = NULL; const Dis *d = dis_scan(s, &x); TT = was; return d;
+}
+static uint64_t record_open;                                                  /* the parts no recipe disposed of, said once */
+static void record_part(const Recipe *r, Ref *out, size_t *n, size_t cap, int k, const char *name, Ref value){
+    const Dis *d = dis_named(r ? r->say : NULL, name); if (!d && stock_file) d = dis_named(stock_file->say, name);
+    if (!d) { if (!(__atomic_fetch_or(&record_open, 1ull << k, __ATOMIC_RELAXED) & (1ull << k))) fprintf(stderr, "  the OS's record of a file: %s is disposed of by no recipe (metadata or omit, in the file recipe)\n", name); return; }
+    if (d->what != D_METADATA || *n >= cap) return;
+    Ref p[2] = { string_ref((const uint8_t *)name, strlen(name)), value }; p[0].said = p[1].said = 0;
+    out[(*n)++] = said_tuple(compose(p, 2, over(p, 2)));
+}
+static Ref number_ref(uint64_t v){ char b[24]; int l = snprintf(b, sizeof b, "%llu", (unsigned long long)v); return string_ref((const uint8_t *)b, (size_t)l); }
+static Ref when_ref(const struct statx_timestamp *t){ char b[40]; int l = snprintf(b, sizeof b, "%lld.%09u", (long long)t->tv_sec, t->tv_nsec); return string_ref((const uint8_t *)b, (size_t)l); }
+size_t file_record(const Recipe *r, const File *f, Ref *out, size_t cap){
+    size_t n = 0; int k = 0; Ref seg[256]; uint32_t ns = 0; const char *p = f->path;
+    while (*p && ns < 256) { const char *e = strchr(p, '/'); size_t l = e ? (size_t)(e - p) : strlen(p);
+        if (l) { seg[ns] = string_ref((const uint8_t *)p, l); seg[ns].said = 0; ns++; } p += l; if (*p == '/') p++; }
+    if (ns) { Ref path = compose(seg, ns, over(seg, ns)); path.said = 0; record_part(r, out, &n, cap, k++, "pathname", path); record_part(r, out, &n, cap, k++, "filename", seg[ns - 1]); }
+    struct statx x; if (statx(AT_FDCWD, f->path, 0, STATX_BASIC_STATS | STATX_BTIME, &x)) return n;
+    #define NUM(F, M) do { if (!(M) || (x.stx_mask & (M))) record_part(r, out, &n, cap, k, #F, number_ref((uint64_t)x.F)); k++; } while (0)
+    #define WHEN(F, M) do { if (x.stx_mask & (M)) record_part(r, out, &n, cap, k, #F, when_ref(&x.F)); k++; } while (0)
+    NUM(stx_mode, STATX_MODE); NUM(stx_uid, STATX_UID); NUM(stx_gid, STATX_GID); NUM(stx_nlink, STATX_NLINK); NUM(stx_ino, STATX_INO);
+    NUM(stx_size, STATX_SIZE); NUM(stx_blocks, STATX_BLOCKS); NUM(stx_blksize, 0); NUM(stx_attributes, 0);
+    NUM(stx_dev_major, 0); NUM(stx_dev_minor, 0); NUM(stx_rdev_major, 0); NUM(stx_rdev_minor, 0);
+    WHEN(stx_atime, STATX_ATIME); WHEN(stx_btime, STATX_BTIME); WHEN(stx_ctime, STATX_CTIME); WHEN(stx_mtime, STATX_MTIME);
+    #undef NUM
+    #undef WHEN
+    return n;
+}
 /* The file, read: every part of its outermost tier on every core, joined in the file's order; then its trunk, over
  * its metadata tree and its content tree. */
 static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw *hw){
@@ -907,14 +947,13 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     things.n = meta.n = 0;
     for (uint64_t j = 0; j < f->nsaid; j++) { Ref x = f->said[j]; if (x.said == LP_SAID_METADATA) { x.said = LP_SAID_TUPLE; push(&meta, &x); } else push(&things, &x); }
     free(f->said); f->said = NULL; f->nsaid = f->csaid = 0;
-    const char *name = strrchr(f->path, '/'); name = name ? name + 1 : f->path;
-    if (f->source && f->source->found[0]) { size_t l = strlen(f->source->found); if (!strncmp(f->path, f->source->found, l) && f->path[l] == '/') name = f->path + l + 1; }
-    Ref nm = text_ref(CTX[omp_get_thread_num()], (const uint8_t *)name, strlen(name)); nm.said = 0;
-    Ref *m = malloc(sizeof(Ref) * (meta.n + 1)); m[0] = nm; memcpy(m + 1, meta.c, sizeof(Ref) * meta.n);
-    Ref metadata = meta.n ? blocks_of(m, meta.n + 1) : nm; free(m);
+    Ref *m = malloc(sizeof(Ref) * (meta.n + 32)); size_t nr = file_record(r, f, m, 32);        /* the OS's record of it, as its recipes dispose of it */
+    memcpy(m + nr, meta.c, sizeof(Ref) * meta.n);
+    size_t nm = nr + meta.n; Ref metadata; memset(&metadata, 0, sizeof metadata); if (nm) metadata = blocks_of(m, nm); free(m);
     if (things.n) { Ref content = blocks_of(things.c, things.n); content.said = 0;
-        Ref two[2] = { said_metadata(metadata), content }; two[1].said = 0; f->file = compose(two, 2, over(two, 2)); f->file.said = 0; f->has_file = 1; f->trunk = content; }
-    else if (f->ev.n) { Ref two[1] = { said_metadata(metadata) }; f->file = two[0]; f->file.said = 0; f->has_file = 0; }
+        if (nm) { Ref two[2] = { said_metadata(metadata), content }; two[1].said = 0; f->file = compose(two, 2, over(two, 2)); } else f->file = content;
+        f->file.said = 0; f->has_file = 1; f->trunk = content; }
+    else if (f->ev.n && nm) { Ref two[1] = { said_metadata(metadata) }; f->file = two[0]; f->file.said = 0; f->has_file = 0; }
     free(things.c); free(meta.c); free(part); free(cut);
 }
 void attest_layout(const Recipe *r, File *f, const uint8_t *src, size_t n){ read_laid(r, f, src, n, NULL); }

@@ -2,6 +2,7 @@ name universal-dependencies
 # Universal Dependencies: treebanks of sentences, each with a row for every word and what the treebank says of it.
 # Every treebank is its own witness, named as its directory is named.
 witness {dir}
+called Universal Dependencies
 class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/UD-Treebanks/extracted/ud-treebanks-*
 root $LAPLACE_DATA/UD-Treebanks/ud-treebanks-*
