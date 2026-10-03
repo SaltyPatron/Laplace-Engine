@@ -370,7 +370,7 @@ int cmd_ingest(int argc, char **argv){
     fputc('\n', stderr);
     extern uint64_t table_total(void), table_hits(void);
     printf("\n== decomposition: %d files, %.1f MB, content recomposed byte for byte or curated %d, mismatched %d%s\n", nfiles, bytes / 1e6, exact, mism, batches > 1 ? ", a batch at a time" : "");
-    if (do_load) printf("   files whose trunk was already recorded: %'llu\n", (unsigned long long)st.known);
+    if (do_load) printf("   files whose trunk was already recorded: %'llu; whose content was, under another trunk, so it attests nothing again: %'llu\n", (unsigned long long)st.known, (unsigned long long)st.content_known);
     printf("   %'llu compositions, %'llu reused; %'llu attestations\n", (unsigned long long)table_total(), (unsigned long long)table_hits(), (unsigned long long)nev);
     { uint64_t inc = 0; for (int i = 0; i < nfiles; i++) inc += files[i].incomplete;
       if (inc) printf("   %'llu parts were not read whole: what parses is recorded, and what they attest is incomplete (see above); the source still goes in\n", (unsigned long long)inc); }
@@ -382,10 +382,10 @@ int cmd_ingest(int argc, char **argv){
            (unsigned long long)st.checked, (unsigned long long)st.rounds, (unsigned long long)st.found);
     printf("  %-44s %8.2f s   %'llu entities, %'llu paths (%'.0f rows/s)\n", "COPY into every partition", st.t_copy,
            (unsigned long long)st.ent_rows, (unsigned long long)st.phy_rows, (st.ent_rows + st.phy_rows) / (st.t_copy > 0 ? st.t_copy : 1));
-    if (nev) printf("  %-44s %8.2f s   %'llu attestations; standings %'llu new, %'llu updated\n", "witnesses, ledger, standings", st.t_sem,
+    if (nev) printf("  %-44s %8.2f s   %'llu attestations new, the rest games of those recorded; standings %'llu new, %'llu updated\n", "witnesses, attestations, standings", st.t_sem,
                     (unsigned long long)st.led, (unsigned long long)st.std_new, (unsigned long long)st.std_upd);
     if (nev) printf("    %-42s %8.2f s\n    %-42s %8.2f s\n    %-42s %8.2f s\n    %-42s %8.2f s\n",
-                    "standings and lineages read", st.t_read, "matchups played", st.t_play, "witnesses", st.t_wit, "the ledger and standings, every partition", st.t_led);
+                    "standings and lineages read", st.t_read, "matchups played", st.t_play, "witnesses", st.t_wit, "attestations and standings, every partition", st.t_led);
     { const Source *one = NULL; int many = 0; Ref trunk;                    /* one source, every file of it recorded: its trunk, last of all */
       for (int i = 0; i < nfiles; i++) { if (files[i].skipped) continue; if (!files[i].source) { many = 1; break; } if (!one) one = files[i].source; else if (one != files[i].source) many = 1; }
       if (one && !many && !mism && !of) { table_reset(); table_size(64u << 20);   /* the last batch is written: an empty table for the trunk alone */

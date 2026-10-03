@@ -1,6 +1,6 @@
 /* laplace model: decompose a transformer checkpoint (safetensors, Llama architecture) into "b beats c given a" survivors
  * and measure it. Prototype stage: this reports timing, throughput, and how much survives each circuit's own noise
- * floor; recording the survivors as ledger attestations comes after the numbers are understood.
+ * floor; recording the survivors as attestations comes after the numbers are understood.
  *
  * Circuits, each a set of rows a against candidates b:
  *   embed      token a vs token b          cosine of the input embeddings

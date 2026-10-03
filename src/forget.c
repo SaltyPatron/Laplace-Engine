@@ -1,7 +1,7 @@
 /* laplace forget: what witnesses attested, taken back out.
  *   laplace forget [-d conninfo] [-j connections] witness...
  *   laplace forget --except witness...        every witness but these
- * Their rows leave the ledger. What no other witness witnessed goes, with the consensus on it; what others witnessed
+ * Their attestations go. What no other witness witnessed goes, with the consensus on it; what others witnessed
  * stays. Then, level by level down the DAG, whatever nothing holds any more goes too: an entity stays while any path
  * holds it, or while it is a file, a witness, or witnessed. A file whose content is what it witnessed stays while any
  * of that is still witnessed. Atoms always stay.
@@ -10,7 +10,7 @@
  * laplace sweep: whatever nothing holds, removed.
  *   laplace sweep [-d conninfo] [-j connections] [--dry]
  * One pass over every path counts, for every entity, the places that hold it. An entity no path holds goes, unless it is
- * a file, a witness, or something the ledger says was witnessed; the consensus on it, if there is one, goes with it.
+ * a file, a witness, or something attestation says was witnessed; the consensus on it, if there is one, goes with it.
  * What it held is counted down, and goes in turn when its count reaches nothing. */
 #include "engine.h"
 #include <locale.h>
@@ -262,11 +262,11 @@ int cmd_forget(int argc, char **argv){
     if (!going.n) { printf("  nothing to forget\n"); return 1; }
     { Reader *rd = reader_new(pg[0]); for (uint64_t i = 0; i < going.n; i++) { char *tx = reader_text(rd, &going.id[i], 80); printf("  %s\n", tx); free(tx); } reader_free(rd); }
 
-    /* what they witnessed leaves the ledger; whatever nothing holds or witnesses any more goes with the sweep */
+    /* what they attested goes; whatever nothing holds or witnesses any more goes with the sweep */
     t = now();
-    uint64_t nl = over(pg, 1, going.id, going.n, "DELETE FROM attestation WHERE witness = ANY($1::blake3[])", NULL, NULL, "the ledger");
+    uint64_t nl = over(pg, 1, going.id, going.n, "DELETE FROM attestation WHERE witness = ANY($1::blake3[])", NULL, NULL, "attestation");
     over(pg, 1, going.id, going.n, "DELETE FROM witness WHERE id = ANY($1::blake3[])", NULL, NULL, "the witnesses");
-    printf("  %-52s %'12llu   (%.1f s)\n\n", "ledger rows", (unsigned long long)nl, now() - t); fflush(stdout);
+    printf("  %-52s %'12llu   (%.1f s)\n\n", "attestations", (unsigned long long)nl, now() - t); fflush(stdout);
     sweep(pg, npg, 0);
     printf("\n== total %.1f s\n", now() - T);
     for (int i = 0; i < npg; i++) PQfinish(pg[i]);

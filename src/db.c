@@ -1,5 +1,5 @@
 /* Writing to PostgreSQL: trunk-to-leaf deduplication, binary COPY straight into each leaf partition on its own
- * connection, and the semantics (witnesses, the ledger, the consensus). SQL only fetches and writes. */
+ * connection, and the semantics (witnesses, attestation, consensus). SQL only fetches and writes. */
 #define _GNU_SOURCE
 #include "engine.h"
 #include <arpa/inet.h>
@@ -163,16 +163,16 @@ static Standing *stand_get(const lp_id *id, const Event *add, double trust){
     sn = lp_idmap_count(smap); return &stand[i];
 }
 
-/* What the ledger already holds, by the witnessed thing and the witness that witnessed it: the same witness witnessing
- * the same thing again is the observation it made before, read again (Content 11.12: a retried job does not multiply
- * the same witnessing), and is not written again. Another witness of the same lineage is a copy, and is. */
-typedef struct { lp_id w, by; } Ledgered;
-static Ledgered *ldg; static uint8_t *ldg_used; static uint64_t ldg_cap, ldg_n;
+/* What attestation already holds, by the witnessed thing and the witness that witnessed it: the same witness attesting
+ * the same thing again, from other content, adds games to that row (part_write). Content already recorded attests
+ * nothing again (load: a file whose content tree is recorded), so a retried job does not multiply the same witnessing. */
+typedef struct { lp_id w, by; } Recorded;
+static Recorded *ldg; static uint8_t *ldg_used; static uint64_t ldg_cap, ldg_n;
 static uint64_t ldg_slot(const lp_id *w, const lp_id *by){ uint64_t a, b; memcpy(&a, w->b, 8); memcpy(&b, by->b + 8, 8); return (a ^ b * 0x9E3779B97F4A7C15ull) & (ldg_cap - 1); }
 static void ldg_put(const lp_id *w, const lp_id *by){
     if ((ldg_n + 1) * 2 > ldg_cap) {                                         /* half full: twice the room */
-        Ledgered *o = ldg; uint8_t *ou = ldg_used; uint64_t oc = ldg_cap; ldg_cap = oc ? oc * 2 : 1 << 16;
-        ldg = malloc(sizeof(Ledgered) * ldg_cap); ldg_used = calloc(ldg_cap, 1);
+        Recorded *o = ldg; uint8_t *ou = ldg_used; uint64_t oc = ldg_cap; ldg_cap = oc ? oc * 2 : 1 << 16;
+        ldg = malloc(sizeof(Recorded) * ldg_cap); ldg_used = calloc(ldg_cap, 1);
         for (uint64_t i = 0; i < oc; i++) if (ou[i]) { uint64_t k = ldg_slot(&o[i].w, &o[i].by); while (ldg_used[k]) k = (k + 1) & (ldg_cap - 1); ldg_used[k] = 1; ldg[k] = o[i]; }
         free(o); free(ou); }
     uint64_t k = ldg_slot(w, by);
@@ -184,26 +184,51 @@ static int ldg_has(const lp_id *w, const lp_id *by){
     while (ldg_used[k]) { if (!memcmp(&ldg[k].w, w, 16) && !memcmp(&ldg[k].by, by, 16)) return 1; k = (k + 1) & (ldg_cap - 1); }
     return 0;
 }
-/* One partition of the semantics, on one connection: the ledger's rows whose witnessed thing's ID begins with h, in
+/* One partition of the semantics, on one connection: the attestations whose witnessed thing's ID begins with h, in
  * reading order (its order is the order of play), the new standings and the recorded ones updated. Each partition is
  * written by one connection, inside that connection's part of the batch's transaction (load: prepared, then committed
  * as one). Returns 0, or 1 when the database refused. */
 static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led, uint64_t *nnew, uint64_t *nupd){
-    Copy lc = { 0 }; char sql[300]; snprintf(sql, sizeof sql, "COPY attestation_%x (claim, witness, score, position) FROM STDIN (FORMAT binary)", h);
-    copy_begin(&lc, pg, sql);
-    /* what this batch writes into the ledger, by the witnessed thing and its witness: the same witness witnessing the
-     * same thing again in the batch is the row already written (ConceptNet's partitions held each row twice) */
-    lp_idmap *mine = lp_idmap_new();
+    /* Each (witnessed, witness) is one attestation: its games the times this witness attested it, its score the series'
+     * score, the mean over its games (a claim is a game series: games plus a score). A pair already recorded gains this
+     * batch's games in one statement; a new pair is copied. */
+    typedef struct { lp_id w, by; uint32_t games, position; double sum; } Series;
+    Series *ser = NULL; uint64_t ns = 0, cs = 0; lp_idmap *mine = lp_idmap_new(); char sql[400];
     for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i];
         if (e->kind == EV_MEMBER || (e->witnessed.b[0] >> 4) != h) continue;                /* witnessed within its record: the record's row */
         const lp_id *by = e->own_witness ? &e->witness : &files[fi].witness.id;
-        if (ldg_has(&e->witnessed, by)) continue;                                           /* this witness's, already in the ledger */
         lp_id pair; for (int b = 0; b < 16; b++) pair.b[b] = e->witnessed.b[b] ^ by->b[(b + 7) & 15];   /* both are hashes: their mix names the pair */
-        bool fresh; lp_idmap_put(mine, &pair, &fresh); if (!fresh) continue;                /* already written by this batch */
-        c16(&lc, 4); cfield(&lc, e->witnessed.b, 16); cfield(&lc, e->own_witness ? e->witness.b : files[fi].witness.id.b, 16); cf_f32(&lc, e->score);
-        if (e->position) cf_i32(&lc, (int32_t)e->position); else c32(&lc, 0xFFFFFFFFu);
-        lc.rows++; }
-    copy_end(&lc); *led += lc.rows; free(lc.b); lp_idmap_free(mine);
+        bool fresh; size_t at = lp_idmap_put(mine, &pair, &fresh);
+        if (fresh) { if (ns == cs) { cs = cs ? cs * 2 : 4096; ser = xrealloc(ser, sizeof(Series) * cs); } ser[ns++] = (Series){ e->witnessed, *by, 0, e->position, 0 }; }
+        ser[at].games++; ser[at].sum += e->score; }
+    lp_idmap_free(mine);
+    Copy lc = { 0 }; snprintf(sql, sizeof sql, "COPY attestation_%x (claim, witness, score, position, games) FROM STDIN (FORMAT binary)", h);
+    copy_begin(&lc, pg, sql); uint64_t nold = 0;
+    for (uint64_t j = 0; j < ns; j++) { const Series *x = &ser[j];
+        if (ldg_has(&x->w, &x->by)) { ser[nold++] = *x; continue; }                         /* recorded already: gains its games below */
+        c16(&lc, 5); cfield(&lc, x->w.b, 16); cfield(&lc, x->by.b, 16); cf_f32(&lc, (float)(x->sum / x->games));
+        if (x->position) cf_i32(&lc, (int32_t)x->position); else c32(&lc, 0xFFFFFFFFu);
+        cf_i32(&lc, (int32_t)x->games); lc.rows++; }
+    copy_end(&lc); *led += lc.rows; free(lc.b);
+    for (uint64_t j0 = 0; j0 < nold; j0 += 100000) {                             /* recorded series: one statement a chunk */
+        uint32_t n = (uint32_t)(nold - j0 < 100000 ? nold - j0 : 100000); static const uint32_t oid[4] = { 0, 0, 23, 701 }; static const int w[4] = { 16, 16, 4, 8 };
+        uint8_t *arr[4]; int alen[4];
+        for (int f = 0; f < 4; f++) {
+            arr[f] = malloc(20 + (size_t)n * (4 + w[f])); uint8_t *q = arr[f] + 20;
+            uint32_t hdr[5] = { htonl(1), htonl(0), htonl(f < 2 ? id_oid : oid[f]), htonl(n), htonl(1) }; memcpy(arr[f], hdr, 20);
+            for (uint32_t j = 0; j < n; j++) { const Series *x = &ser[j0 + j]; uint32_t l = htonl((uint32_t)w[f]); memcpy(q, &l, 4); q += 4;
+                if (f == 0) memcpy(q, x->w.b, 16); else if (f == 1) memcpy(q, x->by.b, 16);
+                else if (f == 2) { uint32_t g = htonl(x->games); memcpy(q, &g, 4); }
+                else { uint64_t u; memcpy(&u, &x->sum, 8); for (int y = 0; y < 8; y++) q[y] = (uint8_t)(u >> (56 - 8 * y)); }
+                q += w[f]; }
+            alen[f] = (int)(q - arr[f]); }
+        const char *v[4] = { (char *)arr[0], (char *)arr[1], (char *)arr[2], (char *)arr[3] }; int fm[4] = { 1, 1, 1, 1 };
+        snprintf(sql, sizeof sql, "UPDATE attestation_%x a SET score = (a.score * a.games + u.s) / (a.games + u.g), games = a.games + u.g "
+            "FROM unnest($1::blake3[], $2::blake3[], $3::int[], $4::float8[]) AS u(c, w, g, s) WHERE a.claim = u.c AND a.witness = u.w", h);
+        PGresult *u = PQexecParams(pg, sql, 4, NULL, v, alen, fm, 0); int bad = PQresultStatus(u) != PGRES_COMMAND_OK;
+        if (bad) fprintf(stderr, "games: %s", PQerrorMessage(pg));
+        PQclear(u); for (int f = 0; f < 4; f++) free(arr[f]); if (bad) { free(ser); return 1; } }
+    free(ser);
     Copy c = { 0 }; snprintf(sql, sizeof sql, "COPY consensus_%x (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)", h);
     copy_begin(&c, pg, sql);
     for (uint64_t i = 0; i < sn; i++) { const Standing *s = &stand[i]; if (s->had || (s->id.b[0] >> 4) != h) continue;
@@ -298,6 +323,13 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
                 uint8_t *hit = recorded(pg, npg, trunk, tt, nt); free(tt); st->checked += nt;
                 for (uint64_t i = 0; i < nt; i++) if (hit[i]) { files[of[i]].known = 1; st->known++; st->found++; Node *x = table_find(&trunk[i]); if (x) x->keep = 2; }
                 free(hit); }
+      /* A file whose trunk is new but whose content tree is recorded (its OS record changed, its content did not):
+       * what its content attests was attested when that content was recorded, and is not attested again. */
+      nt = 0; for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file && files[fi].ev.n) { of[nt] = fi; trunk[nt++] = files[fi].trunk.id; }
+      if (nt) { uint8_t *tt = malloc(nt); for (uint64_t i = 0; i < nt; i++) { Node *x = table_find(&trunk[i]); tt[i] = x ? x->tier : files[of[i]].trunk.tier; }
+                uint8_t *hit = recorded(pg, npg, trunk, tt, nt); free(tt); st->checked += nt;
+                for (uint64_t i = 0; i < nt; i++) if (hit[i]) { files[of[i]].ev.n = 0; st->content_known++; }
+                free(hit); }
       free(trunk); free(of); }
     for (int fi = 0; fi < nfiles; fi++) {
         if (files[fi].known || files[fi].skipped) continue;
@@ -372,7 +404,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     for (int p = 0; p < NPART; p++) { free(bucket[p]); bucket[p] = NULL; }
     st->t_copy += now() - t;
 
-    /* ---- semantics: witnesses, the ledger, and standings played in reading order */
+    /* ---- semantics: witnesses, attestations, and standings played in reading order */
     t = now(); double tp = t; uint64_t nev = 0;      /* tp: where each part of it began */
     for (int fi = 0; fi < nfiles; fi++) { if (files[fi].known) { free(files[fi].ev.e); memset(&files[fi].ev, 0, sizeof files[fi].ev); } nev += files[fi].ev.n; }
     /* What the files attested and the files' trunks are written as one: either all of it is recorded or none is. */
@@ -408,8 +440,8 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             PQclear(q); free(ab);
         }
         free(old); free(oj);
-        /* What was witnessed plays once per lineage: a copy of it is a row in the ledger and nothing more. What this
-         * lineage witnessed before is read from the ledger; what it witnesses in this run is kept here. */
+        /* What was witnessed plays once per lineage: a copy of it is an attestation and nothing more. What this
+         * lineage witnessed before is read from attestation; what it witnesses in this run is kept here. */
         typedef struct { lp_id witnessed, lin; uint8_t used; } Seen;
         uint64_t nrec = 0; for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) nrec += files[fi].ev.e[i].kind != EV_MEMBER;
         lp_id *wold = malloc(sizeof(lp_id) * (nrec + 1)); uint64_t nwold = 0;
@@ -418,13 +450,13 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         uint64_t lin_at[17] = { 0 }; uint64_t pcap = 1024; while (pcap < nrec * 3) pcap <<= 1; Seen *seen = calloc(pcap, sizeof(Seen)); uint64_t nseen = 0;
         #define SEEN_AT(w, l, found) do { uint64_t h_; memcpy(&h_, (w)->b, 8); uint64_t c_; memcpy(&c_, (l)->b + 8, 8); h_ ^= c_ * 0x9E3779B97F4A7C15ull; k_ = h_ & (pcap - 1); found = 0; \
             while (seen[k_].used) { if (!memcmp(seen[k_].witnessed.b, (w)->b, 16) && !memcmp(seen[k_].lin.b, (l)->b, 16)) { found = 1; break; } k_ = (k_ + 1) & (pcap - 1); } } while (0)
-        /* half full: twice the room. It is sized by the batch's records, and the ledger adds every lineage it already
+        /* half full: twice the room. It is sized by the batch's records, and attestation adds every lineage it already
          * holds for them, as many as there are: a full table probed for ever */
         #define SEEN_PUT(w, l) do { if ((nseen + 1) * 2 > pcap) { uint64_t oc_ = pcap; Seen *o_ = seen; pcap <<= 1; seen = calloc(pcap, sizeof(Seen)); \
                 for (uint64_t q_ = 0; q_ < oc_; q_++) if (o_[q_].used) { uint64_t k_; int f_; SEEN_AT(&o_[q_].witnessed, &o_[q_].lin, f_); (void)f_; seen[k_] = o_[q_]; } free(o_); } \
             uint64_t k_; int f_; SEEN_AT(w, l, f_); if (!f_) { seen[k_].used = 1; seen[k_].witnessed = *(w); seen[k_].lin = *(l); nseen++; } } while (0)
-        /* each claim read from the one partition of the ledger it is in (its ID's first hex digit): asked of the whole
-         * ledger, every one of the 16 partitions probes every claim of the batch */
+        /* each claim read from the one partition of attestation it is in (its ID's first hex digit): asked of the whole
+         * table, every one of the 16 partitions probes every claim of the batch */
         { lp_id *by = malloc(sizeof(lp_id) * (nwold + 1)); uint64_t at[17] = { 0 };
           for (uint64_t i = 0; i < nwold; i++) at[(wold[i].b[0] >> 4) + 1]++;
           for (int h = 0; h < 16; h++) at[h + 1] += at[h];
@@ -521,7 +553,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             c16(&c, 3); cfield(&c, own[i].b, 16); c32(&c, 0xFFFFFFFFu); cf_f64(&c, owntrust[i]); }
         copy_end(&c); free(wid); free(wfile); free(known); free(own); free(owntrust); lp_idmap_free(oseen); free(oknown); lp_idmap_free(wmap);
         st->t_wit += now() - tp; tp = now();
-        /* the ledger and the standings, a partition a connection at a time on every connection: each connection's
+        /* attestations and standings, a partition a connection at a time on every connection: each connection's
          * part of the batch's transaction (prepared and committed as one below) */
         uint64_t led = 0, nnew = 0, nupd = 0; int bad = 0;
         for (int j = 1; j < nparts; j++) if (!must(pg[j], "BEGIN")) return 1;

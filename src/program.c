@@ -4,7 +4,7 @@
  *
  * RESOLVE   the prompt is admitted as content, decomposed on the client; its occurrences are its constituents in
  *           order; the session is resolved from the record: its turns are the claims [session, turn] its user
- *           witnessed, in the order their ledger positions give, and their constituents are the discourse.
+ *           witnessed, in the order their positions in attestation give, and their constituents are the discourse.
  * COUPLE    the whole observation perturbs the web at once: every segment of it, the observations that hold each run
  *           and what follows the run in them; every strand that holds an occurrence, the prompt or a discourse
  *           entity, read at the firmware's k. The field keeps its kinds apart: what responds, by which route, from

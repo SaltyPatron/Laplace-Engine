@@ -104,7 +104,7 @@ Claim *claims_of(PGconn *pg, const lp_id *e, int fan, double k, int *n, int *cap
     lp_id part[3] = { *e, *e, *e }; int have[3] = { 1, 0, 0 };
     return claims_like(pg, part, have, fan, k, n, capped);
 }
-/* The position each claim was given by the witnesses that gave one: the least, as recorded in the ledger. */
+/* The position each claim was given by the witnesses that gave one: the least, as recorded in attestation. */
 void positions_of(PGconn *pg, Claim *c, int n){
     if (!n) return;
     lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) ids[i] = c[i].id;
@@ -119,7 +119,7 @@ void positions_of(PGconn *pg, Claim *c, int n){
     PQclear(q);
     /* A claim said within a record has its place in the record's own trajectory (Physicality: the trajectory records
      * the order of the constituents, so no ordinal is needed): the entry lists its senses in the order its witness
-     * gave them. For the claims the ledger gave no place, the records that hold each are fetched as one set, and the
+     * gave them. For the claims attestation gave no place, the records that hold each are fetched as one set, and the
      * claim's place is where it stands in the path, the least when several records hold it. */
     int need = 0; for (int i = 0; i < n; i++) need += !c[i].position;
     if (need) {

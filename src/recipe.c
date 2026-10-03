@@ -37,7 +37,7 @@
  *                                 {name}: the file's own name, without what follows its last dot;
  *                                 {first NAME}: what the file first writes as NAME="...")
  *   lineage NAME...               the witness this one derives from, named as content. Copies of one lineage play one
- *                                 matchup per claim; each copy is still a row in the ledger
+ *                                 matchup per claim; each copy is still an attestation
  *   class NAME                    this recipe's witness's trust class, when it is not the source's
  * A recipe that says what a file's parts are is a curated source: what is recorded is the file's tree as its recipe
  * reads it, over its metadata tree, and what it attests. A recipe that says only a grammar records the file as its
