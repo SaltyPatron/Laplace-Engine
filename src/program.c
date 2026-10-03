@@ -216,9 +216,8 @@ static int elect(const void *a, const void *b){                               /*
 /* ---- ORIENT: the joint interpretation (Sequence 20.3; INVENTION §7, "Joint interpretation before policy"). A winning
  * interpretation is a jointly compatible subgraph, not the definition with the largest global score. A word's readings
  * are the types its own strands reach: a concept, a frame, a lexical unit, a roleset, a class, a role, whatever list of
- * the highway holds it. The lists small enough to be mask fields (a part of speech, a dependency relation, a
- * lexicographer file, a thematic role, a row's kind) are features every word shares, not readings: glue is known by its
- * type. Two readings of different words hold together when they are the same type, or when the Linguistic Super
+ * the highway holds it. The lists that are banks (manifest/banks.tsv: a part of speech, a dependency relation, a
+ * lexicographer file, a thematic role) are features every word shares, not readings: glue is known by its type. Two readings of different words hold together when they are the same type, or when the Linguistic Super
  * Highway maps the one to the other (ILI to frame, roleset, class; roleset to frame and class; lexical unit to frame).
  * Each word takes the reading the others' choices hold together with most, round after round until no choice
  * changes: a reading in turn changes what makes sense for the other words. A word whose best readings stand level is
@@ -226,7 +225,8 @@ static int elect(const void *a, const void *b){                               /*
 typedef struct { int cell, occ, list; uint32_t slot; } Cand;
 typedef struct { int ncand, choice, level, capped; double score; } Bind;      /* per occurrence */
 static int reading_of(const lp_highway *h, const lp_id *id, int *list, uint32_t *slot){
-    for (size_t l = 0; l < h->nlists; l++) { if (lp_highway_mask(h, h->list[l].name)) continue;        /* a feature, not a reading */
+    for (size_t l = 0; l < h->nlists; l++) { int bank = 0; for (size_t k = 0; k < h->nbanks; k++) bank |= h->bank[k].list == &h->list[l];
+        if (bank) continue;                                                  /* a bank's value (a part of speech, a relation): a feature, not a reading */
         int64_t s = lp_highway_slot(h, &h->list[l], id); if (s >= 0) { *list = (int)l; *slot = (uint32_t)s; return 1; } }
     return 0;
 }
@@ -247,7 +247,7 @@ static int orient(State *st, Field *fd, Bind *bind, int *nambig){
         if (!st->composed[i] || st->role[i] <= 0) continue;
         for (int z = 0; z < fd->n; z++) { const Cell *x = &fd->c[z]; int list; uint32_t slot;
             if (!x->routes[R_CLAIM] || !((x->support.w[i >> 6] >> (i & 63)) & 1) || !reading_of(h, &x->id, &list, &slot)) continue;
-            if (lp_highway_mask_bit(h, &x->rel) >= 0) continue;                       /* reached through a feature (a dependency, a part of speech): syntax, not a reading */
+            if (lp_highway_bank_of(h, &x->rel, NULL)) continue;                       /* reached through a feature (a dependency, a part of speech): syntax, not a reading */
             if (nc == cc) { cc = cc ? cc * 2 : 256; cand = xrealloc(cand, sizeof(Cand) * (size_t)cc); } cand[nc++] = (Cand){ z, i, list, slot }; }
         bind[i].ncand = nc - first[i]; }
     first[st->nocc] = nc;

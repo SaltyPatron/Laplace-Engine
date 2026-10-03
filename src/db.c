@@ -88,6 +88,7 @@ static uint8_t *tiers_of(const lp_id *ids, uint64_t n){                       /*
 
 typedef struct { uint64_t idx, h; } NRef;                                /* h: the node's Hilbert value, computed once */
 static NRef *bucket[NPART]; static uint64_t nbucket[NPART];
+static uint8_t *atom_missing;                                              /* the atoms a load writes: those the database does not hold */
 static NRef nref(const Node *x){ lp_coord co; memcpy(co.m, x->m, 32); return (NRef){ (uint64_t)(x - NODE), lp_hilbert4(&co) }; }
 static int by_hilbert(const void *a, const void *b){ uint64_t x = ((const NRef *)a)->h, y = ((const NRef *)b)->h; return x < y ? -1 : x > y; }
 /* A partition's new rows go in Hilbert order (Atoms: the Hilbert value is for locality, ordering, and indexing; it is
@@ -107,7 +108,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
     copy_begin(&c, pg, sql);
     if (atoms_needed && p / 16 == 0)
         for (uint32_t cp = 0; cp < LP_NCP; cp++) {
-            if (part_of(&T0[cp].id, 0) != p) continue;
+            if (part_of(&T0[cp].id, 0) != p || !atom_missing[cp]) continue;
             double x[4]; for (int d = 0; d < 4; d++) x[d] = (double)T0[cp].m[d] / LP_FIXED_ONE;
             size_t gl = lp_ewkb_point4(x, geo, sizeof geo);
             c16(&c, 4); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(T0[cp].hilbert)); c.rows++;
@@ -124,7 +125,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
     copy_begin(&c, pg, sql);
     if (atoms_needed && p / 16 == 0)
         for (uint32_t cp = 0; cp < LP_NCP; cp++) {
-            if (part_of(&T0[cp].id, 0) != p) continue;
+            if (part_of(&T0[cp].id, 0) != p || !atom_missing[cp]) continue;
             uint64_t one = 1; size_t gl = lp_ewkb_runs(&T0[cp].id, &one, 1, geo, sizeof geo); memset(mask + 4, 0, 32);
             c16(&c, 5); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cf_i64(&c, hsigned(T0[cp].hilbert)); cfield(&c, geo, (uint32_t)gl); cfield(&c, mask, 36); c.rows++;
         }
@@ -134,9 +135,9 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
         for (uint32_t v = 0; v < x->nv; v++) { ids[v] = VTX[x->voff + v].id; runs[v] = VTX[x->voff + v].m; }
         size_t gl = lp_ewkb_runs(ids, runs, x->nv, NULL, 0); uint8_t *gp = gl > sizeof geo ? malloc(gl) : geo;
         lp_ewkb_runs(ids, runs, x->nv, gp, gl);
-        /* the mask: what the row is, and the types it holds (each constituent that is a type of a mask field) */
+        /* the row's own bank, kind: what the row is. What its constituents are (a part of speech, a dependency relation)
+         * is their banks', on the rows those banks describe (manifest/banks.tsv), never this row's */
         memset(mask + 4, 0, 32); for (int b = 0; b < 8; b++) if (x->kind & (1u << b)) mask[4 + (b >> 3)] |= (uint8_t)(0x80 >> (b & 7));
-        if (HW) for (uint32_t v = 0; v < x->nv; v++) { int32_t b = lp_highway_mask_bit(HW, &ids[v]); if (b >= 0 && b < 256) mask[4 + (b >> 3)] |= (uint8_t)(0x80 >> (b & 7)); }
         c16(&c, 5); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cf_i64(&c, hsigned(bucket[p][b].h)); cfield(&c, gp, (uint32_t)gl); cfield(&c, mask, 36); c.rows++;
         if (gp != geo) free(gp);
     }
@@ -273,7 +274,15 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     parts_plan(pg[0]);
     if (!resolve_parts(pg[0])) return 1;                                       /* a batch that stopped between its parts' commits, finished first */
     PGresult *r = PQexec(pg[0], "SELECT count(*) FROM entity WHERE tier = 0");
-    int atoms_needed = !(PQresultStatus(r) == PGRES_TUPLES_OK && atoll(PQgetvalue(r, 0, 0)) == (long long)LP_NCP); PQclear(r);
+    long long n0 = PQresultStatus(r) == PGRES_TUPLES_OK ? atoll(PQgetvalue(r, 0, 0)) : -1; PQclear(r);
+    if (n0 < 0) { fprintf(stderr, "tier 0: %s", PQerrorMessage(pg[0])); return 1; }
+    /* The atoms each database holds once. A first load cut off between tier 0's sixteen transactions leaves some: which
+     * are missing is asked, by their IDs, and only those are written (all of them were, again, at every load after). */
+    int atoms_needed = n0 < (long long)LP_NCP; free(atom_missing); atom_missing = NULL;
+    if (atoms_needed) { atom_missing = malloc(LP_NCP);
+        if (n0 == 0) memset(atom_missing, 1, LP_NCP);
+        else { lp_id *ids = malloc(sizeof(lp_id) * LP_NCP); uint8_t *t0 = calloc(LP_NCP, 1); for (uint32_t cp = 0; cp < LP_NCP; cp++) ids[cp] = T0[cp].id;
+               uint8_t *hit = recorded(pg, npg, ids, t0, LP_NCP); for (uint32_t cp = 0; cp < LP_NCP; cp++) atom_missing[cp] = !hit[cp]; free(hit); free(ids); free(t0); } }
 
     /* ---- trunk to leaf: a recorded node means its whole subtree is recorded, so nothing below it is checked */
     double t = now();
@@ -406,9 +415,14 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         lp_id *wold = malloc(sizeof(lp_id) * (nrec + 1)); uint64_t nwold = 0;
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (e->kind == EV_MEMBER) continue;
             Node *x = table_find(&e->witnessed); if (!x || x->keep != 1) wold[nwold++] = e->witnessed; }
-        uint64_t lin_at[17] = { 0 }; uint64_t pcap = 1024; while (pcap < nrec * 3) pcap <<= 1; Seen *seen = calloc(pcap, sizeof(Seen));
+        uint64_t lin_at[17] = { 0 }; uint64_t pcap = 1024; while (pcap < nrec * 3) pcap <<= 1; Seen *seen = calloc(pcap, sizeof(Seen)); uint64_t nseen = 0;
         #define SEEN_AT(w, l, found) do { uint64_t h_; memcpy(&h_, (w)->b, 8); uint64_t c_; memcpy(&c_, (l)->b + 8, 8); h_ ^= c_ * 0x9E3779B97F4A7C15ull; k_ = h_ & (pcap - 1); found = 0; \
             while (seen[k_].used) { if (!memcmp(seen[k_].witnessed.b, (w)->b, 16) && !memcmp(seen[k_].lin.b, (l)->b, 16)) { found = 1; break; } k_ = (k_ + 1) & (pcap - 1); } } while (0)
+        /* half full: twice the room. It is sized by the batch's records, and the ledger adds every lineage it already
+         * holds for them, as many as there are: a full table probed for ever */
+        #define SEEN_PUT(w, l) do { if ((nseen + 1) * 2 > pcap) { uint64_t oc_ = pcap; Seen *o_ = seen; pcap <<= 1; seen = calloc(pcap, sizeof(Seen)); \
+                for (uint64_t q_ = 0; q_ < oc_; q_++) if (o_[q_].used) { uint64_t k_; int f_; SEEN_AT(&o_[q_].witnessed, &o_[q_].lin, f_); (void)f_; seen[k_] = o_[q_]; } free(o_); } \
+            uint64_t k_; int f_; SEEN_AT(w, l, f_); if (!f_) { seen[k_].used = 1; seen[k_].witnessed = *(w); seen[k_].lin = *(l); nseen++; } } while (0)
         /* each claim read from the one partition of the ledger it is in (its ID's first hex digit): asked of the whole
          * ledger, every one of the 16 partitions probes every claim of the batch */
         { lp_id *by = malloc(sizeof(lp_id) * (nwold + 1)); uint64_t at[17] = { 0 };
@@ -430,8 +444,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             for (int j = 0; j < PQntuples(q); j++) {
                 lp_id wit, wid, lin; memcpy(wit.b, PQgetvalue(q, j, 0), 16); memcpy(wid.b, PQgetvalue(q, j, 1), 16);
                 if (PQgetisnull(q, j, 2)) lin = wid; else memcpy(lin.b, PQgetvalue(q, j, 2), 16);
-                uint64_t k_; int found; SEEN_AT(&wit, &lin, found);
-                if (!found) { seen[k_].used = 1; seen[k_].witnessed = wit; seen[k_].lin = lin; }
+                SEEN_PUT(&wit, &lin);
                 ldg_put(&wit, &wid);
             }
             PQclear(q); free(ab);
@@ -455,7 +468,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
                 const Event *e = &files[fi].ev.e[i]; const lp_id *lin = e->own_witness ? &e->witness : flin; play[x] = 255;
                 if (e->kind != EV_MEMBER) {                                  /* what is witnessed: once per lineage */
                     uint64_t k_; SEEN_AT(&e->witnessed, lin, copy);
-                    if (!copy) { seen[k_].used = 1; seen[k_].witnessed = e->witnessed; seen[k_].lin = *lin; }
+                    if (!copy) SEEN_PUT(&e->witnessed, lin);
                     if (e->kind == EV_RECORD) continue;
                 }
                 if (!copy) play[x] = (uint8_t)(e->claim.b[7] % NP);
@@ -472,10 +485,10 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         st->t_play += now() - tp; tp = now();
         Copy c = { 0 };
         /* witnesses: each once, and only those the database does not know yet */
-        lp_id *wid = malloc(sizeof(lp_id) * (size_t)nfiles); int *wfile = malloc(sizeof(int) * (size_t)nfiles), nw = 0;
-        for (int fi = 0; fi < nfiles; fi++) if (files[fi].ev.n) {
-            int k = 0; while (k < nw && memcmp(&wid[k], &files[fi].witness.id, 16)) k++;
-            if (k == nw) { wid[nw] = files[fi].witness.id; wfile[nw++] = fi; }
+        lp_id *wid = malloc(sizeof(lp_id) * (size_t)nfiles); int *wfile = malloc(sizeof(int) * (size_t)nfiles), nw = 0; lp_idmap *wmap = lp_idmap_new();
+        for (int fi = 0; fi < nfiles; fi++) if (files[fi].ev.n) {                  /* the map's places are the order of first meeting: wid's */
+            bool fresh; lp_idmap_put(wmap, &files[fi].witness.id, &fresh);
+            if (fresh) { wid[nw] = files[fi].witness.id; wfile[nw++] = fi; }
         }
         /* witnesses a source names statement by statement: each is its own lineage, and plays at the source's trust */
         lp_id *own = NULL; double *owntrust = NULL; uint64_t nown = 0, cown = 0; lp_idmap *oseen = lp_idmap_new();
@@ -495,7 +508,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
           const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
           PGresult *q = PQexecParams(pg[0], "SELECT id FROM witness WHERE id = ANY($1::blake3[])", 1, NULL, v, l, f, 1);
           if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg[0])); return 1; }
-          for (int j = 0; j < PQntuples(q); j++) for (int k = 0; k < nw; k++) if (!memcmp(wid[k].b, PQgetvalue(q, j, 0), 16)) known[k] = 1;
+          for (int j = 0; j < PQntuples(q); j++) { lp_id x; memcpy(x.b, PQgetvalue(q, j, 0), 16); int64_t k = lp_idmap_find(wmap, &x); if (k >= 0) known[k] = 1; }
           PQclear(q); free(ab); }
         copy_begin(&c, pg[0], "COPY witness (id, lineage, trust) FROM STDIN (FORMAT binary)");
         for (int k = 0; k < nw; k++) if (!known[k]) {
@@ -504,9 +517,9 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             if (files[fi].has_lineage) cfield(&c, files[fi].lineage.id.b, 16); else c32(&c, 0xFFFFFFFFu);
             cf_f64(&c, files[fi].trust);
         }
-        for (uint64_t i = 0; i < nown; i++) if (!oknown[i]) { int dup = 0; for (int k = 0; k < nw && !dup; k++) dup = !memcmp(&wid[k], &own[i], 16); if (dup) continue;
+        for (uint64_t i = 0; i < nown; i++) if (!oknown[i]) { if (lp_idmap_find(wmap, &own[i]) >= 0) continue;
             c16(&c, 3); cfield(&c, own[i].b, 16); c32(&c, 0xFFFFFFFFu); cf_f64(&c, owntrust[i]); }
-        copy_end(&c); free(wid); free(wfile); free(known); free(own); free(owntrust); lp_idmap_free(oseen); free(oknown);
+        copy_end(&c); free(wid); free(wfile); free(known); free(own); free(owntrust); lp_idmap_free(oseen); free(oknown); lp_idmap_free(wmap);
         st->t_wit += now() - tp; tp = now();
         /* the ledger and the standings, a partition a connection at a time on every connection: each connection's
          * part of the batch's transaction (prepared and committed as one below) */

@@ -480,11 +480,12 @@ static int spoken_of(const Say *s, const STree *t, int32_t root, uint32_t which)
         else { int same = n == strlen(w->val) && !memcmp(v, w->val, n); if (same == (w->op == 1)) return 0; } }
     return 1;
 }
-/* A node of the file's tree as the entity it is. A part is what its disposition says; a key is the text it is written
- * as, since the file is recorded as it is; a part that is itself parts is the path of them, a KEY IS VALUE part the
- * pair of the two; and whatever holds parts is the path of what they are, in the file's order. So the whole file is in
- * the tree: every record, every row, every field. What parts a tier (a tab, a line's end) is the layout's, written in
- * the recipe: it is how the file is written down, and is not a constituent of anything. */
+/* A node of the file's tree as the entity it is: a record of what the source teaches. A part is what its disposition
+ * says; a part that is itself parts is the path of them, a KEY IS VALUE part the pair of the two; and whatever holds
+ * parts is the path of what they are, in the file's order. A key is how the file's rows point at each other, and is in
+ * no record (key: written nowhere); a reference is the thing it names, never its key's text. A row, a line and the
+ * source's numbering are packaging, never content (Recipes 10.3, 10.8). What parts a tier (a tab, a line's end) is the
+ * layout's, written in the recipe: it is how the file is written down, and is not a constituent of anything. */
 static int entity_of(Sink *k, const STree *t, int32_t c, Ref *out){
     const SNode *x = &t->n[c]; const Say *s = k->s; const SNode *up = x->parent >= 0 ? &t->n[x->parent] : NULL;
     if (x->kind != S_GROUP) {
@@ -492,15 +493,16 @@ static int entity_of(Sink *k, const STree *t, int32_t c, Ref *out){
         if (up && up->kind == S_GROUP && up->tier == x->tier && up->nlen) {       /* a part of a part */
             const Dis *dp = x->nlen ? dis_of(s, x) : NULL; if (dp && (dp->what == D_OMIT || dp->what == D_METADATA)) return 0;
             if (x->kind == S_VALUE && x->nlen) { Ref p[2] = { string_ref(x->name, x->nlen), string_ref(x->val, x->vlen) };      /* a KEY IS VALUE part: the pair of its key and what its value is */
-                if (dp && dp->what != D_KEY && dp->what != D_REFER && !value_of(k, t, c, &p[1], 0)) return 0;
+                if (dp && dp->what == D_KEY) return 0;                                  /* the file's own numbering: in no record */
+                if (dp && !value_of(k, t, c, &p[1], 0)) return 0;                     /* a reference: the thing it names */
                 if (p[1].said != LP_SAID_TUPLE) p[1].said = 0; *out = said_tuple(compose(p, 2, over(p, 2))); return 1; }
             if (x->nlen && value_of(k, t, c, out, 0)) return 1;                 /* a piece read as its part is (a type, a code point) */
             *out = string_ref(x->val, x->vlen); return 1; }
         const Dis *d = x->nlen ? dis_of(s, x) : NULL;
         if (!d) { if (x->nlen && x->kind != S_TEXT) { left_open(k, x); return 0; } *out = text_of(x->val, x->vlen); return 1; }     /* a text is the text it is */
         if (d->what == D_OMIT || d->what == D_METADATA) return 0;
-        if (d->what == D_KEY || d->what == D_REFER) { *out = string_ref(x->val, x->vlen); return 1; }
-        return value_of(k, t, c, out, 0);
+        if (d->what == D_KEY) return 0;                                      /* the file's own numbering: in no record */
+        return value_of(k, t, c, out, 0);                                    /* a reference: the thing it names, or nothing */
     }
     const Dis *d = x->nlen ? dis_of(s, x) : NULL; if (d && (d->what == D_OMIT || d->what == D_METADATA)) return 0;
     Ref stack[64], *kid = x->nkids <= 64 ? stack : malloc(sizeof(Ref) * x->nkids); uint32_t n = 0;

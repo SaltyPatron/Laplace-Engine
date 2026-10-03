@@ -9,18 +9,21 @@
  *
  * Each list is in the order its resources write it; a type's record is the ID and coordinate of its content, the very
  * thing its recipe composes for it when the source is ingested (never the number or id a resource points at it with,
- * which is a key, kept beside); the mappings are edges between slots. The layout is written beside the records, with
- * the lists small enough to be mask fields (Semantics: Claims, Masks), and the records and edges have a fingerprint.
+ * which is a key, kept beside); the mappings are edges between slots. Every list's slots are frozen (manifest/slots),
+ * and the banks (manifest/banks.tsv) say which lists are masks, of which semantic group, on which row. The layout is
+ * written beside the records, and the records and edges have a fingerprint.
  * The types' contents are written beside them as the compositions they are, for laplace deploy to record as entities.
  * Usage: laplace highway [-o highway.bin] */
 #define _GNU_SOURCE
 #include "engine.h"
 #include "blake3.h"
+#include "laplace_config.h"
 #include <locale.h>
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 typedef struct { char name[32], say[64]; Ref *t; size_t n, cap; lp_idmap *map; uint32_t first; } List;   /* map: a type's slot by its ID */
 typedef struct { int list; char *key; lp_id id; } Key;
@@ -83,6 +86,57 @@ static void node_write(FILE *o, Seen *s, const lp_id *id, int depth){
     fputc('\n', o);
 }
 
+/* ---- frozen slots (decision: enumerate first, then append forever). A type's slot is what a mask bit, a vertex
+ * value or a stored reference to it means; at billions of rows it can never move. Each list's slots are a registry of
+ * their own, versioned with the manifests (manifest/slots/LIST.tsv): a type the registry holds keeps its slot; a type
+ * no resource lists any longer keeps its slot, retired (a tombstone: never reused); a new type takes the next slot.
+ * The order the resources happen to be read in decides nothing. */
+static const char *manifest_dir(void){ const char *e = getenv("LAPLACE_MANIFEST"); return e && *e ? e : LAPLACE_MANIFEST_DEFAULT; }
+typedef struct { lp_id id; int retired; char key[96]; } Frozen;
+static Frozen *frozen_read(const char *list, size_t *n){
+    char p[4096]; snprintf(p, sizeof p, "%s/slots/%s.tsv", manifest_dir(), list); FILE *f = fopen(p, "r"); *n = 0; if (!f) return NULL;
+    Frozen *fz = NULL; size_t cap = 0; char line[1024];
+    while (fgets(line, sizeof line, f)) { if (line[0] == '#' || !strncmp(line, "slot\t", 5)) continue;
+        char *save = NULL, *slot = strtok_r(line, "\t\n", &save), *id = strtok_r(NULL, "\t\n", &save), *st = strtok_r(NULL, "\t\n", &save), *key = strtok_r(NULL, "\n", &save);
+        if (!slot || !id || !st) continue; size_t s = strtoull(slot, NULL, 10);
+        if (s != *n) { fprintf(stderr, "%s: slot %zu where %zu was due: a slot registry is never edited by hand\n", p, s, *n); exit(1); }
+        if (*n == cap) { cap = cap ? cap * 2 : 1024; fz = xrealloc(fz, sizeof(Frozen) * cap); }
+        Frozen *z = &fz[(*n)++]; memset(z, 0, sizeof *z); if (!id_parse(id, &z->id)) { fprintf(stderr, "%s: slot %zu: not an ID\n", p, s); exit(1); }
+        z->retired = !strcmp(st, "retired"); if (key) snprintf(z->key, sizeof z->key, "%s", key); }
+    fclose(f); return fz;
+}
+/* Each list put in its frozen order; returns how many types were new, how many retired, across the lists. */
+static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
+    *added = *retired = *kept = 0;
+    lp_idmap *first = lp_idmap_new(); size_t fcap = 0; const char **fkey = NULL;   /* a readable name for each type: the first key that names it */
+    for (int li = 0; li < h->nl; li++) {
+        List *l = &h->l[li]; size_t nz; Frozen *fz = frozen_read(l->name, &nz);
+        lp_idmap_free(first); first = lp_idmap_new(); fcap = 0; free(fkey); fkey = NULL;
+        for (size_t i = 0; i < h->nk; i++) if (h->k[i].list == li) { bool fresh; size_t at = lp_idmap_put(first, &h->k[i].id, &fresh);
+            if (fresh) { if (at >= fcap) { fcap = (at + 1) * 2; fkey = xrealloc(fkey, sizeof(char *) * fcap); } fkey[at] = h->k[i].key; } }
+        Ref *t = xrealloc(NULL, sizeof(Ref) * (nz + l->n + 1)); size_t n = 0; uint8_t *placed = calloc(l->n + 1, 1);
+        for (size_t s = 0; s < nz; s++) { int64_t was = slot_in(l, &fz[s].id);
+            if (was >= 0) { t[n] = l->t[was]; placed[was] = 1; (*kept)++; fz[s].retired = 0; }
+            else { memset(&t[n], 0, sizeof(Ref)); t[n].id = fz[s].id; if (!fz[s].retired) (*retired)++; fz[s].retired = 1; }
+            n++; }
+        size_t nz_before = nz;
+        for (size_t i = 0; i < l->n; i++) if (!placed[i]) { t[n++] = l->t[i]; (*added)++; }
+        lp_idmap_free(l->map); l->map = lp_idmap_new(); for (size_t s = 0; s < n; s++) lp_idmap_put(l->map, &t[s].id, NULL);
+        free(l->t); l->t = t; l->n = n; l->cap = n + 1; free(placed);
+        /* the registry, written back: the slots it held, then the new ones */
+        char d[4096], p[4200], tmp[4300]; snprintf(d, sizeof d, "%s/slots", manifest_dir()); mkdir(d, 0775);
+        snprintf(p, sizeof p, "%s/%s.tsv", d, l->name); snprintf(tmp, sizeof tmp, "%s.tmp", p); FILE *o = fopen(tmp, "w"); if (!o) { perror(tmp); exit(1); }
+        fprintf(o, "# The frozen slots of the highway list %s (%s). A slot never moves: a type no resource lists any longer is\n# retired and keeps its slot; a new type takes the next. Written by laplace highway; never edited by hand.\n", l->name, l->say);
+        fprintf(o, "slot\tid\tstatus\tkey\n");
+        for (size_t s = 0; s < n; s++) { char hx[33]; id_text(&t[s].id, hx); int64_t at = lp_idmap_find(first, &t[s].id);
+            const char *key = at >= 0 && (size_t)at < fcap ? fkey[at] : s < nz_before ? fz[s].key : "";
+            fprintf(o, "%zu\t%s\t%s\t%s\n", s, hx, s < nz_before && fz[s].retired ? "retired" : "live", key ? key : ""); }
+        if (fclose(o) || rename(tmp, p)) { perror(p); exit(1); }
+        free(fz);
+    }
+    lp_idmap_free(first); free(fkey);
+}
+
 int cmd_highway(int argc, char **argv){
     const char *outp = lp_highway_path();
     for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-o") && a + 1 < argc) outp = argv[++a]; else { fprintf(stderr, "usage: laplace highway [-o highway.bin]\n"); return 2; } }
@@ -109,6 +163,9 @@ int cmd_highway(int argc, char **argv){
     /* a key that names what another names: until no key is added */
     size_t added = 0; for (int more = 1; more; ) { more = 0;
         for (size_t i = 0; i < hw.na; i++) { Alias *a = &hw.a[i]; if (a->done) continue; Key *t = key_find(&hw, a->list, a->to); if (!t) continue; lp_id id = t->id; a->done = 1; if (key_put(&hw, a->list, a->key, &id)) { added++; more = 1; } } }
+    /* every list in its frozen order: slots never move */
+    size_t fz_new, fz_retired, fz_kept; freeze(&hw, &fz_new, &fz_retired, &fz_kept);
+    printf("  slots: %'zu kept, %'zu new, %'zu retired (%s/slots)\n", fz_kept, fz_new, fz_retired, manifest_dir());
     /* the lists, one after another in the order they were first named; the edges by slot */
     uint32_t total = 0; for (int l = 0; l < hw.nl; l++) { hw.l[l].first = total; total += (uint32_t)hw.l[l].n; }
     Edge *ed = malloc(sizeof(Edge) * (hw.ne + 1)); size_t ne = 0, lost = 0;
@@ -135,9 +192,21 @@ int cmd_highway(int argc, char **argv){
     fprintf(o, "records\t%u\nedges-count\t%zu\n", total, ne);
     for (int i = 0; i < hw.nl; i++) fprintf(o, "list\t%s\t%s\t%u\t%zu\n", hw.l[i].name, hw.l[i].say, hw.l[i].first, hw.l[i].n);
     for (size_t i = 0; i < ne; ) { size_t j = i; while (j < ne && ed[j].la == ed[i].la && ed[j].lb == ed[i].lb) j++; fprintf(o, "edges\t%s\t%s\t%zu\t%zu\n", hw.l[ed[i].la].name, hw.l[ed[i].lb].name, i, j - i); i = j; }
-    /* the mask fields: bits 0 to 7 say what a row is (a claim, a record, a tuple, a file); the lists small enough follow, each as wide as it is */
-    int bit = 8; fprintf(o, "mask\tkind\t0\t8\n");
-    for (int i = 0; i < hw.nl; i++) if (hw.l[i].n && hw.l[i].n <= 64 && bit + (int)hw.l[i].n <= 256) { fprintf(o, "mask\t%s\t%d\t%zu\n", hw.l[i].name, bit, hw.l[i].n); bit += (int)hw.l[i].n; }
+    /* the banks (manifest/banks.tsv): one mask per semantic group, on the row its group describes; a value's bit in its
+     * bank is its frozen slot, so nothing is packed and nothing moves. A list grown past its bank's width is refused:
+     * the bank is widened in the manifest, never spilled into another */
+    int nbank = 0;
+    { char bp[4200]; snprintf(bp, sizeof bp, "%s/banks.tsv", manifest_dir()); FILE *bf = fopen(bp, "r"); if (!bf) { perror(bp); return 1; } char line[1024];
+      while (fgets(line, sizeof line, bf)) { if (line[0] == '#' || !strncmp(line, "bank\t", 5)) continue;
+          char *save = NULL, *nm = strtok_r(line, "\t\n", &save), *ls = strtok_r(NULL, "\t\n", &save), *gr = strtok_r(NULL, "\t\n", &save), *ca = strtok_r(NULL, "\t\n", &save), *wd = strtok_r(NULL, "\t\n", &save);
+          if (!nm || !ls || !gr || !ca || !wd) { fprintf(stderr, "%s: a bank is: bank list group carrier width\n", bp); return 1; }
+          size_t width = strtoul(wd, NULL, 10), have = 0; int li = -1;
+          if (strcmp(ls, "-")) { for (int i = 0; i < hw.nl; i++) if (!strcmp(hw.l[i].name, ls)) li = i;
+              if (li < 0) { fprintf(stderr, "%s: bank %s names the list %s, which no resource lists\n", bp, nm, ls); return 1; } have = hw.l[li].n; }
+          if (have > width || width > 256) { fprintf(stderr, "%s: bank %s holds %zu values in %zu bits: widen it (at most 256)\n", bp, nm, have, width); return 1; }
+          fprintf(o, "bank\t%s\t%s\t%s\t%s\t%zu\n", nm, ls, gr, ca, width); nbank++; }
+      fclose(bf); }
+    int bit = nbank;
     fclose(o);
     /* the keys the resources point at their types with, beside the highway: resolved by readers, recorded nowhere */
     snprintf(lay, sizeof lay, "%s.keys", outp); o = fopen(lay, "w"); if (!o) { perror(lay); return 1; } size_t nkeys = 0, stray = 0;
@@ -156,7 +225,7 @@ int cmd_highway(int argc, char **argv){
         for (int q = 0; q < nls; q++) printf("    %-10s to %-10s %'9zu   for instance %s%s%s%s\n", hw.l[ls[q].la].name, hw.l[ls[q].lb].name, ls[q].n, ls[q].ex[0][0] ? ls[q].ex[0] : "", ls[q].ex[0][0] && ls[q].ex[1][0] ? ", " : "", ls[q].ex[1][0] ? ls[q].ex[1] : "", ""); }
     if (stray) printf("  %'zu keys name something that is not a type of their list: left out\n", stray);
     uint8_t fp[32]; blake3_hasher hs; blake3_hasher_init(&hs); blake3_hasher_update(&hs, rec, total * sizeof(lp_tier0_record)); for (size_t i = 0; i < ne; i++) { uint32_t pr[2] = { ed[i].from, ed[i].to }; blake3_hasher_update(&hs, pr, 8); } blake3_hasher_finalize(&hs, fp, 32);
-    printf("\n%s: %'u types in %d lists, %'zu edges, %'zu keys beside them (%'zu by way of other keys); %d of 256 mask bits   (%.1f s)\nfingerprint ", outp, total, hw.nl, ne, nkeys, added, bit, now() - T);
+    printf("\n%s: %'u types in %d lists, %'zu edges, %'zu keys beside them (%'zu by way of other keys); %d banks   (%.1f s)\nfingerprint ", outp, total, hw.nl, ne, nkeys, added, bit, now() - T);
     for (int i = 0; i < 32; i++) printf("%02x", fp[i]); printf("\n");
     (void)nrc; return 0;
 }
