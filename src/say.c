@@ -19,6 +19,8 @@
  *   type NAME LIST             the part's text is the source's key of a type in the highway's LIST: read as that type
  *   metadata NAME...           the part is said of the file itself: it goes in the file's metadata tree
  *   omit NAME...               the part is the file's bookkeeping: read by nothing
+ *   perfcache                  a part named as a property the perf-cache's flags hold (tier0.flags, its layout) is read
+ *                              from there for every codepoint: it is not attested again
  *   attest TIER NAME...        of a TIER's thing, what each part NAME says, under the part's own name: [thing, NAME, value];
  *                              a part that is itself KEY IS VALUE parts says each VALUE under its KEY: [thing, KEY, VALUE]
  *   relate TIER NAME to NAME   of a TIER's thing, its relation (the first part's value) to what the second part is:
@@ -54,6 +56,7 @@ typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thi
                  Att together[8]; int ntogether;                             /* a TIER whose claims are said together: one record, witnessed once, its claims within it */
                  char stem, stemfrom;                                        /* what ends the part of the file's name {file} stands for (. unless said), and what it begins after */
                  char split[16][64]; int nsplit;                             /* a long file a grammar reads is parted before each line that begins one of these elements */
+                 char (*perf)[64]; int nperf;                               /* perfcache: the flags' property names, short and as said, folded (UAX44-LM3) */
                  char selfmark;                                              /* what the source writes, in a value, for the code point the part is (UCD: #) */
                  regex_t about_re; int has_about;                            /* a page's lines: the first that matches names what the page is about */
                  struct { regex_t re; int mode; char pred[64]; } line[8]; int nline;    /* a line that matches says its parts: 0 of what the page is about, 1 the claim itself, 2 a pair, 3 under a name */
@@ -75,6 +78,13 @@ static void dis_parse(Dis *d){
     size_t n = strlen(d->name); name_split(d->name, 0, n, &d->whole.off, &d->whole.len, &d->whole.wild, &d->whole.note);
     const char *dot = strrchr(d->name, '.'); d->el_l = dot && dot != d->name ? (uint8_t)(dot - d->name) : 0;
     if (d->el_l) name_split(d->name, (size_t)d->el_l + 1, n, &d->part.off, &d->part.len, &d->part.wild, &d->part.note); }
+/* A part named as a property the perf-cache's flags hold: under perfcache it is read from there, never attested. */
+static size_t perf_fold(const char *in, size_t n, char *out){              /* the standard's loose match: case, spaces, - and _ do not count */
+    size_t o = 0; for (size_t i = 0; i < n && o < 63; i++) { char c = in[i]; if (c == '_' || c == '-' || c == ' ') continue; out[o++] = (char)(c >= 'A' && c <= 'Z' ? c + 32 : c); }
+    out[o] = 0; return o; }
+static int in_perf(const Say *s, const char *name, size_t n){
+    if (!s->nperf || !n || n >= 64) return 0; char f[64]; perf_fold(name, n, f);
+    for (int i = 0; i < s->nperf; i++) if (!strcmp(s->perf[i], f)) return 1; return 0; }
 static int dis_add(Say *s, const char *path, const char *name, int what, const char *arg){
     if (s->ndis == 256) { fprintf(stderr, "%s: more parts than a recipe disposes of (256)\n", path); return -1; }
     for (int i = 0; i < s->ndis; i++) if (!strcmp(s->dis[i].name, name)) { if (what == D_KEY && s->dis[i].what == D_KEY) return 1;      /* one name may be the key of several kinds of thing (id) */
@@ -157,6 +167,12 @@ int say_says(Recipe *r, const char *path, char *tok){
                 else snprintf(targets + l, sizeof targets - l, " %s", more); }
             snprintf(a2, sizeof a2, "%s", targets); }
         return dis_add(s, path, nm, tok[0] == 'r' ? D_REFER : D_TYPE, a2); }
+    if (!strcmp(tok, "perfcache") && LAID) {                                    /* nothing read from the flags is attested: without them, nothing is read at all */
+        const lp_layout *l = lp_flags_map(NULL);
+        if (!l) { fprintf(stderr, "%s: perfcache: the flags are not at %s (laplace flags generates them)\n", path, lp_flags_path()); return -1; }
+        s->perf = xrealloc(s->perf, sizeof *s->perf * 2 * l->nfields); s->nperf = 0;
+        for (size_t i = 0; i < l->nfields; i++) { perf_fold(l->field[i].name, strlen(l->field[i].name), s->perf[s->nperf++]); perf_fold(l->field[i].say, strlen(l->field[i].say), s->perf[s->nperf++]); }
+        return 1; }
     if (!strcmp(tok, "attest") && LAID) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->natt == 32) { fprintf(stderr, "%s: attest TIER NAME... [of NAME] [by NAME]\n", path); return -1; }
         Att *x = &s->att[s->natt++]; memset(x, 0, sizeof *x); snprintf(x->tier, sizeof x->tier, "%s", a2); x->when = s->now;
         while (x->n < 64 && name_next(&at, nm, sizeof nm)) { if (!strcmp(nm, "by") || !strcmp(nm, "of")) { char w[64]; if (!name_next(&at, w, sizeof w)) { fprintf(stderr, "%s: attest ... %s NAME\n", path, nm); return -1; } snprintf(nm[0] == 'b' ? x->by : x->of, 64, "%s", w); continue; }
@@ -693,9 +709,11 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
                 if (y->kind == S_GROUP) {                                    /* parts: each VALUE under its KEY, or each piece, read as the part is, under the part's own name */
                     for (int32_t q = y->first; q >= 0; q = t->n[q].next) { const SNode *w = &t->n[q]; if (!w->vlen) continue; Ref v;
                         if (w->kind == S_VALUE && w->nlen && !s_named(w, (const char *)y->name, y->nlen)) { const Dis *dw = dis_of(s, w); if (dw && (dw->what == D_OMIT || dw->what == D_METADATA)) continue;      /* the file's bookkeeping says nothing */
+                            if (in_perf(s, (const char *)w->name, w->nlen)) continue;
                             Ref vw; if (!dw || !value_of(k, t, q, &vw, 0)) vw = text_of(w->val, w->vlen); Ref p[3] = { S, string_ref(w->name, w->nlen), vw }; claim(k, p, 3); continue; }
                         if (!value_of(k, t, q, &v, 0) || !memcmp(&v.id, &S.id, 16)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); } }
-                else { Ref v; if (!value_of(k, t, c, &v, 0) || !memcmp(&v.id, &S.id, 16)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); } }
+                else { if (in_perf(s, (const char *)y->name, y->nlen)) continue;
+                    Ref v; if (!value_of(k, t, c, &v, 0) || !memcmp(&v.id, &S.id, 16)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); } }
             }
             if (s->att[a].of[0]) { S = S0; has = had; }
             k->voiced = was; k->voice = wv; }

@@ -8,6 +8,10 @@ name ucd
 # Every record is an element on lines of its own: the file is parted before each, and read on every core.
 match ucd.all.flat.xml
 format xml
+# The properties the perf-cache's flags hold for every codepoint (tier0.flags: age, block, script, the categories
+# and classes, and every binary property) are read from there, not attested again: 52% of the file's attributes were
+# those properties' defaults alone, a row each.
+perfcache
 split char reserved noncharacter surrogate named-sequence provisional-named-sequence normalization-correction standardized-variant cjk-radical emoji-source block do-not-emit instead
 itself-mark hash
 

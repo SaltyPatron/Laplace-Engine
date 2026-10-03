@@ -94,11 +94,12 @@ static int by_hilbert(const void *a, const void *b){ uint64_t x = ((const NRef *
  * never what partitions go by):
  * rows near each other in the 4-ball are written together, so the coordinate and Hilbert indexes take a run of
  * neighbours on the same pages instead of one row per page in hash order. */
-static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_p, int atoms_needed, int own_txn){
+/* Rows lo..hi of a partition's bucket, which is in Hilbert order already: a stretch of the partition, so that a
+ * partition is written by as many connections as it has stretches. atoms: tier 0's atoms go with this stretch. */
+static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_t *rows_e, uint64_t *rows_p, int atoms_needed, int own_txn){
     char tn[64]; Copy c = { 0 }; char sql[160]; uint8_t geo[64 * 1024];
     lp_id *ids = NULL; uint64_t *runs = NULL; size_t idc = 0;
-    qsort(bucket[p], nbucket[p], sizeof(NRef), by_hilbert);
-    /* a partition's entities and their paths are one transaction: a load cut off between the two leaves no entity
+    /* a stretch's entities and their paths are one transaction: a load cut off between the two leaves no entity
      * without a physicality (Physicality: the counts match, or the system is wrong). The file trunks are written
      * inside the transaction that holds what they attested, which is already open: that one is not begun or ended here. */
     if (own_txn) { PGresult *b = PQexec(pg, "BEGIN"); if (PQresultStatus(b) != PGRES_COMMAND_OK) { fprintf(stderr, "begin: %s", PQerrorMessage(pg)); exit(1); } PQclear(b); }
@@ -111,7 +112,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
             size_t gl = lp_ewkb_point4(x, geo, sizeof geo);
             c16(&c, 4); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(T0[cp].hilbert)); c.rows++;
         }
-    for (uint64_t b = 0; b < nbucket[p]; b++) {
+    for (uint64_t b = lo; b < hi; b++) {
         Node *x = &NODE[bucket[p][b].idx];
         double xm[4]; for (int d = 0; d < 4; d++) xm[d] = (double)x->m[d] / LP_FIXED_ONE;
         size_t gl = lp_ewkb_point4(xm, geo, sizeof geo);
@@ -127,7 +128,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t *rows_e, uint64_t *rows_
             uint64_t one = 1; size_t gl = lp_ewkb_runs(&T0[cp].id, &one, 1, geo, sizeof geo); memset(mask + 4, 0, 32);
             c16(&c, 5); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cf_i64(&c, hsigned(T0[cp].hilbert)); cfield(&c, geo, (uint32_t)gl); cfield(&c, mask, 36); c.rows++;
         }
-    for (uint64_t b = 0; b < nbucket[p]; b++) {
+    for (uint64_t b = lo; b < hi; b++) {
         Node *x = &NODE[bucket[p][b].idx];
         if (x->nv > idc) { idc = x->nv * 2; ids = xrealloc(ids, idc * sizeof(lp_id)); runs = xrealloc(runs, idc * 8); }
         for (uint32_t v = 0; v < x->nv; v++) { ids[v] = VTX[x->voff + v].id; runs[v] = VTX[x->voff + v].m; }
@@ -189,13 +190,19 @@ static int ldg_has(const lp_id *w, const lp_id *by){
 static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led, uint64_t *nnew, uint64_t *nupd){
     Copy lc = { 0 }; char sql[300]; snprintf(sql, sizeof sql, "COPY attestation_%x (claim, witness, score, position) FROM STDIN (FORMAT binary)", h);
     copy_begin(&lc, pg, sql);
+    /* what this batch writes into the ledger, by the witnessed thing and its witness: the same witness witnessing the
+     * same thing again in the batch is the row already written (ConceptNet's partitions held each row twice) */
+    lp_idmap *mine = lp_idmap_new();
     for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i];
         if (e->kind == EV_MEMBER || (e->witnessed.b[0] >> 4) != h) continue;                /* witnessed within its record: the record's row */
-        if (ldg_has(&e->witnessed, e->own_witness ? &e->witness : &files[fi].witness.id)) continue;      /* this witness's, already in the ledger */
+        const lp_id *by = e->own_witness ? &e->witness : &files[fi].witness.id;
+        if (ldg_has(&e->witnessed, by)) continue;                                           /* this witness's, already in the ledger */
+        lp_id pair; for (int b = 0; b < 16; b++) pair.b[b] = e->witnessed.b[b] ^ by->b[(b + 7) & 15];   /* both are hashes: their mix names the pair */
+        bool fresh; lp_idmap_put(mine, &pair, &fresh); if (!fresh) continue;                /* already written by this batch */
         c16(&lc, 4); cfield(&lc, e->witnessed.b, 16); cfield(&lc, e->own_witness ? e->witness.b : files[fi].witness.id.b, 16); cf_f32(&lc, e->score);
         if (e->position) cf_i32(&lc, (int32_t)e->position); else c32(&lc, 0xFFFFFFFFu);
         lc.rows++; }
-    copy_end(&lc); *led += lc.rows; free(lc.b);
+    copy_end(&lc); *led += lc.rows; free(lc.b); lp_idmap_free(mine);
     Copy c = { 0 }; snprintf(sql, sizeof sql, "COPY consensus_%x (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)", h);
     copy_begin(&c, pg, sql);
     for (uint64_t i = 0; i < sn; i++) { const Standing *s = &stand[i]; if (s->had || (s->id.b[0] >> 4) != h) continue;
@@ -323,18 +330,37 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
       TABLE_EACH(x) if (x->keep == 1) cnt[part_of(&x->id, x->tier)]++;
       for (int p = 0; p < NPART; p++) { bucket[p] = malloc(sizeof(NRef) * (cnt[p] + 1)); nbucket[p] = 0; }
       TABLE_EACH(x) if (x->keep == 1) {
-          int p = part_of(&x->id, x->tier); bucket[p][nbucket[p]++] = nref(x); } } uint64_t re[NPART] = { 0 }, rp[NPART] = { 0 };
+          int p = part_of(&x->id, x->tier); bucket[p][nbucket[p]++] = nref(x); } } 
     /* A tier at a time, from the lowest: what a composition is made of is always of a lower tier than it, so whatever
      * is recorded has everything under it recorded, even if the writing is cut off. Trunk-to-leaf deduplication
      * rests on that. */
+    /* Within a tier every connection writes: each partition's new rows, in Hilbert order, are cut into stretches,
+     * about four a connection over the tier, and the stretches go to whichever connection is free. A tier that is one
+     * partition (7 and above) was one connection's alone, and sixteen partitions on twelve connections took two
+     * rounds; ConceptNet's COPY was 62% of its load at 60,734 rows/s. */
+    typedef struct { int p; uint64_t lo, hi; int atoms; } Stretch;
+    Stretch *job = malloc(sizeof(Stretch) * 1); uint64_t jcap = 1;
     for (int tier = 0; tier <= 16; tier++) {
-        #pragma omp parallel for num_threads(npg) schedule(dynamic)
+        uint64_t trows = 0, nj = 0;
+        #pragma omp parallel for num_threads(npg) schedule(dynamic) reduction(+:trows)
+        for (int p = tier * 16; p < tier * 16 + 16; p++) { qsort(bucket[p], nbucket[p], sizeof(NRef), by_hilbert); trows += nbucket[p]; }
+        uint64_t ch = trows / ((uint64_t)npg * 4) + 1; if (ch < 20000) ch = 20000;
+        if (tier == 16) ch = UINT64_MAX;                                    /* x holds every tier past 15 in one partition: a stretch of it could commit a node before what it holds, so it is one transaction, as it was */
         for (int p = tier * 16; p < tier * 16 + 16; p++) {
-            if (!nbucket[p] && !(atoms_needed && p / 16 == 0)) continue;         /* nothing new for this partition */
-            write_node_rows(pg[omp_get_thread_num()], p, &re[p], &rp[p], atoms_needed, 1);
+            int atoms = atoms_needed && tier == 0;
+            if (!nbucket[p] && !atoms) continue;                               /* nothing new for this partition */
+            for (uint64_t lo = 0; lo < nbucket[p] || (lo == 0 && atoms); lo = ch > UINT64_MAX - lo ? nbucket[p] : lo + ch) {
+                if (nj == jcap) { jcap *= 2; job = xrealloc(job, sizeof(Stretch) * jcap); }
+                job[nj++] = (Stretch){ p, lo, ch < nbucket[p] - lo ? lo + ch : nbucket[p], atoms && lo == 0 };
+                if (!nbucket[p]) break; }
         }
+        uint64_t te = 0, tp = 0;
+        #pragma omp parallel for num_threads(npg) schedule(dynamic, 1) reduction(+:te, tp)
+        for (uint64_t j = 0; j < nj; j++) { uint64_t e = 0, ph = 0; write_node_rows(pg[omp_get_thread_num()], job[j].p, job[j].lo, job[j].hi, &e, &ph, job[j].atoms, 1); te += e; tp += ph; }
+        st->ent_rows += te; st->phy_rows += tp;
     }
-    for (int p = 0; p < NPART; p++) { st->ent_rows += re[p]; st->phy_rows += rp[p]; free(bucket[p]); bucket[p] = NULL; }
+    free(job);
+    for (int p = 0; p < NPART; p++) { free(bucket[p]); bucket[p] = NULL; }
     st->t_copy += now() - t;
 
     /* ---- semantics: witnesses, the ledger, and standings played in reading order */
@@ -504,7 +530,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         for (int p = 0; p < NPART; p++) { bucket[p] = malloc(sizeof(NRef) * (cnt[p] + 1)); nbucket[p] = 0; }
         for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (!x || x->keep != 5) continue;
             int p = part_of(&x->id, x->tier); bucket[p][nbucket[p]++] = nref(x); x->keep = 1; }
-        for (int p = 0; p < NPART; p++) { uint64_t e = 0, ph = 0; if (nbucket[p]) { write_node_rows(pg[0], p, &e, &ph, 0, 0); st->ent_rows += e; st->phy_rows += ph; } free(bucket[p]); bucket[p] = NULL; }
+        for (int p = 0; p < NPART; p++) { uint64_t e = 0, ph = 0; if (nbucket[p]) { qsort(bucket[p], nbucket[p], sizeof(NRef), by_hilbert); write_node_rows(pg[0], p, 0, nbucket[p], &e, &ph, 0, 0); st->ent_rows += e; st->phy_rows += ph; } free(bucket[p]); bucket[p] = NULL; }
     }
     /* one transaction in parts: each prepared, part 0 last; then part 0 committed, which decides, and the rest */
     if (begun == 1) { if (!must(pg[0], "COMMIT")) return 1; }
