@@ -844,6 +844,12 @@ size_t file_record(const Recipe *r, const File *f, Ref *out, size_t cap){
     #undef WHEN
     return n;
 }
+/* The OS's record of a file as one node, the first part of its metadata tree: computed from stat alone, before a byte
+ * of the file is read, so a file whose trunk is recorded is found by it (ingest.c, files_recorded). 0: none. */
+int file_os(const Recipe *r, const File *f, Ref *out){
+    Ref m[32]; size_t n = file_record(r, f, m, 32); if (!n) return 0;
+    *out = compose(m, (uint32_t)n, over(m, n)); out->said = 0; return 1;
+}
 /* The file, read: every part of its outermost tier on every core, joined in the file's order; then its trunk, over
  * its metadata tree and its content tree. */
 static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw *hw){
@@ -947,7 +953,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     things.n = meta.n = 0;
     for (uint64_t j = 0; j < f->nsaid; j++) { Ref x = f->said[j]; if (x.said == LP_SAID_METADATA) { x.said = LP_SAID_TUPLE; push(&meta, &x); } else push(&things, &x); }
     free(f->said); f->said = NULL; f->nsaid = f->csaid = 0;
-    Ref *m = malloc(sizeof(Ref) * (meta.n + 32)); size_t nr = file_record(r, f, m, 32);        /* the OS's record of it, as its recipes dispose of it */
+    Ref *m = malloc(sizeof(Ref) * (meta.n + 1)); size_t nr = (size_t)file_os(r, f, m);          /* the OS's record of it, one node, first */
     memcpy(m + nr, meta.c, sizeof(Ref) * meta.n);
     size_t nm = nr + meta.n; Ref metadata; memset(&metadata, 0, sizeof metadata); if (nm) metadata = blocks_of(m, nm); free(m);
     if (things.n) { Ref content = blocks_of(things.c, things.n); content.said = 0;

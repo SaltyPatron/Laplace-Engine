@@ -1,14 +1,15 @@
 name atomic-10x-tuples
 # Every line is one object. Its members "head", "relation" and "tail" are the tuple, in that order, each as written:
-# [head, relation, tail], which the set attests. Its other members ("split", "rec_0.5" .. "rec_0.9", "p_valid_model")
-# are said of the tuple itself, under their own names. "p_valid_model" is a number between 0 and 1 that the set gives
-# every tuple: it is also the score the tuple is attested with.
+# [head, relation, tail], which the set attests, scored by "p_valid_model", the number between 0 and 1 its critic gives
+# every tuple. "rec_0.5" .. "rec_0.9" are that same number against thresholds (each true where p_valid_model is at least
+# 0.65344 / 0.83781 / 0.92709 / 0.95577 / 0.96755, checked on 1M lines), and "split" is which part of the release a line
+# is in: neither says anything of the tuple, and neither is read.
 match ATOMIC10X.jsonl
 format json
 tier record by \n
 
 thing record head relation tail
-content head relation tail split rec_* p_valid_model
+content head relation tail p_valid_model
+omit split rec_*
 itself record
 score record p_valid_model
-attest record split rec_*

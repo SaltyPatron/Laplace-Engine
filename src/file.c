@@ -24,9 +24,8 @@ static uint8_t above(const Ref *r, uint64_t n){ uint8_t t = 0; for (uint64_t i =
 /* The file is whole: its trunk, over its metadata and its content. */
 void file_close(File *f){
     if (f->laid) return;                                                   /* its trees came from the recipe's layout */
-    Ref m[32]; size_t nm = file_record(f->recipe, f, m, 32);              /* the OS's record of it, as its recipes dispose of it (say.c) */
-    if (!nm) { f->file = f->trunk; f->file.said = 0; f->has_file = 1; return; }
-    Ref part[2] = { said_metadata(compose(m, (uint32_t)nm, above(m, nm))), f->trunk }; part[1].said = 0;
+    Ref os; if (!file_os(f->recipe, f, &os)) { f->file = f->trunk; f->file.said = 0; f->has_file = 1; return; }   /* the OS's record of it, one node (say.c) */
+    Ref part[2] = { said_metadata(os), f->trunk }; part[1].said = 0;
     f->file = compose(part, 2, above(part, 2)); f->file.said = 0; f->has_file = 1;
 }
 

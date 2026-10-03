@@ -92,7 +92,8 @@ int cmd_deploy(int argc, char **argv){
         printf("  %-52s %'llu types, %'llu compositions, %'llu entities new, %'llu not as written%s   %.1f s\n", "the highway's contents, as entities", (unsigned long long)types, (unsigned long long)n, (unsigned long long)st.ent_rows, (unsigned long long)wrong, unknown ? ", some naming a node not written before them" : "", now() - t); }
     }
     pg = db_connect(conn_arg(argc, argv));
-    { char *db = PQescapeIdentifier(pg, PQdb(pg), strlen(PQdb(pg))), q[256]; snprintf(q, sizeof q, "ALTER DATABASE %s SET enable_parallel_append = off", db); PQclear(PQexec(pg, q)); PQfreemem(db); }
+    /* A named leaf keeps parallel_workers at 0. A statement on the parent is many leaves, and Gather is how it uses the cores. */
+    { char *db = PQescapeIdentifier(pg, PQdb(pg), strlen(PQdb(pg))), q[256]; snprintf(q, sizeof q, "ALTER DATABASE %s SET enable_parallel_append = on", db); PQclear(PQexec(pg, q)); PQfreemem(db); }
     PQfinish(pg);
     return cmd_status(argc, argv);
 }

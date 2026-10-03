@@ -164,6 +164,53 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
 }
 static const uint64_t *by_size_of;                                    /* the batch's files, longest first, ties in the order given */
 static int by_size(const void *a, const void *b){ int i = *(const int *)a, j = *(const int *)b; uint64_t x = by_size_of[i], y = by_size_of[j]; return x < y ? 1 : x > y ? -1 : i - j; }
+/* The child writing a batch: waited for, its counts added to the run's. Nonzero when it failed. */
+static int loader_wait(pid_t *pid, int fd, LoadStats *st){
+    LoadStats cs; memset(&cs, 0, sizeof cs); ssize_t got = read(fd, &cs, sizeof cs); close(fd);
+    int status = 0; while (waitpid(*pid, &status, 0) < 0) { } *pid = 0;
+    if (got != (ssize_t)sizeof cs || !WIFEXITED(status) || WEXITSTATUS(status)) { fprintf(stderr, "\n  a batch was not written (its writer exited %d)\n", WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status)); return 1; }
+    uint64_t *a = (uint64_t *)st, *b = (uint64_t *)&cs; for (size_t k = 0; k < offsetof(LoadStats, t_dedup) / sizeof(uint64_t); k++) a[k] += b[k];
+    double *x = &st->t_dedup, *y = &cs.t_dedup; for (size_t k = 0; k < (sizeof(LoadStats) - offsetof(LoadStats, t_dedup)) / sizeof(double); k++) x[k] += y[k];
+    return 0;
+}
+/* Which files are recorded, before any is read (the inventor: "if you have the file's trunk node (and it's hash metadata
+ * matches), you know you have everything in that file already"). A file's metadata tree begins with the OS's record of
+ * it, one node computed from stat alone (say.c, file_os); the container index gives what holds that node: the file's
+ * trunk, where it is the metadata, or the metadata tree that begins with it, whose container is the trunk. A file found
+ * is recorded with everything under it, and is never decomposed. Returns how many were found. */
+static int ingest_ewkb_point(const uint8_t *e, size_t n, lp_coord *out){
+    if (n < 5 || e[0] != 1) return 0; uint32_t t; memcpy(&t, e + 1, 4); size_t off = 5; if (t & 0x20000000u) off += 4;
+    if (n < off + 32) return 0; for (int d = 0; d < 4; d++) { double v; memcpy(&v, e + off + 8 * d, 8); out->m[d] = (int64_t)(v * (double)LP_FIXED_ONE); } return 1;
+}
+static int files_recorded(const char *conninfo, File *files, int nfiles){
+    lp_id *want = malloc(sizeof(lp_id) * (size_t)(nfiles + 1)); int *of = malloc(sizeof(int) * (size_t)(nfiles + 1)), nw = 0, found = 0;
+    for (int i = 0; i < nfiles; i++) { if (files[i].skipped || files[i].known || !files[i].recipe) continue; Ref os; if (file_os(files[i].recipe, &files[i], &os)) { want[nw] = os.id; of[nw++] = i; } }
+    PGconn *pg = nw ? db_connect(conninfo) : NULL;
+    for (int level = 0; level < 8 && nw; level++) {                          /* a metadata tree factored into blocks is a few levels deep */
+        lp_idmap *at = lp_idmap_new(); for (int k = 0; k < nw; k++) { bool fresh; lp_idmap_put(at, &want[k], &fresh); }
+        lp_id *next = malloc(sizeof(lp_id) * (size_t)nw); int *nof = malloc(sizeof(int) * (size_t)nw), nn = 0;
+        for (int k0 = 0; k0 < nw; k0 += 10000) { int k1 = nw - k0 < 10000 ? nw : k0 + 10000; uint8_t *ab = malloc(20 + 20 * (size_t)(k1 - k0)); size_t al = ids_param(ab, want + k0, (uint32_t)(k1 - k0));
+            const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+            PGresult *r = PQexecParams(pg, "SELECT c.entity, st_asewkb(c.path), c.tier, st_asewkb(e.coord) FROM laplace_containers($1::blake3[], '{}'::smallint[]) c JOIN entity e ON e.id = c.entity AND e.tier = c.tier", 1, NULL, v, l, f, 1);
+            if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "which files are recorded: %s", PQerrorMessage(pg)); PQclear(r); free(ab); break; }
+            for (int j = 0; j < PQntuples(r); j++) {
+                lp_vertex vx[2]; size_t nv = lp_path_vertices((const uint8_t *)PQgetvalue(r, j, 1), (size_t)PQgetlength(r, j, 1), vx, 2); if (!nv) continue;
+                int64_t k = lp_idmap_find(at, &vx[0].id); if (k < 0) continue;                    /* held, but not first: not its metadata */
+                lp_id c; memcpy(c.b, PQgetvalue(r, j, 0), 16);
+                if (vx[0].said == LP_SAID_METADATA && nv >= 2) {                                   /* the file's trunk */
+                    File *fl = &files[of[k]]; if (fl->known) continue;
+                    lp_coord co; if (!ingest_ewkb_point((const uint8_t *)PQgetvalue(r, j, 3), (size_t)PQgetlength(r, j, 3), &co)) continue;
+                    uint16_t tier; memcpy(&tier, PQgetvalue(r, j, 2), 2); tier = ntohs(tier);
+                    memset(&fl->file, 0, sizeof fl->file); fl->file.id = c; fl->file.c = co; fl->file.tier = (uint8_t)tier; fl->file.said = 0;
+                    fl->has_file = 1; fl->known = 1; found++; }
+                else { next[nn] = c; nof[nn++] = of[k]; } }                                         /* a metadata tree it begins: what holds that is next */
+            PQclear(r); free(ab); }
+        lp_idmap_free(at); free(want); free(of); want = next; of = nof; nw = 0;
+        for (int k = 0; k < nn; k++) if (!files[of[k]].known) { want[nw] = want[k]; of[nw++] = of[k]; }
+    }
+    if (pg) PQfinish(pg); free(want); free(of); table_reset();              /* what was composed to ask is composed again for the files that are read */
+    return found;
+}
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
     int threads = 0, do_load = 1, a = 1, show_claims = 0; const char *of = NULL;
@@ -254,12 +301,15 @@ int cmd_ingest(int argc, char **argv){
     /* Whether a file is recorded is not asked of its bytes: it is decomposed, its trunk is computed here, and the
      * trunk is looked for, trunk to leaf, with everything else (load). */
     int nknown = 0; ctx_open(threads);
+    if (do_load) { double tk = now(); nknown = files_recorded(conninfo, files, nfiles); if (nknown) fprintf(stderr, "  %d files recorded already, found by the OS's record of them, not read (%.2f s)\n", nknown, now() - tk); }
 
     /* ---- a batch at a time: decomposed on every core, recomposed and compared, recorded, and the table emptied for
      * the next. A file too long for one batch is read a stretch at a time, if its records can be parted. */
     t = now();
     uint64_t batch = (uint64_t)(getenv("LAPLACE_BATCH_MB") ? atoll(getenv("LAPLACE_BATCH_MB")) : 1024) << 20;
     uint64_t bytes = 0, nev = 0; int done = 0, exact = 0, mism = 0, batches = 0; double t_dec = 0, t_rec = 0; LoadStats st = { 0 };
+    pid_t loader = 0; int loader_fd = -1;                                     /* the child writing the batch before, if one is */
+    st.known += (uint64_t)nknown;                                            /* found by their OS record, never read */
     uint64_t *size = calloc((size_t)nfiles, 8);
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
         size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
@@ -360,13 +410,24 @@ int cmd_ingest(int argc, char **argv){
         }
         t_rec += now() - td;
         for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
-        if (do_load && load(conninfo, threads, files + a0, b0 - a0, &st)) return 1;
+        if (do_load) {
+            /* The batch before is written and committed first, so this batch's lookups see it. When more batches follow,
+             * this one is written by a child, from its copy of the node table, while this process empties the table and
+             * decomposes the next on every core: the cores and the database work at the same time. */
+            if (loader > 0 && loader_wait(&loader, loader_fd, &st)) return 1;
+            if (b0 < nfiles) { int pfd[2]; if (pipe(pfd)) { perror("pipe"); return 1; } fflush(NULL); pid_t p = fork();
+                if (p < 0) { perror("fork"); return 1; }
+                if (!p) { close(pfd[0]); LoadStats cs; memset(&cs, 0, sizeof cs); int rc = load(conninfo, threads, files + a0, b0 - a0, &cs);
+                          if (write(pfd[1], &cs, sizeof cs) != (ssize_t)sizeof cs) rc = 1; fflush(NULL); _exit(rc ? 1 : 0); }
+                close(pfd[1]); loader = p; loader_fd = pfd[0]; }
+            else if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1; }
         batches++;
         if (b0 < nfiles) { for (int i = a0; i < b0; i++) { free(files[i].ev.e); memset(&files[i].ev, 0, sizeof files[i].ev); } table_reset(); }
         a0 = b0;
     }
     #undef SHOW
     #undef WHOLE
+    if (loader > 0 && loader_wait(&loader, loader_fd, &st)) return 1;        /* the last batch a child wrote */
     fputc('\n', stderr);
     extern uint64_t table_total(void), table_hits(void);
     printf("\n== decomposition: %d files, %.1f MB, content recomposed byte for byte or curated %d, mismatched %d%s\n", nfiles, bytes / 1e6, exact, mism, batches > 1 ? ", a batch at a time" : "");
@@ -394,25 +455,6 @@ int cmd_ingest(int argc, char **argv){
               printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded"); }
           else printf("  the source's trunk: none, since its source file names no record (witness or called)\n");
           table_reset(); } }
-    /* What the container index was handed during the load it keeps in a list of its own until it is merged, and
-     * every lookup reads that list through: it is merged here, once, so no lookup pays for a load. Where the index
-     * is not built yet (a bulk load: laplace index comes after) there is nothing to merge. */
-    { double tm = now(); PGconn *pg = db_connect(conninfo);                 /* one index a connection at a time, every connection at once */
-      PGresult *r = PQexec(pg, "SELECT i.indexrelid::regclass::text FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am a ON a.oid = c.relam "
-                               "WHERE a.amname = 'gin' AND c.relkind = 'i' ORDER BY pg_relation_size(i.indexrelid) DESC");
-      if (PQresultStatus(r) != PGRES_TUPLES_OK) fprintf(stderr, "merging the container index: %s", PQerrorMessage(pg));
-      else if (PQntuples(r)) {
-          int ni = PQntuples(r), nc = threads < ni ? threads : ni; long long pages = 0; int bad = 0;
-          PGconn **mc = calloc((size_t)nc, sizeof(PGconn *));
-          #pragma omp parallel for num_threads(nc) schedule(dynamic, 1) reduction(+:pages, bad)
-          for (int k = 0; k < ni; k++) {
-              PGconn **c = &mc[omp_get_thread_num()]; if (!*c) *c = db_connect(conninfo);
-              const char *v[1] = { PQgetvalue(r, k, 0) }; PGresult *q = PQexecParams(*c, "SELECT gin_clean_pending_list($1::regclass)", 1, NULL, v, NULL, NULL, 0);
-              if (PQresultStatus(q) == PGRES_TUPLES_OK) pages += atoll(PQgetvalue(q, 0, 0)); else { bad++; fprintf(stderr, "merging %s: %s", v[0], PQerrorMessage(*c)); }
-              PQclear(q); }
-          for (int k = 0; k < nc; k++) if (mc[k]) PQfinish(mc[k]); free(mc);
-          if (!bad) printf("  %-44s %8.2f s   %'lld pages merged in %d indexes on %d connections\n", "container index, merged", now() - tm, pages, ni, nc); }
-      PQclear(r); PQfinish(pg); }
     printf("\n== total %.1f s\n", now() - T);
     return mism ? 1 : 0;
 }

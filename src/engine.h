@@ -18,6 +18,7 @@ const char *laplace_recipes(void);                   /* LAPLACE_RECIPES */
 const char *laplace_grammars(void);                  /* LAPLACE_GRAMMARS */
 const char *laplace_ucd(void);                       /* LAPLACE_UCD */
 PGconn *db_connect(const char *conninfo);            /* exits with the server's message if it cannot */
+const char *db_noted(void);                          /* the conninfo of the last db_connect */
 PGresult *db_ask(PGconn *, const char *sql, int n, const char *const *v, const int *l, const int *f);   /* planned once for the connection; sql: a literal */
 
 /* ---- the personality firmware: a pull's decisions, read from a file, never from the records (firmware.c) */
@@ -214,6 +215,17 @@ extern uint32_t id_oid;                                               /* the dat
 size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n);         /* a binary blake3[] parameter; out holds 20 + 20 n bytes */
 typedef struct { lp_id *id; int n; } Run;                               /* a trajectory's constituents in order, runs written out */
 Run run_of(const uint8_t *ewkb, size_t len);                            /* ... from a path as the database sends it (lp_path_ids) */
+/* A path that holds the keys, read from the leaf partitions above floor: one statement a leaf, every core at once.
+ * each = 0: the path holds every key (src is 0). each = 1: the path holds one key, src is that key's place.
+ * standing = 1: the consensus on the path's entity, one partition a core, after the paths. claim is mask bit 0.
+ * floor < 0 reads every tier. The caller frees the paths. */
+typedef struct {
+    lp_id entity; int src; int16_t tier; uint8_t claim, stood;
+    uint8_t *path; int path_len; lp_rating r; int matches;
+} Hold;
+Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standing, int *nout);
+void holds_free(Hold *h, int n);
+int  tier_max(const lp_id *ids, int n);                                 /* the highest tier these IDs are recorded at; -1 when none are */
 void   refuse_named(const Firmware *fw);                                 /* the predicates this pass's firmware refuses */
 const char *refuse_param(int *len);                                      /* ... as the blake3[] every claim read passes */
 void   id_text(const lp_id *id, char out[33]);                        /* 32 hexadecimal digits */
@@ -224,6 +236,7 @@ void file_close(File *);
 int  source_trunk(const Source *, const File *, int nfiles, Ref *out);  /* the source's trunk: [its record, its files' trunks] */
 const char *source_called(const Source *);                            /* its record: its witness, or its called line */
 size_t file_record(const Recipe *, const File *, Ref *out, size_t cap);   /* the OS's record of a file, its parts as its recipes dispose of them */
+int  file_os(const Recipe *, const File *, Ref *out);                   /* the OS's record of a file as one node, from stat alone */
 void file_record_stock(const Recipe *);                                /* the stock recipe that disposes of them where a file's own does not */
 int  say_only_disposes(const Recipe *);                                              /* the file is whole: its metadata, its content, its trunk */
 

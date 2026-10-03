@@ -73,17 +73,15 @@ const char *refuse_param(int *len){
 /* The claims that hold the given parts in their places (a part not given is open): at most fan of them; *capped says
  * there were more. k: how many deviations below its rating a claim is read at. */
 Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, double k, int *n, int *capped){
+    (void)pg;
     lp_id keys[3]; uint32_t nk = 0; for (int i = 0; i < 3; i++) if (have[i]) keys[nk++] = part[i];
-    uint8_t ab[80]; size_t al = ids_param(ab, keys, nk); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
-    int rl; const char *v[4] = { (const char *)ab, lim, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
-    PGresult *q = db_ask(pg,
-        "SELECT entity, path, rating, deviation, volatility, matches FROM laplace_claims($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
-    if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
-    int rows = PQntuples(q); *capped = rows > fan; if (rows > fan) rows = fan;
-    Claim *c = malloc(sizeof(Claim) * (size_t)(rows ? rows : 1)); int m = 0;
-    for (int j = 0; j < rows; j++) {
-        Claim *x = &c[m]; memcpy(x->id.b, PQgetvalue(q, j, 0), 16); x->np = 0; x->position = 0;
-        size_t np_ = lp_path_ids((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1), x->part, MAXPARTS); x->np = np_ < MAXPARTS ? (int)np_ : MAXPARTS;
+    /* the tier is known once the IDs are: every leaf above it, together, then the fan keeps the hardest pulling */
+    int nh = 0; Hold *h = holds_above(keys, (int)nk, tier_max(keys, (int)nk), 0, 1, &nh);
+    Claim *c = malloc(sizeof(Claim) * (size_t)(nh ? nh : 1)); int m = 0;
+    for (int j = 0; j < nh; j++) {
+        if (!h[j].claim || !h[j].stood) continue;
+        Claim *x = &c[m]; memcpy(x->id.b, h[j].entity.b, 16); x->np = 0; x->position = 0;
+        size_t np_ = lp_path_ids(h[j].path, (size_t)h[j].path_len, x->part, MAXPARTS); x->np = np_ < MAXPARTS ? (int)np_ : MAXPARTS;
         if (x->np < 2) continue;
         /* in its place: the first part given is the claim's first, the last its last, and the middle one between them */
         int fits = 1, last = x->np - 1;
@@ -91,12 +89,11 @@ Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, doub
         if (have[2] > 1 && memcmp(&x->part[last], &part[2], 16)) fits = 0;
         if (have[1] > 1) { int in = 0; for (int i = 1; i < last || (i == 1 && x->np == 2 && i <= last); i++) if (!memcmp(&x->part[i], &part[1], 16)) in = 1; if (!in) fits = 0; }
         if (!fits) continue;
-        x->r = (lp_rating){ lp_be_f64(PQgetvalue(q, j, 2)), lp_be_f64(PQgetvalue(q, j, 3)), lp_be_f64(PQgetvalue(q, j, 4)) };
-        uint32_t mb; memcpy(&mb, PQgetvalue(q, j, 5), 4); x->matches = (int)ntohl(mb);
-        x->conf = lp_confidence(&x->r, k); m++;
+        x->r = h[j].r; x->matches = h[j].matches; x->conf = lp_confidence(&x->r, k); m++;
     }
-    PQclear(q); *n = m;
+    holds_free(h, nh); *n = m;
     qsort(c, (size_t)m, sizeof(Claim), claim_by_conf);
+    *capped = fan >= 0 && m > fan; if (*capped) *n = fan;
     return c;
 }
 /* Every claim that holds an entity, wherever in it. */

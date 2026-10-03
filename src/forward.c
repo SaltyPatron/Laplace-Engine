@@ -77,34 +77,37 @@ int cmd_pull(int argc, char **argv){
        * those observations sit in are the strands; the entity at the other end of each strand (the subject when the
        * observation is the object, the object when it is the subject, never the predicate) pulls back as hard as the
        * strand's standing, summed over every strand that reaches it. What pulls back hardest is what the prompt is about. */
-      t = now(); lp_id *obs = NULL; int nobs = 0, cobs = 0;
+      t = now(); typedef struct { lp_id id; int16_t tier; } Ob; Ob *obs = NULL; int nobs = 0, cobs = 0;
       for (int r = 0; r < nr; ) { int i = (int)lp_be(PQgetvalue(q, r, 0), 4), j = (int)lp_be(PQgetvalue(q, r, 1), 4); long runs = (long)lp_be(PQgetvalue(q, r, 3), 8);
           while (r < nr && (int)lp_be(PQgetvalue(q, r, 0), 4) == i && (int)lp_be(PQgetvalue(q, r, 1), 4) == j) r++;
           int words = 0; for (int k = i - 1; k < j; k++) words += table_find(&ph[k]) != NULL; if (words < 2 || !runs || nobs >= 2048) continue;
-          uint8_t *sb = malloc(20 + 20 * (size_t)(j - i + 1)); size_t sl = ids_param(sb, ph + i - 1, (uint32_t)(j - i + 1)); const char *sv[1] = { (const char *)sb }; int sll[1] = { (int)sl }, sf[1] = { 1 };
-          PGresult *o = db_ask(pg, "SELECT entity FROM laplace_containers($1::blake3[], '{}'::smallint[]) WHERE NOT (mask ? 0::smallint) LIMIT 128", 1, sv, sll, sf);
-          if (PQresultStatus(o) == PGRES_TUPLES_OK) for (int z = 0; z < PQntuples(o); z++) { lp_id ob; memcpy(ob.b, PQgetvalue(o, z, 0), 16); int dup = 0;
-              for (int u = 0; u < nobs && !dup; u++) dup = !memcmp(&obs[u], &ob, 16); if (dup) continue;
-              if (nobs == cobs) { cobs = cobs ? cobs * 2 : 256; obs = xrealloc(obs, sizeof(lp_id) * (size_t)cobs); } obs[nobs++] = ob; }
-          PQclear(o); free(sb); }
+          int floor = 0; for (int k = i - 1; k < j; k++) { Node *nd = table_find(&ph[k]); if (nd && nd->tier > floor) floor = nd->tier; }
+          int nh = 0; Hold *hh = holds_above(ph + i - 1, j - i + 1, floor, 0, 0, &nh);
+          for (int z = 0; z < nh && nobs < 2048; z++) { if (hh[z].claim) continue; int dup = 0;
+              for (int u = 0; u < nobs && !dup; u++) dup = !memcmp(&obs[u].id, &hh[z].entity, 16); if (dup) continue;
+              if (nobs == cobs) { cobs = cobs ? cobs * 2 : 256; obs = xrealloc(obs, sizeof(Ob) * (size_t)cobs); } obs[nobs++] = (Ob){ hh[z].entity, hh[z].tier }; }
+          holds_free(hh, nh); }
       typedef struct { lp_id id; double pull; int strands; } Tug; Tug *tug = NULL; int ntug = 0, ctug = 0, nstr = 0, nref = 0; double t_obs = now() - t; t = now();
       lp_id wids[FW_WEIGHS]; weights_named(c, &fw, wids);
       lp_id refuse[FW_NAMES]; for (int z = 0; z < fw.nrefuse_predicate; z++) refuse[z] = entity_named(c, fw.refuse_predicate[z], NULL, 0, NULL).id;     /* the firmware's refusals: strands of a kind it does not navigate */
-      if (nobs) { uint8_t *ob = malloc(20 + 20 * (size_t)nobs); size_t ol = ids_param(ob, obs, (uint32_t)nobs); char fan2[24]; snprintf(fan2, sizeof fan2, "%d", 64);
-          int rl; const char *ov[3] = { (const char *)ob, fan2, refuse_param(&rl) }; int oll[3] = { (int)ol, (int)strlen(fan2), rl }, of_[3] = { 1, 0, 1 };
-          PGresult *o = db_ask(pg, "SELECT i, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, '{0}'::smallint[], $3::blake3[])", 3, ov, oll, of_);     /* one call: every strand of every observation */
-          if (PQresultStatus(o) != PGRES_TUPLES_OK) { fprintf(stderr, "fold: %s", PQerrorMessage(pg)); return 1; }
-          for (int z = 0; z < PQntuples(o); z++) { int oi = (int)lp_be(PQgetvalue(o, z, 0), 8) - 1; if (oi < 0 || oi >= nobs) continue;
-              Run rn = run_of((const uint8_t *)PQgetvalue(o, z, 1), (size_t)PQgetlength(o, z, 1)); lp_rating rt = { lp_be_f64(PQgetvalue(o, z, 2)), lp_be_f64(PQgetvalue(o, z, 3)), lp_be_f64(PQgetvalue(o, z, 4)) };
-              int at = -1; for (int k = 0; k < rn.n && at < 0; k++) if (!memcmp(&rn.id[k], &obs[oi], 16)) at = k;
-              int other = rn.n == 2 ? 1 - at : rn.n >= 3 && at == 0 ? rn.n - 1 : rn.n >= 3 && at == rn.n - 1 ? 0 : -1;        /* the other end; an observation that is the predicate pulls nothing */
-              int refused_ = 0; for (int k = 1; k + 1 < rn.n && !refused_; k++) for (int z = 0; z < fw.nrefuse_predicate; z++) if (!memcmp(&rn.id[k], &refuse[z], 16)) refused_ = 1;
-              if (refused_) { nref++; other = -1; }
-              if (at >= 0 && other >= 0) { nstr++; double c_ = lp_confidence(&rt, fw.k) * strand_weight(&fw, wids, rn.id, rn.n); int found = -1; for (int u = 0; u < ntug; u++) if (!memcmp(&tug[u].id, &rn.id[other], 16)) { found = u; break; }
-                  if (found < 0) { if (ntug == ctug) { ctug = ctug ? ctug * 2 : 256; tug = xrealloc(tug, sizeof(Tug) * (size_t)ctug); } tug[ntug] = (Tug){ rn.id[other], 0, 0 }; found = ntug++; }
-                  tug[found].pull += c_; tug[found].strands++; }
-              free(rn.id); }
-          PQclear(o); free(ob); }
+      if (nobs) {
+          /* one tier at a time: a tier-4 observation is not looked for in tier 3. Every leaf of the tiers above, on every core. */
+          uint8_t seen[256]; memset(seen, 0, sizeof seen);
+          for (int s = 0; s < nobs; s++) { int tr = obs[s].tier; if (tr < 0 || tr > 255 || seen[tr]) continue; seen[tr] = 1;
+              lp_id *g = malloc(sizeof(lp_id) * (size_t)nobs); int *map = malloc(sizeof(int) * (size_t)nobs); int ng = 0;
+              for (int u = 0; u < nobs; u++) if (obs[u].tier == tr) { g[ng] = obs[u].id; map[ng++] = u; }
+              int nh = 0; Hold *hh = holds_above(g, ng, tr, 1, 1, &nh);
+              for (int z = 0; z < nh; z++) { int oi = hh[z].src; if (oi < 0 || oi >= ng || !hh[z].claim || !hh[z].stood) continue; oi = map[oi];
+                  Run rn = run_of(hh[z].path, (size_t)hh[z].path_len); lp_rating rt = hh[z].r;
+                  int at = -1; for (int k = 0; k < rn.n && at < 0; k++) if (!memcmp(&rn.id[k], &obs[oi].id, 16)) at = k;
+                  int other = rn.n == 2 ? 1 - at : rn.n >= 3 && at == 0 ? rn.n - 1 : rn.n >= 3 && at == rn.n - 1 ? 0 : -1;        /* the other end; an observation that is the predicate pulls nothing */
+                  int refused_ = 0; for (int k = 1; k + 1 < rn.n && !refused_; k++) for (int y = 0; y < fw.nrefuse_predicate; y++) if (!memcmp(&rn.id[k], &refuse[y], 16)) refused_ = 1;
+                  if (refused_) { nref++; other = -1; }
+                  if (at >= 0 && other >= 0) { nstr++; double c_ = lp_confidence(&rt, fw.k) * strand_weight(&fw, wids, rn.id, rn.n); int found = -1; for (int u = 0; u < ntug; u++) if (!memcmp(&tug[u].id, &rn.id[other], 16)) { found = u; break; }
+                      if (found < 0) { if (ntug == ctug) { ctug = ctug ? ctug * 2 : 256; tug = xrealloc(tug, sizeof(Tug) * (size_t)ctug); } tug[ntug] = (Tug){ rn.id[other], 0, 0 }; found = ntug++; }
+                      tug[found].pull += c_; tug[found].strands++; }
+                  free(rn.id); }
+              holds_free(hh, nh); free(g); free(map); } }
       for (int u = 0; u < ntug; u++) for (int k = 0; k < np; k++) if (!memcmp(&tug[u].id, &ph[k], 16)) tug[u].pull = 0;     /* the prompt's own words pull on nothing */
       for (int u = 1; u < ntug; u++) { Tug x = tug[u]; int y = u; while (y > 0 && tug[y - 1].pull < x.pull) { tug[y] = tug[y - 1]; y--; } tug[y] = x; }
       for (int u = 0; u < ntug && u < 12; u++) reader_want(rd, &tug[u].id);
@@ -139,22 +142,19 @@ int cmd_pull(int argc, char **argv){
             /* the rest of the branch the prompt is a run of: every trajectory that holds the run, followed along what
              * they go on to, constituent by constituent, for as long as more than one of them goes the same way, and
              * then along the one that is left to its end */
-            lp_id *keys = malloc(sizeof(lp_id) * (size_t)np); int nk = 0;
-            for (int i = 0; i < np; i++) if (table_find(&ph[i])) keys[nk++] = ph[i];
+            lp_id *keys = malloc(sizeof(lp_id) * (size_t)np); int nk = 0, floor = 0;
+            for (int i = 0; i < np; i++) { Node *nd = table_find(&ph[i]); if (!nd) continue; keys[nk++] = ph[i]; if (nd->tier > floor) floor = nd->tier; }
             if (!nk) { memcpy(keys, ph, sizeof(lp_id) * (size_t)np); nk = np; }
-            uint8_t *ab = malloc(20 + 20 * (size_t)nk); size_t al = ids_param(ab, keys, (uint32_t)nk);
-            const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-            PGresult *q = db_ask(pg, "SELECT entity, path FROM laplace_containers($1::blake3[], '{}'::smallint[])", 1, v, l, f);
-            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
-            typedef struct { lp_id *id; int n; lp_id in; } Rest; Rest *rest = malloc(sizeof(Rest) * (size_t)(PQntuples(q) + 1)); int nrest = 0, holders = 0;
-            for (int j = 0; j < PQntuples(q); j++) {
-                Run r = run_of((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1)); int found = 0;
+            int nh = 0; Hold *hh = holds_above(keys, nk, floor, 0, 0, &nh);
+            typedef struct { lp_id *id; int n; lp_id in; } Rest; Rest *rest = malloc(sizeof(Rest) * (size_t)(nh + 1)); int nrest = 0, holders = 0;
+            for (int j = 0; j < nh; j++) {
+                Run r = run_of(hh[j].path, (size_t)hh[j].path_len); int found = 0;
                 for (int i = 0; i + np <= r.n; i++) if (!memcmp(&r.id[i], ph, sizeof(lp_id) * (size_t)np)) {          /* each place it holds the run */
-                    Rest x = { malloc(sizeof(lp_id) * (size_t)(r.n - i - np + 1)), r.n - i - np }; memcpy(x.id, &r.id[i + np], sizeof(lp_id) * (size_t)x.n); memcpy(x.in.b, PQgetvalue(q, j, 0), 16);
+                    Rest x = { malloc(sizeof(lp_id) * (size_t)(r.n - i - np + 1)), r.n - i - np }; memcpy(x.id, &r.id[i + np], sizeof(lp_id) * (size_t)x.n); memcpy(x.in.b, hh[j].entity.b, 16);
                     rest = xrealloc(rest, sizeof(Rest) * (size_t)(nrest + 2)); rest[nrest++] = x; found = 1; }
                 holders += found; free(r.id);
             }
-            PQclear(q); free(ab); free(keys);
+            holds_free(hh, nh); free(keys);
             printf("\nobserved   %d trajector%s hold the prompt as a run, in %d places   (%.1f ms)\n", holders, holders == 1 ? "y" : "ies", nrest, (now() - t) * 1000);
             lp_id *seg = malloc(sizeof(lp_id) * 4096); int nseg = 0; uint8_t *alive = malloc((size_t)(nrest ? nrest : 1)); memset(alive, 1, (size_t)(nrest ? nrest : 1)); int nalive = nrest, shared = 0;
             for (int at = 0; nalive && nseg < 4096; at++) {

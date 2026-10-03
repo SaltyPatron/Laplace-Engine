@@ -26,6 +26,9 @@ part start by / space _
 part end by / space _
 part json by object
 
+# ExternalURL is no relation between terms: its end is a URL of the term on another site, which split at its slashes
+# made wiki and en.wiktionary.org things of their own (about 49M attestations). Those edges are not read.
+where rel is-not /r/ExternalURL
 omit uri dataset license process activity
 content rel start end weight surfaceText surfaceStart surfaceEnd
 own contributor

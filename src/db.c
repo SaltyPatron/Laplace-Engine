@@ -360,58 +360,36 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
                 (unsigned long long)st->new_nodes, (unsigned long long)st->found);
     }
     free(front); fputc('\n', stderr);
-    /* a file's trunk is written last, after what the file attested: it is held back from the writing below */
-    uint64_t nlast = 0;
-    for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (x && x->keep == 1) { x->keep = 5; nlast++; } }
     st->t_dedup += now() - t;
 
-    /* ---- every leaf partition on its own connection; new nodes bucketed by partition once */
+    /* ---- the batch is one transaction, in parts, one a connection, prepared and committed together below: what is
+     * recorded of it is all of it, so its nodes need no order among themselves (leaf to trunk holds by the commit).
+     * Each part copies its share of the new nodes into entity and physicality: two statements a connection. */
     t = now();
+    int nparts = npg < 16 ? npg : 16, begun = nparts; char xid0[32] = "";      /* part 0's transaction ID names the parts */
+    for (int j = 0; j < nparts; j++) if (!must(pg[j], "BEGIN")) return 1;
+    { PGresult *x = PQexec(pg[0], "SELECT pg_current_xact_id()"); if (PQresultStatus(x) != PGRES_TUPLES_OK) { fprintf(stderr, "transaction: %s", PQerrorMessage(pg[0])); return 1; }
+      snprintf(xid0, sizeof xid0, "%s", PQgetvalue(x, 0, 0)); PQclear(x); }
+    /* Each leaf partition (its tier, and the range of IDs the leaf holds) is one connection's alone, its new rows
+     * copied in Hilbert order: no two connections write one leaf's pages, and a leaf's heap fills in order. */
     { uint64_t cnt[NPART] = { 0 };
       TABLE_EACH(x) if (x->keep == 1) cnt[part_of(&x->id, x->tier)]++;
       for (int p = 0; p < NPART; p++) { bucket[p] = malloc(sizeof(NRef) * (cnt[p] + 1)); nbucket[p] = 0; }
-      TABLE_EACH(x) if (x->keep == 1) {
-          int p = part_of(&x->id, x->tier); bucket[p][nbucket[p]++] = nref(x); } } 
-    /* A tier at a time, from the lowest: what a composition is made of is always of a lower tier than it, so whatever
-     * is recorded has everything under it recorded, even if the writing is cut off. Trunk-to-leaf deduplication
-     * rests on that. */
-    /* Within a tier every connection writes: each partition's new rows, in Hilbert order, are cut into stretches,
-     * about four a connection over the tier, and the stretches go to whichever connection is free. A tier that is one
-     * partition (7 and above) was one connection's alone, and sixteen partitions on twelve connections took two
-     * rounds; ConceptNet's COPY was 62% of its load at 60,734 rows/s. */
-    typedef struct { int p; uint64_t lo, hi; int atoms; } Stretch;
-    Stretch *job = malloc(sizeof(Stretch) * 1); uint64_t jcap = 1;
-    for (int tier = 0; tier <= 16; tier++) {
-        uint64_t trows = 0, nj = 0;
-        #pragma omp parallel for num_threads(npg) schedule(dynamic) reduction(+:trows)
-        for (int p = tier * 16; p < tier * 16 + 16; p++) { qsort(bucket[p], nbucket[p], sizeof(NRef), by_hilbert); trows += nbucket[p]; }
-        uint64_t ch = trows / ((uint64_t)npg * 4) + 1; if (ch < 20000) ch = 20000;
-        if (tier == 16) ch = UINT64_MAX;                                    /* x holds every tier past 15 in one partition: a stretch of it could commit a node before what it holds, so it is one transaction, as it was */
-        for (int p = tier * 16; p < tier * 16 + 16; p++) {
-            int atoms = atoms_needed && tier == 0;
-            if (!nbucket[p] && !atoms) continue;                               /* nothing new for this partition */
-            for (uint64_t lo = 0; lo < nbucket[p] || (lo == 0 && atoms); lo = ch > UINT64_MAX - lo ? nbucket[p] : lo + ch) {
-                if (nj == jcap) { jcap *= 2; job = xrealloc(job, sizeof(Stretch) * jcap); }
-                job[nj++] = (Stretch){ p, lo, ch < nbucket[p] - lo ? lo + ch : nbucket[p], atoms && lo == 0 };
-                if (!nbucket[p]) break; }
-        }
-        uint64_t te = 0, tp = 0;
-        #pragma omp parallel for num_threads(npg) schedule(dynamic, 1) reduction(+:te, tp)
-        for (uint64_t j = 0; j < nj; j++) { uint64_t e = 0, ph = 0; write_node_rows(pg[omp_get_thread_num()], job[j].p, job[j].lo, job[j].hi, &e, &ph, job[j].atoms, 1); te += e; tp += ph; }
-        st->ent_rows += te; st->phy_rows += tp;
-    }
-    free(job);
+      TABLE_EACH(x) if (x->keep == 1) { int p = part_of(&x->id, x->tier); bucket[p][nbucket[p]++] = nref(x); } }
+    { uint64_t te = 0, tp = 0;
+      #pragma omp parallel for num_threads(nparts) schedule(static, 1) reduction(+:te, tp)
+      for (int j = 0; j < nparts; j++) for (int p = j; p < NPART; p += nparts) {
+          int atoms = atoms_needed && p / 16 == 0; if (!nbucket[p] && !atoms) continue;
+          qsort(bucket[p], nbucket[p], sizeof(NRef), by_hilbert);
+          uint64_t e = 0, ph = 0; write_node_rows(pg[j], p, 0, nbucket[p], &e, &ph, atoms, 0); te += e; tp += ph; }
+      st->ent_rows += te; st->phy_rows += tp; }
     for (int p = 0; p < NPART; p++) { free(bucket[p]); bucket[p] = NULL; }
     st->t_copy += now() - t;
 
     /* ---- semantics: witnesses, attestations, and standings played in reading order */
     t = now(); double tp = t; uint64_t nev = 0;      /* tp: where each part of it began */
     for (int fi = 0; fi < nfiles; fi++) { if (files[fi].known) { free(files[fi].ev.e); memset(&files[fi].ev, 0, sizeof files[fi].ev); } nev += files[fi].ev.n; }
-    /* What the files attested and the files' trunks are written as one: either all of it is recorded or none is. */
-    { PGresult *b = PQexec(pg[0], "BEGIN"); if (PQresultStatus(b) != PGRES_COMMAND_OK) { fprintf(stderr, "begin: %s", PQerrorMessage(pg[0])); return 1; } PQclear(b); }
-    int nparts = npg < 16 ? npg : 16, begun = 1; char xid0[32] = "";      /* the parts of the batch's transaction; part 0's transaction ID names them */
-    { PGresult *x = PQexec(pg[0], "SELECT pg_current_xact_id()"); if (PQresultStatus(x) != PGRES_TUPLES_OK) { fprintf(stderr, "transaction: %s", PQerrorMessage(pg[0])); return 1; }
-      snprintf(xid0, sizeof xid0, "%s", PQgetvalue(x, 0, 0)); PQclear(x); }
+    /* What the files attested goes in the same transaction as their nodes: all of it is recorded, or none. */
     if (nev) {
         smap = lp_idmap_new(); stand = malloc(sizeof(Standing) * (nev + 1)); sn = 0;
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) if (files[fi].ev.e[i].kind != EV_RECORD) stand_get(&files[fi].ev.e[i].claim, &files[fi].ev.e[i], files[fi].trust);
@@ -556,8 +534,6 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         /* attestations and standings, a partition a connection at a time on every connection: each connection's
          * part of the batch's transaction (prepared and committed as one below) */
         uint64_t led = 0, nnew = 0, nupd = 0; int bad = 0;
-        for (int j = 1; j < nparts; j++) if (!must(pg[j], "BEGIN")) return 1;
-        begun = nparts;
         #pragma omp parallel for num_threads(nparts) schedule(static, 1) reduction(+:led, nnew, nupd, bad)
         for (int j = 0; j < nparts; j++) for (int h = j; h < 16; h += nparts) { uint64_t a = 0, b = 0, c = 0; bad += part_write(pg[j], h, files, nfiles, &a, &b, &c); led += a; nnew += b; nupd += c; }
         if (bad) return 1;
@@ -568,21 +544,32 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     if (nev) { free(stand); lp_idmap_free(smap); stand = NULL; smap = NULL; }
     st->t_sem += now() - t;
 
-    /* the files' trunks: last */
-    if (nlast) {
-        uint64_t cnt[NPART] = { 0 };
-        for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (x && x->keep == 5) cnt[part_of(&x->id, x->tier)]++; }
-        for (int p = 0; p < NPART; p++) { bucket[p] = malloc(sizeof(NRef) * (cnt[p] + 1)); nbucket[p] = 0; }
-        for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (!x || x->keep != 5) continue;
-            int p = part_of(&x->id, x->tier); bucket[p][nbucket[p]++] = nref(x); x->keep = 1; }
-        for (int p = 0; p < NPART; p++) { uint64_t e = 0, ph = 0; if (nbucket[p]) { qsort(bucket[p], nbucket[p], sizeof(NRef), by_hilbert); write_node_rows(pg[0], p, 0, nbucket[p], &e, &ph, 0, 0); st->ent_rows += e; st->phy_rows += ph; } free(bucket[p]); bucket[p] = NULL; }
-    }
     /* one transaction in parts: each prepared, part 0 last; then part 0 committed, which decides, and the rest */
     if (begun == 1) { if (!must(pg[0], "COMMIT")) return 1; }
     else { char sql[96];
         for (int j = 1; j < begun; j++) { snprintf(sql, sizeof sql, "PREPARE TRANSACTION 'laplace %s %d'", xid0, j); if (!must(pg[j], sql)) return 1; }
         snprintf(sql, sizeof sql, "PREPARE TRANSACTION 'laplace %s 0'", xid0); if (!must(pg[0], sql)) return 1;
         for (int j = 0; j < begun; j++) { snprintf(sql, sizeof sql, "COMMIT PREPARED 'laplace %s %d'", xid0, j); if (!must(pg[0], sql)) return 1; } }
+    /* The batch is committed. Drain the container indexes on these connections before the next batch appends to the
+     * same lists: a search reads a pending list through, and the 32 MB cap is the spill, not the schedule. */
+    { double tm = now();
+      PGresult *r = PQexec(pg[0], "SELECT c.oid::regclass::text FROM pg_class c JOIN pg_am a ON a.oid = c.relam "
+          "WHERE a.amname = 'gin' AND c.relkind = 'i' AND c.relname LIKE 'physicality%'");
+      if (PQresultStatus(r) != PGRES_TUPLES_OK) fprintf(stderr, "merging the container index: %s", PQerrorMessage(pg[0]));
+      else if (PQntuples(r)) {
+          int ni = PQntuples(r); char **names = malloc(sizeof(char *) * (size_t)ni);
+          for (int i = 0; i < ni; i++) names[i] = strdup(PQgetvalue(r, i, 0));
+          PQclear(r); r = NULL; long long pages = 0; int bad = 0;
+          #pragma omp parallel for num_threads(npg) schedule(dynamic, 1) reduction(+:pages, bad)
+          for (int k = 0; k < ni; k++) {
+              const char *v[1] = { names[k] };
+              PGresult *q = PQexecParams(pg[omp_get_thread_num()], "SELECT gin_clean_pending_list($1::regclass)", 1, NULL, v, NULL, NULL, 0);
+              if (PQresultStatus(q) == PGRES_TUPLES_OK) pages += atoll(PQgetvalue(q, 0, 0));
+              else { bad++; fprintf(stderr, "merging %s: %s", names[k], PQerrorMessage(pg[omp_get_thread_num()])); }
+              PQclear(q); }
+          for (int i = 0; i < ni; i++) free(names[i]); free(names);
+          if (!bad && pages) printf("  %-44s %8.2f s   %'lld pages\n", "container index, this batch", now() - tm, pages); }
+      if (r) PQclear(r); }
     for (int i = 0; i < npg; i++) PQfinish(pg[i]);
     return 0;
 }
