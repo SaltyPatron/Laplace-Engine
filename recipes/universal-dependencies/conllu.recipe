@@ -24,8 +24,13 @@ type UPOS upos
 # ID numbers the rows of one record and HEAD points at a row by it: keys, written nowhere.
 key row ID
 refer HEAD row
+# A treebank's own keys and positions: where a document, paragraph or sentence is in the treebank, and MISC's identifiers
+# and offsets of a token (its unit, lemma, occurrence, chunk, XML and tree node ids, its alignment to the raw text) are
+# how the treebank points at its own things, written nowhere. SpaceAfter is what the sentence's text already says.
+omit "newdoc id" "newpar id" sent_id
+omit MISC.SpaceAfter MISC.UI MISC.Ref MISC.ref MISC.LId MISC.LemmaId MISC.OccId MISC.ChunkId MISC.XmlId MISC.LvtbNodeId MISC.AlignBegin MISC.AlignEnd
 # What the file writes about its own parts, not as their content: the file's metadata tree.
-metadata "newdoc id" "newpar id" sent_id note:newdoc* note:newpar* note:doc_* note:doc* note:meta::* note:meta_* note:global.* note:title note:author note:url note:date* note:file note:archive note:channel note:udpipe_model note:lang note:rtl note:document_authorship note:reference
+metadata note:newdoc* note:newpar* note:doc_* note:doc* note:meta::* note:meta_* note:global.* note:title note:author note:url note:date* note:file note:archive note:channel note:udpipe_model note:lang note:rtl note:document_authorship note:reference
 # every other note is what the treebank says of the sentence under the note's name: a translation (text_en), a
 # transliteration, who spoke it and when, its genre (the format: "# key = value")
 content note:*
