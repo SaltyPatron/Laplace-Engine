@@ -7,3 +7,4 @@ root $LAPLACE_DATA/ConceptNet
 # Measured, not loaded: 254,147,905 compositions from 10,157 MB, at 750 bytes each with their indexes and standings.
 room 19
 after unicode iso-639 wiktionary
+reads text
