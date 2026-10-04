@@ -301,13 +301,25 @@ static const Dis *dis_of(const Say *s, const SNode *x){
 /* One step of a path from a part: ^ what it is inside; N (a number) its Nth part, counted from 1 (a piece of a part
  * parted by its separator: /c/en/ice_cream/n, its 3 is ice_cream); otherwise its first part of that name. */
 static int32_t child_path(const STree *t, int32_t g, const char *path);
+/* A part's child by a name as the recipe writes it (named_as: note:NAME, NAME*), after the child after. */
+static int32_t named_child(const STree *t, int32_t c, const char *name, int32_t after){
+    if (strncmp(name, "note:", 5) && !strchr(name, '*')) return s_child(t, c, name, after);
+    for (int32_t q = after >= 0 ? t->n[after].next : t->n[c].first; q >= 0; q = t->n[q].next) if (named_as(&t->n[q], name)) return q;
+    return -1;
+}
+/* ELEMENT.NAME as a path, ELEMENT/NAME (a piece of a part: MISC.Annotator), for a step no part is literally named;
+ * NULL when the step is no such name. */
+static char *elem_step(const char *step){
+    const char *dot = strrchr(step, '.'); if (!dot || dot == step || !dot[1] || strchr(step, '[')) return NULL;
+    char *p = strdup(step); p[dot - step] = '/'; return p;
+}
 /* NAME[CHILD=VALUE]: a part of that name whose CHILD is written VALUE (a property whose predicate is skos:definition). */
 static int32_t filtered(const STree *t, int32_t c, const char *step, int32_t after){
     const char *br = strchr(step, '['), *eq = br ? strchr(br, '=') : NULL; size_t sl = strlen(step);
-    if (!br || !eq || step[sl - 1] != ']') return s_child(t, c, step, after);
+    if (!br || !eq || step[sl - 1] != ']') return named_child(t, c, step, after);
     char nm[64], ch[64]; snprintf(nm, sizeof nm, "%.*s", (int)(br - step), step); snprintf(ch, sizeof ch, "%.*s", (int)(eq - br - 1), br + 1);
     const char *v = eq + 1; size_t vl = (size_t)(step + sl - 1 - v);
-    for (int32_t q = s_child(t, c, nm, after); q >= 0; q = s_child(t, c, nm, q)) { int32_t w = child_path(t, q, ch);
+    for (int32_t q = named_child(t, c, nm, after); q >= 0; q = named_child(t, c, nm, q)) { int32_t w = child_path(t, q, ch);
         if (w >= 0 && t->n[w].kind == S_GROUP && t->n[w].first >= 0 && t->n[t->n[w].first].next < 0) w = t->n[w].first;      /* a part that holds only its text */
         if (w >= 0 && t->n[w].vlen == vl && !memcmp(t->n[w].val, v, vl)) return q; }
     return -1;
@@ -316,7 +328,9 @@ static int32_t step_of(const STree *t, int32_t c, const char *step){
     if (!strcmp(step, "^")) return t->n[c].parent;
     if (step[0] == '^') { size_t l = strlen(step + 1); for (int32_t up = t->n[c].parent; up >= 0; up = t->n[up].parent) if (s_named(&t->n[up], step + 1, l)) return up; return -1; }     /* ^NAME: the nearest part of that name it is inside */
     if (*step >= '0' && *step <= '9') { char *e; long n = strtol(step, &e, 10); if (!*e) { int32_t q = t->n[c].first; while (q >= 0 && --n > 0) q = t->n[q].next; return n == 0 ? q : -1; } }
-    return filtered(t, c, step, -1);
+    int32_t q = filtered(t, c, step, -1); if (q >= 0) return q;
+    char *el = elem_step(step); if (!el) return -1;                          /* ELEMENT.NAME: the NAME of its ELEMENT */
+    q = child_path(t, c, el); free(el); return q;
 }
 /* A part by a path of steps, A/B: the B of its A. */
 static int32_t child_path(const STree *t, int32_t g, const char *path){
@@ -331,6 +345,8 @@ static int all_path(const STree *t, int32_t g, const char *path, int32_t *out, i
     int n = 0;
     if (!strcmp(step, "^") || (*step >= '0' && *step <= '9')) { int32_t c = step_of(t, g, step); if (c < 0) return 0; if (!sl) { out[0] = c; return 1; } return all_path(t, c, sl + 1, out, cap); }
     for (int32_t c = filtered(t, g, step, -1); c >= 0 && n < cap; c = filtered(t, g, step, c)) { if (!sl) out[n++] = c; else n += all_path(t, c, sl + 1, out + n, cap - n); }
+    if (!n) { char *el = elem_step(step); if (el) {                          /* ELEMENT.NAME: the NAME of each ELEMENT */
+        size_t rl = sl ? strlen(sl) : 0; el = xrealloc(el, strlen(el) + rl + 1); if (sl) strcat(el, sl); n = all_path(t, g, el, out, cap); free(el); } }
     return n;
 }
 static int is_local(const Say *s, const char *tier){ for (int i = 0; i < s->nkey; i++) if (!strcmp(s->key[i].tier, tier)) return 1; return 0; }
