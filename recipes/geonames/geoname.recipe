@@ -22,6 +22,8 @@ part cc2 by ,
 thing row name latitude longitude
 key row geonameid
 content name latitude longitude asciiname "feature class" "feature code" "country code" cc2 "admin1 code" "admin2 code" "admin3 code" "admin4 code" population elevation dem timezone
-# alternatenames is the readme's convenience copy of alternate-names, which says each name with its language
+# readme.txt: "the field 'alternatenames' in the table 'geoname' is a short version of the 'alternatenames' table
+# without links and postal codes but with ascii transliterations." The alternate-names file says each name with its
+# language, so this copy is read by nothing.
 omit "modification date" alternatenames
 attest row asciiname "feature class" "feature code" "country code" cc2 "admin1 code" "admin2 code" "admin3 code" "admin4 code" population elevation dem timezone

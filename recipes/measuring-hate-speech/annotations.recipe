@@ -9,11 +9,12 @@ name measuring-hate-speech-annotations
 #   sentiment, respect, insult, humiliate, status, dehumanize, violence, genocide, attack_defend, hatespeech -
 #     ordinal label that is combined into the continuous score
 #   annotator_severity - annotator's estimated survey interpretation bias
-# A row is one annotator's reading of one comment. What the annotator answered of the comment (the ten labels, and
-# whom the comment targets) the annotator says, of the comment. What the set measured of the comment, and what it
-# holds of the annotator, the set says. The card does not say which of the columns it does not list belong to the
-# comment and which to the reading: infitms, outfitms, std_err and hypothesis are recorded of the comment, as the
-# columns beside hate_speech_score.
+# The recipe's reading, not the card's words: a row is one annotator's reading of one comment. What the annotator
+# answered of the comment (the ten labels, and whom the comment targets) the annotator says, of the comment. What the
+# set measured of the comment, and what it holds of the annotator, the set says. The card's feature list does not say
+# whom infitms, outfitms, std_err and hypothesis belong to; it lists them in the order hate_speech_score, text,
+# infitms, outfitms, annotator_severity, std_err, annotator_infitms, annotator_outfitms, hypothesis, and the recipe
+# records the four of the comment.
 # A comment is its text; comment_id is the set's key to it. An annotator stands within the set: [the set, annotator_id, the id].
 match train-*.tsv
 
