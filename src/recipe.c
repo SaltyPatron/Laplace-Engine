@@ -45,12 +45,8 @@
  * byte for byte. Leaves are text, decomposed by UAX #29. */
 #define _GNU_SOURCE
 #include "engine.h"
+#include "os.h"
 #include <tree_sitter/api.h>
-#include <dirent.h>
-#include <dlfcn.h>
-#include <glob.h>
-#include <sys/stat.h>
-#include <fnmatch.h>
 #include <omp.h>
 #include <zlib.h>
 #include <stdio.h>
@@ -73,9 +69,9 @@ static void trust_by_number(const char *path, const char *directive){
 /* ---- recipes */
 static const TSLanguage *grammar_load(const char *name){
     const char *dir = laplace_grammars();
-    char p[1024], sym[128]; snprintf(p, sizeof p, "%s/libtree-sitter-%s.so", dir, name); snprintf(sym, sizeof sym, "tree_sitter_%s", name);
-    void *h = dlopen(p, RTLD_NOW | RTLD_LOCAL); if (!h) { fprintf(stderr, "grammar %s: %s\n", name, dlerror()); return NULL; }
-    const TSLanguage *(*f)(void) = (const TSLanguage *(*)(void))dlsym(h, sym);
+    char p[1024], sym[128]; snprintf(p, sizeof p, "%s/libtree-sitter-%s" OS_DLL_SUFFIX, dir, name); snprintf(sym, sizeof sym, "tree_sitter_%s", name);
+    void *h = os_dl_open(p); if (!h) { fprintf(stderr, "grammar %s: %s\n", name, os_dl_error()); return NULL; }
+    const TSLanguage *(*f)(void) = (const TSLanguage *(*)(void))os_dl_sym(h, sym);
     return f ? f() : NULL;
 }
 /* A path with $NAME read from the environment. */
@@ -89,6 +85,7 @@ static void path_expand(const char *in, char *out, size_t cap){
         if (v) k += (size_t)snprintf(out + k, cap - k, "%s", v);
     }
     out[k < cap ? k : cap - 1] = 0;
+    os_slashes(out);                                                       /* one separator, whatever the environment wrote */
 }
 /* A recipe's comment: # where a line begins or after a space, outside a name written between double quotes ("#ISO"). */
 void comment_off(char *line){
@@ -146,19 +143,18 @@ static int source_parse(const char *path, Source *s){
         else { fprintf(stderr, "%s: \"%s\" is not something a source says\n", path, tok); fclose(f); return 0; }
     }
     fclose(f);
-    if (s->nfiles) { glob_t g; if (!glob(s->files[0], 0, NULL, &g) && g.gl_pathc) snprintf(s->found, sizeof s->found, "%s", s->files[0]); globfree(&g); }
+    if (s->nfiles) { os_list g; os_glob(s->files[0], &g); if (g.n) snprintf(s->found, sizeof s->found, "%s", s->files[0]); os_list_free(&g); }
     for (int i = 0; i < s->nroot && !s->found[0]; i++) {                   /* the first root that exists; of a pattern, the newest */
-        glob_t g; if (!glob(s->root[i], 0, NULL, &g) && g.gl_pathc) snprintf(s->found, sizeof s->found, "%s", g.gl_pathv[g.gl_pathc - 1]);
-        globfree(&g);
+        os_list g; os_glob(s->root[i], &g); if (g.n) snprintf(s->found, sizeof s->found, "%s", g.item[g.n - 1]);
+        os_list_free(&g);
     }
     return s->name[0] != 0;
 }
 static int by_name(const void *a, const void *b){ return strcmp(*(char *const *)a, *(char *const *)b); }
 static int recipes_in(const char *dir, int source, Recipe **out, int n){
-    DIR *d = opendir(dir); if (!d) { perror(dir); return n; }
-    struct dirent *de; char **names = NULL; int nn = 0;
-    while ((de = readdir(d))) { names = xrealloc(names, sizeof(char *) * (size_t)(nn + 1)); names[nn++] = strdup(de->d_name); }
-    closedir(d); qsort(names, (size_t)nn, sizeof(char *), by_name);
+    os_list ls; if (os_list_dir(dir, &ls)) { perror(dir); return n; }
+    char **names = ls.item; int nn = (int)ls.n;
+    qsort(names, (size_t)nn, sizeof(char *), by_name);
     for (int i = 0; i < nn; i++) {
         size_t l = strlen(names[i]); char p[2048]; snprintf(p, sizeof p, "%s/%s", dir, names[i]);
         if (l >= 8 && !strcmp(names[i] + l - 7, ".recipe")) {
@@ -173,8 +169,8 @@ static int recipes_in(const char *dir, int source, Recipe **out, int n){
             n++;
         }
         else if (source < 0 && names[i][0] != '.') {                           /* a source: a directory with a source file */
-            char sp[2100]; snprintf(sp, sizeof sp, "%s/source", p); struct stat st;
-            if (stat(sp, &st)) continue;
+            char sp[2100]; snprintf(sp, sizeof sp, "%s/source", p);
+            if (!os_exists(sp)) { free(names[i]); continue; }
             sources = xrealloc(sources, sizeof(Source) * (size_t)(nsources + 1));
             if (!source_parse(sp, &sources[nsources])) { fprintf(stderr, "source %s does not load\n", sp); exit(2); }
             n = recipes_in(p, nsources++, out, n);
@@ -237,7 +233,7 @@ Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of){
     char base[1024]; snprintf(base, sizeof base, "%s", b0);
     size_t bl = strlen(base); if (bl > 3 && !strcmp(base + bl - 3, ".gz")) base[bl - 3] = 0;   /* matched by what it holds */
     Recipe *best = NULL; size_t best_lit = 0;                              /* the most specific pattern wins */
-    for (int i = 0; of && i < of->nexcept; i++) if (!fnmatch(of->except[i], path, 0)) return NULL;
+    for (int i = 0; of && i < of->nexcept; i++) if (!os_fnmatch(of->except[i], path)) return NULL;
     for (int i = 0; i < n; i++) {
         if (r[i].broken) continue;
         if (of && !(r[i].source >= 0 && &sources[r[i].source] == of) && !(r[i].source < 0 && reads(of, &r[i]))) continue;
@@ -245,8 +241,8 @@ Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of){
             if (strchr(r[i].match[j], '/')) {                               /* a pattern with a directory in it: matched against the end of the path */
                 char pat[300], whole[1024]; snprintf(pat, sizeof pat, "*/%s", r[i].match[j]); snprintf(whole, sizeof whole, "%s", path);
                 size_t wl = strlen(whole); if (wl > 3 && !strcmp(whole + wl - 3, ".gz")) whole[wl - 3] = 0;
-                if (fnmatch(pat, whole, 0)) continue; }
-            else if (fnmatch(r[i].match[j], base, 0)) continue;
+                if (os_fnmatch(pat, whole)) continue; }
+            else if (os_fnmatch(r[i].match[j], base)) continue;
             size_t lit = 0; for (const char *c = r[i].match[j]; *c; c++) lit += !strchr("*?[]", *c);
             if (!best || lit > best_lit) { best = &r[i]; best_lit = lit; }
         }
