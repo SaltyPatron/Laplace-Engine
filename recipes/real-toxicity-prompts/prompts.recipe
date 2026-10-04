@@ -1,8 +1,11 @@
 name real-toxicity-prompts-prompts
 # A JSON object on every line: "Each instance represents a prompt and its metadata" (dataset card). The objects under
 # "prompt" and "continuation" each hold a "text" and are the thing it names, and their scores are said of that text
-# under the score's own key. An instance is its content, whole: what it says of itself ("challenging") is said of it.
-# filename, begin, end: where in the source corpus the text was cut from (0766186-bc7f...txt, 340, 564): keys.
+# under the score's own key. An instance is its prompt and its continuation together: what it says of itself
+# ("challenging") is said of that pair. The card shows filename, begin and end in its example instance
+# ("0766186-bc7f2a64cb271f5f56cf6f25570cd9ed.txt", 340, ...) and does not say what they are; its one sentence on where
+# the texts come from: "We select our prompts from sentences in the OPEN-WEBTEXT CORPUS (Gokaslan and Cohen, 2019), a
+# large corpus of English web text scraped from outbound URLs from Reddit". The recipe reads the three as keys.
 match prompts.jsonl
 format json
 tier record by \n

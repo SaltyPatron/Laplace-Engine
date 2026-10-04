@@ -4,9 +4,10 @@ name framenet
 # text, a corpus and a document their names, a semantic type its name. Frames, frame elements and lexical units are
 # the types the highway lists, and their numbers (ID) are FrameNet's keys of them: where FrameNet points at one by its
 # number (frameID, feID, luID, subID, supID, a member, required or excluded frame element) the number is read as the
-# type it is the key of. The numbers of sentences, annotation sets, corpora, documents and the user who made an entry
-# are keys. Every other name and value is as the files write them. What is no thing speaks of the nearest thing it is
-# inside.
+# type it is the key of. The numbers of sentences, annotation sets, corpora and documents are keys. The user who made
+# an entry (cBy, on a frame, a frame element, a lexical unit and a label) is the witness of what that entry says:
+# [FrameNet, cBy, the user]; where an entry names no user, FrameNet says it. Every other name and value is as the files
+# write them. What is no thing speaks of the nearest thing it is inside.
 match *.xml
 format xml
 
@@ -43,19 +44,29 @@ thing sentence text
 # a label speaks of the stretch of its sentence's text from start to end; FrameNet's end is the last character
 thing label span start end text inclusive
 
-# the file's bookkeeping, read by nothing: who made an entry and when, display colours, annotation status and counts,
+# who made an entry: a witness of its own
+own cBy
+# the file's bookkeeping, read by nothing: when an entry was made, display colours, annotation status and counts,
 # where a sentence sat in its corpus, the schema declaration; and the numbers that are keys
-omit cBy cDate mDate bgColor fgColor status totalAnnotated numAnnotInstances hasAnnotation XMLCreated sentNo paragNo aPos sentenceCount header xmlns xmlns:* xsi:* ID corpID docID lemmaID
+omit cDate mDate bgColor fgColor status totalAnnotated numAnnotInstances hasAnnotation XMLCreated sentNo paragNo aPos sentenceCount header xmlns xmlns:* xsi:* ID corpID docID lemmaID
 omit start end rank total cxnID order
+# a semantic type's supertype is named beside its number (superTypeName); the number is its key
+omit superType.supID
+# the lexicon's own numbering of its lemmas, lexeme entries and word forms, and the lists of those numbers: keys,
+# recorded nowhere (the file's nesting already holds which forms are of which lemma)
+key Lemma id
+key LexemeEntry id
+key WordForm id
+omit lexemeentryids wordformids lexemeid
 content *
 
 holds frame FE lexUnit semType frameRelation
 holds FE requiresFE excludesFE semType
 holds lexUnit semType sentence
 holds frameRelationType frameRelation
-attest frame definition
-attest FE coreType abbrev definition
-attest lexUnit POS definition incorporatedFE
+attest frame definition by cBy
+attest FE coreType abbrev definition by cBy
+attest lexUnit POS definition incorporatedFE by cBy
 attest lu POS
 attest lexeme name POS breakBefore headword
 attest semType superType
@@ -64,9 +75,9 @@ relate FERelation ^/^/name to supID
 relate frameRelation type to relatedFrame
 attest valenceUnit GF PT FE
 together valenceUnit
-relate label ^/name to name
+relate label ^/name to name by cBy
 # an FE label names its frame element by FrameNet's number too: the stretch is said to be that element
-attest label itype feID
+attest label itype feID by cBy
 attest annotationSet cxnName luName frameName
 
 # the highway: frames, frame elements and lexical units, by their numbers and (a frame) by its name, as VerbNet and

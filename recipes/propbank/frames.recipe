@@ -22,7 +22,7 @@ attest alias pos .
 attest role descr f n
 attest rolelink class resource .
 attest lexlink class resource
-attest example type
+attest example name
 attest arg type f .
 attest rel .
 

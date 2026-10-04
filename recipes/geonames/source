@@ -3,8 +3,8 @@ name geonames
 # the codes they are written with. readme.txt documents every file and names every column.
 # readme.txt's title: "Readme for GeoNames Gazetteer extract files"
 witness GeoNames Gazetteer
-# Its users write it. readme.txt: "please do use the wiki-style edit interface on our website
-# https://www.geonames.org to correct inaccuracies and to add new records."
+# Its users write it. readme.txt: "If you find errors or miss important places, please do use the wiki-style edit
+# interface on our website https://www.geonames.org to correct inaccuracies and to add new records."
 class UserCuratedResource
 root $LAPLACE_DATA/.refresh-*/GeoNames
 after unicode iso-639

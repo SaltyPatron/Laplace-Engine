@@ -1,8 +1,10 @@
 name prosocial-dialog-dialogues
 # A JSON object on every line. The dataset card: `context` "the potentially unsafe utterance"; `safety_label` "the
-# final verdict of the context"; `safety_annotations` "raw annotations from three workers". So an object is the
-# thing its "context" names, and every other member is said of it under its own key.
-# dialogue_id, response_id: the numbering of the turns, keys.
+# final verdict of the context according to `safety_annotations`"; `safety_annotations` "raw annotations from three
+# workers". So an object is the thing its "context" names, and every other member is said of it under its own key.
+# The card: `dialogue_id` "the dialogue index", `response_id` "the response index", `episode_done` "an indicator of
+# whether it is the end of the dialogue". A line is one turn of a dialogue; until the engine reads a dialogue as the
+# progression of its turns, the indexes are keys and episode_done is read by nothing.
 match train.json test.json valid.json
 format json
 tier record by \n

@@ -21,6 +21,9 @@ thing Lexicon label
 thing LexicalEntry Lemma/writtenForm
 thing Sense synset within
 thing Synset members
+# a synset that lists no members (a concept the language does not lexicalize, lexicalized="false") is the concept
+# its ili names
+thing Synset ili
 thing SyntacticBehaviour subcategorizationFrame
 part members by space
 part senses by space
@@ -41,20 +44,27 @@ content label language writtenForm partOfSpeech relType subcategorizationFrame D
 # n (a sense's place among its entry's senses) and index (an entry's place among its homographs) number what the file
 # already holds in order: the order is the path's, and the numbers are not read
 omit n index
-omit dc:* xmlns:* status note confidenceScore version url email license citation logo lexicographer adjposition
+# dc:source names who said it: an example's author (W.B.Yeats), a synset's source (Colloquial WordNet): a witness
+own dc:source
+content adjposition
+omit dc:* xmlns:* status note confidenceScore version url email license citation logo lexicographer
 
 holds Lexicon Synset LexicalEntry SyntacticBehaviour
 attest Lexicon language
 attest Requires ref
 holds LexicalEntry Sense
+# an entry's claims are one record, its senses in the order the file gives them
+together LexicalEntry
 attest Lemma partOfSpeech script
 attest Form writtenForm script
 attest Pronunciation variety .
 attest Tag category .
-attest Sense synset subcat lexicalized
+attest Sense synset subcat lexicalized adjposition
 attest Count .
 relate SenseRelation relType to target
 # an ili written "in" is WN-LMF's mark for a concept proposed to CILI and not yet in it: it names no concept, and is said so
-attest Synset ili partOfSpeech lexfile lexicalized Definition ILIDefinition Example
+attest Synset ili partOfSpeech lexfile lexicalized Definition ILIDefinition by dc:source
+# an example is said by its own author, where the file names one
+attest Example . by dc:source
 relate SynsetRelation relType to target
 attest SyntacticBehaviour senses

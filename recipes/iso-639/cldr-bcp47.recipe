@@ -2,7 +2,8 @@ name cldr-bcp47
 # CLDR's BCP 47 extension data (ldmlBCP47): keys and their types. A key is the thing its name attribute names, and so
 # is a type; every other attribute is said of it under the attribute's own name, and a key says of itself each type
 # written inside it: [key, type, type's name].
-# "Copyright © 1991-2015 Unicode, Inc." and "CLDR data files are interpreted according to the LDML specification"
+# Every file: "Copyright © 1991-YEAR Unicode, Inc." (YEAR 2013 to 2020) and "CLDR data files are interpreted according
+# to the LDML specification"
 # A type's name stands only within its key: "true" is a type of several keys, and each is a different thing. The
 # thing a type is, then, is the path of its key and its name.
 match calendar.xml collation.xml currency.xml measure.xml number.xml segmentation.xml timezone.xml variant.xml transform*.xml bcp47-transform.xml

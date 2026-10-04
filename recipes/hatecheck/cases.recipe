@@ -28,8 +28,6 @@ tier row by \n
 header
 quoted
 tier field by ,
-# "-" is what the file writes where a case has no direction, focus word, lemma or case it refers to
-empty -
 
 thing row test_case
 key row case_id
