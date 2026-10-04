@@ -19,6 +19,7 @@
  *
  * Where things are comes from the environment (laplace.env), else from what the engine was built with. */
 #include "engine.h"
+#include "op.h"
 #include "laplace_config.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,35 +70,14 @@ PGresult *db_ask(PGconn *pg, const char *sql, int n, const char *const *v, const
     return PQexecPrepared(pg, name, n, v, l, f, 1);
 }
 
-static const struct { const char *name; int (*run)(int, char **); const char *what; } CMD[] = {
-    { "tier0",  cmd_tier0,  "generate tier 0 from the Unicode data" },
-    { "flags",  cmd_flags,  "generate the flags that go with tier 0, from the standard's own lists" },
-    { "highway", cmd_highway, "generate the highway: the types, from the resources that list them, and the mappings between them" },
-    { "deploy", cmd_deploy, "make a database a Laplace database" },
-    { "sources", cmd_sources, "the sources there are recipes for, in the order they go in" },
-    { "ingest", cmd_ingest, "a source by its name, or files, through their recipes" },
-    { "merge",  cmd_merge,  "what the ingest staged, into the real tables at once" },
-    { "forget", cmd_forget, "what one witness attested, taken back out" },
-    { "sweep",  cmd_sweep,  "whatever nothing holds, removed" },
-    { "index",  cmd_index,  "the indexes, if one was dropped: deploy makes them" },
-    { "structure", cmd_structure, "a file's tree, as a layout parts it" },
-    { "tree",   cmd_tree,   "a file's syntax tree, as its recipe's grammar reads it" },
-    { "text",   cmd_text,   "a text's ID, coordinate and constituents, computed here" },
-    { "pull",   cmd_pull,   "the forward pass: a prompt, and the segments and strands its firmware takes" },
-    { "turn",   cmd_turn,   "a turn of a session: the one forward program, RESOLVE to WITNESS, each emitted constituent changing the next" },
-    { "hop",    cmd_hop,    "everything attested about an entity" },
-    { "translate", cmd_translate, "a word up to its concepts and down into other languages" },
-    { "degrees", cmd_degrees, "how far one entity is from another, over rated claims" },
-    { "fills",  cmd_fills,  "what follows a phrase" },
-    { "status", cmd_status, "what a database holds" },
-    { "bench",  cmd_bench,  "every native operation, measured" },
-    { "model",  cmd_model,  "a transformer checkpoint read as testimony" },
-};
-
 int main(int argc, char **argv){
-    if (argc > 1) for (size_t i = 0; i < sizeof CMD / sizeof *CMD; i++) if (!strcmp(argv[1], CMD[i].name)) return CMD[i].run(argc - 1, argv + 1);
-    fprintf(stderr, "laplace <command> [options]\n\n");
-    for (size_t i = 0; i < sizeof CMD / sizeof *CMD; i++) fprintf(stderr, "  %-10s %s\n", CMD[i].name, CMD[i].what);
+    if (argc > 1 && !strcmp(argv[1], "describe")) { op_describe(stdout); return 0; }          /* the catalog, for every other surface */
+    if (argc > 2 && !strcmp(argv[1], "help") && op_named(argv[2])) { op_usage(stdout, op_named(argv[2])); return 0; }
+    const Op *op = argc > 1 ? op_named(argv[1]) : NULL;
+    if (op) return op->run(argc - 1, argv + 1);
+    fprintf(stderr, "laplace <operation> [options]       laplace help <operation>       laplace describe (every operation, as JSON)\n\n");
+    for (size_t i = 0; i < NOPS; i++) fprintf(stderr, "  %-10s %s\n", OPS[i].name, OPS[i].what);
     fprintf(stderr, "\n  database  %s\n  tier 0    %s\n  recipes   %s\n  grammars  %s\n  firmware  %s\n", laplace_db(), lp_tier0_path(), laplace_recipes(), laplace_grammars(), firmware_path());
     return 2;
 }
+
