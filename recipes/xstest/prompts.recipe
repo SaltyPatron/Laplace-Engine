@@ -8,6 +8,7 @@ quoted
 tier field by ,
 
 thing row prompt
-content *
+key row id
+content prompt type label focus note
 together row
 attest row type label focus note

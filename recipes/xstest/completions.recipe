@@ -10,6 +10,7 @@ quoted
 tier field by ,
 
 thing row prompt within-file
-content prompt id type completion agreement final_label annotation_1 annotation_2
-attest row id type completion agreement final_label
+key row id
+content prompt type completion agreement final_label annotation_1 annotation_2
+attest row type completion agreement final_label
 voices row annotation_1 annotation_2
