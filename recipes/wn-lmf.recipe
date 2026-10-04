@@ -21,6 +21,9 @@ thing Lexicon label
 thing LexicalEntry Lemma/writtenForm
 thing Sense synset within
 thing Synset members
+# a synset that lists no members (a concept the language does not lexicalize, lexicalized="false") is the concept
+# its ili names
+thing Synset ili
 thing SyntacticBehaviour subcategorizationFrame
 part members by space
 part senses by space
