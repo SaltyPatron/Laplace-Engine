@@ -1,12 +1,12 @@
 name conceptnet-assertions
 # One edge on every line, five fields parted by tabs, no header row. ConceptNet's documentation (Downloads):
 #   "The five fields of each line are: The URI of the whole edge; The relation expressed by the edge; The node at the
-#    start of the edge; The node at the end of the edge; A JSON structure of additional information about the edge"
+#    start of the edge; The node at the end of the edge; A JSON structure of additional information about the edge, such as its weight"
 #
 # (URI hierarchy) "Every object in ConceptNet has a URI that is structured like a path"; "Concept URIs contain the
 # text of the concept, with spaces replaced by underscores"; a concept has "the initial /c", "a part that indicates
 # its language", "a part with the concept text", and "an optional fourth component gives the part of speech"; what
-# follows it is a sense label. A URI is ConceptNet's address for a term: the term is the text itself, the word any
+# follows it the page does not name. A URI is ConceptNet's address for a term: the term is the text itself, the word any
 # other witness speaks of, and what the address says of it (its language, its part of speech) is said of the term.
 # /c/en/ice_cream/n is the term "ice cream", of which ConceptNet says en and n. A relation's URI, /r/IsA, is the
 # relation IsA (/r/dbpedia/genre, the relation dbpedia/genre).
