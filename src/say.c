@@ -529,7 +529,11 @@ static int said_by(Sink *k, const STree *t, int32_t g, const char *by){ return v
 /* The witnesses a part names for what it says (by PATH): every one the path names, each saying it in its own voice.
  * Where the part names none, the source says it, as it says everything it writes. */
 #define WHO 64
-static int whos(const STree *t, int32_t g, const char *by, int32_t *who){ return by[0] ? all_path(t, g, by, who, WHO) : 0; }
+static int whos(const Say *s, const STree *t, int32_t g, const char *by, int32_t *who){
+    if (!by[0]) return 0; int n = all_path(t, g, by, who, WHO), m = 0;
+    for (int i = 0; i < n; i++) if (who[i] >= 0 && t->n[who[i]].vlen && !left_empty(s, &t->n[who[i]])) who[m++] = who[i];      /* a column it leaves empty names no one: the source says it */
+    return m;
+}
 /* A part says a claim once. Two directives of a recipe that reach the same claim of one part (holds record * via and
  * attest * *, for a sense of a Wiktextract entry) are one statement, not two: the same witness attesting the same claim
  * in one record twice would play it twice. The claims a part has made are kept by the claim and who says it, for the
@@ -697,7 +701,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
             k->voiced = was; k->voice = wv; }
         for (int a = 0; a < s->nitself; a++) { if (!s_named(x, s->itself[a].tier, strlen(s->itself[a].tier)) || !spoken_of(s, t, (int32_t)g, s->itself[a].when)) continue;
             Ref X; if (!thing_of(k, t, (int32_t)g, &X, 0)) break;
-            int32_t who[WHO]; int nw = whos(t, (int32_t)g, s->itself[a].by, who), was = k->voiced; Ref wv = k->voice;
+            int32_t who[WHO]; int nw = whos(s, t, (int32_t)g, s->itself[a].by, who), was = k->voiced; Ref wv = k->voice;
             for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !voice_of(k, t, who[wi])) continue;
                 Event e = { X.id, X.id, sc, k->er, k->ed, 0, EV_CLAIM }; if (k->voiced) { e.own_witness = 1; e.witness = k->voice.id; } ev_push(&k->ev, &e); }
             k->voiced = was; k->voice = wv; }
@@ -717,7 +721,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
             Ref S0 = S; int had = has, was = k->voiced; Ref wv = k->voice;
             if (s->att[a].of[0]) { int32_t oc = child_path(t, (int32_t)g, s->att[a].of); if (oc < 0 || !value_of(k, t, oc, &S, 0)) continue; has = 1; }      /* said of another of its parts */
             else { if (has < 0) has = spoken_thing(k, t, (int32_t)g, &S); if (!has) break; }
-            int32_t who[WHO]; int nw = whos(t, (int32_t)g, s->att[a].by, who);
+            int32_t who[WHO]; int nw = whos(s, t, (int32_t)g, s->att[a].by, who);
             for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !voice_of(k, t, who[wi])) continue;
             for (int z = 0; z < s->att[a].n; z++) for (int32_t c = x->first; c >= 0; c = t->n[c].next) { const SNode *y = &t->n[c];
                 if (!strcmp(s->att[a].name[z], "*/")) {                      /* each element inside it that is a value: its own text, or its one attribute (rdf:resource), under the element's name */
@@ -761,7 +765,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
             free(stack); }
         for (int a = 0; a < s->nrel; a++) { if (!named_as(x, s->rel[a].tier) || !spoken_of(s, t, (int32_t)g, s->rel[a].when)) continue;
             if (has < 0) has = spoken_thing(k, t, (int32_t)g, &S); if (!has) break;
-            int was = k->voiced; Ref wv = k->voice; int32_t who[WHO]; int nw = whos(t, (int32_t)g, s->rel[a].by, who);
+            int was = k->voiced; Ref wv = k->voice; int32_t who[WHO]; int nw = whos(s, t, (int32_t)g, s->rel[a].by, who);
             for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !voice_of(k, t, who[wi])) continue;
             Ref rel, o;
             if (!strcmp(s->rel[a].rel, "{file}")) rel = k->fstem;                /* the relation the file's own name gives (noun.exc: noun) */
