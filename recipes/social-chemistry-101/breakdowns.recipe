@@ -4,7 +4,7 @@ name social-chemistry-101-breakdowns
 # What the row says it says together, so the worker's answers stay in one record.
 # README: rot-categorization, rot-moral-foundations and characters are each a '"|" separated list'.
 # A field that holds a double quote is written between double quotes, with the quote doubled.
-# The ids and worker ids are the set's keys; the split and the counts are its bookkeeping.
+# The ids are the set's keys; the split and the counts are its bookkeeping.
 match social-chem-101.v1.0.tsv
 
 tier row by \n
@@ -18,12 +18,16 @@ part characters by |
 thing row rot
 key row rot-id
 key row situation-short-id
-key row rot-worker-id
-key row breakdown-worker-id
+# rot-worker-id, "The worker who _wrote this rule of thumb_", and breakdown-worker-id, "The worker who _did this RoT
+# breakdown_" (README): each a witness of their own, [the set, the column, the id]. The author says the rule of thumb
+# of its situation; the breakdown worker gives every "Worker answer" of it; the area and the characters the set says.
+own rot-worker-id breakdown-worker-id
 # m, the README: "How many workers did the RoT Breakdown for this RoT. Roughly corresponds to the split, but not
 # exactly." A count of workers: the set's bookkeeping, read by nothing.
 omit split n-characters rot-bad
 omit m
 content rot situation area rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical characters
 together row
-attest row situation area rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical characters
+attest row situation by rot-worker-id
+attest row rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical by breakdown-worker-id
+attest row area characters
