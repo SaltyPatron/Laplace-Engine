@@ -29,7 +29,7 @@ thing provisional-named-sequence cps
 thing standardized-variant cps
 thing cjk-radical radical
 thing block name
-codepoints cp first-cp last-cp cps bmg bpb cf dm FC_NFKC lc NFKC_CF NFKC_SCF scf slc stc suc tc uc EqUIdeo ideograph radical-ideograph of use code
+codepoints cp first-cp last-cp cps bmg bpb cf dm FC_NFKC lc NFKC_CF NFKC_SCF scf slc stc suc tc uc EqUIdeo ideograph radical radical-ideograph of use code
 omit xmlns
 omit description normalization-correction.version
 content *
@@ -48,4 +48,3 @@ attest block first-cp last-cp
 attest emoji-source unicode docomo kddi softbank
 attest normalization-correction old new version
 attest instead of use because
-attest description .
