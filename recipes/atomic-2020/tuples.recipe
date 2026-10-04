@@ -1,11 +1,14 @@
 name atomic-2020-tuples
 # ATOMIC 2020: a tuple on every line, three fields parted by tabs, no header row. The set's README:
-#   "The data is in the form of tab-separated tuples: head, relation, tail"
+#   "- each line represents a distinct commonsense tuple"
+#   "- column 1: head node/concept"  "- column 2: edge relation (e.g., xWant,xAttr,AtLocation)"  "- column 3: tail node/concept"
+# A field that holds a quote or a tab is written between double quotes, a quote in it doubled.
 # Each row is the claim of its head, its relation and its tail, every one as written.
 match train.tsv dev.tsv test.tsv
 
 tier row by \n
 names head relation tail
+quoted
 tier field by \t
 
 thing row head
