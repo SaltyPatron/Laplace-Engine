@@ -230,7 +230,7 @@ int say_lays(const Recipe *r){ const Say *s = r->say; return s && (s->lay.ntier 
 /* Whether a file this recipe lays out can be read a stretch at a time: its outermost parts are lines (1) or end at an
  * empty line (2), and nothing in a part points at another part (a key within the file). */
 static int is_local(const Say *s, const char *tier);
-int say_stretches(const Recipe *r){ const Say *s = r->say; if (!s || !s->lay.ntier || s->nsplit || s->lay.tier[0].header || s->lay.tier[0].quoted) return 0;
+int say_stretches(const Recipe *r){ const Say *s = r->say; if (!s || !s->lay.ntier || s->nsplit || s->lay.tier[0].header || s->lay.tier[0].quoted || s->lay.tier[0].numbered[0]) return 0;     /* numbered: a line is counted from the file's start, read whole */
     for (int z = 0; z < s->ndis; z++) if (s->dis[z].what == D_REFER) { char a[64]; snprintf(a, sizeof a, "%s", s->dis[z].arg); for (char *c = strtok(a, " "); c; c = strtok(NULL, " ")) if (is_local(s, *c == '^' ? c + 1 : c)) return 0; }
     if (!strcmp(s->lay.tier[0].sep, "\n")) return 1; if (!strcmp(s->lay.tier[0].sep, "\n\n")) return 2; return 0; }
 static int is_tier(const Say *s, const char *name){ for (int i = 0; i < s->lay.ntier; i++) if (!strcmp(s->lay.tier[i].name, name)) return 1; return 0; }

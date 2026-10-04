@@ -1,0 +1,14 @@
+name opensubtitles-ja
+# The Japanese side: line N is the same subtitle as line N of OpenSubtitles.en-ja.en, so each Japanese sentence says
+# what its English is: [the Japanese sentence, en, the English sentence].
+match OpenSubtitles.en-ja.ja
+
+tier row by \n
+numbered en
+names ja
+tier field by \t
+
+thing row ja
+content ja
+refer en opensubtitles-en
+attest row en

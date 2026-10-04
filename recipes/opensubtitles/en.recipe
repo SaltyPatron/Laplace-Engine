@@ -1,0 +1,14 @@
+name opensubtitles-en
+# OPUS's Moses format: one sentence on each line, nothing else, and line N of OpenSubtitles.en-ja.en and line N of
+# OpenSubtitles.en-ja.ja are the same subtitle in its two languages (the README: "parallel corpora", "Moses format").
+# A line's number is how the two files are joined, the key of the English sentence; it is written nowhere.
+match OpenSubtitles.en-ja.en
+
+tier row by \n
+numbered line
+names en
+tier field by \t
+
+thing row en
+content en
+key row line

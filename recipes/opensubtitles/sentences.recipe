@@ -1,7 +1,0 @@
-name opensubtitles-sentences
-# A file of sentences, one on a line, nothing else: no header, no column, no identifier. Ordinary content, read as
-# text. The language of the sentences is written only in the file's name, after its last dot
-# (OpenSubtitles.en-ja.en, OpenSubtitles.en-ja.ja), and nothing in the file says what line N of the other file is
-# to line N of this one: neither is attested here, because the recipe language has no way to say either.
-match OpenSubtitles.*
-grammar text

@@ -93,6 +93,7 @@ int layout_says(Layout *l, const char *path, char *tok){
     if (!strcmp(tok, "quoted")) { t->quoted = 1; return 1; }
     if (!strcmp(tok, "padded")) { t->padded = 1; return 1; }
     if (!strcmp(tok, "continued")) { t->continued = 1; return 1; }
+    if (!strcmp(tok, "numbered")) { char *v = strtok(NULL, " \t\r\n"); if (!v) { fprintf(stderr, "%s: numbered NAME\n", path); return -1; } snprintf(t->numbered, sizeof t->numbered, "%s", v); return 1; }
     if (!strcmp(tok, "is")) { char *v = strtok(NULL, " \t\r\n"); if (!v || !(t->kvlen = sep_read(v, t->kv, sizeof t->kv))) { fprintf(stderr, "%s: is SEPARATOR\n", path); return -1; } return 1; }
     if (!strcmp(tok, "skip")) { char *v = strtok(NULL, " \t\r\n"); t->skip = v ? atoi(v) : 0; return 1; }
     if (!strcmp(tok, "note")) { char *p = strtok(NULL, " \t\r\n"), *is = strtok(NULL, " \t\r\n"); if (!p) { fprintf(stderr, "%s: note PREFIX [IS]\n", path); return -1; }
@@ -259,9 +260,9 @@ size_t s_boundary(const Layout *l, const uint8_t *s, size_t n, size_t at){
 }
 uint64_t s_decompose(const Layout *l, const uint8_t *s, size_t n, s_unit_fn fn, void *sink){
     if (!l->ntier) { fprintf(stderr, "a layout with no tier parts nothing\n"); exit(2); }
-    const STier *t0 = &l->tier[0]; STree t = { 0 }; uint64_t ord = 0;
+    const STier *t0 = &l->tier[0]; STree t = { 0 }; uint64_t ord = 0, line = 0;
     for (size_t i = 0; i < n; ) {
-        size_t next, e = part_end(l, 0, s, i, n, &next), len = e - i;
+        size_t next, e = part_end(l, 0, s, i, n, &next), len = e - i; line++;      /* every part counted, an empty one too */
         while (len && (s[i] == '\n' || s[i] == '\r') && l->tier[0].seplen > 1) { i++; len--; }          /* line ends left over between records */
         if (!len || (len == 1 && s[i] == '\r')) { i = next; continue; }
         if (t0->commentlen && len >= (size_t)t0->commentlen && !memcmp(s + i, t0->comment, (size_t)t0->commentlen)) { i = next; continue; }
@@ -269,6 +270,9 @@ uint64_t s_decompose(const Layout *l, const uint8_t *s, size_t n, s_unit_fn fn, 
         tree_reset(&t); int32_t g = node(&t, S_GROUP, 0, -1, i); t.n[g].name = (const uint8_t *)t0->name; t.n[g].nlen = (uint32_t)strlen(t0->name);
         if (l->ntier == 1) { t.n[g].kind = S_TEXT; text_put(&t, g, l, 0, s + i, len); }
         else tier_read(&t, l, 0, g, s, i, stop);
+        if (t0->numbered[0] && t.n[g].kind == S_GROUP && t.n[g].nkids) {          /* its line in the file, under the name the recipe gives it */
+            char d[24]; int dn = snprintf(d, sizeof d, "%llu", (unsigned long long)line); uint8_t *o = own(&t, (size_t)dn); memcpy(o, d, (size_t)dn);
+            int32_t x = node(&t, S_VALUE, 1, g, i); t.n[x].name = (const uint8_t *)t0->numbered; t.n[x].nlen = (uint32_t)strlen(t0->numbered); t.n[x].val = o; t.n[x].vlen = (uint32_t)dn; }
         if (t.n[g].kind != S_GROUP || t.n[g].nkids) fn(sink, &t, g, ord++);
         i = next;
     }

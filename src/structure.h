@@ -46,6 +46,7 @@ typedef struct {
     char note[8], note_is[8], comment[8]; int notelen, islen, commentlen;
     char remark, escaped; int header, quoted, skip, padded;
     char kv[8]; int kvlen, continued;                     /* kv: each part is written KEY kv VALUE (the recipe's "is"); continued: a part that begins with white space goes on with the one before */
+    char numbered[32];                                    /* numbered NAME: each part also holds NAME, its line in the file (empty lines counted), so files written line for line join by it */
     char names[S_NAMES][64]; int nnames;                  /* the names of the parts of the tier below, by position */
 } STier;
 typedef struct { char path[64], sep[8], is[8]; int seplen, islen, pieces; char space; } SPart;     /* pieces: at most so many, the last the rest as written; space: the character the file writes for a space in it */
