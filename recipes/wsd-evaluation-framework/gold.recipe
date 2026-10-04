@@ -1,0 +1,16 @@
+name wsd-gold
+# Data_Validation/README: "The .txt gold file should contain all the disambiguation instances included in the XML. Each
+# line is space-separated, where the first column corresponds to the instance id and the remaining columns correspond
+# to the gold key/s." The instance id is the data file's key of its instance (wsd-data: `key instance id`), read as
+# that instance; each gold key is a WordNet 3.0 sense key ("all the senses were annotated with WordNet 3.0"), read as
+# the concept it is a key of. The dataset says of the instance each of its gold keys.
+match *.gold.key.txt
+
+tier row by \n
+names "instance id" "gold key..."
+tier field by space
+
+thing row "instance id"
+refer "instance id" wsd-data
+type "gold key" ili
+attest row "gold key"
