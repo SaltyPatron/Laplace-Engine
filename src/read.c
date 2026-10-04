@@ -166,6 +166,13 @@ static Hold *holds_core(const lp_id *keys, int nkeys, int floor, int each, int s
     int *job = malloc(sizeof(int) * (size_t)nphy); int nj = 0;
     for (int i = 0; i < nphy; i++) job[nj++] = i;                        /* every range holds every tier: the tier is asked of the rows */
     Bag *bag = calloc((size_t)(nj ? nj : 1), sizeof(Bag));
+    /* each = 1 without a second key is asked as each = 2, one overlap probe a leaf for the whole set, never a probe a
+     * key: every path is given to the keys it holds, read from its own vertices through a map of the keys */
+    int give = each == 1 && !with; if (give) each = 2;
+    lp_idmap *km = NULL; int *khead = NULL, *klink = NULL;
+    if (give) { km = lp_idmap_new(); khead = malloc(sizeof(int) * (size_t)nkeys); klink = malloc(sizeof(int) * (size_t)nkeys);
+        for (int i = 0; i < nkeys; i++) khead[i] = -1;
+        for (int i = nkeys - 1; i >= 0; i--) { bool fresh; size_t u = lp_idmap_put(km, &keys[i], &fresh); klink[i] = khead[u]; khead[u] = i; } }
     uint8_t wb[40]; size_t wl = with ? ids_param(wb, with, 1) : 0;          /* each key with this one too: a claim's key and its relation */
     #pragma omp parallel for num_threads(npool) schedule(dynamic)
     for (int j = 0; j < nj; j++) {
@@ -188,11 +195,19 @@ static Hold *holds_core(const lp_id *keys, int nkeys, int floor, int each, int s
             x.tier = rd_i16(PQgetvalue(r, row, col + 2));
             if (x.tier <= floor) { free(x.path); continue; }
             x.claim = (uint8_t)mask_claim(PQgetvalue(r, row, col + 3), PQgetlength(r, row, col + 3));
-            bag_put(&bag[j], x);
+            if (!give) { bag_put(&bag[j], x); continue; }
+            size_t nv = lp_path_ids(x.path, (size_t)x.path_len, NULL, 0); lp_id *pv = malloc(sizeof(lp_id) * (nv ? nv : 1)); lp_path_ids(x.path, (size_t)x.path_len, pv, nv);
+            int64_t seen[64]; int ns = 0, first = 1;
+            for (size_t v = 0; v < nv; v++) { int64_t u = lp_idmap_find(km, &pv[v]); if (u < 0) continue;
+                int dup = 0; for (int s = 0; s < ns; s++) dup |= seen[s] == u; if (dup) continue; if (ns < 64) seen[ns++] = u;      /* a path that holds a key twice holds it once */
+                for (int i = khead[u]; i >= 0; i = klink[i]) { Hold y = x; y.src = i;
+                    if (!first) { y.path = malloc((size_t)(x.path_len ? x.path_len : 1)); memcpy(y.path, x.path, (size_t)x.path_len); }
+                    first = 0; bag_put(&bag[j], y); } }
+            if (first) free(x.path); free(pv);
         }
         PQclear(r);
     }
-    free(ab); free(job);
+    free(ab); free(job); if (km) { lp_idmap_free(km); free(khead); free(klink); }
     int n = 0; for (int j = 0; j < nj; j++) n += bag[j].n;
     Hold *h = calloc((size_t)(n ? n : 1), sizeof(Hold)); int w = 0;
     for (int j = 0; j < nj; j++) { memcpy(h + w, bag[j].h, (size_t)bag[j].n * sizeof(Hold)); w += bag[j].n; free(bag[j].h); }

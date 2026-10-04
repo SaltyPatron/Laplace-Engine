@@ -119,20 +119,20 @@ void positions_of(PGconn *pg, Claim *c, int n){
      * gave them. For the claims attestation gave no place, the records that hold each are fetched as one set, and the
      * claim's place is where it stands in the path, the least when several records hold it. */
     int need = 0; for (int i = 0; i < n; i++) need += !c[i].position;
-    if (need) {
-        const char *v2[1] = { (const char *)ab }; int l2[1] = { (int)al }, f2[1] = { 1 };
-        PGresult *r = db_ask(pg, "SELECT u.i, k.path FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i), LATERAL laplace_containers(ARRAY[u.id], '{1}'::smallint[]) k", 1, v2, l2, f2);
-        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "records: %s", PQerrorMessage(pg)); exit(1); }
-        for (int j = 0; j < PQntuples(r); j++) {
-            uint64_t o; memcpy(&o, PQgetvalue(r, j, 0), 8); int i = (int)(__builtin_bswap64(o) - 1); if (i < 0 || i >= n || (c[i].position && c[i].position < (1 << 20))) { if (i < 0 || i >= n) continue; }
-            const uint8_t *pb = (const uint8_t *)PQgetvalue(r, j, 1); size_t pl = (size_t)PQgetlength(r, j, 1), nv = lp_path_vertices(pb, pl, NULL, 0); int at = 0, place = 0;
-            if (!nv) continue; lp_vertex *vt = malloc(sizeof(lp_vertex) * nv); lp_path_vertices(pb, pl, vt, nv);
+    if (need) {                                                              /* the paths that hold any of them, one set (holds_above gives each path to the claims it holds) */
+        lp_id *want = malloc(sizeof(lp_id) * (size_t)need); int *of = malloc(sizeof(int) * (size_t)need), nw = 0;
+        for (int i = 0; i < n; i++) if (!c[i].position) { want[nw] = c[i].id; of[nw++] = i; }
+        int nh = 0; Hold *h = holds_above(want, nw, -1, 1, 0, &nh);
+        for (int j = 0; j < nh; j++) {
+            if (h[j].src < 0 || h[j].src >= nw || h[j].claim) continue; int i = of[h[j].src];
+            size_t nv = lp_path_vertices(h[j].path, (size_t)h[j].path_len, NULL, 0); if (!nv) continue;
+            lp_vertex *vt = malloc(sizeof(lp_vertex) * nv); lp_path_vertices(h[j].path, (size_t)h[j].path_len, vt, nv); int at = 0, place = 0;
             if (memcmp(&vt[0].id, &c[i].part[0], 16)) { free(vt); continue; }   /* the trajectory under the claim's own subject: the order its witness gave */
             for (size_t z = 0; z < nv && !place; z++) { if (!memcmp(&vt[z].id, &c[i].id, 16)) place = at + 1; at += (int)vt[z].run; }
             free(vt);
             if (place && (!c[i].position || place < c[i].position)) c[i].position = place;
         }
-        PQclear(r);
+        holds_free(h, nh); free(want); free(of);
     }
     free(ab); free(ids);
 }
