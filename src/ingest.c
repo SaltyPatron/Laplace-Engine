@@ -45,6 +45,7 @@ static void show_tuple(const lp_id *id);
 static void show_entities(const char *conninfo, int ask){
     uint64_t n = 0; TABLE_EACH(x) n++; if (!n) return;
     lp_id *ids = malloc(sizeof(lp_id) * n); Node **of = malloc(sizeof(Node *) * n); uint64_t k = 0; TABLE_EACH(x) { ids[k] = x->id; of[k++] = x; }
+    if (ask) { PGconn *t = PQconnectdb(conninfo); ask = PQstatus(t) == CONNECTION_OK; PQfinish(t); }     /* no database: the entities alone */
     uint8_t *hit = ask ? db_recorded(conninfo, ids, n) : NULL;
     uint64_t by[17][2] = { { 0 } };
     for (int t = 0; t <= 16; t++) for (uint64_t i = 0; i < n; i++) { Node *x = of[i]; if ((x->tier < 16 ? x->tier : 16) != t) continue;
@@ -250,7 +251,11 @@ int cmd_ingest(int argc, char **argv){
         else if (!strcmp(argv[a], "--entities")) { entities = 1; show_claims = 1; do_load = 0; }   /* what the recipes would record, entities and claims; nothing is loaded */
         else { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] [--entities] file...\n"); return 2; }
     }
+    /* what a recipe would say is shown of files: of nothing named it is no ingest of every source, and --entities, which
+     * asks the database of every composition, is of files only, never a source by its name */
+    if (show_claims && a >= argc) { fprintf(stderr, "--claims and --entities show what files would record: name the files\n"); return 2; }
     Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec), nsrc; Source *src = sources_loaded(&nsrc);
+    if (entities) for (int i = a; i < argc; i++) { struct stat st_; if (stat(argv[i], &st_)) { fprintf(stderr, "--entities shows what files would record: %s is no file (a sample of a source: -s SOURCE FILE)\n", argv[i]); return 2; } }
     for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, "file")) file_record_stock(&rec[k]);   /* what the OS keeps of every file: the stock recipe file */
     if (of) { int k = 0; while (k < nsrc && strcmp(src[k].name, of)) k++; if (k == nsrc) { fprintf(stderr, "%s is not a source\n", of); return 2; } walking = &src[k]; }
     { int named = 0; for (int i = a; i < argc; i++) { struct stat st_; int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++; named += k < nsrc && stat(argv[i], &st_); }
