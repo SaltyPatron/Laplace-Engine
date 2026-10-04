@@ -50,6 +50,14 @@ own cBy
 # where a sentence sat in its corpus, the schema declaration; and the numbers that are keys
 omit cDate mDate bgColor fgColor status totalAnnotated numAnnotInstances hasAnnotation XMLCreated sentNo paragNo aPos sentenceCount header xmlns xmlns:* xsi:* ID corpID docID lemmaID
 omit start end rank total cxnID order
+# a semantic type's supertype is named beside its number (superTypeName); the number is its key
+omit superType.supID
+# the lexicon's own numbering of its lemmas, lexeme entries and word forms, and the lists of those numbers: keys,
+# recorded nowhere (the file's nesting already holds which forms are of which lemma)
+key Lemma id
+key LexemeEntry id
+key WordForm id
+omit lexemeentryids wordformids lexemeid
 content *
 
 holds frame FE lexUnit semType frameRelation
