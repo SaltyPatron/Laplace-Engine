@@ -160,10 +160,11 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
         if (code) { failed = 1; fprintf(stderr, "\n%s did not go in (exit %d); what it said is in %s\n", src[i].name, code, log); } else { went++; wentin[i] = 1; }
     }
     printf("\n%d sources in, %d absent, %d without a recipe, %d not begun for want of room, %d not begun because what they come after is not in%s   %'.1f s\n", went, absent, empty, short_of_room, short_of_order, failed ? ", and one that failed: the run stops there" : "", now() - T);
-    /* every source went in to the stage: now into the real tables, at once. A run that stopped leaves the stage as it
-     * is, and the next run takes up from it (what is staged is looked for as what is recorded is) */
+    /* the sources that went in, went in whole to the stage: now into the real tables, at once. A source not begun (for
+     * room, or for what it comes after) staged nothing. A run that failed leaves the stage as it is, and the next run
+     * takes up from it (what is staged is looked for as what is recorded is) */
     int merged = 0;
-    if (loads && went && !failed && !short_of_order) { printf("\nmerge\n"); fflush(stdout); merged = merge(conninfo, omp_get_num_procs()); }
+    if (loads && went && !failed) { printf("\nmerge\n"); fflush(stdout); merged = merge(conninfo, omp_get_num_procs()); }
     free(wentin); return failed || short_of_order || merged;
 }
 static const uint64_t *by_size_of;                                    /* the batch's files, longest first, ties in the order given */
