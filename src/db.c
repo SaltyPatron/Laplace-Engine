@@ -65,8 +65,7 @@ static int stage_open(PGconn *pg){
         "           WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relispartition"
         "             AND c.relname ~ '^(entity|physicality|attestation|consensus)_' LOOP"
         "    EXECUTE format('CREATE UNLOGGED TABLE IF NOT EXISTS stage.%I (LIKE public.%I INCLUDING DEFAULTS)', r.relname, r.relname);"
-        "    IF r.relname LIKE 'entity%' THEN EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON stage.%I (id)', r.relname || '_id', r.relname);"
-        "    ELSIF r.relname LIKE 'attestation%' THEN EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON stage.%I (claim, witness)', r.relname || '_cw', r.relname);"
+        "    IF r.relname LIKE 'attestation%' THEN EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON stage.%I (claim, witness)', r.relname || '_cw', r.relname);"
         "    ELSIF r.relname LIKE 'consensus%' THEN EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS %I ON stage.%I (claim)', r.relname || '_claim', r.relname);"
         "    END IF;"
         "  END LOOP; END $$";
@@ -95,8 +94,7 @@ static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, const uint8_t *
         uint32_t k = (uint32_t)job[j].n; lp_id *part = malloc(sizeof(lp_id) * k); for (uint32_t i = 0; i < k; i++) part[i] = ids[at[job[j].lo + i]];
         uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t len = ids_param(ab, part, k); PGconn *c = pg[omp_get_thread_num()];
         char tn[64], sql[256]; part_name(job[j].p, "entity", tn, sizeof tn);
-        snprintf(sql, sizeof sql, "SELECT u.i FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) WHERE EXISTS (SELECT 1 FROM public.%s e WHERE e.id = u.id)"
-                                  " OR EXISTS (SELECT 1 FROM stage.%s e WHERE e.id = u.id)", tn, tn);     /* recorded, or staged by this run */
+        snprintf(sql, sizeof sql, "SELECT u.i FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) WHERE EXISTS (SELECT 1 FROM public.%s e WHERE e.id = u.id)", tn);
         const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
         PGresult *r = PQexecParams(c, sql, 1, NULL, v, l, f, 0);
         if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "dedup: %s", PQerrorMessage(c)); exit(1); }
@@ -343,22 +341,28 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             if (files[fi].ev.e[i].kind == EV_RECORD) { Node *w = table_find(&files[fi].ev.e[i].witnessed); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } }
             if (files[fi].ev.e[i].own_witness) { Node *w = table_find(&files[fi].ev.e[i].witness); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } } }
     }
-    /* Everything under a file that is not recorded is staged, as the batch made it (each node once: the table); whether
-     * a node is recorded already is the database's to say when the source is recorded (merge), trunk to leaf as one
-     * set a leaf, never by asking for IDs here. A file whose trunk is recorded was set aside above, with all it holds. */
+    /* Trunk to leaf, one set a partition a round: the nodes of a round are asked for together ("I have these IDs: which
+     * do you already have?"), and a node the real tables hold is left out with everything under it. What this source
+     * staged in an earlier batch the client knows (keep 2, before the batch: ingest.c), so the stage is never asked;
+     * the real tables answer for every source recorded before this one. */
     while (nf) {
-        st->rounds++;
+        st->rounds++; st->checked += nf;
+        uint8_t *ft = malloc(nf); for (uint64_t i = 0; i < nf; i++) ft[i] = table_find(&front[i])->tier;
+        uint8_t *hit = recorded(pg, npg, front, ft, nf); free(ft);
         uint64_t nn = 0; lp_id *next = malloc((nf + 1) * sizeof(lp_id)); uint64_t ncap = nf + 1;
         for (uint64_t i = 0; i < nf; i++) {
-            Node *x = table_find(&front[i]); x->keep = 1; st->new_nodes++;
+            Node *x = table_find(&front[i]);
+            if (hit[i]) { x->keep = 2; st->found++; continue; }
+            x->keep = 1; st->new_nodes++;
             for (uint32_t v = 0; v < x->nv; v++) {
                 Node *ch = table_find(&VTX[x->voff + v].id);
                 if (ch && !ch->keep) { ch->keep = 3; if (nn == ncap) { ncap *= 2; next = xrealloc(next, ncap * sizeof(lp_id)); } next[nn++] = ch->id; }
             }
         }
-        free(front); front = next; nf = nn; cap = ncap;
+        free(hit); free(front); front = next; nf = nn; cap = ncap;
     }
-    free(front); fprintf(stderr, "  staged: %'llu nodes, %llu tiers deep\n", (unsigned long long)st->new_nodes, (unsigned long long)st->rounds);
+    free(front); fprintf(stderr, "  staged: %'llu nodes, %llu tiers deep, %'llu subtrees recorded already\n", (unsigned long long)st->new_nodes,
+                         (unsigned long long)st->rounds, (unsigned long long)st->found);
     st->t_dedup += now() - t;
 
     /* ---- the batch is one transaction, in parts, one a connection, prepared and committed together below: what is
@@ -395,7 +399,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         /* claims already recorded start from their recorded standing */
         /* the statistics are partitioned by the claim's first hex digit: each read goes to its one partition */
         lp_id *old = malloc(sizeof(lp_id) * (sn + 1)); uint64_t nold = 0, ocnt[17] = { 0 };
-        for (uint64_t i = 0; i < sn; i++) { old[nold++] = stand[i].id; ocnt[(stand[i].id.b[0] >> 4) + 1]++; }      /* every claim: staged is not new, the recorded standings are read as one set a partition */
+        for (uint64_t i = 0; i < sn; i++) { Node *x = table_find(&stand[i].id); if (!x || x->keep != 1) { old[nold++] = stand[i].id; ocnt[(stand[i].id.b[0] >> 4) + 1]++; } }   /* a claim new to the database has no standing to read */
         for (int h = 0; h < 16; h++) ocnt[h + 1] += ocnt[h];
         { lp_id *by = malloc(sizeof(lp_id) * (nold + 1)); uint64_t fill[16]; memcpy(fill, ocnt, sizeof fill); for (uint64_t i = 0; i < nold; i++) by[fill[old[i].b[0] >> 4]++] = old[i]; free(old); old = by; }
         const uint64_t CH = 100000; typedef struct { int h; uint64_t lo, n; } OJob; OJob *oj = malloc(sizeof(OJob) * (nold / CH + 17)); uint64_t noj = 0;
@@ -426,7 +430,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         uint64_t nrec = 0; for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) nrec += files[fi].ev.e[i].kind != EV_MEMBER;
         lp_id *wold = malloc(sizeof(lp_id) * (nrec + 1)); uint64_t nwold = 0;
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (e->kind == EV_MEMBER) continue;
-            wold[nwold++] = e->witnessed; }                                      /* every claim: what it was witnessed by before is read as one set a partition */
+            Node *x = table_find(&e->witnessed); if (!x || x->keep != 1) wold[nwold++] = e->witnessed; }   /* a new claim was witnessed by nothing before */
         uint64_t lin_at[17] = { 0 }; uint64_t pcap = 1024; while (pcap < nrec * 3) pcap <<= 1; Seen *seen = calloc(pcap, sizeof(Seen)); uint64_t nseen = 0;
         #define SEEN_AT(w, l, found) do { uint64_t h_; memcpy(&h_, (w)->b, 8); uint64_t c_; memcpy(&c_, (l)->b + 8, 8); h_ ^= c_ * 0x9E3779B97F4A7C15ull; k_ = h_ & (pcap - 1); found = 0; \
             while (seen[k_].used) { if (!memcmp(seen[k_].witnessed.b, (w)->b, 16) && !memcmp(seen[k_].lin.b, (l)->b, 16)) { found = 1; break; } k_ = (k_ + 1) & (pcap - 1); } } while (0)
@@ -565,16 +569,15 @@ int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers
     uint8_t *hit = recorded(&pg, 1, ids, tiers, n); uint64_t got = 0; for (uint64_t i = 0; i < n; i++) got += hit[i];
     free(hit); PQfinish(pg); return got == n;
 }
-
 /* ---- merge: what a source staged goes into the real tables, in one order, as one transaction in parts, one a connection
- * (prepared, then committed). The stage holds each node of the source once (the client staged nothing twice); whether
- * the real tables hold one already is theirs to say, as one set a leaf:
+ * (prepared, then committed). The stage holds each node of the source once, and only nodes the real tables did not
+ * hold when it was staged (the descent in load asked them, trunk to leaf; the client staged nothing twice). A leaf:
  *   a leaf that holds nothing yet is loaded: truncated and copied FREEZE, in its order (Hilbert for entity and
  *     physicality, the claim for attestation and consensus). A truncated table's files are new, written without WAL at
  *     wal_level minimal and synced when the transaction is prepared, its indexes with it; frozen rows leave no hint
  *     bits for a later read to log (data_checksums is on). TRUNCATE locks that leaf alone.
- *   a leaf that holds rows takes what it does not hold, one INSERT ... SELECT; attestation and consensus put a staged
- *     row in place of the recorded one (its games and standing as the source left them).
+ *   a leaf that holds rows takes the staged rows, one INSERT ... SELECT (its primary key refuses a row it holds);
+ *     attestation and consensus put a staged row in place of the recorded one (its games and standing as the source left them).
  * An entity leaf is always appended: a physicality's entity is a foreign key to it, and a table a foreign key points
  * at cannot be truncated alone. An entity leaf and the physicality leaf of the same range go to one connection, the
  * entities first, so the paths it copies find their entities in its own part of the transaction. */
@@ -616,13 +619,12 @@ static int merge_leaf(PGconn *w, PGconn *rd, const MLeaf *L, uint64_t *rows){
         free(buf);
     } else {
         if (L->table >= M_ATT) {
-            const char *set = L->table == M_ATT ? "score = s.score, games = s.games" : "rating = s.rating, deviation = s.deviation, volatility = s.volatility, matches = s.matches";
-            snprintf(sql, sl, "UPDATE public.%s l SET %s FROM stage.%s s WHERE %s", L->name, set, L->name, same); bad = !must(w, sql);
-            if (!bad) { snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s s WHERE NOT EXISTS (SELECT 1 FROM public.%s l WHERE %s) ORDER BY %s",
-                                 L->name, cols, cols, L->name, L->name, same, M_ORDER[L->table]); bad = !must(w, sql); } }
-        else { const char *key = L->table == M_ENTITY ? "id" : "entity";        /* what the real leaf holds already stays: the rest, as one set */
-               snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s s WHERE NOT EXISTS (SELECT 1 FROM public.%s l WHERE l.%s = s.%s) ORDER BY %s",
-                        L->name, cols, cols, L->name, L->name, key, key, M_ORDER[L->table]); bad = !must(w, sql); }
+            /* one pass along the primary key: a staged row is new, or takes the recorded one's place */
+            const char *set = L->table == M_ATT ? "(claim, witness) DO UPDATE SET score = excluded.score, games = excluded.games"
+                                                : "(claim) DO UPDATE SET rating = excluded.rating, deviation = excluded.deviation, volatility = excluded.volatility, matches = excluded.matches";
+            snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s ORDER BY %s ON CONFLICT %s", L->name, cols, cols, L->name, M_ORDER[L->table], set);
+            bad = !must(w, sql); }
+        else { snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s ORDER BY %s", L->name, cols, cols, L->name, M_ORDER[L->table]); bad = !must(w, sql); }   /* new by the descent: the primary key refuses anything that is not */
         *rows += (uint64_t)L->staged_rows;
     }
     /* the container index takes what it was handed into its own list: merged here, inside the transaction, so no
