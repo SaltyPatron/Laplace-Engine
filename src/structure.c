@@ -190,7 +190,7 @@ static void parts_of(STree *t, int32_t x, const Layout *l){
         if (sp->seplen == 4 && !memcmp(sp->sep, "json", 4)) {               /* a list written as JSON, ["a", "b"]: each text, its escapes resolved */
             while (p < e) { const uint8_t *q = memchr(p, '"', (size_t)(e - p)); if (!q) break; q++; const uint8_t *qe = q; int esc = 0;
                 while (qe < e && *qe != '"') { if (*qe == '\\') { esc = 1; qe++; } qe++; } if (qe >= e) break;
-                const uint8_t *vp = q; size_t vn = (size_t)(qe - q); if (esc) { uint8_t *o = own(t, vn); size_t j = 0; for (size_t i = 0; i < vn; i++) { if (vp[i] == '\\' && i + 1 < vn) { i++; o[j++] = vp[i] == 'n' ? '\n' : vp[i] == 't' ? '\t' : vp[i]; } else o[j++] = vp[i]; } vp = o; vn = j; }
+                const uint8_t *vp = q; size_t vn = (size_t)(qe - q); if (esc) { uint8_t *o = own(t, vn + 8); vn = esc_resolve(vp, vn, o); vp = o; }
                 if (vn) { int32_t c = node(t, S_TEXT, t->n[x].tier, x, at + (uint64_t)(q - t->n[x].val)); t->n[c].val = vp; t->n[c].vlen = (uint32_t)vn; t->n[c].name = t->n[x].name; t->n[c].nlen = t->n[x].nlen; }
                 p = qe + 1; }
             return; }
