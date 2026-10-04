@@ -88,7 +88,9 @@ int layout_says(Layout *l, const char *path, char *tok){
         while ((v = strtok(NULL, " \t\r\n")) && l->nempty < 16) { l->emptylen[l->nempty] = sep_read(v, l->empty[l->nempty], sizeof l->empty[0]); l->nempty++; any = 1; }
         if (!any) { fprintf(stderr, "%s: empty TEXT...\n", path); return -1; } return 1; }
     if (!t) return 0;                                                       /* what follows is said of the tier written last */
-    if (!strcmp(tok, "names")) { char *at = strtok(NULL, "\r\n"), nm[64]; while (t->nnames < S_NAMES && name_next(&at, nm, sizeof nm)) snprintf(t->names[t->nnames++], 64, "%s", nm); return 1; }
+    if (!strcmp(tok, "names")) { char *at = strtok(NULL, "\r\n"), nm[64]; while (t->nnames < S_NAMES && name_next(&at, nm, sizeof nm)) snprintf(t->names[t->nnames++], 64, "%s", nm);
+        if (t->nnames) { char *z = t->names[t->nnames - 1]; size_t zl = strlen(z); if (zl > 3 && !strcmp(z + zl - 3, "...")) { z[zl - 3] = 0; t->rest = 1; } }     /* NAME...: every further part is NAME too, in order */
+        return 1; }
     if (!strcmp(tok, "header")) { t->header = 1; return 1; }
     if (!strcmp(tok, "quoted")) { t->quoted = 1; return 1; }
     if (!strcmp(tok, "padded")) { t->padded = 1; return 1; }
@@ -231,10 +233,11 @@ static void tier_read(STree *t, const Layout *l, int k, int32_t in, const uint8_
                 memcpy(o, v->val, v->vlen); size_t j = v->vlen; if (j && cn) o[j++] = ' '; memcpy(o + j, cp, cn); v = &t->n[t->n[in].last]; v->val = o; v->vlen = (uint32_t)(j + cn);
                 i = next; continue; }
             const uint8_t *is = t1->kvlen && stop > i ? memmem(s + i, stop - i, t1->kv, (size_t)t1->kvlen) : NULL;
-            int32_t x = node(t, pos < me->nnames || is ? S_VALUE : S_TEXT, (uint8_t)(k + 1), in, i);
+            int np = pos < me->nnames ? pos : me->rest && me->nnames ? me->nnames - 1 : -1;     /* the name this position has, if any */
+            int32_t x = node(t, np >= 0 || is ? S_VALUE : S_TEXT, (uint8_t)(k + 1), in, i);
             if (is) { size_t kn = (size_t)(is - s - i), vn = stop - (size_t)(is - s) - (size_t)t1->kvlen; const uint8_t *kp = trimmed(s + i, &kn), *vp = trimmed(is + t1->kvlen, &vn);   /* KEY IS VALUE: named by its key */
                 t->n[x].name = kp; t->n[x].nlen = (uint32_t)kn; t->n[x].val = vp; t->n[x].vlen = (uint32_t)vn; (void)(kp + t1->kvlen); if (l->npart) parts_of(t, x, l); pos++; i = next; continue; }
-            if (pos < me->nnames) { t->n[x].name = (const uint8_t *)me->names[pos]; t->n[x].nlen = (uint32_t)strlen(me->names[pos]); }
+            if (np >= 0) { t->n[x].name = (const uint8_t *)me->names[np]; t->n[x].nlen = (uint32_t)strlen(me->names[np]); }
             text_put(t, x, l, k + 1, s + i, stop - i); if (l->npart && t->n[x].nlen) parts_of(t, x, l);
             if (stop < e) { i = hi; pos++; break; }
         }

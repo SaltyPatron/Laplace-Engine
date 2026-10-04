@@ -47,7 +47,7 @@ typedef struct {
     char remark, escaped; int header, quoted, skip, padded;
     char kv[8]; int kvlen, continued;                     /* kv: each part is written KEY kv VALUE (the recipe's "is"); continued: a part that begins with white space goes on with the one before */
     char numbered[32];                                    /* numbered NAME: each part also holds NAME, its line in the file (empty lines counted), so files written line for line join by it */
-    char names[S_NAMES][64]; int nnames;                  /* the names of the parts of the tier below, by position */
+    char names[S_NAMES][64]; int nnames, rest;            /* the names of the parts of the tier below, by position; rest: the last (written NAME...) names every further part too */
 } STier;
 typedef struct { char path[64], sep[8], is[8]; int seplen, islen, pieces; char space; } SPart;     /* pieces: at most so many, the last the rest as written; space: the character the file writes for a space in it */
 /* A file whose tree a grammar gives (the recipe names it: grammar NAME, loaded at run time): what each kind of the
