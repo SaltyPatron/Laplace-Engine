@@ -1,7 +1,9 @@
 name hatecheck-placeholders
 # HateCheck's README: "template_placeholders.csv" contains the tokens that the placeholders in the case templates
-# are replaced with for generating the test cases. Two columns, Placeholder and Values; a field of Values holds
-# several, parted by commas.
+# are replaced with for generating the test cases.
+# The column names Placeholder and Values come from the file's header. The values are written parted by a comma
+# and a space, as in this raw line:
+# [IDENTITY_S],"woman, trans person, gay person, black person, disabled person, Muslim, immigrant"
 match template_placeholders.csv
 
 tier row by \n

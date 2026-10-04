@@ -1,10 +1,25 @@
 name hatecheck-cases
-# HateCheck's README names every column of "test_suite_cases.csv" and "all_cases.csv":
-#   case_id "The unique ID of the test case"; test_case "The text of the test case."; label_gold "The gold standard
-#   label (hateful/non-hateful) of the test case"; ref_case_id "the ID of the simpler hateful case which was
-#   perturbed to generate them", or "of the hateful case which is contrasted"; ref_templ_id "The equivalent, but for
-#   template IDs."; templ_id "The unique ID of the template from which the test case was generated"
-# A case is its test case, the sentence itself; case_id, templ_id and ref_templ_id are HateCheck's keys; ref_case_id
+# HateCheck's README, of "test_suite_cases.csv" and "all_cases.csv", names these columns:
+#   "**functionality**" "The shorthand for the functionality tested by the test case."
+#   "**case_id**" "The unique ID of the test case (assigned to each of the 3,901 cases we initially generated)"
+#   "**test_case**" "The text of the test case."
+#   "**label_gold**" "The gold standard label (hateful/non-hateful) of the test case. All test cases within a
+#   given functionality have the same gold standard label."
+#   "**target_ident**" "Where applicable, the protected group targeted or referenced by the test case. We cover
+#   seven protected groups in the test suite: women, trans people, gay people, black people, disabled people,
+#   Muslims and immigrants."
+#   "**direction**" "For hateful cases, the binary secondary label indicating whether they are *directed* at an
+#   individual as part of a protected group or aimed at the group in *general*."
+#   "**focus_words**" "Where applicable, the key word or phrase in a given test case (e.g. "cut their throats")."
+#   "**focus_lemma**" "Where applicable, the corresponding lemma (e.g. "cut sb. throat")."
+#   "**ref_case_id**" "For hateful cases, where applicable, the ID of the simpler hateful case which was
+#   perturbed to generate them." "For non-hateful cases, where applicable, the ID of the hateful case which is
+#   contrasted."
+#   "**ref_templ_id**" "The equivalent, but for template IDs."
+#   "**templ_id**" "The unique ID of the template from which the test case was generated (assigned to each of
+#   the 866 cases and templates from which we generated the 3,901 initial cases)."
+# case_templ is named by the header only.
+# A case is its test case, the sentence itself; case_id, templ_id and ref_templ_id are keys; ref_case_id
 # points at another case by its key, read as that case's sentence. What a row says of its case it says together.
 # The first column has no name and says nothing.
 match all_cases.csv test_suite_cases.csv
