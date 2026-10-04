@@ -631,11 +631,14 @@ static void keys_at(const Say *s, const STree *t, int32_t g, const KSpec *ks, Ke
         if (x->kind != S_GROUP) { if (!left_empty(s, x)) key_form(ks, x->val, x->vlen, out); continue; }
         for (int32_t q = x->first; q >= 0; q = t->n[q].next) if (t->n[q].kind != S_GROUP && !left_empty(s, &t->n[q])) key_form(ks, t->n[q].val, t->n[q].vlen, out); }
 }
-/* The file's key for a part, kept for the source's other files that point at it (refer NAME RECIPE). */
+/* The file's key for every part of the unit named the key's tier, wherever it is in the unit (an instance of a sentence
+ * of an XML document read as one tree, or a row that is the unit itself), kept for the source's other files that point
+ * at it (refer NAME RECIPE). */
 static void keep_keys(Sink *k, const STree *t, int32_t root){
-    const Say *s = k->s;
-    for (int i = 0; i < s->nkey; i++) if (s_named(&t->n[root], s->key[i].tier, strlen(s->key[i].tier))) { int32_t kc = s_child(t, root, s->key[i].name, -1); Ref S;
-        if (kc >= 0 && t->n[kc].vlen && thing_of(k, t, root, &S, 0)) keys_put(k->r->name, t->n[kc].val, t->n[kc].vlen, S); }
+    const Say *s = k->s; if (!s->nkey) return; int32_t end = subtree_end(t, root);
+    for (int32_t g = root; g <= end; g++) { const SNode *x = &t->n[g]; if (x->kind != S_GROUP || !x->nlen) continue;
+        for (int i = 0; i < s->nkey; i++) if (s_named(x, s->key[i].tier, strlen(s->key[i].tier))) { int32_t kc = s_child(t, g, s->key[i].name, -1); Ref S;
+            if (kc >= 0 && t->n[kc].vlen && thing_of(k, t, g, &S, 0)) keys_put(k->r->name, t->n[kc].val, t->n[kc].vlen, S); } }
 }
 /* A part read for the highway: the types it is, their keys, and the keys it maps to one another. */
 static void unit_highway(Sink *k, const STree *t, int32_t root){
