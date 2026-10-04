@@ -38,6 +38,27 @@ static int expand(const lp_id *id, Buf *o){
     return 1;
 }
 
+/* Every composition a batch made, by tier: whether the database holds it already (recorded, in the real tables or the
+ * stage) or it would be new, how many parts it has, and its text (a claim or tuple as its parts). Nothing is written:
+ * laplace ingest --entities, on a sample, shows what a recipe would record before anything is loaded. */
+static void show_tuple(const lp_id *id);
+static void show_entities(const char *conninfo, int ask){
+    uint64_t n = 0; TABLE_EACH(x) n++; if (!n) return;
+    lp_id *ids = malloc(sizeof(lp_id) * n); Node **of = malloc(sizeof(Node *) * n); uint64_t k = 0; TABLE_EACH(x) { ids[k] = x->id; of[k++] = x; }
+    uint8_t *hit = ask ? db_recorded(conninfo, ids, n) : NULL;
+    uint64_t by[17][2] = { { 0 } };
+    for (int t = 0; t <= 16; t++) for (uint64_t i = 0; i < n; i++) { Node *x = of[i]; if ((x->tier < 16 ? x->tier : 16) != t) continue;
+        int rec = hit && hit[i]; by[t][rec]++;
+        printf("  tier %-2d %-9s %4u parts   ", x->tier, !hit ? "" : rec ? "recorded" : "new", x->len);
+        if (x->kind & ((1u << LP_KIND_CLAIM) | (1u << LP_KIND_TUPLE))) show_tuple(&x->id);
+        else { Buf o = { 0 }; expand(&x->id, &o); size_t m = o.n > 160 ? 160 : o.n; for (size_t j = 0; j < m; j++) putchar(o.b[j] == '\n' ? ' ' : o.b[j]); if (o.n > m) printf("..."); free(o.b); }
+        putchar('\n'); }
+    printf("  entities: %'llu", (unsigned long long)n);
+    if (hit) { uint64_t nn = 0, nr = 0; for (int t = 0; t <= 16; t++) { nn += by[t][0]; nr += by[t][1]; } printf(", %'llu new, %'llu recorded", (unsigned long long)nn, (unsigned long long)nr); }
+    printf("; by tier:"); for (int t = 0; t <= 16; t++) if (by[t][0] + by[t][1]) printf(" %d:%llu", t, (unsigned long long)(by[t][0] + by[t][1])); putchar('\n');
+    free(ids); free(of); free(hit);
+}
+
 /* Directories are walked for every file under them. */
 static char **paths; static const Source **path_of; static int npaths, cpaths; static const Source *walking;
 static void add_path(const char *p){
@@ -218,7 +239,7 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
 }
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
-    int threads = 0, do_load = 1, a = 1, show_claims = 0; const char *of = NULL;
+    int threads = 0, do_load = 1, a = 1, show_claims = 0, entities = 0, ask = 1; const char *of = NULL;
     for (; a < argc && argv[a][0] == '-'; a++) {
         if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
         else if (!strcmp(argv[a], "-t") && a + 1 < argc) t0p = argv[++a];
@@ -229,7 +250,8 @@ int cmd_ingest(int argc, char **argv){
         else if (!strcmp(argv[a], "--no-load")) do_load = 0;
         else if (!strcmp(argv[a], "--plan")) do_load = -1;
         else if (!strcmp(argv[a], "--claims")) { show_claims = 1; do_load = 0; }     /* what the recipes attest, as text; nothing is loaded */
-        else { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] file...\n"); return 2; }
+        else if (!strcmp(argv[a], "--entities")) { entities = 1; show_claims = 1; do_load = 0; }   /* what the recipes would record, entities and claims; nothing is loaded */
+        else { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] [--entities] file...\n"); return 2; }
     }
     Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec), nsrc; Source *src = sources_loaded(&nsrc);
     for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, "file")) file_record_stock(&rec[k]);   /* what the OS keeps of every file: the stock recipe file */
@@ -419,6 +441,7 @@ int cmd_ingest(int argc, char **argv){
         }
         t_rec += now() - td;
         for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
+        if (entities) show_entities(conninfo, ask);
         if (do_load) {
             /* The batch before is written and committed first, so this batch's lookups see it. When more batches follow,
              * this one is written by a child, from its copy of the node table, while this process empties the table and

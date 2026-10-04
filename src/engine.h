@@ -212,6 +212,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
 int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers, uint64_t n);   /* every one of them recorded (in its tier's partition) */
 int merge(const char *conninfo, int npg);            /* what the runs staged, into the real tables at once (db.c) */
 int tier0_write(const char *conninfo, int npg);       /* every codepoint, once, from the perf-cache, into the real tables (laplace deploy) */
+uint8_t *db_recorded(const char *conninfo, const lp_id *ids, uint64_t n);   /* which are recorded, real tables or stage: nothing written */
 int cmd_merge(int argc, char **argv);
 
 /* ---- reading the database: set-based fetches, decoded here */

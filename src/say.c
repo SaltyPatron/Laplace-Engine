@@ -625,6 +625,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
 static void worker_of(Sink *w, const Sink *k){
     *w = *k; memset(&w->ev, 0, sizeof w->ev); memset(&w->things, 0, sizeof w->things); memset(&w->meta, 0, sizeof w->meta); memset(&w->grp, 0, sizeof w->grp);
     memset(w->open, 0, sizeof w->open); w->nopen = 0; w->unknown = 0; w->nunk = 0; w->hr = NULL; w->nhr = w->chr = 0; w->worker = 1;
+    w->cs = NULL; w->cs_cap = w->cs_n = 0;                                    /* the claims it has made: its own, never the parent's table */
 }
 static void sink_merge(Sink *k, Sink *w){
     for (uint64_t i = 0; i < w->ev.n; i++) ev_push(&k->ev, &w->ev.e[i]);
@@ -633,7 +634,7 @@ static void sink_merge(Sink *k, Sink *w){
     for (int i = 0; i < 256; i++) k->open[i] += w->open[i];
     for (int i = 0; i < w->nopen; i++) { int dup = 0; for (int j = 0; j < k->nopen && !dup; j++) dup = !strcmp(k->opennm[j], w->opennm[i]); if (!dup && k->nopen < 16) strcpy(k->opennm[k->nopen++], w->opennm[i]); }
     k->unknown += w->unknown; for (int i = 0; i < w->nunk && k->nunk < 8; i++) strcpy(k->unknm[k->nunk++], w->unknm[i]);
-    free(w->ev.e); free(w->meta.c); free(w->things.c); free(w->grp.c);
+    free(w->ev.e); free(w->meta.c); free(w->things.c); free(w->grp.c); free(w->cs);
 }
 /* A thread may take up a part while it waits inside its own reading: what it was in the middle of is put back after. */
 typedef struct { const STree *tt; int16_t *dm; int base, nbusy; long self_cp; char self_mark; } Tls;

@@ -749,3 +749,10 @@ int tier0_write(const char *conninfo, int npg){
     if (!bad) printf("  %-52s %'9llu written, from the perf-cache   %.1f s\n", "tier 0: every codepoint, once", (unsigned long long)wrote, now() - T);
     return bad ? 1 : 0;
 }
+
+/* Which of these compositions are recorded, in the real tables or the stage: one set question per partition, nothing
+ * written (laplace ingest --entities asks it of a sample). The caller frees what it returns. */
+uint8_t *db_recorded(const char *conninfo, const lp_id *ids, uint64_t n){
+    PGconn *pg = db_connect(conninfo); parts_plan(pg); if (!stage_open(pg)) exit(1);
+    uint8_t *t = calloc(n ? n : 1, 1), *hit = recorded(&pg, 1, ids, t, n); free(t); PQfinish(pg); return hit;
+}
