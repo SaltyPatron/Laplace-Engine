@@ -8,7 +8,7 @@ tier row by \n
 escaped \
 names Lang "Skill level" Username Details
 tier field by \t
-empty \N
+empty \\N
 
 thing row Username Lang
 own Username
