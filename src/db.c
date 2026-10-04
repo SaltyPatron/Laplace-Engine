@@ -318,13 +318,14 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     PGresult *r = PQexec(pg[0], "SELECT count(*) FROM entity WHERE tier = 0");
     long long n0 = PQresultStatus(r) == PGRES_TUPLES_OK ? atoll(PQgetvalue(r, 0, 0)) : -1; PQclear(r);
     if (n0 < 0) { fprintf(stderr, "tier 0: %s", PQerrorMessage(pg[0])); return 1; }
-    /* The atoms each database holds once. A first load cut off between tier 0's sixteen transactions leaves some: which
-     * are missing is asked, by their IDs, and only those are written (all of them were, again, at every load after). */
+    /* The atoms each database holds once. Where the real tables do not hold all of them, which are missing is asked by
+     * their IDs, of the real tables and the stage together (a staged run's atoms are in the stage until the merge:
+     * counted in the real tables alone, every batch of the run staged them all again), and only those are written. */
     int atoms_needed = n0 < (long long)LP_NCP; free(atom_missing); atom_missing = NULL;
-    if (atoms_needed) { atom_missing = malloc(LP_NCP);
-        if (n0 == 0) memset(atom_missing, 1, LP_NCP);
-        else { lp_id *ids = malloc(sizeof(lp_id) * LP_NCP); uint8_t *t0 = calloc(LP_NCP, 1); for (uint32_t cp = 0; cp < LP_NCP; cp++) ids[cp] = T0[cp].id;
-               uint8_t *hit = recorded(pg, npg, ids, t0, LP_NCP); for (uint32_t cp = 0; cp < LP_NCP; cp++) atom_missing[cp] = !hit[cp]; free(hit); free(ids); free(t0); } }
+    if (atoms_needed) { atom_missing = malloc(LP_NCP); int any = 0;
+        lp_id *ids = malloc(sizeof(lp_id) * LP_NCP); uint8_t *t0 = calloc(LP_NCP, 1); for (uint32_t cp = 0; cp < LP_NCP; cp++) ids[cp] = T0[cp].id;
+        uint8_t *hit = recorded(pg, npg, ids, t0, LP_NCP); for (uint32_t cp = 0; cp < LP_NCP; cp++) { atom_missing[cp] = !hit[cp]; any |= !hit[cp]; }
+        free(hit); free(ids); free(t0); atoms_needed = any; }
 
     /* ---- trunk to leaf: a recorded node means its whole subtree is recorded, so nothing below it is checked */
     double t = now();
