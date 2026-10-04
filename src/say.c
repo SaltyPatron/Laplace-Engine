@@ -438,19 +438,20 @@ static int value_of(Sink *k, const STree *t, int32_t c, Ref *out, int depth){
 }
 /* What a part speaks of: its own thing, or, for a part that is no thing, the nearest thing it is inside. */
 static int spoken_thing(Sink *k, const STree *t, int32_t g, Ref *out){
-    for (int32_t up = g; up >= 0; up = t->n[up].parent) if (thing_of(k, t, up, out, 0)) return 1;
+    for (int32_t up = g; up >= 0; up = t->n[up].parent) { if (thing_of(k, t, up, out, 0)) return 1;
+        for (int i = 0; i < k->s->nthing; i++) if (named_as(&t->n[up], k->s->thing[i].tier)) return 0; }     /* a kind the recipe names a thing of, naming none here (a synset with no members), speaks of nothing: never of what holds it */
     return 0;
 }
 static int entity_of(Sink *k, const STree *t, int32_t c, Ref *out);
 static uint32_t entities_wide(Sink *k, const STree *t, int32_t g, Ref *kid);
 static int thing_of(Sink *k, const STree *t, int32_t g, Ref *out, int depth){
     int memo = k->tc_tree == t && (uint32_t)g < k->tc_n;                     /* each thing is composed once in a tree; the threads reading one tree share what is composed */
-    if (memo) { uint8_t st = __atomic_load_n(&k->ts[g], __ATOMIC_ACQUIRE); if (st == 1) { *out = k->tc[g]; return 1; } if (st == 2) return 0; }
+    if (memo) { uint8_t st = __atomic_load_n(&k->ts[g], __ATOMIC_ACQUIRE); if (st >= 3) { *out = k->tc[g]; return st - 2; } if (st == 2) return 0; }     /* 3 and up: named, by the way st - 3 */
     if (memo && composing(g)) return 0;                                            /* being composed by this thread: a thing named by itself names nothing */
     int pushed = memo && nbusy < BUSY_MAX; if (pushed) busy[nbusy++] = g;
     int r = thing_compose(k, t, g, out, depth);
     if (pushed) nbusy--;
-    if (memo) { if (r) k->tc[g] = *out; __atomic_store_n(&k->ts[g], (uint8_t)(r ? 1 : 2), __ATOMIC_RELEASE); }
+    if (memo) { if (r) k->tc[g] = *out; __atomic_store_n(&k->ts[g], (uint8_t)(r ? (r < 250 ? r + 2 : 252) : 2), __ATOMIC_RELEASE); }
     return r;
 }
 /* A part as one way its kind is named: 0 when it is not named that way. */
@@ -490,13 +491,15 @@ static int one_thing(Sink *k, const STree *t, int32_t g, const Thing *th, Ref *o
 /* A part as the thing it is: the first of the ways its kind is named that names it (a code point, or a range). */
 static int thing_compose(Sink *k, const STree *t, int32_t g, Ref *out, int depth){
     const SNode *x = &t->n[g]; const Say *s = k->s;
-    for (int i = 0; i < s->nthing; i++) if (named_as(x, s->thing[i].tier) && one_thing(k, t, g, &s->thing[i], out, depth)) return 1;
+    for (int i = 0; i < s->nthing; i++) if (named_as(x, s->thing[i].tier) && one_thing(k, t, g, &s->thing[i], out, depth)) return i + 1;                       /* which way named it, counted from 1 */
     return 0;
 }
-/* Whether a part is one of those that name the thing it is in (an entry's word and pos). */
-static int names_it(const Say *s, const SNode *x, const SNode *y){
-    for (int i = 0; i < s->nthing; i++) { if (!named_as(x, s->thing[i].tier)) continue;
-        for (int z = 0; z < s->thing[i].n; z++) if (!strchr(s->thing[i].name[z], '/') && s_named(y, s->thing[i].name[z], strlen(s->thing[i].name[z]))) return 1; }
+/* Whether a part is one of those that name the thing it is in (an entry's word and pos): by the way that named it,
+ * never by another way of its kind (a synset named by its members still says its ili; one with none, named by its ili,
+ * does not). */
+static int names_it(Sink *k, const STree *t, int32_t g, const SNode *y){
+    Ref X; int r = thing_of(k, t, g, &X, 0); if (!r) return 0; const Thing *th = &k->s->thing[r - 1];
+    for (int z = 0; z < th->n; z++) if (!strchr(th->name[z], '/') && s_named(y, th->name[z], strlen(th->name[z]))) return 1;
     return 0;
 }
 /* Whether a part meets the conditions named: the outermost part the recipe speaks of (where ...), or a claim said
@@ -754,13 +757,13 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
                     if (y->kind != S_GROUP || !y->nlen || y->join == S_PIECES) continue; int32_t only = -1, nk = 0;
                     for (int32_t q = y->first; q >= 0; q = t->n[q].next) { const Dis *dq = t->n[q].nlen && t->n[q].kind == S_VALUE ? dis_of(s, &t->n[q]) : NULL; if (dq && dq->what == D_OMIT) continue; nk++; only = q; }   /* what is omitted does not count */
                     if (nk != 1 || (t->n[only].kind != S_TEXT && t->n[only].kind != S_VALUE) || left_empty(s, &t->n[only])) continue;
-                    if (!s->att[a].of[0] && names_it(s, x, y)) continue;                     /* the element that names the thing is the thing, not said of it */
+                    if (!s->att[a].of[0] && names_it(k, t, (int32_t)g, y)) continue;                     /* the element that names the thing is the thing, not said of it */
                     Ref v; if (!value_of(k, t, only, &v, 0)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); continue; }
                 if (!strcmp(s->att[a].name[z], ".")) {                       /* its own text, under its own name */
                     if (y->kind != S_TEXT || left_empty(s, y)) continue; Ref v = text_of(y->val, y->vlen); if (!memcmp(&v.id, &S.id, 16)) continue;    /* the text the thing is named by: the thing, said already */
                     Ref p[3] = { S, string_ref(x->name, x->nlen), v }; claim(k, p, 3); continue; }
                 if (!y->nlen || y->kind == S_TEXT || !named_as(y, s->att[a].name[z])) continue;
-                if (!s->att[a].of[0] && names_it(s, x, y)) continue;                         /* a part that names the thing is said already: it is the thing */
+                if (!s->att[a].of[0] && names_it(k, t, (int32_t)g, y)) continue;                         /* a part that names the thing is said already: it is the thing */
                 if (y->kind == S_GROUP && y->join != S_PIECES && strchr(s->att[a].name[z], '*')) continue;      /* a wildcard names the part's values, not the elements inside it, which speak for themselves */
                 if (y->kind == S_GROUP) {                                    /* parts: each VALUE under its KEY, or each piece, read as the part is, under the part's own name */
                     for (int32_t q = y->first; q >= 0; q = t->n[q].next) { const SNode *w = &t->n[q]; if (!w->vlen) continue; Ref v;
