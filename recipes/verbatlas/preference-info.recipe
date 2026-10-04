@@ -1,17 +1,17 @@
 name verbatlas-preference-info
-# A selectional preference on each row: its id (va:0001p, a key), its reference BabelNet synset (read as the ILI
-# concept), its name, and a picture of it (a fourth column the file does not name: a pair). The first line is the
-# release's banner, not a row.
+# README.txt: "Each line contains the ID of a VerbAtlas selectional preference, its reference BabelNet synset ID, and
+# its name"; a fourth column, a picture of it, the README does not name (a pair). The id (va:0001p) is a key. The
+# BabelNet ID is recorded as written: these are noun synsets, and VerbAtlas's bn2wn maps only verbs to WordNet. The
+# first line is the release's banner, not a row.
 match VA_preference_info.tsv
 
 tier row by \n
 skip 1
-names ID reference_BabelNet_synset_ID name fourth
+names ID "reference BabelNet synset ID" name fourth
 tier field by \t
 
 thing row name
 key row ID
-type reference_BabelNet_synset_ID ili
-content name fourth
-attest row reference_BabelNet_synset_ID
+content name "reference BabelNet synset ID" fourth
+attest row "reference BabelNet synset ID"
 pair row fourth
