@@ -13,7 +13,8 @@ format xml
 # those properties' defaults alone, a row each.
 perfcache
 split char reserved noncharacter surrogate named-sequence provisional-named-sequence normalization-correction standardized-variant cjk-radical emoji-source block do-not-emit instead
-itself-mark hash
+# "#", in the flat XML, is "the code point itself": the default, where the file gives no value of its own (UAX #42)
+empty hash
 
 thing char cp
 thing char first-cp last-cp
