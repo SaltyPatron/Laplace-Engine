@@ -724,9 +724,10 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
                     if (y->kind != S_GROUP || !y->nlen || y->join == S_PIECES) continue; int32_t only = -1, nk = 0;
                     for (int32_t q = y->first; q >= 0; q = t->n[q].next) { const Dis *dq = t->n[q].nlen && t->n[q].kind == S_VALUE ? dis_of(s, &t->n[q]) : NULL; if (dq && dq->what == D_OMIT) continue; nk++; only = q; }   /* what is omitted does not count */
                     if (nk != 1 || (t->n[only].kind != S_TEXT && t->n[only].kind != S_VALUE) || left_empty(s, &t->n[only])) continue;
-                    Ref v; if (!value_of(k, t, only, &v, 0) || !memcmp(&v.id, &S.id, 16)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); continue; }
+                    if (!s->att[a].of[0] && names_it(s, x, y)) continue;                     /* the element that names the thing is the thing, not said of it */
+                    Ref v; if (!value_of(k, t, only, &v, 0)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); continue; }
                 if (!strcmp(s->att[a].name[z], ".")) {                       /* its own text, under its own name */
-                    if (y->kind != S_TEXT || left_empty(s, y)) continue; Ref v = text_of(y->val, y->vlen); if (!memcmp(&v.id, &S.id, 16)) continue;
+                    if (y->kind != S_TEXT || left_empty(s, y)) continue; Ref v = text_of(y->val, y->vlen); if (!memcmp(&v.id, &S.id, 16)) continue;    /* the text the thing is named by: the thing, said already */
                     Ref p[3] = { S, string_ref(x->name, x->nlen), v }; claim(k, p, 3); continue; }
                 if (!y->nlen || y->kind == S_TEXT || !named_as(y, s->att[a].name[z])) continue;
                 if (!s->att[a].of[0] && names_it(s, x, y)) continue;                         /* a part that names the thing is said already: it is the thing */
@@ -736,9 +737,9 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
                         if (w->kind == S_VALUE && w->nlen && !s_named(w, (const char *)y->name, y->nlen)) { const Dis *dw = dis_of(s, w); if (dw && (dw->what == D_OMIT || dw->what == D_METADATA)) continue;      /* the file's bookkeeping says nothing */
                             if (in_perf(s, (const char *)w->name, w->nlen)) continue;
                             Ref vw; if (!dw || !value_of(k, t, q, &vw, 0)) vw = text_of(w->val, w->vlen); Ref p[3] = { S, string_ref(w->name, w->nlen), vw }; claim(k, p, 3); continue; }
-                        if (!value_of(k, t, q, &v, 0) || !memcmp(&v.id, &S.id, 16)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); } }
+                        if (!value_of(k, t, q, &v, 0)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); } }
                 else { if (in_perf(s, (const char *)y->name, y->nlen)) continue;
-                    Ref v; if (!value_of(k, t, c, &v, 0) || !memcmp(&v.id, &S.id, 16)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); } }
+                    Ref v; if (!value_of(k, t, c, &v, 0)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); } }
             }
             if (s->att[a].of[0]) { S = S0; has = had; }
             k->voiced = was; k->voice = wv; }
