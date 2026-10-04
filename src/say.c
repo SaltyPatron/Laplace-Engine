@@ -327,7 +327,8 @@ static int32_t filtered(const STree *t, int32_t c, const char *step, int32_t aft
 static int32_t step_of(const STree *t, int32_t c, const char *step){
     if (!strcmp(step, "^")) return t->n[c].parent;
     if (step[0] == '^') { size_t l = strlen(step + 1); for (int32_t up = t->n[c].parent; up >= 0; up = t->n[up].parent) if (s_named(&t->n[up], step + 1, l)) return up; return -1; }     /* ^NAME: the nearest part of that name it is inside */
-    if (*step >= '0' && *step <= '9') { char *e; long n = strtol(step, &e, 10); if (!*e) { int32_t q = t->n[c].first; while (q >= 0 && --n > 0) q = t->n[q].next; return n == 0 ? q : -1; } }
+    if (*step >= '0' && *step <= '9') { int32_t q = named_child(t, c, step, -1); if (q >= 0) return q;           /* a part named so (names 0 1 2) before the Nth part */
+        char *e; long n = strtol(step, &e, 10); if (!*e) { q = t->n[c].first; while (q >= 0 && --n > 0) q = t->n[q].next; return n == 0 ? q : -1; } }
     int32_t q = filtered(t, c, step, -1); if (q >= 0) return q;
     char *el = elem_step(step); if (!el) return -1;                          /* ELEMENT.NAME: the NAME of its ELEMENT */
     q = child_path(t, c, el); free(el); return q;
@@ -343,7 +344,8 @@ static int all_path(const STree *t, int32_t g, const char *path, int32_t *out, i
     if (!strcmp(path, ".")) { if (cap < 1) return 0; out[0] = g; return 1; }   /* the part itself */
     const char *sl = strchr(path, '/'); char step[64]; size_t l = sl ? (size_t)(sl - path) : strlen(path); if (l >= sizeof step) return 0; memcpy(step, path, l); step[l] = 0;
     int n = 0;
-    if (!strcmp(step, "^") || (*step >= '0' && *step <= '9')) { int32_t c = step_of(t, g, step); if (c < 0) return 0; if (!sl) { out[0] = c; return 1; } return all_path(t, c, sl + 1, out, cap); }
+    if (!strcmp(step, "^") || (*step >= '0' && *step <= '9' && named_child(t, g, step, -1) < 0)) {      /* a number names the Nth part when no part is named so */
+    int32_t c = step_of(t, g, step); if (c < 0) return 0; if (!sl) { out[0] = c; return 1; } return all_path(t, c, sl + 1, out, cap); }
     for (int32_t c = filtered(t, g, step, -1); c >= 0 && n < cap; c = filtered(t, g, step, c)) { if (!sl) out[n++] = c; else n += all_path(t, c, sl + 1, out + n, cap - n); }
     if (!n) { char *el = elem_step(step); if (el) {                          /* ELEMENT.NAME: the NAME of each ELEMENT */
         size_t rl = sl ? strlen(sl) : 0; el = xrealloc(el, strlen(el) + rl + 1); if (sl) strcat(el, sl); n = all_path(t, g, el, out, cap); free(el); } }
