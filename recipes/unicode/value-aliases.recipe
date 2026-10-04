@@ -6,9 +6,11 @@ tier row by \n
 comment hash
 remark hash
 padded
-names property short long
+names property short long alias...
 tier field by ;
 
 thing row property
-content property short long
+content property short long alias
 relate row short to long
+# "Other aliases may be listed in additional fields" (the header)
+relate row short to alias
