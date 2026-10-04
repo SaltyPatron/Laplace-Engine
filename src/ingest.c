@@ -181,12 +181,9 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
         if (code) { failed = 1; fprintf(stderr, "\n%s did not go in (exit %d); what it said is in %s\n", src[i].name, code, log); } else { went++; wentin[i] = 1; }
     }
     printf("\n%d sources in, %d absent, %d without a recipe, %d not begun for want of room, %d not begun because what they come after is not in%s   %'.1f s\n", went, absent, empty, short_of_room, short_of_order, failed ? ", and one that failed: the run stops there" : "", now() - T);
-    /* the sources that went in, went in whole to the stage: now into the real tables, at once. A source not begun (for
-     * room, or for what it comes after) staged nothing. A run that failed leaves the stage as it is, and the next run
-     * takes up from it (what is staged is looked for as what is recorded is) */
-    int merged = 0;
-    if (loads && went && !failed) { printf("\nmerge\n"); fflush(stdout); merged = merge(conninfo, omp_get_num_procs()); }
-    free(wentin); return failed || short_of_order || merged;
+    /* each source that went in merged its own stage as it ended (cmd_ingest); one that failed left its stage, and its
+     * next run takes up from it (what is staged is looked for as what is recorded is) */
+    free(wentin); return failed || short_of_order;
 }
 static const uint64_t *by_size_of;                                    /* the batch's files, longest first, ties in the order given */
 static int by_size(const void *a, const void *b){ int i = *(const int *)a, j = *(const int *)b; uint64_t x = by_size_of[i], y = by_size_of[j]; return x < y ? 1 : x > y ? -1 : i - j; }
@@ -487,8 +484,12 @@ int cmd_ingest(int argc, char **argv){
               printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded"); }
           else printf("  the source's trunk: none, since its source file names no record (witness or called)\n");
           table_reset(); } }
-    /* files named directly, not a source within a run of them (that run merges after its last): into the real tables */
-    if (do_load > 0 && !mism && !getenv("LAPLACE_INGEST_ONE")) { printf("\nmerge\n"); fflush(stdout); if (merge(conninfo, threads)) return 1; }
+    /* What this ingest staged goes into the real tables now, before anything after it: a source is in once its records
+     * are (the inventor: "decompose and stage all the records necessary... and then we batch that into the real
+     * database"). The next source is read against them, a key a record breaks stops this source and no other, and
+     * what is in can be read while the rest goes in. Each leaf takes what was staged for it by rewriting or by
+     * appending, whichever writes less (merge): a small source appends. */
+    if (do_load > 0 && !mism) { printf("\nmerge\n"); fflush(stdout); if (merge(conninfo, threads)) return 1; }
     printf("\n== total %.1f s\n", now() - T);
     return mism ? 1 : 0;
 }
