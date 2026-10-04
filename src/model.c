@@ -150,6 +150,9 @@ int cmd_model(int argc, char **argv){
     }
     if (!nsamp) { static const char *d[] = { " king", " dog", " Paris", " happy", " run" }; for (int i = 0; i < 5; i++) samples[nsamp++] = d[i]; }
     double T = now(), t = now();
+    /* Every GEMM below in MKL's reproducible mode (CNR, AVX2, strict), the level both machines have: without it MKL
+     * picks kernels by CPU, and the z-score candidates kept from the products could differ between them. */
+    if (!lp_mkl_reproducible()) { fprintf(stderr, "laplace model: MKL refused reproducible mode (CNR AVX2, strict)\n"); return 1; }
     tier0_open(NULL); TX = lp_text_new(T0);
     printf("laplace model %s\ncpu: %s; MKL threads %d\n", dir, lp_cpu_describe(lp_cpu_features()), mkl_get_max_threads());
 
