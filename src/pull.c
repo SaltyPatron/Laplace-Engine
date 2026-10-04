@@ -245,26 +245,49 @@ int cmd_hop(int argc, char **argv){
  *                          under SAYS, [h, SAYS, code]
  *   gloss R                what is shown of a concept: [x(n-1), R, text]
  *   laplace translate [-d conninfo] [-n N] [--firmware FILE] word from to...        laplace translate dog en de fr ja */
+/* Every step is one set: the whole frontier is asked at once, its claims read from every leaf together (holds_above,
+ * one statement a leaf), never one entity at a time. A step no claim carries is the structure's (Recipes: a thing named
+ * by several parts together is the path of them, so a sense named by its synset and its entry holds its synset as a
+ * constituent, recorded once and never said again as a claim): up, the constituents of x; down, what holds x. */
+typedef struct { int from; lp_id to; lp_rating r; } Step;          /* from: the frontier entry it leaves; to: where it goes */
 static double read_k = 2.0;                                                  /* the firmware's k, for the lookups below */
-static Claim *one_open(PGconn *pg, Ctx *c, const lp_id *first, const char *middle, const lp_id *last, int fan, int *n){
-    lp_id p[3]; int h[3] = { first ? 2 : 0, 2, last ? 2 : 0 }, capped; if (first) p[0] = *first; if (last) p[2] = *last;
-    p[1] = entity_named(c, middle, NULL, 0, NULL).id; return claims_like(pg, p, h, fan, read_k, n, &capped);
+/* dir 0: [key, R, x], x the far end; dir 1: [x, R, key]. claim 0: the paths that hold the key and are no claim. */
+static Step *open_each(const lp_id *keys, int nk, const lp_id *rel, int dir, int claim, int fan, int *ns){
+    int nh = 0; Hold *h = claim ? holds_pair(keys, nk, rel, 1, &nh) : holds_above(keys, nk, -1, 1, 0, &nh); Step *s = malloc(sizeof(Step) * (size_t)(nh ? nh : 1)); int m = 0;
+    int *per = calloc((size_t)(nk ? nk : 1), sizeof(int));
+    for (int j = 0; j < nh; j++) { if (h[j].src < 0 || h[j].src >= nk || per[h[j].src] >= fan) continue;
+        if (!claim) { if (h[j].claim) continue; s[m++] = (Step){ h[j].src, h[j].entity, { 0, 0, 0 } }; per[h[j].src]++; continue; }
+        if (!h[j].claim || !h[j].stood) continue;
+        lp_id p[MAXPARTS]; size_t np = lp_path_ids(h[j].path, (size_t)h[j].path_len, p, MAXPARTS); if (np < 3 || np > MAXPARTS) continue;
+        const lp_id *key = &keys[h[j].src]; size_t last = np - 1, end = dir ? last : 0;
+        if (memcmp(&p[end], key, 16)) continue;
+        int in = 0; for (size_t i = 1; i < last; i++) in |= !memcmp(&p[i], rel, 16); if (!in) continue;
+        s[m++] = (Step){ h[j].src, p[dir ? 0 : last], h[j].r }; per[h[j].src]++; }
+    holds_free(h, nh); free(per); *ns = m; return s;
 }
-typedef struct { lp_id held; char code[24]; } Lang;
-static const char *language_of(PGconn *pg, Ctx *c, Reader *rd, const Firmware *fw, const lp_id *x, Lang **known, int *nknown){
-    int n; Claim *lx = one_open(pg, c, NULL, fw->language[0], x, 8, &n); if (!n) { free(lx); return ""; }
-    lp_id h = lx[0].part[0]; free(lx);
-    for (int i = 0; i < *nknown; i++) if (!memcmp(&(*known)[i].held, &h, 16)) return (*known)[i].code;
-    Claim *lg = one_open(pg, c, &h, fw->language[1], NULL, 8, &n); *known = xrealloc(*known, sizeof(Lang) * (size_t)(*nknown + 1)); Lang *k = &(*known)[(*nknown)++]; k->held = h; k->code[0] = 0;
-    if (n) { char *t = reader_text(rd, &lg[0].part[lg[0].np - 1], 20); snprintf(k->code, sizeof k->code, "%s", t); free(t); }
-    free(lg); return k->code;
+/* The constituents of each entity, one set: out[i] for keys[i]. */
+static Run *parts_each(PGconn *pg, const lp_id *keys, int nk){
+    Run *out = calloc((size_t)(nk ? nk : 1), sizeof(Run)); if (!nk) return out;
+    uint8_t *ab = malloc(20 + 20 * (size_t)nk); size_t al = ids_param(ab, keys, (uint32_t)nk); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+    PGresult *q = db_ask(pg, "SELECT u.i, p.path FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN physicality p ON p.entity = u.id", 1, v, l, f);
+    if (PQresultStatus(q) == PGRES_TUPLES_OK) for (int j = 0; j < PQntuples(q); j++) { uint64_t o; memcpy(&o, PQgetvalue(q, j, 0), 8); int i = (int)__builtin_bswap64(o) - 1;
+        if (i >= 0 && i < nk && !out[i].id) out[i] = run_of((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1)); }
+    PQclear(q); free(ab); return out;
 }
-/* Down from x along the steps up[from..0], in the other direction: the words at the bottom, at most cap of them. */
-static int down(PGconn *pg, Ctx *c, Reader *rd, const Firmware *fw, const lp_id *x, int from, int fan, int *lookups, int cap, int any){
-    if (from < 0) { char *tx = reader_text(rd, x, 40); printf("%s%s", any ? ", " : " ", tx); free(tx); return 1; }
-    int n, shown = 0; Claim *cl = one_open(pg, c, NULL, fw->up[from], x, from ? 256 : 8, &n); (*lookups)++;
-    for (int i = 0; i < n && any + shown < cap; i++) shown += down(pg, c, rd, fw, &cl[i].part[0], from - 1, fan, lookups, cap, any + shown);
-    free(cl); return shown;
+/* The language each entity is in, one set a step: [h, HELD, x], then [h, SAYS, code]; code[i] for keys[i] ("" none). */
+static char (*language_each(Reader *rd, const lp_id *keys, int nk, const lp_id *held, const lp_id *says))[24] {
+    char (*code)[24] = calloc((size_t)(nk ? nk : 1), 24); int nh, ns;
+    Step *h = open_each(keys, nk, held, 1, 1, 8, &nh); int *hold = malloc(sizeof(int) * (size_t)(nk ? nk : 1)); for (int i = 0; i < nk; i++) hold[i] = -1;
+    lp_idmap *m = lp_idmap_new(); lp_id *hs = malloc(sizeof(lp_id) * (size_t)(nh ? nh : 1)); int nu = 0;
+    for (int j = 0; j < nh; j++) if (hold[h[j].from] < 0) { bool fresh; size_t at = lp_idmap_put(m, &h[j].to, &fresh); if (fresh) hs[nu++] = h[j].to; hold[h[j].from] = (int)at; }
+    Step *sy = open_each(hs, nu, says, 0, 1, 1, &ns); char (*hc)[24] = calloc((size_t)(nu ? nu : 1), 24);
+    for (int j = 0; j < ns; j++) reader_want(rd, &sy[j].to);
+    for (int j = 0; j < ns; j++) if (!hc[sy[j].from][0]) { char *t = reader_text(rd, &sy[j].to, 20); snprintf(hc[sy[j].from], 24, "%s", t); free(t); }
+    for (int i = 0; i < nk; i++) if (hold[i] >= 0) memcpy(code[i], hc[hold[i]], 24);
+    free(h); free(hold); free(hs); free(sy); free(hc); lp_idmap_free(m); return code;
+}
+static Claim *one_open_claims(PGconn *pg, const lp_id *first, const lp_id *rel, int fan, int *n){
+    lp_id p[3] = { *first, *rel, *first }; int h[3] = { 2, 2, 0 }, capped; return claims_like(pg, p, h, fan, read_k, n, &capped);
 }
 int cmd_translate(int argc, char **argv){
     const char *conninfo = laplace_db(), *fwp = NULL; int limit = 4, a = 1;
@@ -277,33 +300,71 @@ int cmd_translate(int argc, char **argv){
     if (argc - a < 3) { fprintf(stderr, "usage: laplace translate [-d conninfo] [-n concepts] word from to...\n       languages as the resources write them: en de fr ja\n"); return 2; }
     if (fw.nup < 2 || !fw.language[0][0]) { fprintf(stderr, "%s: for translate, the firmware names no way up to a concept and back down (up RELATION..., language HELD SAYS)\n", fw.path); return 2; }
     double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_connect(conninfo); Reader *rd = reader_new(pg);
-    lp_id word = entity_named(c, argv[a], NULL, 0, NULL).id; const char *from = argv[a + 1]; Lang *known = NULL; int nknown = 0, n, lookups = 0, shown = 0, last = fw.nup - 1;
-    Claim *first = one_open(pg, c, &word, fw.up[0], NULL, fan, &n); lookups++; positions_of(pg, first, n); qsort(first, (size_t)n, sizeof(Claim), claim_by_position);
-    lp_id seen[64]; int nseen = 0;
-    for (int i = 0; i < n && shown < limit; i++) {
-        lp_id x = first[i].part[first[i].np - 1]; int ok = 1;
-        for (int s = 1; s < last && ok; s++) { int ny; Claim *st = one_open(pg, c, &x, fw.up[s], NULL, 8, &ny); lookups++; if (ny) x = st[0].part[st[0].np - 1]; else ok = 0; free(st); }
-        if (!ok || strcmp(language_of(pg, c, rd, &fw, &x, &known, &nknown), from)) continue;
-        int ni; Claim *il = one_open(pg, c, &x, fw.up[last], NULL, 8, &ni); lookups += 3; if (!ni) { free(il); continue; }
-        lp_id concept = il[0].part[il[0].np - 1]; lp_rating ir = il[0].r; free(il);
-        int dup = 0; for (int z = 0; z < nseen; z++) dup |= !memcmp(&seen[z], &concept, 16); if (dup) continue; if (nseen < 64) seen[nseen++] = concept;
-        int nd = 0; Claim *df = fw.gloss[0] ? one_open(pg, c, &x, fw.gloss, NULL, 8, &nd) : NULL; lookups += fw.gloss[0] != 0;
-        char *it = reader_text(rd, &concept, 60), *dt = nd ? reader_text(rd, &df[0].part[df[0].np - 1], 100) : strdup(""); free(df);
-        printf("\n  %4.0f \xC2\xB1 %-3.0f  %s\n            %s\n", ir.rating, ir.deviation, it, dt); free(it); free(dt); shown++;
-        int no; Claim *others = one_open(pg, c, NULL, fw.up[last], &concept, fan, &no); lookups++;
-        for (int g = a + 2; g < argc; g++) {
-            printf("    %-6s", argv[g]); int any = 0;
-            for (int o = 0; o < no && any < 8; o++) { lp_id y = others[o].part[0];
-                if (strcmp(language_of(pg, c, rd, &fw, &y, &known, &nknown), argv[g])) continue;
-                any += down(pg, c, rd, &fw, &y, last - 1, fan, &lookups, 8, any); }
-            if (!any) printf(" (nothing attested)");
-            printf("\n");
-        }
-        free(others);
+    const lp_id word = entity_named(c, argv[a], NULL, 0, NULL).id; const char *from = argv[a + 1]; int last = fw.nup - 1, steps = 0;
+    lp_id up[FW_CHAIN], held = entity_named(c, fw.language[0], NULL, 0, NULL).id, says = entity_named(c, fw.language[1], NULL, 0, NULL).id, gloss = { { 0 } };
+    for (int s = 0; s <= last; s++) up[s] = entity_named(c, fw.up[s], NULL, 0, NULL).id; if (fw.gloss[0]) gloss = entity_named(c, fw.gloss, NULL, 0, NULL).id;
+
+    /* up: the word's first step in its witness's order, then every further step for the whole frontier at once */
+    int n; Claim *first = one_open_claims(pg, &word, &up[0], fan, &n); steps++; positions_of(pg, first, n); qsort(first, (size_t)n, sizeof(Claim), claim_by_position);
+    int nf = n; lp_id *fr = malloc(sizeof(lp_id) * (size_t)(nf ? nf : 1)); int *orig = malloc(sizeof(int) * (size_t)(nf ? nf : 1));
+    for (int i = 0; i < n; i++) { fr[i] = first[i].part[first[i].np - 1]; orig[i] = i; }
+    lp_id *syn = calloc((size_t)(n ? n : 1), sizeof(lp_id)); lp_id *concept = calloc((size_t)(n ? n : 1), sizeof(lp_id)); lp_rating *cr = calloc((size_t)(n ? n : 1), sizeof(lp_rating)); uint8_t *got = calloc((size_t)(n ? n : 1), 1);
+    for (int s = 1; s <= last && nf; s++) {
+        int ns; Step *st = open_each(fr, nf, &up[s], 0, 1, s == last ? 1 : 8, &ns); steps++;
+        uint8_t *had = calloc((size_t)nf, 1); for (int j = 0; j < ns; j++) had[st[j].from] = 1;
+        if (s == last) { for (int j = 0; j < ns; j++) { int o = orig[st[j].from]; if (got[o]) continue; got[o] = 1; syn[o] = fr[st[j].from]; concept[o] = st[j].to; cr[o] = st[j].r; } free(had); free(st); break; }
+        int nn = 0, cap = ns + 1; lp_id *nx = malloc(sizeof(lp_id) * (size_t)cap); int *no = malloc(sizeof(int) * (size_t)cap);
+        #define PUSH(id, o) do { if (nn == cap) { cap *= 2; nx = xrealloc(nx, sizeof(lp_id) * (size_t)cap); no = xrealloc(no, sizeof(int) * (size_t)cap); } nx[nn] = (id); no[nn++] = (o); } while (0)
+        for (int j = 0; j < ns; j++) PUSH(st[j].to, orig[st[j].from]);
+        int nb = 0; lp_id *bare = malloc(sizeof(lp_id) * (size_t)nf); int *bo = malloc(sizeof(int) * (size_t)nf);
+        for (int i = 0; i < nf; i++) if (!had[i]) { bare[nb] = fr[i]; bo[nb++] = orig[i]; }
+        Run *pr = parts_each(pg, bare, nb); steps += nb > 0;                 /* no claim carries the step: the constituents, never back to the word */
+        for (int i = 0; i < nb; i++) { for (int p = 0; p < pr[i].n; p++) if (memcmp(&pr[i].id[p], &word, 16)) PUSH(pr[i].id[p], bo[i]); free(pr[i].id); }
+        free(pr); free(bare); free(bo); free(had); free(st); free(fr); free(orig); fr = nx; orig = no; nf = nn;
+        #undef PUSH
     }
-    if (!shown) printf("%s: no concept of it is attested in a language written %s\n", argv[a], from);
-    printf("\n%d lookups   total %.1f ms\n", lookups, (now() - T) * 1000);
-    free(first); free(known); reader_free(rd); PQfinish(pg);
+    free(fr); free(orig);
+    /* the concepts reached from synsets in the language asked for, each once, in the word's order */
+    char (*lang)[24] = language_each(rd, syn, n, &held, &says); steps += 2;
+    int nc = 0; int *pick = malloc(sizeof(int) * (size_t)(n ? n : 1));
+    for (int i = 0; i < n && nc < limit; i++) { if (!got[i] || strcmp(lang[i], from)) continue; int dup = 0; for (int z = 0; z < nc; z++) dup |= !memcmp(&concept[pick[z]], &concept[i], 16); if (!dup) pick[nc++] = i; }
+    free(lang);
+    if (!nc) { printf("%s: no concept of it is attested in a language written %s\n", argv[a], from); }
+    /* down: every concept's synsets in one set, their languages in one, then each step back down for all of them */
+    lp_id *cs = malloc(sizeof(lp_id) * (size_t)(nc ? nc : 1)), *ss = malloc(sizeof(lp_id) * (size_t)(nc ? nc : 1)); for (int z = 0; z < nc; z++) { cs[z] = concept[pick[z]]; ss[z] = syn[pick[z]]; }
+    int ng = 0; Step *gl = fw.gloss[0] ? open_each(ss, nc, &gloss, 0, 1, 1, &ng) : NULL; steps += fw.gloss[0] != 0;
+    int nd; Step *dn = open_each(cs, nc, &up[last], 1, 1, fan, &nd); steps++;
+    lp_id *ys = malloc(sizeof(lp_id) * (size_t)(nd ? nd : 1)); for (int j = 0; j < nd; j++) ys[j] = dn[j].to;
+    char (*yl)[24] = language_each(rd, ys, nd, &held, &says); steps += 2;
+    int nf2 = 0; lp_id *f2 = malloc(sizeof(lp_id) * (size_t)(nd ? nd : 1)); int *o2 = malloc(sizeof(int) * (size_t)(nd ? nd : 1));   /* o2: concept * 64 + target language */
+    for (int j = 0; j < nd; j++) for (int g = a + 2; g < argc && g - a - 2 < 64; g++) if (!strcmp(yl[j], argv[g])) { f2[nf2] = ys[j]; o2[nf2++] = dn[j].from * 64 + (g - a - 2); }
+    free(yl); free(ys);
+    for (int s = last - 1; s >= 0 && nf2; s--) {
+        int ns; Step *st = open_each(f2, nf2, &up[s], 1, 1, fan, &ns); steps++;
+        uint8_t *had = calloc((size_t)nf2, 1); for (int j = 0; j < ns; j++) had[st[j].from] = 1;
+        int nn = 0, cap = ns + 1; lp_id *nx = malloc(sizeof(lp_id) * (size_t)cap); int *no = malloc(sizeof(int) * (size_t)cap);
+        #define PUSH(id, o) do { if (nn == cap) { cap *= 2; nx = xrealloc(nx, sizeof(lp_id) * (size_t)cap); no = xrealloc(no, sizeof(int) * (size_t)cap); } nx[nn] = (id); no[nn++] = (o); } while (0)
+        for (int j = 0; j < ns; j++) PUSH(st[j].to, o2[st[j].from]);
+        if (s > 0) { int nb = 0; lp_id *bare = malloc(sizeof(lp_id) * (size_t)nf2); int *bo = malloc(sizeof(int) * (size_t)nf2);
+            for (int i = 0; i < nf2; i++) if (!had[i]) { bare[nb] = f2[i]; bo[nb++] = o2[i]; }
+            int nh; Step *hs = nb ? open_each(bare, nb, NULL, 0, 0, fan, &nh) : NULL; steps += nb > 0;     /* no claim carries the step: what holds it */
+            for (int j = 0; nb && j < nh; j++) PUSH(hs[j].to, bo[hs[j].from]); free(hs); free(bare); free(bo); }
+        free(had); free(st); free(f2); free(o2); f2 = nx; o2 = no; nf2 = nn;
+        #undef PUSH
+    }
+    for (int j = 0; j < nf2; j++) reader_want(rd, &f2[j]); for (int z = 0; z < nc; z++) reader_want(rd, &cs[z]); for (int j = 0; j < ng; j++) reader_want(rd, &gl[j].to);
+    for (int z = 0; z < nc; z++) {
+        int i = pick[z]; char *it = reader_text(rd, &cs[z], 60), *dt = NULL;
+        for (int j = 0; j < ng && !dt; j++) if (gl[j].from == z) dt = reader_text(rd, &gl[j].to, 100);
+        printf("\n  %4.0f \xC2\xB1 %-3.0f  %s\n            %s\n", cr[i].rating, cr[i].deviation, it, dt ? dt : ""); free(it); free(dt);
+        for (int g = a + 2; g < argc && g - a - 2 < 64; g++) {
+            printf("    %-6s", argv[g]); int any = 0; lp_idmap *shown = lp_idmap_new();
+            for (int j = 0; j < nf2 && any < 8; j++) { if (o2[j] != z * 64 + (g - a - 2)) continue; bool fresh; lp_idmap_put(shown, &f2[j], &fresh); if (!fresh) continue;
+                char *tx = reader_text(rd, &f2[j], 40); printf("%s%s", any ? ", " : " ", tx); free(tx); any++; }
+            lp_idmap_free(shown); if (!any) printf(" (nothing attested)"); printf("\n"); }
+    }
+    printf("\n%d steps, each one set   total %.1f ms\n", steps, (now() - T) * 1000);
+    free(first); free(syn); free(concept); free(cr); free(got); free(pick); free(cs); free(ss); free(gl); free(dn); free(f2); free(o2); reader_free(rd); PQfinish(pg);
     return 0;
 }
 

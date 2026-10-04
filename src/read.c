@@ -159,21 +159,23 @@ static void bag_put(Bag *b, Hold x){
     if (b->n == b->cap) { b->cap = b->cap ? b->cap * 2 : 32; b->h = xrealloc(b->h, (size_t)b->cap * sizeof(Hold)); }
     b->h[b->n++] = x;
 }
-Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standing, int *nout){
+static Hold *holds_core(const lp_id *keys, int nkeys, int floor, int each, int standing, const lp_id *with, int *nout){
     *nout = 0; if (!nkeys) return NULL;
     leaves_of("physicality", &phy, &nphy);
     uint8_t *ab = malloc(20 + 20 * (size_t)nkeys); size_t al = ids_param(ab, keys, (uint32_t)nkeys);
     int *job = malloc(sizeof(int) * (size_t)nphy); int nj = 0;
     for (int i = 0; i < nphy; i++) job[nj++] = i;                        /* every range holds every tier: the tier is asked of the rows */
     Bag *bag = calloc((size_t)(nj ? nj : 1), sizeof(Bag));
+    uint8_t wb[40]; size_t wl = with ? ids_param(wb, with, 1) : 0;          /* each key with this one too: a claim's key and its relation */
     #pragma omp parallel for num_threads(npool) schedule(dynamic)
     for (int j = 0; j < nj; j++) {
         char sql[384];
-        if (each) snprintf(sql, sizeof sql, "SELECT u.i, p.entity, p.path, p.tier, p.mask FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN %s p ON p.path @> ARRAY[u.id] WHERE p.tier > %d", phy[job[j]].name, floor);
+        if (each) snprintf(sql, sizeof sql, "SELECT u.i, p.entity, p.path, p.tier, p.mask FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN %s p ON p.path @> %s WHERE p.tier > %d",
+                           phy[job[j]].name, with ? "(ARRAY[u.id] || $2::blake3[])" : "ARRAY[u.id]", floor);
         else snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM %s WHERE path @> $1::blake3[] AND tier > %d", phy[job[j]].name, floor);
-        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+        const char *v[2] = { (const char *)ab, (const char *)wb }; int l[2] = { (int)al, (int)wl }, f[2] = { 1, 1 };
         PGconn *c = pool[omp_get_thread_num()];
-        PGresult *r = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
+        PGresult *r = PQexecParams(c, sql, each && with ? 2 : 1, NULL, v, l, f, 1);
         if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "hold %s: %s", phy[job[j]].name, PQerrorMessage(c)); exit(1); }
         for (int row = 0; row < PQntuples(r); row++) {
             int col = each ? 1 : 0;
@@ -203,8 +205,10 @@ Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standin
         #pragma omp parallel for num_threads(npool) schedule(dynamic)
         for (int k = 0; k < 16; k++) {
             if (!nx[k]) continue;
-            lp_id *ids = malloc(sizeof(lp_id) * (size_t)nx[k]); for (int i = 0; i < nx[k]; i++) ids[i] = h[ix[k][i]].entity;
-            uint8_t *bb = malloc(20 + 20 * (size_t)nx[k]); size_t bl = ids_param(bb, ids, (uint32_t)nx[k]);
+            /* each claim once, and the holds that are it chained under it: a standing finds its holds by its ID, not by a scan */
+            lp_idmap *u = lp_idmap_new(); lp_id *ids = malloc(sizeof(lp_id) * (size_t)nx[k]); int *head = malloc(sizeof(int) * (size_t)nx[k]), *link = malloc(sizeof(int) * (size_t)nx[k]); int nu = 0;
+            for (int i = 0; i < nx[k]; i++) { bool fresh; size_t at_ = lp_idmap_put(u, &h[ix[k][i]].entity, &fresh); if (fresh) { ids[nu] = h[ix[k][i]].entity; head[nu++] = -1; } link[i] = head[at_]; head[at_] = i; }
+            uint8_t *bb = malloc(20 + 20 * (size_t)nu); size_t bl = ids_param(bb, ids, (uint32_t)nu);
             char sql[160]; snprintf(sql, sizeof sql, "SELECT claim, rating, deviation, volatility, matches FROM consensus_%x WHERE claim = ANY($1::blake3[])", k);
             const char *v[1] = { (const char *)bb }; int l[1] = { (int)bl }, f[1] = { 1 };
             PGconn *c = pool[omp_get_thread_num()];
@@ -212,16 +216,19 @@ Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standin
             if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "standing: %s", PQerrorMessage(c)); exit(1); }
             for (int row = 0; row < PQntuples(r); row++) {
                 lp_id id; memcpy(id.b, PQgetvalue(r, row, 0), 16);
-                for (int i = 0; i < nx[k]; i++) if (!memcmp(h[ix[k][i]].entity.b, id.b, 16)) {
+                int64_t at_ = lp_idmap_find(u, &id); if (at_ < 0) continue;
+                for (int i = head[at_]; i >= 0; i = link[i]) {
                     Hold *x = &h[ix[k][i]];
                     x->r.rating = lp_be_f64(PQgetvalue(r, row, 1)); x->r.deviation = lp_be_f64(PQgetvalue(r, row, 2)); x->r.volatility = lp_be_f64(PQgetvalue(r, row, 3));
                     uint32_t mb; memcpy(&mb, PQgetvalue(r, row, 4), 4); x->matches = (int)ntohl(mb); x->stood = 1;
                 }
             }
-            PQclear(r); free(bb); free(ids);
+            PQclear(r); free(bb); free(ids); free(head); free(link); lp_idmap_free(u);
         }
         free(at);
     }
     *nout = n; return h;
 }
+Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standing, int *nout){ return holds_core(keys, nkeys, floor, each, standing, NULL, nout); }
+Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout){ return holds_core(keys, nkeys, -1, 1, standing, with, nout); }
 void holds_free(Hold *h, int n){ if (!h) return; for (int i = 0; i < n; i++) free(h[i].path); free(h); }
