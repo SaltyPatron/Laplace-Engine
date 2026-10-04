@@ -46,6 +46,7 @@ thing label span start end text inclusive
 # the file's bookkeeping, read by nothing: who made an entry and when, display colours, annotation status and counts,
 # where a sentence sat in its corpus, the schema declaration; and the numbers that are keys
 omit cBy cDate mDate bgColor fgColor status totalAnnotated numAnnotInstances hasAnnotation XMLCreated sentNo paragNo aPos sentenceCount header xmlns xmlns:* xsi:* ID corpID docID lemmaID
+omit start end rank total cxnID order
 content *
 
 holds frame FE lexUnit semType frameRelation
@@ -56,7 +57,7 @@ attest frame definition
 attest FE coreType abbrev definition
 attest lexUnit POS definition incorporatedFE
 attest lu POS
-attest lexeme name POS breakBefore headword order
+attest lexeme name POS breakBefore headword
 attest semType superType
 relate frameRelation ^/name to supID
 relate FERelation ^/^/name to supID

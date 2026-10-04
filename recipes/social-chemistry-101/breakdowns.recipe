@@ -22,7 +22,7 @@ key row rot-worker-id
 key row breakdown-worker-id
 # m is a column the README does not describe; it is in the file's tree as written and attests nothing
 omit split n-characters rot-bad
-content m
+omit m
 content rot situation area rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical characters
 together row
 attest row situation area rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical characters

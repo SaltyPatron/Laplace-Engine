@@ -21,6 +21,7 @@ type 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$
 type 23_MCR_BLC ili matching ^mcr:ili-30-([0-9]+-[a-z])$
 type 13_FN_FRAME fnframe matching ^fn:(.*)$
 type 16_PB_ROLESET pbroleset matching ^pb:(.*)$
+omit 6_VN_CLASS_NUMBER 8_VN_SUBCLASS_NUMBER 24_WN_SENSEFREC 25_WN_SYNSET_REL_NUM
 content *
 attest row *
 

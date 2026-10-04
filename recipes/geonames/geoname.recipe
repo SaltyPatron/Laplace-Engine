@@ -21,6 +21,7 @@ part cc2 by ,
 
 thing row name latitude longitude
 key row geonameid
-content name latitude longitude asciiname alternatenames "feature class" "feature code" "country code" cc2 "admin1 code" "admin2 code" "admin3 code" "admin4 code" population elevation dem timezone
-omit "modification date"
+content name latitude longitude asciiname "feature class" "feature code" "country code" cc2 "admin1 code" "admin2 code" "admin3 code" "admin4 code" population elevation dem timezone
+# alternatenames is the readme's convenience copy of alternate-names, which says each name with its language
+omit "modification date" alternatenames
 attest row asciiname alternatenames "feature class" "feature code" "country code" cc2 "admin1 code" "admin2 code" "admin3 code" "admin4 code" population elevation dem timezone

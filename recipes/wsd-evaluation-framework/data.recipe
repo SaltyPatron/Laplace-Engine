@@ -13,8 +13,8 @@ thing sentence of wf instance
 key sentence id
 key instance id
 key text id
-content wf instance lemma pos lang source
-attest corpus lang source
+content wf instance lemma pos lang
+attest corpus lang
 attest wf lemma pos
 attest instance lemma pos
 together sentence

@@ -12,6 +12,7 @@ format xml
 thing key name
 thing type name within
 omit xmlns xmlns:*
+omit since
 content *
 holds key type
 attest key *

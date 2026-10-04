@@ -15,5 +15,6 @@ continued
 thing record Subtag
 thing record Tag
 metadata File-Date
+omit Added Deprecated
 content *
 attest record *

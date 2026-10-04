@@ -14,6 +14,7 @@ part targetCategory by json
 part targetStereotype by json
 
 thing row post
-content post targetMinority targetCategory targetStereotype whoTarget intentYN sexYN offensiveYN dataSource hasBiasedImplication
+content post targetMinority targetCategory targetStereotype whoTarget intentYN sexYN offensiveYN hasBiasedImplication
+omit dataSource
 together row
 attest row targetMinority targetCategory targetStereotype whoTarget intentYN sexYN offensiveYN dataSource hasBiasedImplication

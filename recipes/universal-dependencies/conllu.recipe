@@ -19,7 +19,7 @@ part DEPS by | is :
 # A record is the sentence its text note writes; a row is the word its FORM writes.
 thing record text
 thing row FORM
-content text FORM LEMMA XPOS DEPREL DEPS FEATS MISC
+content text FORM LEMMA XPOS DEPREL FEATS MISC
 type UPOS upos
 # ID numbers the rows of one record and HEAD points at a row by it: keys, written nowhere.
 key row ID
@@ -28,7 +28,8 @@ refer HEAD row
 # and offsets of a token (its unit, lemma, occurrence, chunk, XML and tree node ids, its alignment to the raw text) are
 # how the treebank points at its own things, written nowhere. SpaceAfter is what the sentence's text already says.
 omit "newdoc id" "newpar id" sent_id
-omit MISC.SpaceAfter MISC.UI MISC.Ref MISC.ref MISC.LId MISC.LemmaId MISC.OccId MISC.ChunkId MISC.XmlId MISC.LvtbNodeId MISC.AlignBegin MISC.AlignEnd
+omit note:X_ID note:X_IDs note:parallel_id note:original_sent_id note:s_24_sent_id note:orig_file_sentence note:sound_url note:speaker_id note:converted_from_file note:corpus_name note:gold_annotation note:auto
+omit MISC.SpaceAfter MISC.UI MISC.Ref MISC.ref MISC.LId MISC.LemmaId MISC.OccId MISC.ChunkId MISC.XmlId MISC.LvtbNodeId MISC.AlignBegin MISC.AlignEnd MISC.Entity MISC.Annotator
 # What the file writes about its own parts, not as their content: the file's metadata tree.
 metadata note:newdoc* note:newpar* note:doc_* note:doc* note:meta::* note:meta_* note:global.* note:title note:author note:url note:date* note:file note:archive note:channel note:udpipe_model note:lang note:rtl note:document_authorship note:reference
 # every other note is what the treebank says of the sentence under the note's name: a translation (text_en), a

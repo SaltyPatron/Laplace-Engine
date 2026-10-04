@@ -20,6 +20,7 @@ thing scriptVariant id
 thing parentLocale parent
 thing reference type
 omit xmlns xmlns:*
+omit uri version
 content *
 
 attest language *

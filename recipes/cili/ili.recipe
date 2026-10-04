@@ -12,6 +12,7 @@ format turtle
 tier statement by \n\n
 
 thing triple property[predicate=skos:definition]/object_list/rdf_literal/value
+omit subject
 content *
 
 when predicate is a

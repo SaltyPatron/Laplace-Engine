@@ -18,6 +18,6 @@ tier field by ;
 
 thing row "Unicode code point"
 codepoints "Unicode code point" "Original (erroneous) decomposition" "Corrected decomposition"
-content 3
+omit 3
 attest row "Original (erroneous) decomposition" "Corrected decomposition"
 pair row 3

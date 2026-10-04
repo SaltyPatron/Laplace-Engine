@@ -8,5 +8,6 @@ format xml
 
 thing likelySubtag from
 omit xmlns xmlns:*
+omit origin
 content *
 attest likelySubtag *

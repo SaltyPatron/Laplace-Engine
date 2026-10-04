@@ -30,6 +30,7 @@ thing cjk-radical radical
 thing block name
 codepoints cp first-cp last-cp cps bmg bpb cf dm FC_NFKC lc NFKC_CF NFKC_SCF scf slc stc suc tc uc EqUIdeo ideograph radical-ideograph of use code
 omit xmlns
+omit description normalization-correction.version
 content *
 
 attest char *

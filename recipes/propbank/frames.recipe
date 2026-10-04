@@ -13,9 +13,9 @@ thing roleset ^predicate/lemma name
 thing example text
 key roleset id
 type class vnclass fnframe
-content lemma name pos descr f n resource rolelink alias type note text arg rel slots slot head dep
+content lemma name pos descr f n resource rolelink alias type text arg rel slots slot head dep
 # bookkeeping, read by nothing: which releases a roleset is in use in, a link's version, confidence and how it was made
-omit usagenotes version confidence src start end relloc
+omit usagenotes version confidence src start end relloc note
 
 holds predicate roleset
 attest alias pos .

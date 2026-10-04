@@ -25,6 +25,7 @@ omit etymology_number id senseid wikidata
 # the extract's machinery, read by nothing: the templates and categories the page was rendered from, disambiguation
 # weights, where bold text sat in an example
 omit head_templates etymology_templates inflection_templates categories _dis _dis1 topics source bold_text_offsets italic_text_offsets
+omit audio ogg_url mp3_url ref
 content *
 
 holds record * via

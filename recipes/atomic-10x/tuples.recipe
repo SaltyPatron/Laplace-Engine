@@ -9,7 +9,7 @@ format json
 tier record by \n
 
 thing record head relation tail
-content head relation tail p_valid_model
-omit split rec_*
+content head relation tail
+omit split rec_* p_valid_model
 itself record
 score record p_valid_model

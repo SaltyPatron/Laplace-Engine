@@ -8,5 +8,6 @@ header
 tier field by \t
 
 thing row Id
-content Id Ref_Name Ret_Reason Change_To Ret_Remedy Effective
+content Id Ref_Name Ret_Reason Change_To Ret_Remedy
+omit Effective
 attest row Ref_Name Ret_Reason Change_To Ret_Remedy Effective

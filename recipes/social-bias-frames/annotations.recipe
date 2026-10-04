@@ -22,7 +22,8 @@ tier field by ,
 thing row post
 key row HITId
 own WorkerId
-content post dataSource whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype annotator*
+omit dataSource
+content post whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype annotator*
 
 attest row dataSource
 attest row whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype by WorkerId

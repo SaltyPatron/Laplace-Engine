@@ -783,12 +783,10 @@ static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
     while (np_) { np_--; together(k, pend[np_].e0, pend[np_].has ? &pend[np_].about : NULL); }
     keep_keys(k, t, root);
     /* the part itself, whole, into the file's content tree; where it is the very tuple it attests (a row that is a
-     * claim), the tree holds it as the claim it is */
-    Ref T; int whole;
-    if (speaks) whole = entity_of(k, t, root, &T);
-    else {                                                                   /* a part the recipe does not speak of: in the tree as the texts it is written as */
-        Ref kid[64]; uint32_t n = 0; for (int32_t c = t->n[root].first; c >= 0 && n < 64; c = t->n[c].next) if (t->n[c].kind != S_GROUP && t->n[c].vlen) kid[n++] = text_of(t->n[c].val, t->n[c].vlen);
-        whole = n > 0; if (n == 1) T = kid[0]; else if (n > 1) T = compose(kid, n, over(kid, n)); }
+     * claim), the tree holds it as the claim it is. A part the recipe does not speak of (a row its where leaves out)
+     * is in no tree: a recipe that says what a file's parts are reads a curated source, mined for what it says and
+     * not kept byte for byte (Storage: curated sources are mined for knowledge, not recorded bit-perfect) */
+    Ref T; int whole = speaks ? entity_of(k, t, root, &T) : 0;
     if (whole) { T.said = 0; for (uint64_t e = ev0; e < k->ev.n; e++) if (!memcmp(&k->ev.e[e].claim, &T.id, 16)) { T.said = LP_SAID_CLAIM; break; } push(&k->things, &T); }
 }
 
