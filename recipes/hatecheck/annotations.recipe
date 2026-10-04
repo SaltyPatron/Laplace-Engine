@@ -19,5 +19,5 @@ key row case_id
 key row templ_id
 omit count_label_h count_label_nh
 content test_case functionality label_gold label_annot_maj label_*
-attest row functionality label_gold count_label_h count_label_nh label_annot_maj
+attest row functionality label_gold label_annot_maj
 voices row label_1 label_2 label_3 label_4 label_5 label_6 label_7 label_8 label_9 label_10
