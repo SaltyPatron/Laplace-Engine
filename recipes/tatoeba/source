@@ -3,7 +3,7 @@ name tatoeba
 # fields: nothing in them is content, and they are not read.
 # Tatoeba's weekly exports: tables of tab-separated fields, without a header row. Tatoeba's page "Download sentences"
 # names every file's fields ("Fields and structure"); it is kept beside the files, in "documentation".
-# What Tatoeba says is of whole sentences: a sentence, its language, who wrote it, which sentences translate it, its
+# What Tatoeba says is of whole sentences: a sentence, its language, "owner name", which sentences translate it, its
 # tags, lists, audio and reviews. It says nothing of a sentence's words one by one.
 witness Tatoeba
 class UserCuratedResource

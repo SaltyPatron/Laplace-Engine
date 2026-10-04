@@ -1,7 +1,7 @@
 name tatoeba-sentences-detailed
-# "Contains all the sentences ... with the name of the member who added it and the date."
+# "Contains additional fields for each sentence (owner name, date created/modified)."
 # Fields: Sentence id [tab] Lang [tab] Text [tab] Username [tab] Date added [tab] Date last modified
-# A sentence is its text; the member who added it says its language. A member stands within Tatoeba:
+# A sentence is its text; Username is the column the page calls "owner name". A member stands within Tatoeba:
 # [Tatoeba, Username, the name]. The dates are Tatoeba's bookkeeping.
 match sentences_detailed.csv
 

@@ -1,5 +1,7 @@
 name tatoeba-sentences-with-audio
-# "Contains the ids of the sentences ... for which audio is available ... the username of the contributor".
+# "Contains the ids of the sentences, in all languages, for which audio is available. Other fields indicate who
+# recorded the audio, its license and a URL to attribute the author. If the license field is empty, you may not
+# reuse the audio outside the Tatoeba project."
 # Fields: Sentence id [tab] Audio id [tab] Username [tab] License [tab] Attribution URL
 # The sentence id is read as the sentence; the audio id is Tatoeba's key to the recording. Of the sentence, the row
 # says who recorded it. The licence and the attribution URL are the recording's bookkeeping.
