@@ -1,6 +1,6 @@
 name civil-comments
 # Comments from the Civil Comments platform with the labels Jigsaw added. The dataset card's title: Dataset Card for
-# "civil_comments". Its data is in Parquet files only, which no recipe reads; the card itself is read as text.
+# "civil_comments". Its data is in Parquet files, read as they are written out in extracted/; the card is read as text.
 witness civil_comments
 class AcademicCuratedWithUserInput
 root $LAPLACE_DATA/.refresh-*/Safety/CivilComments/civil-comments-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]

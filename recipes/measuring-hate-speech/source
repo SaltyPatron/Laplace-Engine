@@ -1,6 +1,7 @@
 name measuring-hate-speech
-# Comments, each annotated by several annotators. The dataset card's title: "Dataset card for Measuring Hate Speech".
-# Its data is in Parquet files only, which no recipe reads; the card itself is read as text.
+# Comments and the annotators' readings of them: "39,565 comments annotated by 7,912 annotators, for 135,556 combined
+# rows" (the card). The dataset card's title: "Dataset card for Measuring Hate Speech".
+# Its data is in Parquet files, read as they are written out in extracted/; the card is read as text.
 witness Measuring Hate Speech
 class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/Safety/MeasuringHateSpeech/measuring-hate-speech-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
