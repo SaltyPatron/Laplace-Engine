@@ -12,6 +12,8 @@ name wiktextract-kaikki
 match kaikki.org-dictionary-*.jsonl
 format json
 tier record by \n
+# an empty list ("references": []) says nothing
+empty []
 
 thing record lang_code word pos
 thing senses glosses
