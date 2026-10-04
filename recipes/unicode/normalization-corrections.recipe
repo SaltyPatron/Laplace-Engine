@@ -5,8 +5,8 @@ name unicode-normalization-corrections
 #   "#   Field 2: Corrected decomposition"
 #   "#   Field 3: Version of Unicode for which the correction was"
 #   "#            entered into UnicodeData.txt, in n.n.n format."
-# The decompositions are recorded as the text they are. Field 3 is described by a sentence, not a name: it is
-# recorded as the pair of the code point and the version.
+# The decompositions are recorded as the text they are. Field 3, the version a correction was entered in, is
+# bookkeeping, read by nothing.
 match NormalizationCorrections.txt
 
 tier row by \n
@@ -20,4 +20,3 @@ thing row "Unicode code point"
 codepoints "Unicode code point" "Original (erroneous) decomposition" "Corrected decomposition"
 omit 3
 attest row "Original (erroneous) decomposition" "Corrected decomposition"
-pair row 3
