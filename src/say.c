@@ -253,7 +253,7 @@ static int codepoints_text(const uint8_t *p, size_t n, uint8_t *out, size_t cap,
 typedef struct { Ref *c; size_t n, cap; } Refs;
 static void push(Refs *a, const Ref *x){ if (a->n == a->cap) { a->cap = a->cap ? a->cap * 2 : 256; a->c = xrealloc(a->c, sizeof(Ref) * a->cap); } a->c[a->n++] = *x; }   /* by address: a copy per call, in a loop, is stack that is never given back */
 typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; uint64_t open[256]; float er, ed, score; uint64_t ordinal; Ref fw, voice; int voiced; char opennm[16][64]; int nopen; uint64_t unknown; char unknm[8][96]; int nunk; Refs grp; Ref fname, fstem;
-                 const STree *ix_tree; uint32_t ix_count; uint64_t *ix_h; int32_t *ix_g; size_t ix_cap;      /* the key index of the tree being read */
+                 const STree *ix_tree; uint32_t ix_count; uint64_t *ix_h; int32_t *ix_g;  /* two a slot: the part, its key */ size_t ix_cap;      /* the key index of the tree being read */
                  const STree *tc_tree; uint32_t tc_n, tc_cap; Ref *tc; uint8_t *ts;
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
@@ -270,7 +270,6 @@ static void left_open(Sink *k, const SNode *x){
     k->open[0]++; for (int i = 0; i < k->nopen; i++) if (strlen(k->opennm[i]) == x->nlen && !memcmp(k->opennm[i], x->name, x->nlen)) return;
     if (k->nopen < 16) snprintf(k->opennm[k->nopen++], 64, "%.*s", (int)(x->nlen < 63 ? x->nlen : 63), x->name);
 }
-static uint8_t over(const Ref *r, size_t n){ uint8_t t = 0; for (size_t i = 0; i < n; i++) if (r[i].tier > t) t = r[i].tier; return (uint8_t)(t < 255 ? t + 1 : 255); }
 /* A name as the recipe writes it: NAME* is every name that begins with NAME (a header's columns that begin alike). */
 static int named_as(const SNode *x, const char *name){
     if (!strncmp(name, "note:", 5)) { if (x->kind != S_NOTE) return 0; name += 5; }       /* note:NAME: a note of that name, and nothing else (note:*: every note) */
@@ -335,19 +334,27 @@ static int all_path(const STree *t, int32_t g, const char *path, int32_t *out, i
     return n;
 }
 static int is_local(const Say *s, const char *tier){ for (int i = 0; i < s->nkey; i++) if (!strcmp(s->key[i].tier, tier)) return 1; return 0; }
-/* The key index of a tree: every part with a key, by its tier and the key's text, built once per tree. */
+/* The key index of a tree: every part with a key, by its tier and the key's text, built once per tree. A slot holds the
+ * part and its key's child (ix_g[2 at], ix_g[2 at + 1]): an equal hash is the same key only when the tier and the bytes
+ * are the same too. */
 static uint64_t kh(const char *tier, const uint8_t *v, size_t n){ uint64_t h = 1469598103934665603ull; for (const char *c = tier; *c; c++) h = (h ^ (uint8_t)*c) * 1099511628211ull; h = (h ^ 0xff) * 1099511628211ull; for (size_t i = 0; i < n; i++) h = (h ^ v[i]) * 1099511628211ull; return h | 1; }
+static int key_is(const Sink *k, const STree *t, size_t at, const char *tier, const uint8_t *v, size_t n){
+    const SNode *g = &t->n[k->ix_g[2 * at]], *c = &t->n[k->ix_g[2 * at + 1]];
+    return c->vlen == n && !memcmp(c->val, v, n) && s_named(g, tier, strlen(tier));
+}
 static void index_keys(Sink *k, const STree *t){
     const Say *s = k->s; size_t cap = 64; while (cap < (size_t)t->count * 2) cap <<= 1;
-    free(k->ix_h); free(k->ix_g); k->ix_h = calloc(cap, 8); k->ix_g = malloc(sizeof(int32_t) * cap); k->ix_cap = cap; k->ix_tree = t; k->ix_count = t->count;
+    free(k->ix_h); free(k->ix_g); k->ix_h = calloc(cap, 8); k->ix_g = malloc(2 * sizeof(int32_t) * cap); k->ix_cap = cap; k->ix_tree = t; k->ix_count = t->count;
     for (uint32_t g = 0; g < t->count; g++) { const SNode *y = &t->n[g]; if (y->kind != S_GROUP || !y->nlen) continue;
         for (int i = 0; i < s->nkey; i++) { if (!s_named(y, s->key[i].tier, strlen(s->key[i].tier))) continue; int32_t kc = s_child(t, (int32_t)g, s->key[i].name, -1); if (kc < 0 || !t->n[kc].vlen) continue;
-            uint64_t h = kh(s->key[i].tier, t->n[kc].val, t->n[kc].vlen); size_t at = h & (cap - 1); while (k->ix_h[at]) { if (k->ix_h[at] == h) break; at = (at + 1) & (cap - 1); }
-            if (!k->ix_h[at]) { k->ix_h[at] = h; k->ix_g[at] = (int32_t)g; } } }       /* the first that names a key keeps it */
+            uint64_t h = kh(s->key[i].tier, t->n[kc].val, t->n[kc].vlen); size_t at = h & (cap - 1);
+            while (k->ix_h[at] && !(k->ix_h[at] == h && key_is(k, t, at, s->key[i].tier, t->n[kc].val, t->n[kc].vlen))) at = (at + 1) & (cap - 1);
+            if (!k->ix_h[at]) { k->ix_h[at] = h; k->ix_g[2 * at] = (int32_t)g; k->ix_g[2 * at + 1] = kc; } } }       /* the first that names a key keeps it */
 }
 static int32_t keyed(Sink *k, const STree *t, const char *tier, const uint8_t *v, size_t n){
     if (k->ix_tree != t || k->ix_count != t->count) index_keys(k, t);
-    uint64_t h = kh(tier, v, n); size_t at = h & (k->ix_cap - 1); while (k->ix_h[at]) { if (k->ix_h[at] == h) return k->ix_g[at]; at = (at + 1) & (k->ix_cap - 1); }
+    uint64_t h = kh(tier, v, n); size_t at = h & (k->ix_cap - 1);
+    while (k->ix_h[at]) { if (k->ix_h[at] == h && key_is(k, t, at, tier, v, n)) return k->ix_g[2 * at]; at = (at + 1) & (k->ix_cap - 1); }
     return -1;
 }
 static int left_empty(const Say *s, const SNode *x){ return s_empty(&s->lay, x->val, x->vlen); }
@@ -361,7 +368,7 @@ static int value_of(Sink *k, const STree *t, int32_t c, Ref *out, int depth){
     const SNode *x = &t->n[c]; const Say *s = k->s; const Dis *d = dis_of(s, x);
     if (x->kind == S_GROUP && x->join == S_PIECES && x->first >= 0 && t->n[x->first].next >= 0) {      /* a list of values: the tuple of what each is ([display text, target]) */
         Ref pc[64]; uint32_t np = 0; for (int32_t q = x->first; q >= 0 && np < 64; q = t->n[q].next) { if (t->n[q].kind == S_GROUP) return 0; if (value_of(k, t, q, &pc[np], depth)) { pc[np].said = 0; np++; } }
-        if (!np) return 0; *out = np == 1 ? pc[0] : said_tuple(compose(pc, np, over(pc, np))); return 1; }
+        if (!np) return 0; *out = np == 1 ? pc[0] : said_tuple(compose(pc, np, ref_above(pc, np))); return 1; }
     if (x->kind == S_GROUP && depth < 16) {                                    /* a part that is a thing: that thing */
         if (k->tc_tree == t && (uint32_t)c < k->tc_n && !composing(c)) { Ref v; if (thing_of(k, t, c, &v, depth + 1)) { *out = v; return 1; } }
         int32_t only = x->first; if (only >= 0 && t->n[only].next < 0 && t->n[only].kind == S_GROUP) return value_of(k, t, only, out, depth + 1); }     /* holding one part: what that part is */
@@ -378,7 +385,7 @@ static int value_of(Sink *k, const STree *t, int32_t c, Ref *out, int depth){
             for (uint32_t i = 0; i < x->vlen; i++) { if (x->val[i] == (uint8_t)s->selfmark) { memcpy(o + j, hex, (size_t)hl); j += (size_t)hl; } else o[j++] = x->val[i]; }
             *out = text_of(o, j); free(o); return 1; }
         *out = text_of(x->val, x->vlen); return 1; }
-    if (d->what == D_OWN) { Ref w[3] = { k->fw, string_ref(x->name, x->nlen), string_ref(x->val, x->vlen) }; w[0].said = 0; *out = said_tuple(compose(w, 3, over(w, 3))); return 1; }
+    if (d->what == D_OWN) { Ref w[3] = { k->fw, string_ref(x->name, x->nlen), string_ref(x->val, x->vlen) }; w[0].said = 0; *out = said_tuple(compose(w, 3, ref_above(w, 3))); return 1; }
     if (d->what == D_TYPE) {                                                 /* by the source's key of it; or the type whose content this text is; a text that is neither is left open */
         char lists[64], *save = NULL; snprintf(lists, sizeof lists, "%s", d->arg);    /* the first of its lists that knows it; a key is the key without the spaces written around it */
         const uint8_t *kp = x->val; size_t kn = x->vlen;
@@ -397,7 +404,7 @@ static int value_of(Sink *k, const STree *t, int32_t c, Ref *out, int depth){
         const uint8_t *dd = d->what == D_RANGE ? memmem(p, n, "..", 2) : NULL;
         if (dd) {                                                            /* a range, written as its first and its last: the path of the two */
             uint8_t a[8], b[8]; size_t al, bl; if (!codepoints_text(p, (size_t)(dd - p), a, sizeof a, &al) || !codepoints_text(dd + 2, n - (size_t)(dd - p) - 2, b, sizeof b, &bl)) { *out = text_of(p, n); return 1; }   /* not code points: the text it is written as */
-            Ref two[2] = { string_ref(a, al), string_ref(b, bl) }; *out = said_tuple(compose(two, 2, over(two, 2))); return 1; }
+            Ref two[2] = { string_ref(a, al), string_ref(b, bl) }; *out = said_tuple(compose(two, 2, ref_above(two, 2))); return 1; }
         uint8_t buf[512]; size_t l; if (!codepoints_text(p, n, buf, sizeof buf, &l)) { if (!n) return 0; *out = text_of(p, n); return 1; }
         *out = string_ref(buf, l); return 1; }
     if (d->what == D_REFER && depth < 16) {                                  /* the first of its targets that holds the key */
@@ -437,7 +444,7 @@ static int one_thing(Sink *k, const STree *t, int32_t g, const Thing *th, Ref *o
             for (int32_t c = x->first; c >= 0; c = t->n[c].next) { int hit = 0; for (int z = 0; z < th->n && !hit; z++) hit = named_as(&t->n[c], th->name[z]); if (!hit) continue;
                 Ref v; if (!(t->n[c].kind == S_GROUP ? thing_of(k, t, c, &v, depth + 1) : value_of(k, t, c, &v, depth))) continue;
                 if (np == cap) { cap *= 2; pc = xrealloc(pc, sizeof(Ref) * cap); } v.said = 0; pc[np++] = v; }
-            if (!np) { free(pc); return 0; } *out = np == 1 ? pc[0] : compose(pc, (uint32_t)np, over(pc, np)); out->said = 0; free(pc); return 1; }
+            if (!np) { free(pc); return 0; } *out = np == 1 ? pc[0] : compose(pc, (uint32_t)np, ref_above(pc, np)); out->said = 0; free(pc); return 1; }
         if (th->span) {                                                      /* the stretch of the text of TEXT, found in what it is inside, from the character START to END */
             int32_t a = child_path(t, g, th->name[0]), b = child_path(t, g, th->name[1]); if (a < 0 || b < 0 || !t->n[a].vlen || !t->n[b].vlen || t->n[a].vlen > 11 || t->n[b].vlen > 11) return 0;
             char za[16], zb[16]; memcpy(za, t->n[a].val, t->n[a].vlen); za[t->n[a].vlen] = 0; memcpy(zb, t->n[b].val, t->n[b].vlen); zb[t->n[b].vlen] = 0; char *e1, *e2; long lo = strtol(za, &e1, 10), hi = strtol(zb, &e2, 10);
@@ -452,14 +459,14 @@ static int one_thing(Sink *k, const STree *t, int32_t g, const Thing *th, Ref *o
         for (int z = 0; z < th->n; z++) { int32_t c = child_path(t, g, th->name[z]); if (c < 0) return 0;
             if (t->n[c].kind == S_GROUP && t->n[c].first >= 0 && t->n[t->n[c].first].next >= 0) {      /* a part that is several pieces: the path of what each is, in order */
                 Ref pc[256]; uint32_t np = 0; for (int32_t q = t->n[c].first; q >= 0 && np < 256; q = t->n[q].next) if (value_of(k, t, q, &pc[np], depth)) { pc[np].said = 0; np++; }
-                if (!np) return 0; p[z] = np == 1 ? pc[0] : compose(pc, np, over(pc, np)); }
+                if (!np) return 0; p[z] = np == 1 ? pc[0] : compose(pc, np, ref_above(pc, np)); }
             else if (!value_of(k, t, c, &p[z], depth)) return 0;
             p[z].said = 0; }
-        Ref X = th->n == 1 ? p[0] : said_tuple(compose(p, (uint32_t)th->n, over(p, (size_t)th->n)));      /* named by several parts together: the path of them */
+        Ref X = th->n == 1 ? p[0] : said_tuple(compose(p, (uint32_t)th->n, ref_above(p, (size_t)th->n)));      /* named by several parts together: the path of them */
         if (th->within && depth < 8) {                                       /* its name stands only within what it is inside: the pair of the two */
             Ref P; int32_t up = x->parent; while (up >= 0 && !thing_of(k, t, up, &P, depth + 1)) up = t->n[up].parent;
-            if (up >= 0) { Ref two[2] = { P, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, over(two, 2))); } }
-        if (th->infile) { Ref two[2] = { k->fname, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, over(two, 2))); }      /* its name stands only within the file: [the file's name, it] */
+            if (up >= 0) { Ref two[2] = { P, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, ref_above(two, 2))); } }
+        if (th->infile) { Ref two[2] = { k->fname, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, ref_above(two, 2))); }      /* its name stands only within the file: [the file's name, it] */
         *out = X; return 1; }
 }
 /* A part as the thing it is: the first of the ways its kind is named that names it (a code point, or a range). */
@@ -499,7 +506,7 @@ static int entity_of(Sink *k, const STree *t, int32_t c, Ref *out){
             if (x->kind == S_VALUE && x->nlen) { Ref p[2] = { string_ref(x->name, x->nlen), string_ref(x->val, x->vlen) };      /* a KEY IS VALUE part: the pair of its key and what its value is */
                 if (dp && dp->what == D_KEY) return 0;                                  /* the file's own numbering: in no record */
                 if (dp && !value_of(k, t, c, &p[1], 0)) return 0;                     /* a reference: the thing it names */
-                if (p[1].said != LP_SAID_TUPLE) p[1].said = 0; *out = said_tuple(compose(p, 2, over(p, 2))); return 1; }
+                if (p[1].said != LP_SAID_TUPLE) p[1].said = 0; *out = said_tuple(compose(p, 2, ref_above(p, 2))); return 1; }
             if (x->nlen && value_of(k, t, c, out, 0)) return 1;                 /* a piece read as its part is (a type, a code point) */
             *out = string_ref(x->val, x->vlen); return 1; }
         const Dis *d = x->nlen ? dis_of(s, x) : NULL;
@@ -513,7 +520,7 @@ static int entity_of(Sink *k, const STree *t, int32_t c, Ref *out){
     if (x->nkids >= FAN && !k->worker) { n = entities_wide(k, t, c, kid); goto composed; }       /* its parts on every core, kept in order */
     for (int32_t q = x->first; q >= 0; q = t->n[q].next) { Ref v; if (entity_of(k, t, q, &v)) { if (v.said != LP_SAID_TUPLE) v.said = 0; kid[n++] = v; } }
     composed:
-    if (n == 1) *out = kid[0]; else if (n > 1) *out = compose(kid, n, over(kid, n));
+    if (n == 1) *out = kid[0]; else if (n > 1) *out = compose(kid, n, ref_above(kid, n));
     if (kid != stack) free(kid);
     return n > 0;
 }
@@ -522,7 +529,7 @@ static int entity_of(Sink *k, const STree *t, int32_t c, Ref *out){
 static int voice_of(Sink *k, const STree *t, int32_t c){
     if (c < 0 || left_empty(k->s, &t->n[c])) return 0; const SNode *y = &t->n[c]; const Dis *d = dis_of(k->s, y);
     if (d && d->what == D_OWN) { if (!value_of(k, t, c, &k->voice, 0)) return 0; }
-    else { Ref w[3] = { k->fw, string_ref(y->name, y->nlen), string_ref(y->val, y->vlen) }; w[0].said = 0; k->voice = said_tuple(compose(w, 3, over(w, 3))); }
+    else { Ref w[3] = { k->fw, string_ref(y->name, y->nlen), string_ref(y->val, y->vlen) }; w[0].said = 0; k->voice = said_tuple(compose(w, 3, ref_above(w, 3))); }
     k->voiced = 1; return 1;
 }
 static int said_by(Sink *k, const STree *t, int32_t g, const char *by){ return voice_of(k, t, child_path(t, g, by)); }
@@ -537,23 +544,24 @@ static int whos(const Say *s, const STree *t, int32_t g, const char *by, int32_t
 /* A part says a claim once. Two directives of a recipe that reach the same claim of one part (holds record * via and
  * attest * *, for a sense of a Wiktextract entry) are one statement, not two: the same witness attesting the same claim
  * in one record twice would play it twice. The claims a part has made are kept by the claim and who says it, for the
- * part being read alone (cs_epoch: a new part, an empty set, nothing cleared). */
-struct CSeen { lp_id key; uint64_t epoch; };
+ * part being read alone (cs_epoch: a new part, an empty set, nothing cleared): the pair itself, so no two pairs share a slot
+ * by a mix of their IDs. */
+struct CSeen { lp_id claim, voice; uint64_t epoch; };
 static int said_already(Sink *k, const lp_id *c){
     if (!k->cs_epoch) k->cs_epoch = 1;                                      /* a slot never used is of epoch 0: no part's */
-    lp_id key = *c; if (k->voiced) for (int i = 0; i < 16; i++) key.b[i] ^= k->voice.id.b[(i + 5) & 15];
+    lp_id voice; memset(&voice, 0, sizeof voice); if (k->voiced) voice = k->voice.id;     /* the source's own voice: no ID */
     if ((k->cs_n + 1) * 2 > k->cs_cap) {                                     /* half full: twice the room, this part's keys moved */
         struct CSeen *o = k->cs; uint64_t oc = k->cs_cap; k->cs_cap = oc ? oc * 2 : 256; k->cs = calloc(k->cs_cap, sizeof(struct CSeen));
-        for (uint64_t i = 0; i < oc; i++) if (o[i].epoch == k->cs_epoch) { uint64_t h; memcpy(&h, o[i].key.b, 8); uint64_t s = h & (k->cs_cap - 1);
+        for (uint64_t i = 0; i < oc; i++) if (o[i].epoch == k->cs_epoch) { uint64_t h, w; memcpy(&h, o[i].claim.b, 8); memcpy(&w, o[i].voice.b + 8, 8); uint64_t s = (h ^ w) & (k->cs_cap - 1);
             while (k->cs[s].epoch == k->cs_epoch) s = (s + 1) & (k->cs_cap - 1); k->cs[s] = o[i]; }
         free(o); }
-    uint64_t h; memcpy(&h, key.b, 8); uint64_t s = h & (k->cs_cap - 1);
-    while (k->cs[s].epoch == k->cs_epoch) { if (!memcmp(&k->cs[s].key, &key, 16)) return 1; s = (s + 1) & (k->cs_cap - 1); }
-    k->cs[s].key = key; k->cs[s].epoch = k->cs_epoch; k->cs_n++; return 0;
+    uint64_t h, w; memcpy(&h, c->b, 8); memcpy(&w, voice.b + 8, 8); uint64_t s = (h ^ w) & (k->cs_cap - 1);
+    while (k->cs[s].epoch == k->cs_epoch) { if (!memcmp(&k->cs[s].claim, c, 16) && !memcmp(&k->cs[s].voice, &voice, 16)) return 1; s = (s + 1) & (k->cs_cap - 1); }
+    k->cs[s].claim = *c; k->cs[s].voice = voice; k->cs[s].epoch = k->cs_epoch; k->cs_n++; return 0;
 }
 static void claim(Sink *k, Ref *part, int n){
     for (int i = 0; i < n; i++) if (part[i].said != LP_SAID_TUPLE) part[i].said = 0;      /* a tuple held by a claim stays a tuple: M says so, the ID is the same */
-    Ref c = said_claim(compose(part, (uint32_t)n, over(part, (size_t)n)));
+    Ref c = said_claim(compose(part, (uint32_t)n, ref_above(part, (size_t)n)));
     if (said_already(k, &c.id)) return;
     Event x = { c.id, c.id, k->score, k->er, k->ed, 0, EV_CLAIM }; if (k->voiced) { x.own_witness = 1; x.witness = k->voice.id; } ev_push(&k->ev, &x);
     push(&k->grp, &c);
@@ -567,7 +575,7 @@ static void together(Sink *k, uint64_t e0, const Ref *about){
     for (uint64_t i = e0; i < k->ev.n; i++) { if (k->ev.e[i].kind != EV_CLAIM) continue; Node *x = table_find(&k->ev.e[i].claim); if (!x) continue;
         Ref r; memset(&r, 0, sizeof r); r.id = x->id; memcpy(r.c.m, x->m, sizeof r.c.m); r.tier = x->tier; r.said = LP_SAID_CLAIM; c[n++] = r; }
     if (n < 2 + (about ? 1 : 0)) { free(c); return; }
-    Ref rec = said_record(compose(c, n, over(c, n))); free(c);
+    Ref rec = said_record(compose(c, n, ref_above(c, n))); free(c);
     Event r = { rec.id, rec.id, 1.0f, k->er, k->ed, 0, EV_RECORD }; ev_push(&k->ev, &r);
     memmove(&k->ev.e[e0 + 1], &k->ev.e[e0], sizeof(Event) * (size_t)(k->ev.n - 1 - e0)); k->ev.e[e0] = r;     /* the record first: its claims are within the record before them */
     for (uint64_t i = e0 + 1; i < k->ev.n; i++) if (k->ev.e[i].kind == EV_CLAIM) { k->ev.e[i].kind = EV_MEMBER; k->ev.e[i].witnessed = rec.id; }
@@ -684,7 +692,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
     for (uint32_t g = g0; g < g1; g++) { const SNode *x = &t->n[g];
         while (np_ && pend[np_ - 1].end < (int32_t)g) { np_--; together(k, pend[np_].e0, pend[np_].has ? &pend[np_].about : NULL); }
         if (x->kind == S_NOTE || x->kind == S_VALUE) { const Dis *d = dis_of(s, x);
-            if (d && d->what == D_METADATA && !left_empty(s, x)) { Ref p[2] = { string_ref(x->name, x->nlen), text_of(x->val, x->vlen) }; Ref m = said_tuple(compose(p, 2, over(p, 2))); push(&k->meta, &m); }
+            if (d && d->what == D_METADATA && !left_empty(s, x)) { Ref p[2] = { string_ref(x->name, x->nlen), text_of(x->val, x->vlen) }; Ref m = said_tuple(compose(p, 2, ref_above(p, 2))); push(&k->meta, &m); }
             continue; }
         if (x->kind != S_GROUP || !speaks) continue;
         if (x->nlen) { const Dis *dg = dis_of(s, x); if (dg && dg->what == D_OMIT) { g = (uint32_t)subtree_end(t, (int32_t)g); continue; } }     /* the file's bookkeeping: nothing inside it is read */
@@ -697,7 +705,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
             if (has < 0) has = spoken_thing(k, t, (int32_t)g, &S); if (!has) break; int was = k->voiced; Ref wv = k->voice;
             for (int z = 0; z < s->voices[a].n; z++) for (int32_t c = x->first; c >= 0; c = t->n[c].next) { const SNode *y = &t->n[c]; Ref v; if (!y->nlen || !named_as(y, s->voices[a].name[z]) || !value_of(k, t, c, &v, 0)) continue;
                 Ref w[3] = { k->fw, k->fname, string_ref(y->name, y->nlen) }; int nw = 2; if (s->voices[a].file) nw = 3; else w[1] = w[2]; w[0].said = 0; w[1].said = 0;     /* [the source's witness, NAME], or within the file [witness, file, NAME] */
-                k->voice = said_tuple(compose(w, (uint32_t)nw, over(w, (size_t)nw))); k->voiced = 1; Ref p[2] = { S, v }; claim(k, p, 2); }
+                k->voice = said_tuple(compose(w, (uint32_t)nw, ref_above(w, (size_t)nw))); k->voiced = 1; Ref p[2] = { S, v }; claim(k, p, 2); }
             k->voiced = was; k->voice = wv; }
         for (int a = 0; a < s->nitself; a++) { if (!s_named(x, s->itself[a].tier, strlen(s->itself[a].tier)) || !spoken_of(s, t, (int32_t)g, s->itself[a].when)) continue;
             Ref X; if (!thing_of(k, t, (int32_t)g, &X, 0)) break;
@@ -825,11 +833,11 @@ static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
 #define BLOCK 4096
 static Ref blocks_of(Ref *r, size_t n){
     if (n == 1) return r[0];
-    if (n <= BLOCK) return compose(r, (uint32_t)n, over(r, n));
+    if (n <= BLOCK) return compose(r, (uint32_t)n, ref_above(r, n));
     Ref *up = malloc(sizeof(Ref) * n); size_t m = 0, from = 0;
     for (size_t i = 0; i < n; i++) { uint64_t b; memcpy(&b, r[i].id.b + 8, 8);
-        if ((b & (BLOCK - 1)) == 0 || i == n - 1) { Ref x = i - from + 1 == 1 ? r[from] : compose(r + from, (uint32_t)(i - from + 1), over(r + from, i - from + 1)); if (x.said != LP_SAID_TUPLE && x.said != LP_SAID_CLAIM) x.said = 0; up[m++] = x; from = i + 1; } }
-    Ref out = m == n ? compose(r, (uint32_t)n, over(r, n)) : blocks_of(up, m); free(up); return out;
+        if ((b & (BLOCK - 1)) == 0 || i == n - 1) { Ref x = i - from + 1 == 1 ? r[from] : compose(r + from, (uint32_t)(i - from + 1), ref_above(r + from, i - from + 1)); if (x.said != LP_SAID_TUPLE && x.said != LP_SAID_CLAIM) x.said = 0; up[m++] = x; from = i + 1; } }
+    Ref out = m == n ? compose(r, (uint32_t)n, ref_above(r, n)) : blocks_of(up, m); free(up); return out;
 }
 /* The OS's record of a file, as parts named as the OS names them: its pathname and filename (POSIX), and what statx
  * returns. Each is disposed of by the file's recipe, else by the stock recipe file, as any part is: metadata, a
@@ -848,7 +856,7 @@ static void record_part(const Recipe *r, Ref *out, size_t *n, size_t cap, int k,
     if (!d) { if (!(__atomic_fetch_or(&record_open, 1ull << k, __ATOMIC_RELAXED) & (1ull << k))) fprintf(stderr, "  the OS's record of a file: %s is disposed of by no recipe (metadata or omit, in the file recipe)\n", name); return; }
     if (d->what != D_METADATA || *n >= cap) return;
     Ref p[2] = { string_ref((const uint8_t *)name, strlen(name)), value }; p[0].said = p[1].said = 0;
-    out[(*n)++] = said_tuple(compose(p, 2, over(p, 2)));
+    out[(*n)++] = said_tuple(compose(p, 2, ref_above(p, 2)));
 }
 static Ref number_ref(uint64_t v){ char b[24]; int l = snprintf(b, sizeof b, "%llu", (unsigned long long)v); return string_ref((const uint8_t *)b, (size_t)l); }
 static Ref when_ref(const struct statx_timestamp *t){ char b[40]; int l = snprintf(b, sizeof b, "%lld.%09u", (long long)t->tv_sec, t->tv_nsec); return string_ref((const uint8_t *)b, (size_t)l); }
@@ -856,7 +864,7 @@ size_t file_record(const Recipe *r, const File *f, Ref *out, size_t cap){
     size_t n = 0; int k = 0; Ref seg[256]; uint32_t ns = 0; const char *p = f->path;
     while (*p && ns < 256) { const char *e = strchr(p, '/'); size_t l = e ? (size_t)(e - p) : strlen(p);
         if (l) { seg[ns] = string_ref((const uint8_t *)p, l); seg[ns].said = 0; ns++; } p += l; if (*p == '/') p++; }
-    if (ns) { Ref path = compose(seg, ns, over(seg, ns)); path.said = 0; record_part(r, out, &n, cap, k++, "pathname", path); record_part(r, out, &n, cap, k++, "filename", seg[ns - 1]); }
+    if (ns) { Ref path = compose(seg, ns, ref_above(seg, ns)); path.said = 0; record_part(r, out, &n, cap, k++, "pathname", path); record_part(r, out, &n, cap, k++, "filename", seg[ns - 1]); }
     struct statx x; if (statx(AT_FDCWD, f->path, 0, STATX_BASIC_STATS | STATX_BTIME, &x)) return n;
     #define NUM(F, M) do { if (!(M) || (x.stx_mask & (M))) record_part(r, out, &n, cap, k, #F, number_ref((uint64_t)x.F)); k++; } while (0)
     #define WHEN(F, M) do { if (x.stx_mask & (M)) record_part(r, out, &n, cap, k, #F, when_ref(&x.F)); k++; } while (0)
@@ -872,7 +880,7 @@ size_t file_record(const Recipe *r, const File *f, Ref *out, size_t cap){
  * of the file is read, so a file whose trunk is recorded is found by it (ingest.c, files_recorded). 0: none. */
 int file_os(const Recipe *r, const File *f, Ref *out){
     Ref m[32]; size_t n = file_record(r, f, m, 32); if (!n) return 0;
-    *out = compose(m, (uint32_t)n, over(m, n)); out->said = 0; return 1;
+    *out = compose(m, (uint32_t)n, ref_above(m, n)); out->said = 0; return 1;
 }
 /* The file, read: every part of its outermost tier on every core, joined in the file's order; then its trunk, over
  * its metadata tree and its content tree. */
@@ -981,7 +989,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     memcpy(m + nr, meta.c, sizeof(Ref) * meta.n);
     size_t nm = nr + meta.n; Ref metadata; memset(&metadata, 0, sizeof metadata); if (nm) metadata = blocks_of(m, nm); free(m);
     if (things.n) { Ref content = blocks_of(things.c, things.n); content.said = 0;
-        if (nm) { Ref two[2] = { said_metadata(metadata), content }; two[1].said = 0; f->file = compose(two, 2, over(two, 2)); } else f->file = content;
+        if (nm) { Ref two[2] = { said_metadata(metadata), content }; two[1].said = 0; f->file = compose(two, 2, ref_above(two, 2)); } else f->file = content;
         f->file.said = 0; f->has_file = 1; f->trunk = content; }
     else if (f->ev.n && nm) { Ref two[1] = { said_metadata(metadata) }; f->file = two[0]; f->file.said = 0; f->has_file = 0; }
     free(things.c); free(meta.c); free(part); free(cut);

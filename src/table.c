@@ -139,6 +139,7 @@ static inline void tier_floor(Node *x, uint8_t tier){
     uint8_t t = __atomic_load_n(&x->tier, __ATOMIC_RELAXED);
     while (tier < t && !__atomic_compare_exchange_n(&x->tier, &t, tier, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) ;
 }
+uint8_t ref_above(const Ref *r, size_t n){ uint8_t t = 0; for (size_t i = 0; i < n; i++) if (r[i].tier > t) t = r[i].tier; return (uint8_t)(t < 255 ? t + 1 : 255); }
 /* A composition, recorded: Laplace-Native gives its ID and coordinate; the table keeps it, once, with its path. */
 Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     if (n == 1) return ch[0];

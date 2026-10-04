@@ -221,7 +221,7 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
     PGconn *pg = nw ? db_connect(conninfo) : NULL;
     for (int level = 0; level < 8 && nw; level++) {                          /* a metadata tree factored into blocks is a few levels deep */
         lp_idmap *at = lp_idmap_new(); for (int k = 0; k < nw; k++) { bool fresh; lp_idmap_put(at, &want[k], &fresh); }
-        lp_id *next = malloc(sizeof(lp_id) * (size_t)nw); int *nof = malloc(sizeof(int) * (size_t)nw), nn = 0;
+        int ncap = nw, nn = 0; lp_id *next = malloc(sizeof(lp_id) * (size_t)ncap); int *nof = malloc(sizeof(int) * (size_t)ncap);   /* an ID can be held by many: grown as they come */
         for (int k0 = 0; k0 < nw; k0 += 10000) { int k1 = nw - k0 < 10000 ? nw : k0 + 10000; uint8_t *ab = malloc(20 + 20 * (size_t)(k1 - k0)); size_t al = ids_param(ab, want + k0, (uint32_t)(k1 - k0));
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
             PGresult *r = PQexecParams(pg, "SELECT c.entity, st_asewkb(c.path), c.tier, st_asewkb(e.coord) FROM laplace_containers($1::blake3[], '{}'::smallint[]) c JOIN entity e ON e.id = c.entity AND e.tier = c.tier", 1, NULL, v, l, f, 1);
@@ -236,7 +236,7 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
                     uint16_t tier; memcpy(&tier, PQgetvalue(r, j, 2), 2); tier = ntohs(tier);
                     memset(&fl->file, 0, sizeof fl->file); fl->file.id = c; fl->file.c = co; fl->file.tier = (uint8_t)tier; fl->file.said = 0;
                     fl->has_file = 1; fl->known = 1; found++; }
-                else { next[nn] = c; nof[nn++] = of[k]; } }                                         /* a metadata tree it begins: what holds that is next */
+                else { if (nn == ncap) { ncap *= 2; next = xrealloc(next, sizeof(lp_id) * (size_t)ncap); nof = xrealloc(nof, sizeof(int) * (size_t)ncap); } next[nn] = c; nof[nn++] = of[k]; } }                                         /* a metadata tree it begins: what holds that is next */
             PQclear(r); free(ab); }
         lp_idmap_free(at); free(want); free(of); want = next; of = nof; nw = 0;
         for (int k = 0; k < nn; k++) if (!files[of[k]].known) { want[nw] = want[k]; of[nw++] = of[k]; }

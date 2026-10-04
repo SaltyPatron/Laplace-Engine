@@ -301,9 +301,9 @@ static Ref ast_node(TSNode nd, const uint8_t *src, uint32_t lo, uint32_t hi, int
     uint32_t at = lo;
     for (uint32_t i = 0; i < nc; i++) { if (cs[i] > at) { kids[2 * i] = string_ref(src + at, cs[i] - at); has[2 * i] = 1; } if (ce[i] > at) at = ce[i]; }
     if (hi > at) { kids[2 * nc] = string_ref(src + at, hi - at); has[2 * nc] = 1; }
-    uint32_t k = 0; uint8_t t = 0;
-    for (uint32_t i = 0; i <= 2 * nc; i++) if (has[i]) { kids[k] = kids[i]; if (kids[k].tier > t) t = kids[k].tier; k++; }
-    Ref r = compose(kids, k, (uint8_t)(t + 1));
+    uint32_t k = 0;
+    for (uint32_t i = 0; i <= 2 * nc; i++) if (has[i]) kids[k++] = kids[i];
+    Ref r = compose(kids, k, ref_above(kids, k));
     free(kids); free(cs); free(has); free(cn);
     return r;
 }

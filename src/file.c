@@ -19,14 +19,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-static uint8_t above(const Ref *r, uint64_t n){ uint8_t t = 0; for (uint64_t i = 0; i < n; i++) if (r[i].tier > t) t = r[i].tier; return (uint8_t)(t < 255 ? t + 1 : 255); }
 
 /* The file is whole: its trunk, over its metadata and its content. */
 void file_close(File *f){
     if (f->laid) return;                                                   /* its trees came from the recipe's layout */
     Ref os; if (!file_os(f->recipe, f, &os)) { f->file = f->trunk; f->file.said = 0; f->has_file = 1; return; }   /* the OS's record of it, one node (say.c) */
     Ref part[2] = { said_metadata(os), f->trunk }; part[1].said = 0;
-    f->file = compose(part, 2, above(part, 2)); f->file.said = 0; f->has_file = 1;
+    f->file = compose(part, 2, ref_above(part, 2)); f->file.said = 0; f->has_file = 1;
 }
 
 /* A source's trunk: [its record, its files' trunks in the order of their paths]. The record is the source file's
@@ -42,7 +41,7 @@ int source_trunk(const Source *s, const File *files, int nfiles, Ref *out){
     if (!n) { free(at); return 0; }
     by_path_of = files; qsort(at, (size_t)n, sizeof(int), by_path);
     Ref *t = malloc(sizeof(Ref) * (size_t)n); for (int k = 0; k < n; k++) { t[k] = files[at[k]].file; t[k].said = 0; }
-    Ref content = compose(t, (uint32_t)n, above(t, (uint64_t)n)); content.said = 0;
+    Ref content = compose(t, (uint32_t)n, ref_above(t, (uint64_t)n)); content.said = 0;
     Ref two[2] = { said_metadata(text_ref(CTX[0], (const uint8_t *)what, strlen(what))), content }; two[1].said = 0;
-    *out = compose(two, 2, above(two, 2)); out->said = 0; free(t); free(at); return 1;
+    *out = compose(two, 2, ref_above(two, 2)); out->said = 0; free(t); free(at); return 1;
 }

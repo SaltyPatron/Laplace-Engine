@@ -114,6 +114,7 @@ void   table_init(void);
 void   table_kinds(void);                                             /* after a decomposition: what each child is said to be, on the child */
 Ref    atom(uint32_t cp);
 Ref    compose(const Ref *ch, uint32_t n, uint8_t tier);             /* one child is that child */
+uint8_t ref_above(const Ref *r, size_t n);                            /* the tier above the highest of them (255 stays 255) */
 Node  *table_find(const lp_id *id);                                   /* NULL for atoms and unknown IDs */
 size_t table_parts(const lp_id *id, lp_id *out, size_t cap);         /* a composition's constituents in order, its runs written out; 0 when it is not in the table */
 void   table_size(uint64_t bytes);                                    /* while the table is empty: room for what a batch of this many bytes makes */
