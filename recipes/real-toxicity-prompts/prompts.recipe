@@ -7,7 +7,7 @@ match prompts.jsonl
 format json
 tier record by \n
 
-thing record .
+thing record prompt/text continuation/text
 thing prompt text
 thing continuation text
 key record filename
@@ -17,5 +17,5 @@ content text challenging profanity sexually_explicit identity_attack flirtation 
 
 holds record prompt continuation
 attest record challenging
-attest prompt *
-attest continuation *
+attest prompt profanity sexually_explicit identity_attack flirtation threat insult severe_toxicity toxicity
+attest continuation profanity sexually_explicit identity_attack flirtation threat insult severe_toxicity toxicity
