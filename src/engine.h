@@ -230,7 +230,8 @@ typedef struct {
     uint8_t *path; int path_len; lp_rating r; int matches;
 } Hold;
 Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standing, int *nout);
-Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout);   /* each = 1, every tier: each path that holds a key and with as well (a claim of a key under a relation) */
+Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout);   /* every tier, one probe a leaf: each path that holds any key and with as well; src -1, the caller reads which key from the path */
+Hold *holds_any(const lp_id *keys, int nkeys, int *nout);                                     /* every tier, one probe a leaf: each path that holds any key; src -1 */
 void holds_free(Hold *h, int n);
 int  tier_max(const lp_id *ids, int n);                                 /* the highest tier these IDs are recorded at; -1 when none are */
 void   refuse_named(const Firmware *fw);                                 /* the predicates this pass's firmware refuses */

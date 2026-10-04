@@ -170,17 +170,19 @@ static Hold *holds_core(const lp_id *keys, int nkeys, int floor, int each, int s
     #pragma omp parallel for num_threads(npool) schedule(dynamic)
     for (int j = 0; j < nj; j++) {
         char sql[384];
-        if (each) snprintf(sql, sizeof sql, "SELECT u.i, p.entity, p.path, p.tier, p.mask FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN %s p ON p.path @> %s WHERE p.tier > %d",
+        if (each == 2) snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM %s WHERE path && $1::blake3[] AND tier > %d%s",     /* any key: one probe a leaf for the set; with is checked on the rows, never probed (a relation is a hub: its posting list is every claim of it) */
+                                phy[job[j]].name, floor, with ? " AND (path @> $2::blake3[]) IS TRUE" : "");
+        else if (each) snprintf(sql, sizeof sql, "SELECT u.i, p.entity, p.path, p.tier, p.mask FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN %s p ON p.path @> %s WHERE p.tier > %d",
                            phy[job[j]].name, with ? "(ARRAY[u.id] || $2::blake3[])" : "ARRAY[u.id]", floor);
         else snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM %s WHERE path @> $1::blake3[] AND tier > %d", phy[job[j]].name, floor);
         const char *v[2] = { (const char *)ab, (const char *)wb }; int l[2] = { (int)al, (int)wl }, f[2] = { 1, 1 };
         PGconn *c = pool[omp_get_thread_num()];
-        PGresult *r = PQexecParams(c, sql, each && with ? 2 : 1, NULL, v, l, f, 1);
+        PGresult *r = PQexecParams(c, sql, each && with ? 2 : 1, NULL, v, l, f, 1); int one = each == 1;
         if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "hold %s: %s", phy[job[j]].name, PQerrorMessage(c)); exit(1); }
         for (int row = 0; row < PQntuples(r); row++) {
-            int col = each ? 1 : 0;
+            int col = one ? 1 : 0;
             Hold x; memset(&x, 0, sizeof x);
-            if (each) { uint64_t o; memcpy(&o, PQgetvalue(r, row, 0), 8); x.src = (int)__builtin_bswap64(o) - 1; }
+            if (one) { uint64_t o; memcpy(&o, PQgetvalue(r, row, 0), 8); x.src = (int)__builtin_bswap64(o) - 1; } else if (each) x.src = -1;     /* any key: the caller reads which from the path */
             memcpy(x.entity.b, PQgetvalue(r, row, col), 16);
             x.path_len = PQgetlength(r, row, col + 1); x.path = malloc((size_t)(x.path_len ? x.path_len : 1)); memcpy(x.path, PQgetvalue(r, row, col + 1), (size_t)x.path_len);
             x.tier = rd_i16(PQgetvalue(r, row, col + 2));
@@ -230,5 +232,6 @@ static Hold *holds_core(const lp_id *keys, int nkeys, int floor, int each, int s
     *nout = n; return h;
 }
 Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standing, int *nout){ return holds_core(keys, nkeys, floor, each, standing, NULL, nout); }
-Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout){ return holds_core(keys, nkeys, -1, 1, standing, with, nout); }
+Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout){ return holds_core(keys, nkeys, -1, 2, standing, with, nout); }
+Hold *holds_any(const lp_id *keys, int nkeys, int *nout){ return holds_core(keys, nkeys, -1, 2, 0, NULL, nout); }
 void holds_free(Hold *h, int n){ if (!h) return; for (int i = 0; i < n; i++) free(h[i].path); free(h); }

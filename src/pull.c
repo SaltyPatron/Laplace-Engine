@@ -253,17 +253,29 @@ typedef struct { int from; lp_id to; lp_rating r; } Step;          /* from: the 
 static double read_k = 2.0;                                                  /* the firmware's k, for the lookups below */
 /* dir 0: [key, R, x], x the far end; dir 1: [x, R, key]. claim 0: the paths that hold the key and are no claim. */
 static Step *open_each(const lp_id *keys, int nk, const lp_id *rel, int dir, int claim, int fan, int *ns){
-    int nh = 0; Hold *h = claim ? holds_pair(keys, nk, rel, 1, &nh) : holds_above(keys, nk, -1, 1, 0, &nh); Step *s = malloc(sizeof(Step) * (size_t)(nh ? nh : 1)); int m = 0;
-    int *per = calloc((size_t)(nk ? nk : 1), sizeof(int));
-    for (int j = 0; j < nh; j++) { if (h[j].src < 0 || h[j].src >= nk || per[h[j].src] >= fan) continue;
-        if (!claim) { if (h[j].claim) continue; s[m++] = (Step){ h[j].src, h[j].entity, { 0, 0, 0 } }; per[h[j].src]++; continue; }
-        if (!h[j].claim || !h[j].stood) continue;
-        lp_id p[MAXPARTS]; size_t np = lp_path_ids(h[j].path, (size_t)h[j].path_len, p, MAXPARTS); if (np < 3 || np > MAXPARTS) continue;
-        const lp_id *key = &keys[h[j].src]; size_t last = np - 1, end = dir ? last : 0;
-        if (memcmp(&p[end], key, 16)) continue;
-        int in = 0; for (size_t i = 1; i < last; i++) in |= !memcmp(&p[i], rel, 16); if (!in) continue;
-        s[m++] = (Step){ h[j].src, p[dir ? 0 : last], h[j].r }; per[h[j].src]++; }
-    holds_free(h, nh); free(per); *ns = m; return s;
+    *ns = 0; if (!nk) return malloc(sizeof(Step));
+    lp_idmap *km = lp_idmap_new(); int *at = malloc(sizeof(int) * (size_t)nk);      /* which key a path holds: by its ID, the keys deduplicated */
+    for (int i = 0; i < nk; i++) { bool fresh; at[i] = (int)lp_idmap_put(km, &keys[i], &fresh); }
+    int nu = (int)lp_idmap_count(km); int *head = malloc(sizeof(int) * (size_t)(nu ? nu : 1)), *link = malloc(sizeof(int) * (size_t)nk);   /* the frontier entries of each key */
+    for (int u = 0; u < nu; u++) head[u] = -1; for (int i = nk - 1; i >= 0; i--) { link[i] = head[at[i]]; head[at[i]] = i; }
+    int nh = 0; Hold *h = claim ? holds_pair(keys, nk, rel, 1, &nh) : holds_any(keys, nk, &nh);
+    int cap = nh + 1, m = 0; Step *s = malloc(sizeof(Step) * (size_t)cap); int *per = calloc((size_t)nk, sizeof(int));
+    lp_id *p = malloc(sizeof(lp_id) * 4096);
+    for (int j = 0; j < nh; j++) {
+        if (claim && (!h[j].claim || !h[j].stood)) continue;
+        if (!claim && h[j].claim) continue;
+        size_t np = lp_path_ids(h[j].path, (size_t)h[j].path_len, p, 4096); if (np > 4096) np = 4096;
+        if (claim) {
+            if (np < 3) continue; size_t last = np - 1; int64_t u = lp_idmap_find(km, &p[dir ? last : 0]); if (u < 0) continue;
+            int in = 0; for (size_t i = 1; i < last; i++) in |= !memcmp(&p[i], rel, 16); if (!in) continue;
+            for (int i = head[u]; i >= 0; i = link[i]) if (per[i] < fan) { if (m == cap) { cap *= 2; s = xrealloc(s, sizeof(Step) * (size_t)cap); } s[m++] = (Step){ i, p[dir ? 0 : last], h[j].r }; per[i]++; }
+        } else {
+            int64_t got[64]; int ng = 0;
+            for (size_t v = 0; v < np; v++) { int64_t u = lp_idmap_find(km, &p[v]); if (u < 0) continue;
+                int dup = 0; for (int w = 0; w < ng; w++) dup |= got[w] == u; if (dup) continue; if (ng < 64) got[ng++] = u;     /* a path that holds the key twice holds it once */
+                for (int i = head[u]; i >= 0; i = link[i]) if (per[i] < fan) { if (m == cap) { cap *= 2; s = xrealloc(s, sizeof(Step) * (size_t)cap); } s[m++] = (Step){ i, h[j].entity, { 0, 0, 0 } }; per[i]++; } } }
+    }
+    free(p); holds_free(h, nh); free(per); free(at); free(head); free(link); lp_idmap_free(km); *ns = m; return s;
 }
 /* The constituents of each entity, one set: out[i] for keys[i]. */
 static Run *parts_each(PGconn *pg, const lp_id *keys, int nk){
@@ -319,7 +331,8 @@ int cmd_translate(int argc, char **argv){
         int nb = 0; lp_id *bare = malloc(sizeof(lp_id) * (size_t)nf); int *bo = malloc(sizeof(int) * (size_t)nf);
         for (int i = 0; i < nf; i++) if (!had[i]) { bare[nb] = fr[i]; bo[nb++] = orig[i]; }
         Run *pr = parts_each(pg, bare, nb); steps += nb > 0;                 /* no claim carries the step: the constituents, never back to the word */
-        for (int i = 0; i < nb; i++) { for (int p = 0; p < pr[i].n; p++) if (memcmp(&pr[i].id[p], &word, 16)) PUSH(pr[i].id[p], bo[i]); free(pr[i].id); }
+        for (int i = 0; i < nb; i++) { int other = 0; for (int p = 0; p < pr[i].n; p++) if (memcmp(&pr[i].id[p], &word, 16)) { PUSH(pr[i].id[p], bo[i]); other = 1; }
+            if (!other && pr[i].n) PUSH(word, bo[i]); free(pr[i].id); }     /* [dog, dog]: a synset of the word alone is the word */
         free(pr); free(bare); free(bo); free(had); free(st); free(fr); free(orig); fr = nx; orig = no; nf = nn;
         #undef PUSH
     }
