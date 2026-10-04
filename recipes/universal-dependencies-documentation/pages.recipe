@@ -7,6 +7,6 @@ match *.md
 
 tier line by \n
 
-about ^title: '(.*)'$
-line ^(shortdef): '(.*)'$
+about ^title *: *'(.*)'$
+line ^(shortdef) *: *'(.*)'$
 line ^### <a name="[^"]*">`([^`]+)`</a>: (.*)$
