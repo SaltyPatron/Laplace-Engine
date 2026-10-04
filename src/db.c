@@ -3,6 +3,7 @@
 #define _GNU_SOURCE
 #include "engine.h"
 #include <arpa/inet.h>
+#include <locale.h>
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -50,6 +51,32 @@ static void part_name(int p, const char *table, char *out, size_t cap){
 }
 #define NPART (17 * 16)
 
+/* ---- the stage: what an ingest has deduplicated and played, held until it goes into the real tables at once (merge).
+ * The inventor: "decompose and stage all the records necessary... deduplicated and all of that but just the records...
+ * and then we batch that into the real database". A stage table is UNLOGGED, one for each leaf partition of entity,
+ * physicality, attestation and consensus, in the schema stage under the leaf's own name: what is staged writes no WAL.
+ * Lookups during an ingest read the leaf and its stage table both. A crash empties every stage table (unlogged) and
+ * leaves the real tables as they were before the run: the run is begun again. */
+static int stage_ready;
+static int stage_open(PGconn *pg){
+    if (stage_ready) return 1;
+    const char *sql =
+        "CREATE SCHEMA IF NOT EXISTS stage;"
+        "DO $$ DECLARE r record; BEGIN"
+        "  FOR r IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
+        "           WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relispartition"
+        "             AND c.relname ~ '^(entity|physicality|attestation|consensus)_' LOOP"
+        "    EXECUTE format('CREATE UNLOGGED TABLE IF NOT EXISTS stage.%I (LIKE public.%I INCLUDING DEFAULTS)', r.relname, r.relname);"
+        "    IF r.relname LIKE 'entity%' THEN EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON stage.%I (id)', r.relname || '_id', r.relname);"
+        "    ELSIF r.relname LIKE 'attestation%' THEN EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON stage.%I (claim, witness)', r.relname || '_cw', r.relname);"
+        "    ELSIF r.relname LIKE 'consensus%' THEN EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS %I ON stage.%I (claim)', r.relname || '_claim', r.relname);"
+        "    END IF;"
+        "  END LOOP; END $$";
+    PGresult *r = PQexec(pg, sql); int ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+    if (!ok) fprintf(stderr, "the stage: %s", PQerrorMessage(pg)); PQclear(r);
+    return stage_ready = ok;
+}
+
 /* "I have these IDs: which do you already have?" The client composed every node, so it knows each ID's tier; an ID's
  * tier and first hex digit name the one partition it can be in. The IDs of a partition go to that partition as one
  * sorted set and come back as the ones it holds: a set question answered from the ID index, never a search of the
@@ -70,7 +97,8 @@ static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, const uint8_t *
         uint32_t k = (uint32_t)job[j].n; lp_id *part = malloc(sizeof(lp_id) * k); for (uint32_t i = 0; i < k; i++) part[i] = ids[at[job[j].lo + i]];
         uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t len = ids_param(ab, part, k); PGconn *c = pg[omp_get_thread_num()];
         char tn[64], sql[256]; part_name(job[j].p, "entity", tn, sizeof tn);
-        snprintf(sql, sizeof sql, "SELECT u.i FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) WHERE EXISTS (SELECT 1 FROM %s e WHERE e.id = u.id)", tn);
+        snprintf(sql, sizeof sql, "SELECT u.i FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) WHERE EXISTS (SELECT 1 FROM public.%s e WHERE e.id = u.id)"
+                                  " OR EXISTS (SELECT 1 FROM stage.%s e WHERE e.id = u.id)", tn, tn);     /* recorded, or staged by this run */
         const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
         PGresult *r = PQexecParams(c, sql, 1, NULL, v, l, f, 0);
         if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "dedup: %s", PQerrorMessage(c)); exit(1); }
@@ -104,7 +132,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
      * without a physicality (Physicality: the counts match, or the system is wrong). The file trunks are written
      * inside the transaction that holds what they attested, which is already open: that one is not begun or ended here. */
     if (own_txn) { PGresult *b = PQexec(pg, "BEGIN"); if (PQresultStatus(b) != PGRES_COMMAND_OK) { fprintf(stderr, "begin: %s", PQerrorMessage(pg)); exit(1); } PQclear(b); }
-    part_name(p, "entity", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY %s (id, tier, coord, hilbert) FROM STDIN (FORMAT binary)", tn);
+    part_name(p, "entity", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY stage.%s (id, tier, coord, hilbert) FROM STDIN (FORMAT binary)", tn);
     copy_begin(&c, pg, sql);
     if (atoms_needed && p / 16 == 0)
         for (uint32_t cp = 0; cp < LP_NCP; cp++) {
@@ -120,7 +148,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
         c16(&c, 4); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(bucket[p][b].h)); c.rows++;
     }
     copy_end(&c); *rows_e = c.rows;
-    part_name(p, "physicality", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY %s (entity, tier, hilbert, path, mask) FROM STDIN (FORMAT binary)", tn);
+    part_name(p, "physicality", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY stage.%s (entity, tier, hilbert, path, mask) FROM STDIN (FORMAT binary)", tn);
     uint8_t mask[4 + 32]; { uint32_t bl = htonl(256); memcpy(mask, &bl, 4); }         /* bit varying, binary: its length in bits, then its bytes, first bit first */
     copy_begin(&c, pg, sql);
     if (atoms_needed && p / 16 == 0)
@@ -202,7 +230,7 @@ static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led,
         if (fresh) { if (ns == cs) { cs = cs ? cs * 2 : 4096; ser = xrealloc(ser, sizeof(Series) * cs); } ser[ns++] = (Series){ e->witnessed, *by, 0, e->position, 0 }; }
         ser[at].games++; ser[at].sum += e->score; }
     lp_idmap_free(mine);
-    Copy lc = { 0 }; snprintf(sql, sizeof sql, "COPY attestation_%x (claim, witness, score, position, games) FROM STDIN (FORMAT binary)", h);
+    Copy lc = { 0 }; snprintf(sql, sizeof sql, "COPY stage.attestation_%x (claim, witness, score, position, games) FROM STDIN (FORMAT binary)", h);
     copy_begin(&lc, pg, sql); uint64_t nold = 0;
     for (uint64_t j = 0; j < ns; j++) { const Series *x = &ser[j];
         if (ldg_has(&x->w, &x->by)) { ser[nold++] = *x; continue; }                         /* recorded already: gains its games below */
@@ -223,42 +251,39 @@ static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led,
                 q += w[f]; }
             alen[f] = (int)(q - arr[f]); }
         const char *v[4] = { (char *)arr[0], (char *)arr[1], (char *)arr[2], (char *)arr[3] }; int fm[4] = { 1, 1, 1, 1 };
-        snprintf(sql, sizeof sql, "UPDATE attestation_%x a SET score = (a.score * a.games + u.s) / (a.games + u.g), games = a.games + u.g "
-            "FROM unnest($1::blake3[], $2::blake3[], $3::int[], $4::float8[]) AS u(c, w, g, s) WHERE a.claim = u.c AND a.witness = u.w", h);
+        /* a pair staged already gains the games where it is staged; a pair only recorded is staged with what it will
+         * be, its recorded games and these (merge puts the staged row in place of the recorded one) */
+        snprintf(sql, sizeof sql, "WITH u AS (SELECT * FROM unnest($1::blake3[], $2::blake3[], $3::int[], $4::float8[]) AS u(c, w, g, s)), "
+            "st AS (UPDATE stage.attestation_%x a SET score = (a.score * a.games + u.s) / (a.games + u.g), games = a.games + u.g "
+            "FROM u WHERE a.claim = u.c AND a.witness = u.w RETURNING a.claim, a.witness) "
+            "INSERT INTO stage.attestation_%x (claim, witness, score, position, games) "
+            "SELECT a.claim, a.witness, (a.score * a.games + u.s) / (a.games + u.g), a.position, a.games + u.g "
+            "FROM public.attestation_%x a JOIN u ON a.claim = u.c AND a.witness = u.w "
+            "WHERE NOT EXISTS (SELECT 1 FROM st WHERE st.claim = u.c AND st.witness = u.w)", h, h, h);
         PGresult *u = PQexecParams(pg, sql, 4, NULL, v, alen, fm, 0); int bad = PQresultStatus(u) != PGRES_COMMAND_OK;
         if (bad) fprintf(stderr, "games: %s", PQerrorMessage(pg));
         PQclear(u); for (int f = 0; f < 4; f++) free(arr[f]); if (bad) { free(ser); return 1; } }
     free(ser);
-    Copy c = { 0 }; snprintf(sql, sizeof sql, "COPY consensus_%x (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)", h);
+    /* The standings: new ones, and recorded or staged ones this batch's matchups moved, staged as they now stand. A
+     * standing staged before is taken out of the stage first; merge puts a staged standing in place of the recorded one. */
+    uint64_t *idx = malloc(sizeof(uint64_t) * (sn + 1)), n = 0, nmoved = 0;
+    for (uint64_t i = 0; i < sn; i++) { const Standing *s = &stand[i]; if ((s->id.b[0] >> 4) != h) continue;
+        if (!s->had) idx[n++] = i; else if (s->matches != s->m0) { idx[n++] = i; nmoved++; } }
+    for (uint64_t j0 = 0; j0 < n; j0 += 100000) {                             /* out of the stage: one statement a chunk */
+        uint32_t k = (uint32_t)(n - j0 < 100000 ? n - j0 : 100000); lp_id *ids = malloc(sizeof(lp_id) * k);
+        for (uint32_t j = 0; j < k; j++) ids[j] = stand[idx[j0 + j]].id;
+        uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t len = ids_param(ab, ids, k); free(ids);
+        const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
+        snprintf(sql, sizeof sql, "DELETE FROM stage.consensus_%x WHERE claim = ANY($1::blake3[])", h);
+        PGresult *u = PQexecParams(pg, sql, 1, NULL, v, l, f, 0); int bad = PQresultStatus(u) != PGRES_COMMAND_OK;
+        if (bad) fprintf(stderr, "standings staged: %s", PQerrorMessage(pg));
+        PQclear(u); free(ab); if (bad) { free(idx); return 1; } }
+    Copy c = { 0 }; snprintf(sql, sizeof sql, "COPY stage.consensus_%x (claim, rating, deviation, volatility, matches) FROM STDIN (FORMAT binary)", h);
     copy_begin(&c, pg, sql);
-    for (uint64_t i = 0; i < sn; i++) { const Standing *s = &stand[i]; if (s->had || (s->id.b[0] >> 4) != h) continue;
+    for (uint64_t j = 0; j < n; j++) { const Standing *s = &stand[idx[j]];
         c16(&c, 5); cfield(&c, s->id.b, 16); cf_f64(&c, s->r.rating); cf_f64(&c, s->r.deviation); cf_f64(&c, s->r.volatility); cf_i32(&c, (int32_t)s->matches); c.rows++; }
-    copy_end(&c); *nnew += c.rows; free(c.b);
-    for (uint64_t i0 = 0; i0 < sn; ) {                                        /* recorded standings: set-based updates */
-        const uint32_t oid[5] = { id_oid, 701, 701, 701, 23 }; static const int w[5] = { 16, 8, 8, 8, 4 };
-        uint64_t *idx = malloc(sizeof(uint64_t) * 100000); uint32_t n = 0;
-        for (; i0 < sn && n < 100000; i0++) if (stand[i0].had && stand[i0].matches != stand[i0].m0 && (stand[i0].id.b[0] >> 4) == h) idx[n++] = i0;     /* moved by this batch's matchups */
-        if (!n) { free(idx); continue; }
-        uint8_t *arr[5]; int alen[5];
-        for (int f = 0; f < 5; f++) {
-            arr[f] = malloc(20 + (size_t)n * (4 + w[f])); uint8_t *q = arr[f] + 20;
-            uint32_t hdr[5] = { htonl(1), htonl(0), htonl(oid[f]), htonl(n), htonl(1) }; memcpy(arr[f], hdr, 20);
-            for (uint32_t j = 0; j < n; j++) {
-                const Standing *s = &stand[idx[j]]; uint32_t l = htonl((uint32_t)w[f]); memcpy(q, &l, 4); q += 4;
-                if (f == 0) memcpy(q, s->id.b, 16);
-                else if (f < 4) { double d = f == 1 ? s->r.rating : f == 2 ? s->r.deviation : s->r.volatility; uint64_t u; memcpy(&u, &d, 8); for (int y = 0; y < 8; y++) q[y] = (uint8_t)(u >> (56 - 8 * y)); }
-                else { uint32_t m = htonl(s->matches); memcpy(q, &m, 4); }
-                q += w[f];
-            }
-            alen[f] = (int)(q - arr[f]);
-        }
-        const char *v[5] = { (char *)arr[0], (char *)arr[1], (char *)arr[2], (char *)arr[3], (char *)arr[4] }; int fm[5] = { 1, 1, 1, 1, 1 };
-        snprintf(sql, sizeof sql, "UPDATE consensus_%x s SET rating = u.r, deviation = u.d, volatility = u.v, matches = u.m "
-            "FROM unnest($1::blake3[], $2::float8[], $3::float8[], $4::float8[], $5::int[]) AS u(c, r, d, v, m) WHERE s.claim = u.c", h);
-        PGresult *u = PQexecParams(pg, sql, 5, NULL, v, alen, fm, 0); int bad = PQresultStatus(u) != PGRES_COMMAND_OK;
-        if (bad) fprintf(stderr, "standing update: %s", PQerrorMessage(pg));
-        PQclear(u); for (int f = 0; f < 5; f++) free(arr[f]); free(idx); if (bad) return 1; *nupd += n;
-    }
+    copy_end(&c); free(c.b); free(idx);
+    *nnew += n - nmoved; *nupd += nmoved;
     return 0;
 }
 /* A statement that must succeed. */
@@ -297,6 +322,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         PQclear(PQexec(pg[i], "SET synchronous_commit = off"));
     }
     parts_plan(pg[0]);
+    if (!stage_open(pg[0])) return 1;
     if (!resolve_parts(pg[0])) return 1;                                       /* a batch that stopped between its parts' commits, finished first */
     PGresult *r = PQexec(pg[0], "SELECT count(*) FROM entity WHERE tier = 0");
     long long n0 = PQresultStatus(r) == PGRES_TUPLES_OK ? atoll(PQgetvalue(r, 0, 0)) : -1; PQclear(r);
@@ -404,18 +430,21 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         #pragma omp parallel for num_threads(npg) schedule(dynamic)
         for (uint64_t j = 0; j < noj; j++) {
             uint32_t k = (uint32_t)oj[j].n; uint8_t *ab = malloc(20 + 20 * (size_t)k);
-            size_t len = ids_param(ab, old + oj[j].lo, k); PGconn *c = pg[omp_get_thread_num()]; char sql[160]; snprintf(sql, sizeof sql, "SELECT claim, rating, deviation, volatility, matches FROM consensus_%x WHERE claim = ANY($1::blake3[])", oj[j].h);
+            size_t len = ids_param(ab, old + oj[j].lo, k); PGconn *c = pg[omp_get_thread_num()];
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
-            PGresult *q = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
-            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "standing: %s", PQerrorMessage(c)); exit(1); }
-            #pragma omp critical
-            for (int j = 0; j < PQntuples(q); j++) {
-                lp_id id; memcpy(id.b, PQgetvalue(q, j, 0), 16); Standing *s = stand_get(&id, NULL, 0); if (!s) continue;
-                double d[3]; for (int z = 0; z < 3; z++) { uint64_t u = 0; const uint8_t *b = (const uint8_t *)PQgetvalue(q, j, 1 + z); for (int y = 0; y < 8; y++) u = u << 8 | b[y]; memcpy(&d[z], &u, 8); }
-                const uint8_t *mb = (const uint8_t *)PQgetvalue(q, j, 4);
-                s->r = (lp_rating){ d[0], d[1], d[2] }; s->matches = s->m0 = (uint32_t)mb[0] << 24 | mb[1] << 16 | mb[2] << 8 | mb[3]; s->had = 1;
-            }
-            PQclear(q); free(ab);
+            for (int from = 0; from < 2; from++) {                            /* recorded, then staged: a staged standing is the later one */
+                char sql[160]; snprintf(sql, sizeof sql, "SELECT claim, rating, deviation, volatility, matches FROM %s.consensus_%x WHERE claim = ANY($1::blake3[])", from ? "stage" : "public", oj[j].h);
+                PGresult *q = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
+                if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "standing: %s", PQerrorMessage(c)); exit(1); }
+                #pragma omp critical
+                for (int j = 0; j < PQntuples(q); j++) {
+                    lp_id id; memcpy(id.b, PQgetvalue(q, j, 0), 16); Standing *s = stand_get(&id, NULL, 0); if (!s) continue;
+                    double d[3]; for (int z = 0; z < 3; z++) { uint64_t u = 0; const uint8_t *b = (const uint8_t *)PQgetvalue(q, j, 1 + z); for (int y = 0; y < 8; y++) u = u << 8 | b[y]; memcpy(&d[z], &u, 8); }
+                    const uint8_t *mb = (const uint8_t *)PQgetvalue(q, j, 4);
+                    s->r = (lp_rating){ d[0], d[1], d[2] }; s->matches = s->m0 = (uint32_t)mb[0] << 24 | mb[1] << 16 | mb[2] << 8 | mb[3]; s->had = 1;
+                }
+                PQclear(q); }
+            free(ab);
         }
         free(old); free(oj);
         /* What was witnessed plays once per lineage: a copy of it is an attestation and nothing more. What this
@@ -447,7 +476,8 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             uint64_t i0 = lj[jx].lo; uint32_t k = (uint32_t)lj[jx].n; uint8_t *ab = malloc(20 + 20 * (size_t)k);
             size_t len = ids_param(ab, wold + i0, k); PGconn *c = pg[omp_get_thread_num()];
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 }; char sql[160];
-            snprintf(sql, sizeof sql, "SELECT a.claim, w.id, w.lineage FROM attestation_%x a JOIN witness w ON w.id = a.witness WHERE a.claim = ANY($1::blake3[])", lj[jx].h);
+            snprintf(sql, sizeof sql, "SELECT a.claim, w.id, w.lineage FROM (SELECT claim, witness FROM public.attestation_%x WHERE claim = ANY($1::blake3[]) "
+                                      "UNION SELECT claim, witness FROM stage.attestation_%x WHERE claim = ANY($1::blake3[])) a JOIN witness w ON w.id = a.witness", lj[jx].h, lj[jx].h);
             PGresult *q = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
             if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "lineage: %s", PQerrorMessage(c)); exit(1); }
             #pragma omp critical
@@ -550,26 +580,6 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         for (int j = 1; j < begun; j++) { snprintf(sql, sizeof sql, "PREPARE TRANSACTION 'laplace %s %d'", xid0, j); if (!must(pg[j], sql)) return 1; }
         snprintf(sql, sizeof sql, "PREPARE TRANSACTION 'laplace %s 0'", xid0); if (!must(pg[0], sql)) return 1;
         for (int j = 0; j < begun; j++) { snprintf(sql, sizeof sql, "COMMIT PREPARED 'laplace %s %d'", xid0, j); if (!must(pg[0], sql)) return 1; } }
-    /* The batch is committed. Drain the container indexes on these connections before the next batch appends to the
-     * same lists: a search reads a pending list through, and the 32 MB cap is the spill, not the schedule. */
-    { double tm = now();
-      PGresult *r = PQexec(pg[0], "SELECT c.oid::regclass::text FROM pg_class c JOIN pg_am a ON a.oid = c.relam "
-          "WHERE a.amname = 'gin' AND c.relkind = 'i' AND c.relname LIKE 'physicality%'");
-      if (PQresultStatus(r) != PGRES_TUPLES_OK) fprintf(stderr, "merging the container index: %s", PQerrorMessage(pg[0]));
-      else if (PQntuples(r)) {
-          int ni = PQntuples(r); char **names = malloc(sizeof(char *) * (size_t)ni);
-          for (int i = 0; i < ni; i++) names[i] = strdup(PQgetvalue(r, i, 0));
-          PQclear(r); r = NULL; long long pages = 0; int bad = 0;
-          #pragma omp parallel for num_threads(npg) schedule(dynamic, 1) reduction(+:pages, bad)
-          for (int k = 0; k < ni; k++) {
-              const char *v[1] = { names[k] };
-              PGresult *q = PQexecParams(pg[omp_get_thread_num()], "SELECT gin_clean_pending_list($1::regclass)", 1, NULL, v, NULL, NULL, 0);
-              if (PQresultStatus(q) == PGRES_TUPLES_OK) pages += atoll(PQgetvalue(q, 0, 0));
-              else { bad++; fprintf(stderr, "merging %s: %s", names[k], PQerrorMessage(pg[omp_get_thread_num()])); }
-              PQclear(q); }
-          for (int i = 0; i < ni; i++) free(names[i]); free(names);
-          if (!bad && pages) printf("  %-44s %8.2f s   %'lld pages\n", "container index, this batch", now() - tm, pages); }
-      if (r) PQclear(r); }
     for (int i = 0; i < npg; i++) PQfinish(pg[i]);
     return 0;
 }
@@ -578,7 +588,151 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
  * under it recorded, so one composition of a file's content that is not means the file's trunk is not. */
 int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers, uint64_t n){
     if (!n) return 1;
-    PGconn *pg = db_connect(conninfo); parts_plan(pg);
+    PGconn *pg = db_connect(conninfo); parts_plan(pg); if (!stage_open(pg)) exit(1);
     uint8_t *hit = recorded(&pg, 1, ids, tiers, n); uint64_t got = 0; for (uint64_t i = 0; i < n; i++) got += hit[i];
     free(hit); PQfinish(pg); return got == n;
+}
+
+/* ---- merge: what the runs staged goes into the real tables, as one transaction in parts, one a connection (prepared,
+ * then committed, as a batch's was). A leaf partition with rows staged for it takes them one of two ways, whichever
+ * writes less:
+ *   rewritten: the leaf is truncated and copied back whole, what it held and what was staged, in its order (Hilbert for
+ *     entity and physicality, the claim for attestation and consensus), FREEZE. A truncated table's new files are
+ *     written without WAL when wal_level is minimal (they are synced when the transaction is prepared instead), indexes
+ *     with it, and frozen rows leave no hint bits for a later read to log (data_checksums is on). TRUNCATE locks that
+ *     leaf alone, so the connections never wait on each other.
+ *   appended: the staged rows are inserted, logged as any write is. A leaf that takes a few rows takes them this way.
+ * What an append logs: the staged rows, and an image of every index page they land on (one a page per checkpoint,
+ * up to all of the index's pages). What a rewrite costs: the leaf read and written once, nothing logged. With
+ * wal_level above minimal a rewrite is logged whole, so every leaf is appended. */
+typedef struct { char name[64]; int table; double live, staged_rows, staged_bytes, append_cost, rewrite_cost; int rewrite, worker; } MLeaf;
+enum { M_ENTITY, M_PHYS, M_ATT, M_CONS };
+static const char *M_ORDER[4] = { "hilbert", "hilbert", "claim, witness", "claim" };
+static int mleaf_by_cost(const void *a, const void *b){ double x = ((const MLeaf *)a)->rewrite ? ((const MLeaf *)a)->rewrite_cost : ((const MLeaf *)a)->append_cost,
+                                                              y = ((const MLeaf *)b)->rewrite ? ((const MLeaf *)b)->rewrite_cost : ((const MLeaf *)b)->append_cost; return x < y ? 1 : x > y ? -1 : 0; }
+static char *cols_of(PGconn *pg, const char *leaf){                          /* the leaf's columns, in order */
+    const char *v[1] = { leaf }; PGresult *r = PQexecParams(pg, "SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) FROM pg_attribute "
+        "WHERE attrelid = ('public.' || quote_ident($1))::regclass AND attnum > 0 AND NOT attisdropped", 1, NULL, v, NULL, NULL, 0);
+    char *c = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) ? strdup(PQgetvalue(r, 0, 0)) : NULL; PQclear(r); return c;
+}
+/* One leaf, on its writer's transaction w; r reads, outside any transaction. Returns 0, or 1 when the database refused. */
+static int merge_leaf(PGconn *w, PGconn *rd, const MLeaf *L, uint64_t *rows){
+    char *cols = cols_of(w, L->name); if (!cols) { fprintf(stderr, "merge %s: no columns\n", L->name); return 1; }
+    size_t sl = strlen(cols) * 3 + 1024; char *sql = malloc(sl); int bad = 0;
+    const char *same = L->table == M_ATT ? "s.claim = l.claim AND s.witness = l.witness" : "s.claim = l.claim";   /* a staged row in place of the recorded one */
+    if (L->rewrite) {
+        /* read whole, before the leaf is truncated: what it held (less what the stage holds in its place) and what was staged */
+        if (L->table >= M_ATT) snprintf(sql, sl, "COPY (SELECT %s FROM public.%s l WHERE NOT EXISTS (SELECT 1 FROM stage.%s s WHERE %s) UNION ALL SELECT %s FROM stage.%s ORDER BY %s) TO STDOUT (FORMAT binary)",
+                                        cols, L->name, L->name, same, cols, L->name, M_ORDER[L->table]);
+        else snprintf(sql, sl, "COPY (SELECT %s FROM public.%s UNION ALL SELECT %s FROM stage.%s ORDER BY %s) TO STDOUT (FORMAT binary)", cols, L->name, cols, L->name, M_ORDER[L->table]);
+        PGresult *r = PQexec(rd, sql);
+        if (PQresultStatus(r) != PGRES_COPY_OUT) { fprintf(stderr, "merge %s, read: %s", L->name, PQerrorMessage(rd)); PQclear(r); free(sql); free(cols); return 1; }
+        PQclear(r);
+        size_t cap = 1 << 24, n = 0; uint8_t *buf = malloc(cap); char *chunk; int got;
+        while ((got = PQgetCopyData(rd, &chunk, 0)) > 0) { if (n + (size_t)got > cap) { while (n + (size_t)got > cap) cap *= 2; buf = xrealloc(buf, cap); } memcpy(buf + n, chunk, (size_t)got); n += (size_t)got; PQfreemem(chunk); }
+        while ((r = PQgetResult(rd))) { if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "merge %s, read: %s", L->name, PQerrorMessage(rd)); bad = 1; }
+                                        else *rows += (uint64_t)atoll(PQcmdTuples(r)); PQclear(r); }
+        if (!bad) { snprintf(sql, sl, "TRUNCATE public.%s", L->name); bad = !must(w, sql); }
+        if (!bad) { snprintf(sql, sl, "COPY public.%s (%s) FROM STDIN (FORMAT binary, FREEZE)", L->name, cols);
+            r = PQexec(w, sql);
+            if (PQresultStatus(r) != PGRES_COPY_IN) { fprintf(stderr, "merge %s, write: %s", L->name, PQerrorMessage(w)); bad = 1; }
+            PQclear(r);
+            for (size_t o = 0; !bad && o < n; o += 1 << 22) { size_t k = n - o < (1u << 22) ? n - o : 1u << 22; if (PQputCopyData(w, (const char *)buf + o, (int)k) != 1) { fprintf(stderr, "merge %s: %s", L->name, PQerrorMessage(w)); bad = 1; } }
+            if (!bad && PQputCopyEnd(w, NULL) != 1) { fprintf(stderr, "merge %s: %s", L->name, PQerrorMessage(w)); bad = 1; }
+            while ((r = PQgetResult(w))) { if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "merge %s, write: %s", L->name, PQerrorMessage(w)); bad = 1; } PQclear(r); } }
+        free(buf);
+    } else {
+        if (L->table >= M_ATT) {
+            const char *set = L->table == M_ATT ? "score = s.score, games = s.games" : "rating = s.rating, deviation = s.deviation, volatility = s.volatility, matches = s.matches";
+            snprintf(sql, sl, "UPDATE public.%s l SET %s FROM stage.%s s WHERE %s", L->name, set, L->name, same); bad = !must(w, sql);
+            if (!bad) { snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s s WHERE NOT EXISTS (SELECT 1 FROM public.%s l WHERE %s) ORDER BY %s",
+                                 L->name, cols, cols, L->name, L->name, same, M_ORDER[L->table]); bad = !must(w, sql); } }
+        else { snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s ORDER BY %s", L->name, cols, cols, L->name, M_ORDER[L->table]); bad = !must(w, sql); }
+        *rows += (uint64_t)L->staged_rows;
+    }
+    /* the container index takes what it was handed into its own list: merged here, inside the transaction, so no
+     * lookup reads a pending list through (in a rewritten leaf this too is written without WAL) */
+    if (!bad && L->table == M_PHYS) {
+        const char *v[1] = { L->name };
+        PGresult *q = PQexecParams(w, "SELECT gin_clean_pending_list(i.indexrelid::regclass) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am a ON a.oid = c.relam "
+                                      "WHERE i.indrelid = ('public.' || quote_ident($1))::regclass AND a.amname = 'gin'", 1, NULL, v, NULL, NULL, 0);
+        if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "merge %s, container index: %s", L->name, PQerrorMessage(w)); bad = 1; } PQclear(q); }
+    if (!bad) { snprintf(sql, sl, "TRUNCATE stage.%s", L->name); bad = !must(w, sql); }
+    free(sql); free(cols); return bad;
+}
+int merge(const char *conninfo, int npg){
+    double T = now(); setlocale(LC_NUMERIC, "en_US.UTF-8");
+    PGconn *pg0 = db_connect(conninfo); parts_plan(pg0); if (!stage_open(pg0)) return 1;
+    if (!resolve_parts(pg0)) return 1;
+    PGresult *r = PQexec(pg0, "SELECT current_setting('wal_level'), wal_bytes, wal_fpi FROM pg_stat_wal");
+    if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "merge: %s", PQerrorMessage(pg0)); return 1; }
+    int minimal = !strcmp(PQgetvalue(r, 0, 0), "minimal"); double wal0 = atof(PQgetvalue(r, 0, 1)), fpi0 = atof(PQgetvalue(r, 0, 2)); PQclear(r);
+    /* what is staged, leaf by leaf, and what each way would write */
+    r = PQexec(pg0, "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'stage' AND c.relkind = 'r' ORDER BY 1");
+    if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "merge: %s", PQerrorMessage(pg0)); return 1; }
+    int nl = PQntuples(r); MLeaf *L = calloc((size_t)nl + 1, sizeof(MLeaf));
+    for (int i = 0; i < nl; i++) { snprintf(L[i].name, sizeof L[i].name, "%s", PQgetvalue(r, i, 0));
+        L[i].table = !strncmp(L[i].name, "entity", 6) ? M_ENTITY : !strncmp(L[i].name, "physicality", 11) ? M_PHYS : !strncmp(L[i].name, "attestation", 11) ? M_ATT : M_CONS; }
+    PQclear(r);
+    PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg), **rd = malloc(sizeof(PGconn *) * (size_t)npg);
+    for (int i = 0; i < npg; i++) { pg[i] = db_connect(conninfo); rd[i] = db_connect(conninfo); PQclear(PQexec(pg[i], "SET synchronous_commit = off")); }
+    int bad = 0;
+    #pragma omp parallel for num_threads(npg) schedule(dynamic, 1) reduction(+:bad)
+    for (int i = 0; i < nl; i++) {
+        PGconn *c = rd[omp_get_thread_num()]; const char *v[1] = { L[i].name }; char sql[512];
+        snprintf(sql, sizeof sql, "SELECT (SELECT count(*) FROM stage.%s), pg_relation_size('stage.%s'), pg_relation_size('public.%s'), pg_total_relation_size('public.%s')",
+                 L[i].name, L[i].name, L[i].name, L[i].name);
+        PGresult *q = PQexec(c, sql);
+        if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "merge %s: %s", L[i].name, PQerrorMessage(c)); bad++; PQclear(q); continue; }
+        L[i].staged_rows = atof(PQgetvalue(q, 0, 0)); L[i].staged_bytes = atof(PQgetvalue(q, 0, 1)); double total = atof(PQgetvalue(q, 0, 3));
+        L[i].live = total; PQclear(q);
+        if (!L[i].staged_rows) continue;
+        char rows[32]; snprintf(rows, sizeof rows, "%.0f", L[i].staged_rows); const char *v2[2] = { v[0], rows };
+        q = PQexecParams(c, "SELECT coalesce(sum(least($2::float8, c.relpages::float8)), 0) * 8192 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                            "WHERE i.indrelid = ('public.' || quote_ident($1))::regclass", 2, NULL, v2, NULL, NULL, 0);
+        double images = PQresultStatus(q) == PGRES_TUPLES_OK ? atof(PQgetvalue(q, 0, 0)) : 0; PQclear(q);
+        L[i].append_cost = L[i].staged_bytes + images;
+        L[i].rewrite_cost = 2.0 * (total + L[i].staged_bytes);
+        L[i].rewrite = minimal && L[i].rewrite_cost < L[i].append_cost;
+    }
+    if (bad) return 1;
+    int nm = 0; for (int i = 0; i < nl; i++) if (L[i].staged_rows) L[nm++] = L[i];
+    if (!nm) { printf("  nothing staged\n"); for (int i = 0; i < npg; i++) { PQfinish(pg[i]); PQfinish(rd[i]); } PQfinish(pg0); free(L); return 0; }
+    qsort(L, (size_t)nm, sizeof(MLeaf), mleaf_by_cost);                      /* the largest first, each to the writer with least so far */
+    double *load = calloc((size_t)npg, sizeof(double));
+    for (int i = 0; i < nm; i++) { int b = 0; for (int j = 1; j < npg; j++) if (load[j] < load[b]) b = j; L[i].worker = b; load[b] += L[i].rewrite ? L[i].rewrite_cost : L[i].append_cost; }
+    free(load);
+    int nrw = 0; double rw_bytes = 0, ap_rows = 0; for (int i = 0; i < nm; i++) { if (L[i].rewrite) { nrw++; rw_bytes += L[i].live; } else ap_rows += L[i].staged_rows; }
+    printf("  %d leaves have rows staged: %d rewritten (%.1f GB held, written without WAL), %d appended (%'.0f rows, logged)%s\n",
+           nm, nrw, rw_bytes / 1e9, nm - nrw, ap_rows, minimal ? "" : "; wal_level is not minimal, so none is rewritten");
+    /* one transaction in parts: each writer's part prepared, part 0 last, then part 0 committed, which decides */
+    char xid0[32] = ""; for (int j = 0; j < npg; j++) if (!must(pg[j], "BEGIN")) return 1;
+    r = PQexec(pg[0], "SELECT pg_current_xact_id()"); if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "merge: %s", PQerrorMessage(pg[0])); return 1; }
+    snprintf(xid0, sizeof xid0, "%s", PQgetvalue(r, 0, 0)); PQclear(r);
+    uint64_t rows = 0;
+    #pragma omp parallel for num_threads(npg) schedule(static, 1) reduction(+:bad, rows)
+    for (int j = 0; j < npg; j++) for (int i = 0; i < nm && !bad; i++) if (L[i].worker == j) { uint64_t k = 0; bad += merge_leaf(pg[j], rd[j], &L[i], &k); rows += k; }
+    if (bad) { for (int j = 0; j < npg; j++) PQclear(PQexec(pg[j], "ROLLBACK")); fprintf(stderr, "merge: rolled back, the stage is as it was\n"); return 1; }
+    { char sql[96];
+      for (int j = 1; j < npg; j++) { snprintf(sql, sizeof sql, "PREPARE TRANSACTION 'laplace %s %d'", xid0, j); if (!must(pg[j], sql)) return 1; }
+      snprintf(sql, sizeof sql, "PREPARE TRANSACTION 'laplace %s 0'", xid0); if (!must(pg[0], sql)) return 1;
+      for (int j = 0; j < npg; j++) { snprintf(sql, sizeof sql, "COMMIT PREPARED 'laplace %s %d'", xid0, j); if (!must(pg[0], sql)) return 1; } }
+    double tc = now() - T;
+    /* the planner's statistics for what was rewritten */
+    #pragma omp parallel for num_threads(npg) schedule(dynamic, 1)
+    for (int i = 0; i < nm; i++) if (L[i].rewrite) { char sql[96]; snprintf(sql, sizeof sql, "ANALYZE public.%s", L[i].name); PQclear(PQexec(pg[omp_get_thread_num()], sql)); }
+    r = PQexec(pg0, "SELECT wal_bytes, wal_fpi FROM pg_stat_wal");
+    double wal1 = PQresultStatus(r) == PGRES_TUPLES_OK ? atof(PQgetvalue(r, 0, 0)) : wal0, fpi1 = PQresultStatus(r) == PGRES_TUPLES_OK ? atof(PQgetvalue(r, 0, 1)) : fpi0; PQclear(r);
+    printf("  merged %'llu rows in %.1f s (committed at %.1f s); WAL written by the merge: %.2f GB, %'.0f page images\n",
+           (unsigned long long)rows, now() - T, tc, (wal1 - wal0) / 1e9, fpi1 - fpi0);
+    for (int i = 0; i < npg; i++) { PQfinish(pg[i]); PQfinish(rd[i]); } PQfinish(pg0); free(L);
+    return 0;
+}
+int cmd_merge(int argc, char **argv){
+    const char *conninfo = laplace_db(); int threads = 0;
+    for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a]; else if (!strcmp(argv[a], "-j") && a + 1 < argc) threads = atoi(argv[++a]);
+                                     else { fprintf(stderr, "usage: laplace merge [-d conninfo] [-j connections]\n"); return 2; } }
+    if (threads <= 0) threads = omp_get_num_procs();
+    printf("laplace merge   %d connections\n", threads);
+    return merge(conninfo, threads);
 }

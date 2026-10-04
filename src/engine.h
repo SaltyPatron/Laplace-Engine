@@ -209,6 +209,8 @@ void ev_push(Events *, const Event *);
 typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, led, std_new, std_upd, known, content_known; double t_dedup, t_copy, t_sem, t_read, t_play, t_wit, t_led; } LoadStats;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
 int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers, uint64_t n);   /* every one of them recorded (in its tier's partition) */
+int merge(const char *conninfo, int npg);            /* what the runs staged, into the real tables at once (db.c) */
+int cmd_merge(int argc, char **argv);
 
 /* ---- reading the database: set-based fetches, decoded here */
 extern uint32_t id_oid;                                               /* the database's own number for the type of an ID, blake3 */

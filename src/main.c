@@ -76,6 +76,7 @@ static const struct { const char *name; int (*run)(int, char **); const char *wh
     { "deploy", cmd_deploy, "make a database a Laplace database" },
     { "sources", cmd_sources, "the sources there are recipes for, in the order they go in" },
     { "ingest", cmd_ingest, "a source by its name, or files, through their recipes" },
+    { "merge",  cmd_merge,  "what the ingest staged, into the real tables at once" },
     { "forget", cmd_forget, "what one witness attested, taken back out" },
     { "sweep",  cmd_sweep,  "whatever nothing holds, removed" },
     { "index",  cmd_index,  "the indexes, if one was dropped: deploy makes them" },
