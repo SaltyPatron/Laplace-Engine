@@ -306,6 +306,10 @@ int cmd_ingest(int argc, char **argv){
     /* Whether a file is recorded is not asked of its bytes: it is decomposed, its trunk is computed here, and the
      * trunk is looked for, trunk to leaf, with everything else (load). */
     int nknown = 0; ctx_open(threads);
+    /* A source that records tier 0 (the Unicode source, first in recipes/order) records every codepoint before anything
+     * of its own: each codepoint's ID, coordinate and Hilbert value are tier 0's, computed once from the same data and
+     * mapped, never asked of the database. A codepoint recorded already is left as it is. */
+    if (do_load > 0) for (int i = 0; i < nfiles; i++) if (files[i].source && files[i].source->tier0) { if (tier0_write(conninfo, threads)) return 1; break; }
     if (do_load) { double tk = now(); nknown = files_recorded(conninfo, files, nfiles); if (nknown) fprintf(stderr, "  %d files recorded already, found by the OS's record of them, not read (%.2f s)\n", nknown, now() - tk); }
 
     /* ---- a batch at a time: decomposed on every core, recomposed and compared, recorded, and the table emptied for

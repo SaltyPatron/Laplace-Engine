@@ -115,7 +115,7 @@ static int by_hilbert(const void *a, const void *b){ uint64_t x = ((const NRef *
  * neighbours on the same pages instead of one row per page in hash order. */
 /* Rows lo..hi of a partition's bucket, which is in Hilbert order already: a stretch of the partition, so that a
  * partition is written by as many connections as it has stretches. A codepoint is never written here: tier 0 is the
- * perf-cache's, written once by laplace deploy (tier0_write). */
+ * recorded once by the source that records it (tier0_write). */
 static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_t *rows_e, uint64_t *rows_p, int own_txn){
     char tn[64]; Copy c = { 0 }; char sql[160]; uint8_t geo[64 * 1024];
     lp_id *ids = NULL; uint64_t *runs = NULL; size_t idc = 0;
@@ -302,8 +302,9 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     parts_plan(pg[0]);
     if (!stage_open(pg[0])) return 1;
     if (!resolve_parts(pg[0])) return 1;                                       /* a batch that stopped between its parts' commits, finished first */
-    /* Tier 0 is the perf-cache's: a load never asks for, counts or writes a codepoint. Its rows are laplace deploy's,
-     * written once (tier0_write); a codepoint is no node of the table, so the descent below never reaches one. */
+    /* Tier 0 is the perf-cache's: a load never asks for, counts or writes a codepoint. Its rows are
+     * written once by the source that records them (tier0_write); a codepoint is no node of the table, so the descent below
+     * never reaches one. */
 
     /* ---- trunk to leaf: a recorded node means its whole subtree is recorded, so nothing below it is checked */
     double t = now();
@@ -710,7 +711,8 @@ int cmd_merge(int argc, char **argv){
 }
 
 /* ---- tier 0: every codepoint, recorded once, from the perf-cache (Atoms: "Tier 0 is still recorded to the database, but
- * function calls never need to read it from there"). laplace deploy writes it; an ingest never asks for, counts or writes
+ * function calls never need to read it from there"). The source that records it (tier0 in its source file: the Unicode source,
+ * first in recipes/order) writes it as its ingest begins; no load asks for, counts or writes
  * a codepoint. Each range's codepoints go into the real tables on one connection, entities then their paths (a path's
  * entity is a foreign key), one transaction a range. A range that holds all of its codepoints is left as it is; a range
  * that holds some is told which it holds. Returns 0, or 1 when the database refused. */

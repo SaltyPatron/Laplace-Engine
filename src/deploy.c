@@ -67,8 +67,6 @@ int cmd_deploy(int argc, char **argv){
       if (n) printf("  %-52s %9d\n", "tables from before the extension owned them, adopted", n); PQclear(r); }
     if (!run(pg, "SELECT laplace_schema_indexes()", "every index, made where one is missing")) return 1;
     PQfinish(pg);
-    /* tier 0, from the perf-cache, once: no ingest writes a codepoint */
-    if (tier0_write(conn_arg(argc, argv), omp_get_num_procs())) return 1;
     /* the highway's contents as entities: a type's content (a definition, a frame's name, a lemma and a roleset's name)
      * is what a claim that holds the type renders and pulls through, whether or not any file wrote it as content. Each
      * is recomposed here as the composition laplace highway wrote beside the highway, and its ID checked */

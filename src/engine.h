@@ -151,6 +151,7 @@ typedef struct {
     char called[128];                                 /* what the source is, where its witness is named file by file (called NAME) */
     char root[8][512]; int nroot;                     /* where it may be kept: the first that exists, newest of a pattern */
     double room;                                      /* what it takes in the database, in times what its files hold, as measured (0: not measured) */
+    int tier0;                                        /* it records every codepoint, tier 0 (its source file says tier0): the Unicode source, first */
     char after[16][64]; int nafter;                   /* the sources it comes after */
     char except[8][128]; int nexcept;                 /* files of its roots that are not the source */
     char files[8][512]; int nfiles;                   /* the files it is, by pattern, when it is not everything under a root */

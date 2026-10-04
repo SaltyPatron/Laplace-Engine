@@ -6,3 +6,5 @@ class StandardsDerived
 root $LAPLACE_DATA/UCD/Public/UCD/latest
 # Measured when it was loaded: 20,147,624 compositions from 239 MB, at 750 bytes each with their indexes and standings.
 room 64
+# The codepoints themselves are what this source is of: its ingest records every one of them, tier 0, before anything else.
+tier0
