@@ -60,13 +60,15 @@ int cmd_deploy(int argc, char **argv){
       PQfreemem(esc); PQfreemem(db); }
     /* the schema is the extension's: the five tables, their partitions and every index, from CREATE EXTENSION. A
      * database that had them before the extension owned them keeps them, and they are made the extension's here. */
-    { PGresult *r = PQexec(pg, "SELECT c.oid::regclass::text FROM pg_class c WHERE c.relkind IN ('r', 'p') AND (c.relname ~ '^(entity|physicality)(_t[0-9a-fx]+(_[0-9a-f])?)?$' OR c.relname IN ('witness', 'attestation', 'consensus')) "
+    { PGresult *r = PQexec(pg, "SELECT c.oid::regclass::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND (c.relname ~ '^(entity|physicality)(_[0-9a-f]{2})?$' OR c.relname ~ '^(attestation|consensus)(_[0-9a-f])?$' OR c.relname = 'witness') "
                                "AND NOT EXISTS (SELECT 1 FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND e.extname = 'laplace')");
       int n = PQresultStatus(r) == PGRES_TUPLES_OK ? PQntuples(r) : 0;
       for (int i = 0; i < n; i++) { char q[256]; snprintf(q, sizeof q, "ALTER EXTENSION laplace ADD TABLE %s", PQgetvalue(r, i, 0)); PGresult *a = PQexec(pg, q); PQclear(a); }
       if (n) printf("  %-52s %9d\n", "tables from before the extension owned them, adopted", n); PQclear(r); }
     if (!run(pg, "SELECT laplace_schema_indexes()", "every index, made where one is missing")) return 1;
     PQfinish(pg);
+    /* tier 0, from the perf-cache, once: no ingest writes a codepoint */
+    if (tier0_write(conn_arg(argc, argv), omp_get_num_procs())) return 1;
     /* the highway's contents as entities: a type's content (a definition, a frame's name, a lemma and a roleset's name)
      * is what a claim that holds the type renders and pulls through, whether or not any file wrote it as content. Each
      * is recomposed here as the composition laplace highway wrote beside the highway, and its ID checked */
@@ -89,6 +91,7 @@ int cmd_deploy(int argc, char **argv){
         free(line); free(ch); fclose(f);
         extern int load_whole; load_whole = 1; File one = { 0 }; one.path = "the highway's contents"; LoadStats st = { 0 };
         if (load(conn_arg(argc, argv), threads, &one, 1, &st)) return 1;
+        if (merge(conn_arg(argc, argv), threads)) return 1;                  /* what the load staged, into the real tables */
         printf("  %-52s %'llu types, %'llu compositions, %'llu entities new, %'llu not as written%s   %.1f s\n", "the highway's contents, as entities", (unsigned long long)types, (unsigned long long)n, (unsigned long long)st.ent_rows, (unsigned long long)wrong, unknown ? ", some naming a node not written before them" : "", now() - t); }
     }
     pg = db_connect(conn_arg(argc, argv));

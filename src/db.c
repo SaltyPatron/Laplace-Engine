@@ -107,7 +107,6 @@ static uint8_t *tiers_of(const lp_id *ids, uint64_t n){                       /*
 
 typedef struct { uint64_t idx, h; } NRef;                                /* h: the node's Hilbert value, computed once */
 static NRef *bucket[NPART]; static uint64_t nbucket[NPART];
-static uint8_t *atom_missing;                                              /* the atoms a load writes: those the database does not hold */
 static NRef nref(const Node *x){ lp_coord co; memcpy(co.m, x->m, 32); return (NRef){ (uint64_t)(x - NODE), lp_hilbert4(&co) }; }
 static int by_hilbert(const void *a, const void *b){ uint64_t x = ((const NRef *)a)->h, y = ((const NRef *)b)->h; return x < y ? -1 : x > y; }
 /* A partition's new rows go in Hilbert order (Atoms: the Hilbert value is for locality, ordering, and indexing; it is
@@ -115,8 +114,9 @@ static int by_hilbert(const void *a, const void *b){ uint64_t x = ((const NRef *
  * rows near each other in the 4-ball are written together, so the coordinate and Hilbert indexes take a run of
  * neighbours on the same pages instead of one row per page in hash order. */
 /* Rows lo..hi of a partition's bucket, which is in Hilbert order already: a stretch of the partition, so that a
- * partition is written by as many connections as it has stretches. atoms: tier 0's atoms go with this stretch. */
-static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_t *rows_e, uint64_t *rows_p, int atoms_needed, int own_txn){
+ * partition is written by as many connections as it has stretches. A codepoint is never written here: tier 0 is the
+ * perf-cache's, written once by laplace deploy (tier0_write). */
+static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_t *rows_e, uint64_t *rows_p, int own_txn){
     char tn[64]; Copy c = { 0 }; char sql[160]; uint8_t geo[64 * 1024];
     lp_id *ids = NULL; uint64_t *runs = NULL; size_t idc = 0;
     /* a stretch's entities and their paths are one transaction: a load cut off between the two leaves no entity
@@ -125,13 +125,6 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
     if (own_txn) { PGresult *b = PQexec(pg, "BEGIN"); if (PQresultStatus(b) != PGRES_COMMAND_OK) { fprintf(stderr, "begin: %s", PQerrorMessage(pg)); exit(1); } PQclear(b); }
     part_name(p, "entity", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY stage.%s (id, tier, coord, hilbert) FROM STDIN (FORMAT binary)", tn);
     copy_begin(&c, pg, sql);
-    if (atoms_needed)                                  /* the atoms each partition holds: whichever IDs fall in it */
-        for (uint32_t cp = 0; cp < LP_NCP; cp++) {
-            if (part_of(&T0[cp].id, 0) != p || !atom_missing[cp]) continue;
-            double x[4]; for (int d = 0; d < 4; d++) x[d] = (double)T0[cp].m[d] / LP_FIXED_ONE;
-            size_t gl = lp_ewkb_point4(x, geo, sizeof geo);
-            c16(&c, 4); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cfield(&c, geo, (uint32_t)gl); cf_i64(&c, hsigned(T0[cp].hilbert)); c.rows++;
-        }
     for (uint64_t b = lo; b < hi; b++) {
         Node *x = &NODE[bucket[p][b].idx];
         double xm[4]; for (int d = 0; d < 4; d++) xm[d] = (double)x->m[d] / LP_FIXED_ONE;
@@ -142,12 +135,6 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
     part_name(p, "physicality", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY stage.%s (entity, tier, hilbert, path, mask) FROM STDIN (FORMAT binary)", tn);
     uint8_t mask[4 + 32]; { uint32_t bl = htonl(256); memcpy(mask, &bl, 4); }         /* bit varying, binary: its length in bits, then its bytes, first bit first */
     copy_begin(&c, pg, sql);
-    if (atoms_needed)                                  /* the atoms each partition holds: whichever IDs fall in it */
-        for (uint32_t cp = 0; cp < LP_NCP; cp++) {
-            if (part_of(&T0[cp].id, 0) != p || !atom_missing[cp]) continue;
-            uint64_t one = 1; size_t gl = lp_ewkb_runs(&T0[cp].id, &one, 1, geo, sizeof geo); memset(mask + 4, 0, 32);
-            c16(&c, 5); cfield(&c, T0[cp].id.b, 16); cf_i16(&c, 0); cf_i64(&c, hsigned(T0[cp].hilbert)); cfield(&c, geo, (uint32_t)gl); cfield(&c, mask, 36); c.rows++;
-        }
     for (uint64_t b = lo; b < hi; b++) {
         Node *x = &NODE[bucket[p][b].idx];
         if (x->nv > idc) { idc = x->nv * 2; ids = xrealloc(ids, idc * sizeof(lp_id)); runs = xrealloc(runs, idc * 8); }
@@ -315,17 +302,8 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     parts_plan(pg[0]);
     if (!stage_open(pg[0])) return 1;
     if (!resolve_parts(pg[0])) return 1;                                       /* a batch that stopped between its parts' commits, finished first */
-    PGresult *r = PQexec(pg[0], "SELECT count(*) FROM entity WHERE tier = 0");
-    long long n0 = PQresultStatus(r) == PGRES_TUPLES_OK ? atoll(PQgetvalue(r, 0, 0)) : -1; PQclear(r);
-    if (n0 < 0) { fprintf(stderr, "tier 0: %s", PQerrorMessage(pg[0])); return 1; }
-    /* The atoms each database holds once. Where the real tables do not hold all of them, which are missing is asked by
-     * their IDs, of the real tables and the stage together (a staged run's atoms are in the stage until the merge:
-     * counted in the real tables alone, every batch of the run staged them all again), and only those are written. */
-    int atoms_needed = n0 < (long long)LP_NCP; free(atom_missing); atom_missing = NULL;
-    if (atoms_needed) { atom_missing = malloc(LP_NCP); int any = 0;
-        lp_id *ids = malloc(sizeof(lp_id) * LP_NCP); uint8_t *t0 = calloc(LP_NCP, 1); for (uint32_t cp = 0; cp < LP_NCP; cp++) ids[cp] = T0[cp].id;
-        uint8_t *hit = recorded(pg, npg, ids, t0, LP_NCP); for (uint32_t cp = 0; cp < LP_NCP; cp++) { atom_missing[cp] = !hit[cp]; any |= !hit[cp]; }
-        free(hit); free(ids); free(t0); atoms_needed = any; }
+    /* Tier 0 is the perf-cache's: a load never asks for, counts or writes a codepoint. Its rows are laplace deploy's,
+     * written once (tier0_write); a codepoint is no node of the table, so the descent below never reaches one. */
 
     /* ---- trunk to leaf: a recorded node means its whole subtree is recorded, so nothing below it is checked */
     double t = now();
@@ -397,9 +375,9 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     { uint64_t te = 0, tp = 0;
       #pragma omp parallel for num_threads(nparts) schedule(static, 1) reduction(+:te, tp)
       for (int j = 0; j < nparts; j++) for (int p = j; p < NPART; p += nparts) {
-          int atoms = atoms_needed; if (!nbucket[p] && !atoms) continue;
+          if (!nbucket[p]) continue;
           qsort(bucket[p], nbucket[p], sizeof(NRef), by_hilbert);
-          uint64_t e = 0, ph = 0; write_node_rows(pg[j], p, 0, nbucket[p], &e, &ph, atoms, 0); te += e; tp += ph; }
+          uint64_t e = 0, ph = 0; write_node_rows(pg[j], p, 0, nbucket[p], &e, &ph, 0); te += e; tp += ph; }
       st->ent_rows += te; st->phy_rows += tp; }
     for (int p = 0; p < NPART; p++) { free(bucket[p]); bucket[p] = NULL; }
     st->t_copy += now() - t;
@@ -729,4 +707,43 @@ int cmd_merge(int argc, char **argv){
     if (threads <= 0) threads = omp_get_num_procs();
     printf("laplace merge   %d connections\n", threads);
     return merge(conninfo, threads);
+}
+
+/* ---- tier 0: every codepoint, recorded once, from the perf-cache (Atoms: "Tier 0 is still recorded to the database, but
+ * function calls never need to read it from there"). laplace deploy writes it; an ingest never asks for, counts or writes
+ * a codepoint. Each range's codepoints go into the real tables on one connection, entities then their paths (a path's
+ * entity is a foreign key), one transaction a range. A range that holds all of its codepoints is left as it is; a range
+ * that holds some is told which it holds. Returns 0, or 1 when the database refused. */
+int tier0_write(const char *conninfo, int npg){
+    double T = now(); uint32_t want[NPART] = { 0 }; for (uint32_t cp = 0; cp < LP_NCP; cp++) want[part_of(&T0[cp].id, 0)]++;
+    PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) { pg[i] = db_connect(conninfo); PQclear(PQexec(pg[i], "SET synchronous_commit = off")); }
+    uint64_t wrote = 0; int bad = 0;
+    #pragma omp parallel for num_threads(npg) schedule(dynamic, 1) reduction(+:wrote, bad)
+    for (int p = 0; p < NPART; p++) {
+        PGconn *c = pg[omp_get_thread_num()]; char tn[64], sql[192]; part_name(p, "entity", tn, sizeof tn);
+        snprintf(sql, sizeof sql, "SELECT id FROM public.%s WHERE tier = 0", tn);
+        PGresult *r = PQexecParams(c, sql, 0, NULL, NULL, NULL, NULL, 1);
+        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "tier 0, %s: %s", tn, PQerrorMessage(c)); PQclear(r); bad++; continue; }
+        int have = PQntuples(r); if ((uint32_t)have >= want[p]) { PQclear(r); continue; }
+        lp_idmap *held = lp_idmap_new(); for (int i = 0; i < have; i++) { lp_id id; memcpy(id.b, PQgetvalue(r, i, 0), 16); bool f; lp_idmap_put(held, &id, &f); }
+        PQclear(r);
+        if (!must(c, "BEGIN")) { bad++; lp_idmap_free(held); continue; }
+        Copy e = { 0 }; uint8_t geo[256]; uint64_t n = 0;
+        snprintf(sql, sizeof sql, "COPY public.%s (id, tier, coord, hilbert) FROM STDIN (FORMAT binary)", tn); copy_begin(&e, c, sql);
+        for (uint32_t cp = 0; cp < LP_NCP; cp++) { if (part_of(&T0[cp].id, 0) != p || lp_idmap_find(held, &T0[cp].id) >= 0) continue;
+            double x[4]; for (int d = 0; d < 4; d++) x[d] = (double)T0[cp].m[d] / LP_FIXED_ONE; size_t gl = lp_ewkb_point4(x, geo, sizeof geo);
+            c16(&e, 4); cfield(&e, T0[cp].id.b, 16); cf_i16(&e, 0); cfield(&e, geo, (uint32_t)gl); cf_i64(&e, hsigned(T0[cp].hilbert)); n++; }
+        copy_end(&e);
+        part_name(p, "physicality", tn, sizeof tn); uint8_t mask[4 + 32]; { uint32_t bl = htonl(256); memcpy(mask, &bl, 4); memset(mask + 4, 0, 32); }
+        snprintf(sql, sizeof sql, "COPY public.%s (entity, tier, hilbert, path, mask) FROM STDIN (FORMAT binary)", tn); copy_begin(&e, c, sql);
+        for (uint32_t cp = 0; cp < LP_NCP; cp++) { if (part_of(&T0[cp].id, 0) != p || lp_idmap_find(held, &T0[cp].id) >= 0) continue;
+            uint64_t one = 1; size_t gl = lp_ewkb_runs(&T0[cp].id, &one, 1, geo, sizeof geo);
+            c16(&e, 5); cfield(&e, T0[cp].id.b, 16); cf_i16(&e, 0); cf_i64(&e, hsigned(T0[cp].hilbert)); cfield(&e, geo, (uint32_t)gl); cfield(&e, mask, 36); }
+        copy_end(&e); free(e.b); lp_idmap_free(held);
+        if (!must(c, "COMMIT")) { bad++; continue; }
+        wrote += n;
+    }
+    for (int i = 0; i < npg; i++) PQfinish(pg[i]); free(pg);
+    if (!bad) printf("  %-52s %'9llu written, from the perf-cache   %.1f s\n", "tier 0: every codepoint, once", (unsigned long long)wrote, now() - T);
+    return bad ? 1 : 0;
 }
