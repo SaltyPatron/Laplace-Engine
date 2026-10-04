@@ -50,6 +50,8 @@ holds Lexicon Synset LexicalEntry SyntacticBehaviour
 attest Lexicon language
 attest Requires ref
 holds LexicalEntry Sense
+# an entry's claims are one record, its senses in the order the file gives them
+together LexicalEntry
 attest Lemma partOfSpeech script
 attest Form writtenForm script
 attest Pronunciation variety .
