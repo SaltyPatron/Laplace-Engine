@@ -41,6 +41,15 @@ static int expand(const lp_id *id, Buf *o){
 /* Every composition a batch made, by tier: whether the database holds it already (recorded, in the real tables or the
  * stage) or it would be new, how many parts it has, and its text (a claim or tuple as its parts). Nothing is written:
  * laplace ingest --entities, on a sample, shows what a recipe would record before anything is loaded. */
+/* What this source has staged, every ID of it, kept here (the client knows what it wrote; the database is not asked):
+ * a node an earlier batch staged is marked recorded before the next batch is loaded, so neither it nor anything under
+ * it is staged again, and the stage holds each node of the source once. Kept by this process, which forks each batch's
+ * writer: it is marked before the fork. */
+static lp_idmap *staged_set; static uint64_t staged_again;
+static void staged_mark(void){
+    if (!staged_set) staged_set = lp_idmap_new();
+    TABLE_EACH(x) { bool fresh; lp_idmap_put(staged_set, &x->id, &fresh); if (!fresh) { x->keep = 2; staged_again++; } }
+}
 static void show_tuple(const lp_id *id);
 static void show_entities(const char *conninfo, int ask){
     uint64_t n = 0; TABLE_EACH(x) n++; if (!n) return;
@@ -390,7 +399,7 @@ int cmd_ingest(int argc, char **argv){
                         free(ids); free(tt); }
                     if (pass) { bytes += end; nev += f->ev.n; batches++; }
                     fprintf(stderr, "\r  %s: %s  %.1f MB read  %'llu nodes in this stretch   ", f->path, pass ? "recording" : "its trunk", f->bytes / 1e6, (unsigned long long)table_count());
-                    if (pass) { SHOW(f); if (do_load && load(conninfo, threads, f, 1, &st)) return 1; }
+                    if (pass) { SHOW(f); if (do_load) staged_mark(); if (do_load && load(conninfo, threads, f, 1, &st)) return 1; }
                     free(f->ev.e); memset(&f->ev, 0, sizeof f->ev); table_reset();
                     memmove(buf, buf + end, have - end); have -= end;
                     if (unrecorded && !pass) { fprintf(stderr, "\n  %s: what it holds is not all recorded: it is recorded now\n", f->path); break; }
@@ -444,7 +453,7 @@ int cmd_ingest(int argc, char **argv){
         t_rec += now() - td;
         for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
         if (entities) show_entities(conninfo, ask);
-        if (do_load) {
+        if (do_load) { staged_mark();                                        /* what an earlier batch staged is not staged again */
             /* The batch before is written and committed first, so this batch's lookups see it. When more batches follow,
              * this one is written by a child, from its copy of the node table, while this process empties the table and
              * decomposes the next on every core: the cores and the database work at the same time. */
@@ -485,7 +494,7 @@ int cmd_ingest(int argc, char **argv){
       for (int i = 0; i < nfiles; i++) { if (files[i].skipped) continue; if (!files[i].source) { many = 1; break; } if (!one) one = files[i].source; else if (one != files[i].source) many = 1; }
       if (one && !many && !mism && !of) { table_reset(); table_size(64u << 20);   /* the last batch is written: an empty table for the trunk alone */
           if (source_trunk(one, files, nfiles, &trunk)) { File sf; memset(&sf, 0, sizeof sf); sf.path = one->name; sf.source = one; sf.trunk = trunk; sf.file = trunk; sf.has_file = 1;
-              LoadStats ss = { 0 }; double ts = now(); if (load(conninfo, threads, &sf, 1, &ss)) return 1;
+              LoadStats ss = { 0 }; double ts = now(); staged_mark(); if (load(conninfo, threads, &sf, 1, &ss)) return 1;
               printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded"); }
           else printf("  the source's trunk: none, since its source file names no record (witness or called)\n");
           table_reset(); } }

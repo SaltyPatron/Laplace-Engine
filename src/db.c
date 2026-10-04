@@ -106,9 +106,6 @@ static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, const uint8_t *
     free(at); free(job); free(cnt); free(fill);
     return hit;
 }
-static uint8_t *tiers_of(const lp_id *ids, uint64_t n){                       /* the tier the client composed each of them at */
-    uint8_t *t = malloc(n ? n : 1); for (uint64_t i = 0; i < n; i++) { Node *x = table_find(&ids[i]); t[i] = x ? x->tier : 0; } return t;
-}
 
 
 
@@ -346,24 +343,22 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             if (files[fi].ev.e[i].kind == EV_RECORD) { Node *w = table_find(&files[fi].ev.e[i].witnessed); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } }
             if (files[fi].ev.e[i].own_witness) { Node *w = table_find(&files[fi].ev.e[i].witness); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } } }
     }
+    /* Everything under a file that is not recorded is staged, as the batch made it (each node once: the table); whether
+     * a node is recorded already is the database's to say when the source is recorded (merge), trunk to leaf as one
+     * set a leaf, never by asking for IDs here. A file whose trunk is recorded was set aside above, with all it holds. */
     while (nf) {
-        st->rounds++; st->checked += nf;
-        uint8_t *ft = tiers_of(front, nf); uint8_t *hit = recorded(pg, npg, front, ft, nf); free(ft);
+        st->rounds++;
         uint64_t nn = 0; lp_id *next = malloc((nf + 1) * sizeof(lp_id)); uint64_t ncap = nf + 1;
         for (uint64_t i = 0; i < nf; i++) {
-            Node *x = table_find(&front[i]);
-            if (hit[i]) { x->keep = 2; st->found++; continue; }
-            x->keep = 1; st->new_nodes++;
+            Node *x = table_find(&front[i]); x->keep = 1; st->new_nodes++;
             for (uint32_t v = 0; v < x->nv; v++) {
                 Node *ch = table_find(&VTX[x->voff + v].id);
                 if (ch && !ch->keep) { ch->keep = 3; if (nn == ncap) { ncap *= 2; next = xrealloc(next, ncap * sizeof(lp_id)); } next[nn++] = ch->id; }
             }
         }
-        free(hit); free(front); front = next; nf = nn; cap = ncap;
-        fprintf(stderr, "\r  dedup round %llu: %llu new so far, %llu subtrees already recorded   ", (unsigned long long)st->rounds,
-                (unsigned long long)st->new_nodes, (unsigned long long)st->found);
+        free(front); front = next; nf = nn; cap = ncap;
     }
-    free(front); fputc('\n', stderr);
+    free(front); fprintf(stderr, "  staged: %'llu nodes, %llu tiers deep\n", (unsigned long long)st->new_nodes, (unsigned long long)st->rounds);
     st->t_dedup += now() - t;
 
     /* ---- the batch is one transaction, in parts, one a connection, prepared and committed together below: what is
@@ -400,7 +395,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         /* claims already recorded start from their recorded standing */
         /* the statistics are partitioned by the claim's first hex digit: each read goes to its one partition */
         lp_id *old = malloc(sizeof(lp_id) * (sn + 1)); uint64_t nold = 0, ocnt[17] = { 0 };
-        for (uint64_t i = 0; i < sn; i++) { Node *x = table_find(&stand[i].id); if (!x || x->keep != 1) { old[nold++] = stand[i].id; ocnt[(stand[i].id.b[0] >> 4) + 1]++; } }
+        for (uint64_t i = 0; i < sn; i++) { old[nold++] = stand[i].id; ocnt[(stand[i].id.b[0] >> 4) + 1]++; }      /* every claim: staged is not new, the recorded standings are read as one set a partition */
         for (int h = 0; h < 16; h++) ocnt[h + 1] += ocnt[h];
         { lp_id *by = malloc(sizeof(lp_id) * (nold + 1)); uint64_t fill[16]; memcpy(fill, ocnt, sizeof fill); for (uint64_t i = 0; i < nold; i++) by[fill[old[i].b[0] >> 4]++] = old[i]; free(old); old = by; }
         const uint64_t CH = 100000; typedef struct { int h; uint64_t lo, n; } OJob; OJob *oj = malloc(sizeof(OJob) * (nold / CH + 17)); uint64_t noj = 0;
@@ -431,7 +426,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         uint64_t nrec = 0; for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) nrec += files[fi].ev.e[i].kind != EV_MEMBER;
         lp_id *wold = malloc(sizeof(lp_id) * (nrec + 1)); uint64_t nwold = 0;
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (e->kind == EV_MEMBER) continue;
-            Node *x = table_find(&e->witnessed); if (!x || x->keep != 1) wold[nwold++] = e->witnessed; }
+            wold[nwold++] = e->witnessed; }                                      /* every claim: what it was witnessed by before is read as one set a partition */
         uint64_t lin_at[17] = { 0 }; uint64_t pcap = 1024; while (pcap < nrec * 3) pcap <<= 1; Seen *seen = calloc(pcap, sizeof(Seen)); uint64_t nseen = 0;
         #define SEEN_AT(w, l, found) do { uint64_t h_; memcpy(&h_, (w)->b, 8); uint64_t c_; memcpy(&c_, (l)->b + 8, 8); h_ ^= c_ * 0x9E3779B97F4A7C15ull; k_ = h_ & (pcap - 1); found = 0; \
             while (seen[k_].used) { if (!memcmp(seen[k_].witnessed.b, (w)->b, 16) && !memcmp(seen[k_].lin.b, (l)->b, 16)) { found = 1; break; } k_ = (k_ + 1) & (pcap - 1); } } while (0)
@@ -571,22 +566,19 @@ int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers
     free(hit); PQfinish(pg); return got == n;
 }
 
-/* ---- merge: what the runs staged goes into the real tables, as one transaction in parts, one a connection (prepared,
- * then committed, as a batch's was). A leaf partition with rows staged for it takes them one of two ways, whichever
- * writes less:
- *   rewritten: the leaf is truncated and copied back whole, what it held and what was staged, in its order (Hilbert for
- *     entity and physicality, the claim for attestation and consensus), FREEZE. A truncated table's new files are
- *     written without WAL when wal_level is minimal (they are synced when the transaction is prepared instead), indexes
- *     with it, and frozen rows leave no hint bits for a later read to log (data_checksums is on). TRUNCATE locks that
- *     leaf alone, so the connections never wait on each other.
- *   appended: the staged rows are inserted, logged as any write is. A leaf that takes a few rows takes them this way.
- * What an append logs: the staged rows, and an image of every index page they land on (one a page per checkpoint,
- * up to all of the index's pages). What a rewrite costs: the leaf read and written once, nothing logged. With
- * wal_level above minimal a rewrite is logged whole, so every leaf is appended.
+/* ---- merge: what a source staged goes into the real tables, in one order, as one transaction in parts, one a connection
+ * (prepared, then committed). The stage holds each node of the source once (the client staged nothing twice); whether
+ * the real tables hold one already is theirs to say, as one set a leaf:
+ *   a leaf that holds nothing yet is loaded: truncated and copied FREEZE, in its order (Hilbert for entity and
+ *     physicality, the claim for attestation and consensus). A truncated table's files are new, written without WAL at
+ *     wal_level minimal and synced when the transaction is prepared, its indexes with it; frozen rows leave no hint
+ *     bits for a later read to log (data_checksums is on). TRUNCATE locks that leaf alone.
+ *   a leaf that holds rows takes what it does not hold, one INSERT ... SELECT; attestation and consensus put a staged
+ *     row in place of the recorded one (its games and standing as the source left them).
  * An entity leaf is always appended: a physicality's entity is a foreign key to it, and a table a foreign key points
  * at cannot be truncated alone. An entity leaf and the physicality leaf of the same range go to one connection, the
  * entities first, so the paths it copies find their entities in its own part of the transaction. */
-typedef struct { char name[64]; int table; double live, staged_rows, staged_bytes, append_cost, rewrite_cost; int rewrite, worker; } MLeaf;
+typedef struct { char name[64]; int table; double live, staged_rows, staged_bytes; int rewrite, worker; } MLeaf;
 enum { M_ENTITY, M_PHYS, M_ATT, M_CONS };
 static const char *M_ORDER[4] = { "hilbert", "hilbert", "claim, witness", "claim" };
 static int mleaf_by_table(const void *a, const void *b){ return ((const MLeaf *)a)->table - ((const MLeaf *)b)->table; }   /* entities before their paths */
@@ -628,7 +620,9 @@ static int merge_leaf(PGconn *w, PGconn *rd, const MLeaf *L, uint64_t *rows){
             snprintf(sql, sl, "UPDATE public.%s l SET %s FROM stage.%s s WHERE %s", L->name, set, L->name, same); bad = !must(w, sql);
             if (!bad) { snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s s WHERE NOT EXISTS (SELECT 1 FROM public.%s l WHERE %s) ORDER BY %s",
                                  L->name, cols, cols, L->name, L->name, same, M_ORDER[L->table]); bad = !must(w, sql); } }
-        else { snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s ORDER BY %s", L->name, cols, cols, L->name, M_ORDER[L->table]); bad = !must(w, sql); }
+        else { const char *key = L->table == M_ENTITY ? "id" : "entity";        /* what the real leaf holds already stays: the rest, as one set */
+               snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s s WHERE NOT EXISTS (SELECT 1 FROM public.%s l WHERE l.%s = s.%s) ORDER BY %s",
+                        L->name, cols, cols, L->name, L->name, key, key, M_ORDER[L->table]); bad = !must(w, sql); }
         *rows += (uint64_t)L->staged_rows;
     }
     /* the container index takes what it was handed into its own list: merged here, inside the transaction, so no
@@ -660,7 +654,7 @@ int merge(const char *conninfo, int npg){
     int bad = 0;
     #pragma omp parallel for num_threads(npg) schedule(dynamic, 1) reduction(+:bad)
     for (int i = 0; i < nl; i++) {
-        PGconn *c = rd[omp_get_thread_num()]; const char *v[1] = { L[i].name }; char sql[512];
+        PGconn *c = rd[omp_get_thread_num()]; char sql[512];
         snprintf(sql, sizeof sql, "SELECT (SELECT count(*) FROM stage.%s), pg_relation_size('stage.%s'), pg_relation_size('public.%s'), pg_total_relation_size('public.%s')",
                  L[i].name, L[i].name, L[i].name, L[i].name);
         PGresult *q = PQexec(c, sql);
@@ -668,17 +662,13 @@ int merge(const char *conninfo, int npg){
         L[i].staged_rows = atof(PQgetvalue(q, 0, 0)); L[i].staged_bytes = atof(PQgetvalue(q, 0, 1)); double total = atof(PQgetvalue(q, 0, 3));
         L[i].live = total; PQclear(q);
         if (!L[i].staged_rows) continue;
-        char rows[32]; snprintf(rows, sizeof rows, "%.0f", L[i].staged_rows); const char *v2[2] = { v[0], rows };
-        q = PQexecParams(c, "SELECT coalesce(sum(least($2::float8, c.relpages::float8)), 0) * 8192 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
-                            "WHERE i.indrelid = ('public.' || quote_ident($1))::regclass", 2, NULL, v2, NULL, NULL, 0);
-        double images = PQresultStatus(q) == PGRES_TUPLES_OK ? atof(PQgetvalue(q, 0, 0)) : 0; PQclear(q);
-        /* an append writes the rows and logs them again, and an image of every index page it lands on; a rewrite reads
-         * the leaf and writes it, with what was staged, once, and logs nothing (wal_level minimal). Measured on run
-         * 37195024984, priced without the log of the rows themselves: every leaf of every source appended, and
-         * open-multilingual-wordnet's merge wrote 24.77 GB of WAL for 42.2M rows into a nearly empty database */
-        L[i].append_cost = 2.0 * L[i].staged_bytes + images;
-        L[i].rewrite_cost = 2.0 * total + L[i].staged_bytes;
-        L[i].rewrite = minimal && L[i].table != M_ENTITY && L[i].rewrite_cost < L[i].append_cost;
+        /* A leaf that holds nothing yet is loaded, unlogged: truncated, so its files are new and written without WAL at
+         * wal_level minimal, and copied FREEZE. A leaf that holds rows takes what it does not hold, as one set. No
+         * estimate decides: what the leaf is does. An entity leaf takes the set always (a path's entity is a foreign key
+         * to it, and a table a foreign key points at cannot be truncated alone). */
+        snprintf(sql, sizeof sql, "SELECT EXISTS (SELECT 1 FROM public.%s)", L[i].name); q = PQexec(c, sql);
+        int holds = PQresultStatus(q) != PGRES_TUPLES_OK || PQgetvalue(q, 0, 0)[0] == 't'; PQclear(q);
+        L[i].rewrite = minimal && L[i].table != M_ENTITY && !holds;
     }
     if (bad) return 1;
     int nm = 0; for (int i = 0; i < nl; i++) if (L[i].staged_rows) L[nm++] = L[i];
