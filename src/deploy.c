@@ -121,11 +121,14 @@ int cmd_status(int argc, char **argv){
                       printf("           %s\n", strcmp(hex, hfp) ? "DIFFERS from this engine's highway: the two would give a type different slots" : "the same as this engine's"); }
       free(hw); free(hfp); }
 
-    PGresult *r = PQexec(pg, "SELECT p.tier, sum(c.reltuples)::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))) "
-                             "FROM pg_class c JOIN LATERAL (SELECT (regexp_match(c.relname, '^entity_t([0-9]+|x)(_[0-9a-f])?$'))[1] AS tier) p ON p.tier IS NOT NULL "
-                             "WHERE c.relkind = 'r' AND c.reltuples > 0 GROUP BY 1 ORDER BY CASE WHEN p.tier = 'x' THEN 99 ELSE p.tier::int END");
-    printf("\nentities, by tier (the planner's counts)\n");
-    for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) printf("  tier %-3s %'16lld   %s\n", PQgetvalue(r, i, 0), atoll(PQgetvalue(r, i, 1)), PQgetvalue(r, i, 2));
+    /* the tier is a column, not a partition: counted from a 1% sample of the rows, the size from the partitions */
+    PGresult *r = PQexec(pg, "SELECT tier, (count(*) * 100)::bigint FROM entity TABLESAMPLE SYSTEM (1) GROUP BY 1 ORDER BY 1");
+    printf("\nentities, by tier (from a 1%% sample)\n");
+    for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) printf("  tier %-3s %'16lld\n", PQgetvalue(r, i, 0), atoll(PQgetvalue(r, i, 1)));
+    PQclear(r);
+    r = PQexec(pg, "SELECT sum(c.reltuples)::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                   "WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname ~ '^(entity|physicality)_[0-9a-f]{2}$'");
+    if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) printf("  entities and paths %'14lld rows   %s\n", atoll(PQgetvalue(r, 0, 0)), PQgetvalue(r, 0, 1));
     PQclear(r);
     r = PQexec(pg, "SELECT c.relname, c.reltuples::bigint, pg_size_pretty(pg_total_relation_size(c.oid)) FROM pg_class c "
                    "WHERE c.relname IN ('witness', 'attestation', 'consensus') AND c.relkind = 'r' ORDER BY 1");

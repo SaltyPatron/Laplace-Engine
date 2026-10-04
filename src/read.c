@@ -125,7 +125,7 @@ static int tier_in(const char *name){
 static void leaves_of(const char *kind, Leaf **out, int *n){
     if (*out) return;
     pool_open();
-    char q[192]; snprintf(q, sizeof q, "SELECT c.relname FROM pg_class c WHERE c.relkind = 'r' AND c.relname ~ '^%s_t([0-9]+|x)(_[0-9a-f])?$' ORDER BY 1", kind);
+    char q[320]; snprintf(q, sizeof q, "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname ~ '^%s_[0-9a-f]{2}$' ORDER BY 1", kind);   /* the ID's ranges: a leaf holds every tier */
     PGresult *r = PQexec(pool[0], q);
     if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "leaves: %s", PQerrorMessage(pool[0])); exit(1); }
     int m = PQntuples(r); *out = calloc((size_t)(m ? m : 1), sizeof(Leaf)); *n = m;
@@ -164,13 +164,13 @@ Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standin
     leaves_of("physicality", &phy, &nphy);
     uint8_t *ab = malloc(20 + 20 * (size_t)nkeys); size_t al = ids_param(ab, keys, (uint32_t)nkeys);
     int *job = malloc(sizeof(int) * (size_t)nphy); int nj = 0;
-    for (int i = 0; i < nphy; i++) if (phy[i].tier > floor) job[nj++] = i;
+    for (int i = 0; i < nphy; i++) job[nj++] = i;                        /* every range holds every tier: the tier is asked of the rows */
     Bag *bag = calloc((size_t)(nj ? nj : 1), sizeof(Bag));
     #pragma omp parallel for num_threads(npool) schedule(dynamic)
     for (int j = 0; j < nj; j++) {
         char sql[384];
-        if (each) snprintf(sql, sizeof sql, "SELECT u.i, p.entity, p.path, p.tier, p.mask FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN %s p ON p.path @> ARRAY[u.id]", phy[job[j]].name);
-        else snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM %s WHERE path @> $1::blake3[]", phy[job[j]].name);
+        if (each) snprintf(sql, sizeof sql, "SELECT u.i, p.entity, p.path, p.tier, p.mask FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN %s p ON p.path @> ARRAY[u.id] WHERE p.tier > %d", phy[job[j]].name, floor);
+        else snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM %s WHERE path @> $1::blake3[] AND tier > %d", phy[job[j]].name, floor);
         const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
         PGconn *c = pool[omp_get_thread_num()];
         PGresult *r = PQexecParams(c, sql, 1, NULL, v, l, f, 1);

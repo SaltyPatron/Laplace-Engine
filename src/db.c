@@ -34,22 +34,13 @@ static void copy_end(Copy *c){
 }
 static int64_t hsigned(uint64_t h){ return (int64_t)(h ^ 0x8000000000000000ull); }      /* bigint order = Hilbert order */
 
-/* ---- partitions: a tier each, tiers deeper than 15 in the default; the largest tiers split again 16 ways by the
- * ID's first hex digit. Which tiers are split is the schema's to say: it is read from the database, never assumed. */
-static uint8_t split[17];
-static void parts_plan(PGconn *pg){
-    PGresult *r = PQexec(pg, "SELECT c.relname FROM pg_class c WHERE c.relkind = 'r' AND c.relname ~ '^entity_t([0-9]+|x)_[0-9a-f]$'");
-    if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "partitions: %s", PQerrorMessage(pg)); exit(1); }
-    memset(split, 0, sizeof split);
-    for (int j = 0; j < PQntuples(r); j++) { const char *n = PQgetvalue(r, j, 0) + 8; int t = *n == 'x' ? 16 : atoi(n); if (t >= 0 && t <= 16) split[t] = 1; }
-    PQclear(r);
-}
-static int part_of(const lp_id *id, uint8_t tier){ int t = tier < 16 ? tier : 16; return t * 16 + (split[t] ? id->b[0] >> 4 : 0); }
-static void part_name(int p, const char *table, char *out, size_t cap){
-    int t = p / 16, k = p % 16; char tier[8]; if (t == 16) snprintf(tier, sizeof tier, "x"); else snprintf(tier, sizeof tier, "%d", t);
-    if (split[t]) snprintf(out, cap, "%s_t%s_%x", table, tier, k); else snprintf(out, cap, "%s_t%s", table, tier);
-}
-#define NPART (17 * 16)
+/* ---- partitions: an entity is its ID, so entity and physicality partition by the ID alone, 256 ways by its first byte
+ * (entity_00 .. entity_ff, physicality_00 .. physicality_ff, the same ranges). A node's tier is a column of its row,
+ * never where it is looked for: the same content is one row however it is composed. */
+static void parts_plan(PGconn *pg){ (void)pg; }
+static int part_of(const lp_id *id, uint8_t tier){ (void)tier; return id->b[0]; }
+static void part_name(int p, const char *table, char *out, size_t cap){ snprintf(out, cap, "%s_%02x", table, p); }
+#define NPART 256
 
 /* ---- the stage: what an ingest has deduplicated and played, held until it goes into the real tables at once (merge).
  * The inventor: "decompose and stage all the records necessary... deduplicated and all of that but just the records...
@@ -134,7 +125,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
     if (own_txn) { PGresult *b = PQexec(pg, "BEGIN"); if (PQresultStatus(b) != PGRES_COMMAND_OK) { fprintf(stderr, "begin: %s", PQerrorMessage(pg)); exit(1); } PQclear(b); }
     part_name(p, "entity", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY stage.%s (id, tier, coord, hilbert) FROM STDIN (FORMAT binary)", tn);
     copy_begin(&c, pg, sql);
-    if (atoms_needed && p / 16 == 0)
+    if (atoms_needed)                                  /* the atoms each partition holds: whichever IDs fall in it */
         for (uint32_t cp = 0; cp < LP_NCP; cp++) {
             if (part_of(&T0[cp].id, 0) != p || !atom_missing[cp]) continue;
             double x[4]; for (int d = 0; d < 4; d++) x[d] = (double)T0[cp].m[d] / LP_FIXED_ONE;
@@ -151,7 +142,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
     part_name(p, "physicality", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY stage.%s (entity, tier, hilbert, path, mask) FROM STDIN (FORMAT binary)", tn);
     uint8_t mask[4 + 32]; { uint32_t bl = htonl(256); memcpy(mask, &bl, 4); }         /* bit varying, binary: its length in bits, then its bytes, first bit first */
     copy_begin(&c, pg, sql);
-    if (atoms_needed && p / 16 == 0)
+    if (atoms_needed)                                  /* the atoms each partition holds: whichever IDs fall in it */
         for (uint32_t cp = 0; cp < LP_NCP; cp++) {
             if (part_of(&T0[cp].id, 0) != p || !atom_missing[cp]) continue;
             uint64_t one = 1; size_t gl = lp_ewkb_runs(&T0[cp].id, &one, 1, geo, sizeof geo); memset(mask + 4, 0, 32);
@@ -221,7 +212,7 @@ static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led,
      * score, the mean over its games (a claim is a game series: games plus a score). A pair already recorded gains this
      * batch's games in one statement; a new pair is copied. */
     typedef struct { lp_id w, by; uint32_t games, position; double sum; } Series;
-    Series *ser = NULL; uint64_t ns = 0, cs = 0; lp_idmap *mine = lp_idmap_new(); char sql[400];
+    Series *ser = NULL; uint64_t ns = 0, cs = 0; lp_idmap *mine = lp_idmap_new(); char sql[1024];
     for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i];
         if (e->kind == EV_MEMBER || (e->witnessed.b[0] >> 4) != h) continue;                /* witnessed within its record: the record's row */
         const lp_id *by = e->own_witness ? &e->witness : &files[fi].witness.id;
@@ -405,7 +396,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     { uint64_t te = 0, tp = 0;
       #pragma omp parallel for num_threads(nparts) schedule(static, 1) reduction(+:te, tp)
       for (int j = 0; j < nparts; j++) for (int p = j; p < NPART; p += nparts) {
-          int atoms = atoms_needed && p / 16 == 0; if (!nbucket[p] && !atoms) continue;
+          int atoms = atoms_needed; if (!nbucket[p] && !atoms) continue;
           qsort(bucket[p], nbucket[p], sizeof(NRef), by_hilbert);
           uint64_t e = 0, ph = 0; write_node_rows(pg[j], p, 0, nbucket[p], &e, &ph, atoms, 0); te += e; tp += ph; }
       st->ent_rows += te; st->phy_rows += tp; }
@@ -475,7 +466,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         for (uint64_t jx = 0; jx < nlj; jx++) {
             uint64_t i0 = lj[jx].lo; uint32_t k = (uint32_t)lj[jx].n; uint8_t *ab = malloc(20 + 20 * (size_t)k);
             size_t len = ids_param(ab, wold + i0, k); PGconn *c = pg[omp_get_thread_num()];
-            const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 }; char sql[160];
+            const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 }; char sql[512];
             snprintf(sql, sizeof sql, "SELECT a.claim, w.id, w.lineage FROM (SELECT claim, witness FROM public.attestation_%x WHERE claim = ANY($1::blake3[]) "
                                       "UNION SELECT claim, witness FROM stage.attestation_%x WHERE claim = ANY($1::blake3[])) a JOIN witness w ON w.id = a.witness", lj[jx].h, lj[jx].h);
             PGresult *q = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
@@ -604,12 +595,15 @@ int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers
  *   appended: the staged rows are inserted, logged as any write is. A leaf that takes a few rows takes them this way.
  * What an append logs: the staged rows, and an image of every index page they land on (one a page per checkpoint,
  * up to all of the index's pages). What a rewrite costs: the leaf read and written once, nothing logged. With
- * wal_level above minimal a rewrite is logged whole, so every leaf is appended. */
+ * wal_level above minimal a rewrite is logged whole, so every leaf is appended.
+ * An entity leaf is always appended: a physicality's entity is a foreign key to it, and a table a foreign key points
+ * at cannot be truncated alone. An entity leaf and the physicality leaf of the same range go to one connection, the
+ * entities first, so the paths it copies find their entities in its own part of the transaction. */
 typedef struct { char name[64]; int table; double live, staged_rows, staged_bytes, append_cost, rewrite_cost; int rewrite, worker; } MLeaf;
 enum { M_ENTITY, M_PHYS, M_ATT, M_CONS };
 static const char *M_ORDER[4] = { "hilbert", "hilbert", "claim, witness", "claim" };
-static int mleaf_by_cost(const void *a, const void *b){ double x = ((const MLeaf *)a)->rewrite ? ((const MLeaf *)a)->rewrite_cost : ((const MLeaf *)a)->append_cost,
-                                                              y = ((const MLeaf *)b)->rewrite ? ((const MLeaf *)b)->rewrite_cost : ((const MLeaf *)b)->append_cost; return x < y ? 1 : x > y ? -1 : 0; }
+static int mleaf_by_table(const void *a, const void *b){ return ((const MLeaf *)a)->table - ((const MLeaf *)b)->table; }   /* entities before their paths */
+static int leaf_range(const char *name){ const char *u = strrchr(name, '_'); return u ? (int)strtol(u + 1, NULL, 16) : 0; }    /* entity_ab, physicality_ab: 0xab */
 static char *cols_of(PGconn *pg, const char *leaf){                          /* the leaf's columns, in order */
     const char *v[1] = { leaf }; PGresult *r = PQexecParams(pg, "SELECT string_agg(quote_ident(attname), ', ' ORDER BY attnum) FROM pg_attribute "
         "WHERE attrelid = ('public.' || quote_ident($1))::regclass AND attnum > 0 AND NOT attisdropped", 1, NULL, v, NULL, NULL, 0);
@@ -693,15 +687,14 @@ int merge(const char *conninfo, int npg){
         double images = PQresultStatus(q) == PGRES_TUPLES_OK ? atof(PQgetvalue(q, 0, 0)) : 0; PQclear(q);
         L[i].append_cost = L[i].staged_bytes + images;
         L[i].rewrite_cost = 2.0 * (total + L[i].staged_bytes);
-        L[i].rewrite = minimal && L[i].rewrite_cost < L[i].append_cost;
+        L[i].rewrite = minimal && L[i].table != M_ENTITY && L[i].rewrite_cost < L[i].append_cost;
     }
     if (bad) return 1;
     int nm = 0; for (int i = 0; i < nl; i++) if (L[i].staged_rows) L[nm++] = L[i];
     if (!nm) { printf("  nothing staged\n"); for (int i = 0; i < npg; i++) { PQfinish(pg[i]); PQfinish(rd[i]); } PQfinish(pg0); free(L); return 0; }
-    qsort(L, (size_t)nm, sizeof(MLeaf), mleaf_by_cost);                      /* the largest first, each to the writer with least so far */
-    double *load = calloc((size_t)npg, sizeof(double));
-    for (int i = 0; i < nm; i++) { int b = 0; for (int j = 1; j < npg; j++) if (load[j] < load[b]) b = j; L[i].worker = b; load[b] += L[i].rewrite ? L[i].rewrite_cost : L[i].append_cost; }
-    free(load);
+    /* a range's leaves to one writer (an ID is a hash: the ranges are alike in size), entities first */
+    qsort(L, (size_t)nm, sizeof(MLeaf), mleaf_by_table);
+    for (int i = 0; i < nm; i++) L[i].worker = leaf_range(L[i].name) % npg;
     int nrw = 0; double rw_bytes = 0, ap_rows = 0; for (int i = 0; i < nm; i++) { if (L[i].rewrite) { nrw++; rw_bytes += L[i].live; } else ap_rows += L[i].staged_rows; }
     printf("  %d leaves have rows staged: %d rewritten (%.1f GB held, written without WAL), %d appended (%'.0f rows, logged)%s\n",
            nm, nrw, rw_bytes / 1e9, nm - nrw, ap_rows, minimal ? "" : "; wal_level is not minimal, so none is rewritten");

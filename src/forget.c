@@ -55,14 +55,14 @@ static uint64_t over(PGconn **pg, int npg, const lp_id *ids, uint64_t n, const c
  * every partition of every tier for every ID. */
 typedef struct { char name[32][40]; int n; } Parts;
 static void parts_of(PGconn *pg, const char *table, Parts out[16]){
-    char q[256]; snprintf(q, sizeof q, "SELECT c.relname FROM pg_class c WHERE c.relkind = 'r' AND c.relname ~ '^%s_t([0-9]+|x)(_[0-9a-f])?$' ORDER BY 1", table);
+    char q[256]; snprintf(q, sizeof q, "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname ~ '^%s_[0-9a-f]{2}$' ORDER BY 1", table);
     PGresult *r = PQexec(pg, q); must(pg, r, PGRES_TUPLES_OK, "partitions"); memset(out, 0, sizeof(Parts) * 16);
     for (int j = 0; j < PQntuples(r); j++) {
         const char *name = PQgetvalue(r, j, 0); snprintf(q, sizeof q, "SELECT 1 FROM %s LIMIT 1", name);
         PGresult *e = PQexec(pg, q); int holds = PQresultStatus(e) == PGRES_TUPLES_OK && PQntuples(e) > 0; PQclear(e); if (!holds) continue;
-        size_t nl = strlen(name); int whole = !(nl > 2 && name[nl - 2] == '_');        /* a tier that is one partition holds IDs of every first digit */
-        char hx = name[nl - 1]; int only = hx <= '9' ? hx - '0' : hx - 'a' + 10;
-        for (int h = whole ? 0 : only; h < (whole ? 16 : only + 1); h++) if (out[h].n < 32) snprintf(out[h].name[out[h].n++], 40, "%s", name);
+        size_t nl = strlen(name); char hx = name[nl - 2];                              /* entity_ab: the IDs whose first hex digit is a */
+        int only = hx <= '9' ? hx - '0' : hx - 'a' + 10;
+        if (out[only].n < 32) snprintf(out[only].name[out[only].n++], 40, "%s", name);
     }
     PQclear(r);
 }
@@ -169,13 +169,13 @@ static void each_release(PGresult *r, int j, void *into){
 static uint64_t sweep(PGconn **pg, int npg, int dry){
     double T = now(), t = now(); for (int i = 0; i < 256; i++) pthread_mutex_init(&cs[i].mu, NULL);
     static Parts eparts[16], pparts[16]; parts_of(pg[0], "entity", eparts); parts_of(pg[0], "physicality", pparts);
-    /* every partition of paths above tier 0, each on a connection */
-    PGresult *r = PQexec(pg[0], "SELECT c.relname FROM pg_class c JOIN pg_inherits i ON i.inhrelid = c.oid WHERE c.relkind = 'r' "
-                                "AND c.relname ~ '^physicality_t([1-9][0-9]*|x)(_[0-9a-f])?$' ORDER BY c.reltuples DESC");
+    /* every partition of paths, each on a connection; the paths above tier 0 */
+    PGresult *r = PQexec(pg[0], "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' "
+                                "AND c.relname ~ '^physicality_[0-9a-f]{2}$' ORDER BY c.reltuples DESC");
     must(pg[0], r, PGRES_TUPLES_OK, "partitions"); int nparts = PQntuples(r); uint64_t paths = 0;
     #pragma omp parallel for num_threads(npg) schedule(dynamic) reduction(+:paths)
     for (int p = 0; p < nparts; p++) {
-        Batch b = { 0 }; char sql[160]; snprintf(sql, sizeof sql, "SELECT entity, path FROM %s", PQgetvalue(r, p, 0));
+        Batch b = { 0 }; char sql[160]; snprintf(sql, sizeof sql, "SELECT entity, path FROM %s WHERE tier > 0", PQgetvalue(r, p, 0));
         paths += stream(pg[omp_get_thread_num()], sql, row_path, &b); batch_done(&b);
     }
     PQclear(r);
