@@ -672,8 +672,12 @@ int merge(const char *conninfo, int npg){
         q = PQexecParams(c, "SELECT coalesce(sum(least($2::float8, c.relpages::float8)), 0) * 8192 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
                             "WHERE i.indrelid = ('public.' || quote_ident($1))::regclass", 2, NULL, v2, NULL, NULL, 0);
         double images = PQresultStatus(q) == PGRES_TUPLES_OK ? atof(PQgetvalue(q, 0, 0)) : 0; PQclear(q);
-        L[i].append_cost = L[i].staged_bytes + images;
-        L[i].rewrite_cost = 2.0 * (total + L[i].staged_bytes);
+        /* an append writes the rows and logs them again, and an image of every index page it lands on; a rewrite reads
+         * the leaf and writes it, with what was staged, once, and logs nothing (wal_level minimal). Measured on run
+         * 37195024984, priced without the log of the rows themselves: every leaf of every source appended, and
+         * open-multilingual-wordnet's merge wrote 24.77 GB of WAL for 42.2M rows into a nearly empty database */
+        L[i].append_cost = 2.0 * L[i].staged_bytes + images;
+        L[i].rewrite_cost = 2.0 * total + L[i].staged_bytes;
         L[i].rewrite = minimal && L[i].table != M_ENTITY && L[i].rewrite_cost < L[i].append_cost;
     }
     if (bad) return 1;
