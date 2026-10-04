@@ -11,6 +11,7 @@ quoted
 tier field by ,
 
 thing row c_testcase
-content c_testcase p_label p_value p_target t_case_local t_function t_gold t_direction t_id
+key row t_id
+content c_testcase p_label p_value p_target t_case_local t_function t_gold t_direction
 together row
-attest row p_label p_value p_target t_case_local t_function t_gold t_direction t_id
+attest row p_label p_value p_target t_case_local t_function t_gold t_direction

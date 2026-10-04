@@ -13,10 +13,12 @@ quoted
 tier field by ,
 
 thing row c_testcase
+key row c_id
+key row t_id
 # Some files carry the row numbers of the tables they were written out from ("Unnamed: 0", "Unnamed: 0.1", index):
 # how they were written down, not what the set says
 omit "Unnamed: 0" "Unnamed: 0.1" index
-content c_testcase c_id c_group p_label p_value p_target t_case_local t_function t_gold t_direction t_id annotation_common annotation_selected annotator_*
+content c_testcase c_group p_label p_value p_target t_case_local t_function t_gold t_direction annotation_common annotation_selected annotator_*
 omit c_order
-attest row c_id c_group p_label p_value p_target t_case_local t_function t_gold t_direction t_id c_order annotation_common annotation_selected
+attest row c_group p_label p_value p_target t_case_local t_function t_gold t_direction annotation_common annotation_selected
 voices row annotator_* within-file
