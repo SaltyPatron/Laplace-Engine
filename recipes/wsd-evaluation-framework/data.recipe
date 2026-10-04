@@ -10,11 +10,15 @@ format xml
 thing wf wf
 thing instance instance
 thing sentence of wf instance
+# a corpus is the name its source attribute gives it (semcor, semeval2015); a text's source (br-e30) is the key of its
+# Brown document, recorded nowhere
+thing corpus source
 key sentence id
 key instance id
 key text id
 # the data set a sentence is from (semeval2015, senseval2) is the framework's bookkeeping
-omit source
+omit text.source
+content corpus.source
 content wf instance lemma pos lang
 attest corpus lang
 attest wf lemma pos
