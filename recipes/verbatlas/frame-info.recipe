@@ -3,18 +3,21 @@ name verbatlas-frame-info
 # frame is, the type the highway lists), its definition, its prototypical BabelNet synset (a key of a
 # WordNet synset, read as the ILI concept), that synset's definition, and a small definition.
 # The first line is the release's banner (name, version, licence), not a row.
+# README.txt: "Each line contains the ID and the name of a VerbAtlas frame ... we also provide a definition, a
+# prototypical synset ..., the definition of the prototypical synset, and a "small definition" of the frame." The
+# fields are named in those words.
 match VA_frame_info.tsv
 
 tier row by \n
 skip 1
-names ID name definition prototypical_synset definition_of_the_prototypical_synset small_definition
+names ID name definition "prototypical synset" "definition of the prototypical synset" "small definition"
 tier field by \t
 
 thing row name
 key row ID
-type prototypical_synset ili
-content name definition definition_of_the_prototypical_synset small_definition
-attest row definition prototypical_synset definition_of_the_prototypical_synset small_definition
+type "prototypical synset" ili
+content name definition "definition of the prototypical synset" "small definition"
+attest row definition "prototypical synset" "definition of the prototypical synset" "small definition"
 
 # the highway: a frame is its name (TOLERATE), and its id (va:0001f) is VerbAtlas's key of it
 types vaframe "VerbAtlas frame" row
