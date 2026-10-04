@@ -257,7 +257,8 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  const STree *tc_tree; uint32_t tc_n, tc_cap; Ref *tc; uint8_t *ts;
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
-                 Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int16_t *dm; uint32_t dm_cap; } Sink;          /* reading for the highway (laplace highway): what the part says of its types, in order */
+                 Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int16_t *dm; uint32_t dm_cap;
+                 struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; } Sink;          /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
     if (k->nhr == k->chr) { k->chr = k->chr ? k->chr * 2 : 1024; k->hr = xrealloc(k->hr, sizeof(HwRec) * k->chr); }
@@ -529,9 +530,27 @@ static int said_by(Sink *k, const STree *t, int32_t g, const char *by){ return v
  * Where the part names none, the source says it, as it says everything it writes. */
 #define WHO 64
 static int whos(const STree *t, int32_t g, const char *by, int32_t *who){ return by[0] ? all_path(t, g, by, who, WHO) : 0; }
+/* A part says a claim once. Two directives of a recipe that reach the same claim of one part (holds record * via and
+ * attest * *, for a sense of a Wiktextract entry) are one statement, not two: the same witness attesting the same claim
+ * in one record twice would play it twice. The claims a part has made are kept by the claim and who says it, for the
+ * part being read alone (cs_epoch: a new part, an empty set, nothing cleared). */
+struct CSeen { lp_id key; uint64_t epoch; };
+static int said_already(Sink *k, const lp_id *c){
+    if (!k->cs_epoch) k->cs_epoch = 1;                                      /* a slot never used is of epoch 0: no part's */
+    lp_id key = *c; if (k->voiced) for (int i = 0; i < 16; i++) key.b[i] ^= k->voice.id.b[(i + 5) & 15];
+    if ((k->cs_n + 1) * 2 > k->cs_cap) {                                     /* half full: twice the room, this part's keys moved */
+        struct CSeen *o = k->cs; uint64_t oc = k->cs_cap; k->cs_cap = oc ? oc * 2 : 256; k->cs = calloc(k->cs_cap, sizeof(struct CSeen));
+        for (uint64_t i = 0; i < oc; i++) if (o[i].epoch == k->cs_epoch) { uint64_t h; memcpy(&h, o[i].key.b, 8); uint64_t s = h & (k->cs_cap - 1);
+            while (k->cs[s].epoch == k->cs_epoch) s = (s + 1) & (k->cs_cap - 1); k->cs[s] = o[i]; }
+        free(o); }
+    uint64_t h; memcpy(&h, key.b, 8); uint64_t s = h & (k->cs_cap - 1);
+    while (k->cs[s].epoch == k->cs_epoch) { if (!memcmp(&k->cs[s].key, &key, 16)) return 1; s = (s + 1) & (k->cs_cap - 1); }
+    k->cs[s].key = key; k->cs[s].epoch = k->cs_epoch; k->cs_n++; return 0;
+}
 static void claim(Sink *k, Ref *part, int n){
     for (int i = 0; i < n; i++) if (part[i].said != LP_SAID_TUPLE) part[i].said = 0;      /* a tuple held by a claim stays a tuple: M says so, the ID is the same */
     Ref c = said_claim(compose(part, (uint32_t)n, over(part, (size_t)n)));
+    if (said_already(k, &c.id)) return;
     Event x = { c.id, c.id, k->score, k->er, k->ed, 0, EV_CLAIM }; if (k->voiced) { x.own_witness = 1; x.witness = k->voice.id; } ev_push(&k->ev, &x);
     push(&k->grp, &c);
 }
@@ -764,6 +783,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
 }
 static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
     Sink *k = sink; const Say *s = k->s; (void)ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f; TT = t;
+    k->cs_epoch++; k->cs_n = 0;                                              /* a new part: none of its claims made yet */
     if (k->dm_cap < t->count) { k->dm_cap = t->count * 2; k->dm = xrealloc(k->dm, sizeof(int16_t) * k->dm_cap); } memset(k->dm, 0, sizeof(int16_t) * t->count); DM = k->dm;
     if (k->tc_cap < t->count) { k->tc_cap = t->count * 2; k->tc = xrealloc(k->tc, sizeof(Ref) * k->tc_cap); k->ts = xrealloc(k->ts, k->tc_cap); }
     k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); k->ix_tree = NULL;      /* a new tree: nothing of the last is known of it */
