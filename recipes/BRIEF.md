@@ -70,8 +70,9 @@ the whole source once at the end.
 
 ## The recipe language
 
-The full reference is the comment at the top of **`/repos/src/Laplace-Engine/src/recipe.c`**; the native readers are
-described at the top of `records.c`, `elements.c` and `members.c` in the same directory. **Read those four comments.**
+The full reference is the comment at the top of **`/repos/src/Laplace-Engine/src/recipe.c`**; the one decomposer is
+described at the top of `structure.c` and its layout in `structure.h`, and what each part of a file is (content, key,
+omit, attest...) at the top of `say.c`, in the same directory. **Read those comments.**
 Working examples to copy from, all under `recipes/`:
 
 | Kind of file | Example |
