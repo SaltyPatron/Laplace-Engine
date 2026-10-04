@@ -2,14 +2,14 @@ name semlink-vn-fn
 # instances/vn-fn2.json: SemLink's mapping of VerbNet classes to FrameNet frames, an object whose keys are classes,
 # written by their numbers and a member's name (26.5-shake, 21.1-1-chip), each with the list of frames it maps to:
 #   {"26.5-shake": ["Moving_in_place", "Body_movement", "Cause_to_move_in_place"], ...}
-# The class is the VerbNet class its number names; that it maps to each frame is said of it, as the pair of the two;
-# the highway maps the class to each frame.
+# A key is recorded as SemLink writes it, the class and its member together (10.4.1-1-pluck): that it maps to each
+# frame is said of it, as the pair of the two. The highway maps the class the key's number names to each frame.
 match vn-fn2.json
 format json
 levels class
 
 thing class key
-type class.key vnclass matching ^(.*)-[^0-9-][^-]*$
+content key
 type value fnframe
 
 pair class value
