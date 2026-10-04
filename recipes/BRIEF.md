@@ -31,6 +31,13 @@ So:
   geonameid, a case id, a roleset id, an `ID` attribute, an entry's etymology number: these are how the source points
   at its own things. Name them with `key` (never recorded), `refer` (read as the thing another row or element of the
   same source defines) or `type` (read as the type in the highway's list that the key points at). No claim may hold one.
+- **Whoever said it is a witness, and what they said is theirs.** A worker, an annotator, an author, an owner, a
+  contributor, a speaker: when the source names who wrote, answered or said something, that is a witness of its own,
+  and its id is its name, not a key. Name it with `own` (`[the source's witness, COLUMN, id]`) and attribute what it
+  said with `by` (or `voices` for a column per annotator); what the source says of that witness is attested `of` it.
+  A book is attested to its author, a quote to its speaker, an annotation to its annotator. "Who edited a row" in the
+  bookkeeping list below means housekeeping about the file's records, never the person whose words or answers the row
+  holds.
 - **A thing is its content.** A word is what the lemma writes; a synset is the words it lists; a sentence is its text
   or its words; a place is its name, latitude and longitude; a case or a post is its text. Say `identity`, `subject in`
   or `named ... by` over content, never over an id column.
