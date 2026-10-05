@@ -20,14 +20,6 @@ static void show_claim(Reader *rd, const Claim *c, const char *lead){
     for (int p = 0; p < c->np; p++) { char *tx = reader_text(rd, &c->part[p], p == c->np - 1 ? 96 : 48); printf("%s%s", p ? ", " : "", tx); free(tx); }
     printf("]\n");
 }
-/* The strands of a set a firmware takes: the top n, or, when the firmware says how near a tie has to be, any strand
- * that near the one above it may be taken in its place. */
-static void take_top(Claim *cl, int n, int want, const Firmware *fw, unsigned *seed){
-    if (fw->top_within <= 0) return;
-    for (int i = 0; i < n && i < want; i++) { int tied = i; while (tied + 1 < n && cl[i].conf - cl[tied + 1].conf <= fw->top_within) tied++;
-        if (tied > i) { int pick = i + (int)(rand_r(seed) % (unsigned)(tied - i + 1)); Claim t = cl[i]; cl[i] = cl[pick]; cl[pick] = t; } }
-}
-
 int cmd_pull(int argc, char **argv){
     const char *conninfo = laplace_db(), *fwp = NULL; int a = 1; unsigned seed = 0; int seeded = 0;
     for (; a < argc - 1 && argv[a][0] == '-' && argv[a][1]; a++) {

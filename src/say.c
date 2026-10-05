@@ -253,7 +253,7 @@ static int codepoints_text(const uint8_t *p, size_t n, uint8_t *out, size_t cap,
 typedef struct { Ref *c; size_t n, cap; } Refs;
 static void push(Refs *a, const Ref *x){ if (a->n == a->cap) { a->cap = a->cap ? a->cap * 2 : 256; a->c = xrealloc(a->c, sizeof(Ref) * a->cap); } a->c[a->n++] = *x; }   /* by address: a copy per call, in a loop, is stack that is never given back */
 typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; uint64_t open[256]; float er, ed, score; uint64_t ordinal; Ref fw, voice; int voiced; char opennm[16][64]; int nopen; uint64_t unknown; char unknm[8][96]; int nunk; Refs grp; Ref fname, fstem;
-                 const STree *ix_tree; uint32_t ix_count; uint64_t *ix_h; int32_t *ix_g;  /* two a slot: the part, its key */ size_t ix_cap;      /* the key index of the tree being read */
+                 const STree *ix_tree; uint32_t ix_count; lp_strmap *ix; lp_buf ix_key;      /* the key index of the tree being read */
                  const STree *tc_tree; uint32_t tc_n, tc_cap; Ref *tc; uint8_t *ts;
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
@@ -352,28 +352,20 @@ static int all_path(const STree *t, int32_t g, const char *path, int32_t *out, i
     return n;
 }
 static int is_local(const Say *s, const char *tier){ for (int i = 0; i < s->nkey; i++) if (!strcmp(s->key[i].tier, tier)) return 1; return 0; }
-/* The key index of a tree: every part with a key, by its tier and the key's text, built once per tree. A slot holds the
- * part and its key's child (ix_g[2 at], ix_g[2 at + 1]): an equal hash is the same key only when the tier and the bytes
- * are the same too. */
-static uint64_t kh(const char *tier, const uint8_t *v, size_t n){ uint64_t h = 1469598103934665603ull; for (const char *c = tier; *c; c++) h = (h ^ (uint8_t)*c) * 1099511628211ull; h = (h ^ 0xff) * 1099511628211ull; for (size_t i = 0; i < n; i++) h = (h ^ v[i]) * 1099511628211ull; return h | 1; }
-static int key_is(const Sink *k, const STree *t, size_t at, const char *tier, const uint8_t *v, size_t n){
-    const SNode *g = &t->n[k->ix_g[2 * at]], *c = &t->n[k->ix_g[2 * at + 1]];
-    return c->vlen == n && !memcmp(c->val, v, n) && s_named(g, tier, strlen(tier));
-}
+/* The key index of a tree: every part with a key, by its tier and the key's text, built once per tree. A key is its
+ * tier, a NUL, the key's text; compared whole, never by its hash alone. */
+static const void *key_of(lp_buf *b, const char *tier, const uint8_t *v, size_t n){ b->n = 0; lp_buf_put(b, tier, strlen(tier) + 1); lp_buf_put(b, v, n); return b->b; }
 static void index_keys(Sink *k, const STree *t){
-    const Say *s = k->s; size_t cap = 64; while (cap < (size_t)t->count * 2) cap <<= 1;
-    free(k->ix_h); free(k->ix_g); k->ix_h = calloc(cap, 8); k->ix_g = malloc(2 * sizeof(int32_t) * cap); k->ix_cap = cap; k->ix_tree = t; k->ix_count = t->count;
+    const Say *s = k->s;
+    if (k->ix) lp_strmap_free(k->ix); k->ix = lp_strmap_sized(sizeof(int32_t)); k->ix_tree = t; k->ix_count = t->count;
     for (uint32_t g = 0; g < t->count; g++) { const SNode *y = &t->n[g]; if (y->kind != S_GROUP || !y->nlen) continue;
         for (int i = 0; i < s->nkey; i++) { if (!s_named(y, s->key[i].tier, strlen(s->key[i].tier))) continue; int32_t kc = s_child(t, (int32_t)g, s->key[i].name, -1); if (kc < 0 || !t->n[kc].vlen) continue;
-            uint64_t h = kh(s->key[i].tier, t->n[kc].val, t->n[kc].vlen); size_t at = h & (cap - 1);
-            while (k->ix_h[at] && !(k->ix_h[at] == h && key_is(k, t, at, s->key[i].tier, t->n[kc].val, t->n[kc].vlen))) at = (at + 1) & (cap - 1);
-            if (!k->ix_h[at]) { k->ix_h[at] = h; k->ix_g[2 * at] = (int32_t)g; k->ix_g[2 * at + 1] = kc; } } }       /* the first that names a key keeps it */
+            bool fresh; int32_t *at = lp_strmap_get(k->ix, key_of(&k->ix_key, s->key[i].tier, t->n[kc].val, t->n[kc].vlen), k->ix_key.n, &fresh);
+            if (fresh) *at = (int32_t)g; } }                                        /* the first that names a key keeps it */
 }
 static int32_t keyed(Sink *k, const STree *t, const char *tier, const uint8_t *v, size_t n){
     if (k->ix_tree != t || k->ix_count != t->count) index_keys(k, t);
-    uint64_t h = kh(tier, v, n); size_t at = h & (k->ix_cap - 1);
-    while (k->ix_h[at]) { if (k->ix_h[at] == h && key_is(k, t, at, tier, v, n)) return k->ix_g[2 * at]; at = (at + 1) & (k->ix_cap - 1); }
-    return -1;
+    const int32_t *at = lp_strmap_lookup(k->ix, key_of(&k->ix_key, tier, v, n), k->ix_key.n); return at ? *at : -1;
 }
 static int left_empty(const Say *s, const SNode *x){ return s_empty(&s->lay, x->val, x->vlen); }
 static Ref text_of(const uint8_t *p, size_t n){ return n > 256 ? text_ref(CTX[omp_get_thread_num()], p, n) : string_ref(p, n); }
@@ -975,7 +967,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         for (size_t j = 0; j < part[i].things.n; j++) push(&things, &part[i].things.c[j]);
         for (size_t j = 0; j < part[i].meta.n; j++) push(&meta, &part[i].meta.c[j]);
         open += part[i].open[0]; free(part[i].ev.e); free(part[i].things.c); free(part[i].meta.c);
-        free(part[i].tc); free(part[i].ts); free(part[i].dm); free(part[i].ix_h); free(part[i].ix_g); free(part[i].grp.c); }
+        free(part[i].tc); free(part[i].ts); free(part[i].dm); if (part[i].ix) lp_strmap_free(part[i].ix); lp_buf_free(&part[i].ix_key); free(part[i].grp.c); }
     if (open) { fprintf(stderr, "\n  %s: %llu named parts of %s have no disposition in the recipe: they are left open, not read:", r->name, (unsigned long long)open, f->path);
         char seen[64][64]; int ns = 0;
         for (size_t i = 0; i < nc; i++) for (int j = 0; j < part[i].nopen; j++) { int dup = 0; for (int z = 0; z < ns && !dup; z++) dup = !strcmp(seen[z], part[i].opennm[j]); if (dup || ns == 64) continue; snprintf(seen[ns++], 64, "%s", part[i].opennm[j]); fprintf(stderr, " %s", part[i].opennm[j]); }

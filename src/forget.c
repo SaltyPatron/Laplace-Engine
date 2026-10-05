@@ -19,36 +19,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { lp_id *id; uint64_t n, cap; lp_idmap *m; } Set;                           /* in the order added; membership by ID */
-static int set_add(Set *s, const lp_id *id){                              /* 1 if it was not there */
-    if (!s->m) s->m = lp_idmap_new(); bool fresh; lp_idmap_put(s->m, id, &fresh); if (!fresh) return 0;
-    if (s->n == s->cap) { s->cap = s->cap ? s->cap * 2 : 1 << 16; s->id = xrealloc(s->id, s->cap * sizeof(lp_id)); }
-    s->id[s->n++] = *id; return 1;
-}
-static void set_free(Set *s){ free(s->id); lp_idmap_free(s->m); memset(s, 0, sizeof *s); }
+/* A set of IDs is an ID map with nothing beside each key: its keys, in the order added, are the set as an array. */
+typedef lp_idmap Set;
+static Set *set_new(void){ return lp_idmap_sized(0); }
+static void set_add(Set *s, const lp_id *id){ lp_idmap_put(s, id, NULL); }
+static bool set_has(const Set *s, const lp_id *id){ return lp_idmap_find(s, id) >= 0; }
 
 static void must(PGconn *pg, PGresult *r, ExecStatusType want, const char *what){
     if (PQresultStatus(r) != want) { fprintf(stderr, "%s: %s", what, PQerrorMessage(pg)); exit(1); }
 }
 #define CHUNK 50000
-/* One statement over a set of IDs, in chunks, on every connection at once. Rows of a fetch go to `each`. */
-typedef void (*Each)(PGresult *, int row, void *into);
+/* One statement over a set of IDs, in chunks, on every connection at once (over_ids). Rows of a fetch go to `each`. */
 static uint64_t over(PGconn **pg, int npg, const lp_id *ids, uint64_t n, const char *sql, Each each, void *into, const char *what){
-    uint64_t rows = 0;
-    #pragma omp parallel for num_threads(npg) schedule(dynamic) reduction(+:rows)
-    for (uint64_t i0 = 0; i0 < n; i0 += CHUNK) {
-        uint32_t k = (uint32_t)(n - i0 < CHUNK ? n - i0 : CHUNK); uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t al = ids_param(ab, ids + i0, k);
-        PGconn *c = pg[omp_get_thread_num()]; const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-        PGresult *r = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
-        must(c, r, each ? PGRES_TUPLES_OK : PGRES_COMMAND_OK, what);
-        if (each) {
-            #pragma omp critical(forget_rows)
-            for (int j = 0; j < PQntuples(r); j++) each(r, j, into);
-            rows += (uint64_t)PQntuples(r);
-        } else rows += strtoull(PQcmdTuples(r), NULL, 10);
-        PQclear(r); free(ab);
-    }
-    return rows;
+    (void)what; Groups one = whole(); return over_ids(pg, npg, ids, n, &one, CHUNK, sql, each, into);
 }
 /* The partitions of a table that hold anything, by the first hex digit of the IDs they hold. An ID is looked for, or
  * removed, in the partitions its first digit names, by name: never through the partitioned table, which would probe
@@ -67,44 +50,23 @@ static void parts_of(PGconn *pg, const char *table, Parts out[16]){
     PQclear(r);
 }
 /* One statement per partition over the IDs that partition could hold; %s in the statement is the partition. */
+static int parts_targets(int g, void *parts){ return ((const Parts *)parts)[g].n; }
+static void parts_target(int g, int t, char *out, size_t cap, void *parts){ snprintf(out, cap, "%s", ((const Parts *)parts)[g].name[t]); }
+static int digit(const lp_id *ids, uint64_t i, void *ctx){ (void)ctx; return ids[i].b[0] >> 4; }
 static uint64_t over_parts(PGconn **pg, int npg, const Parts parts[16], const lp_id *ids, uint64_t n, const char *sql, Each each, void *into, const char *what){
-    uint64_t cnt[17] = { 0 }; for (uint64_t i = 0; i < n; i++) cnt[(ids[i].b[0] >> 4) + 1]++;
-    for (int h = 0; h < 16; h++) cnt[h + 1] += cnt[h];
-    lp_id *by = malloc(sizeof(lp_id) * (n + 1)); uint64_t fill[16]; memcpy(fill, cnt, sizeof fill); for (uint64_t i = 0; i < n; i++) by[fill[ids[i].b[0] >> 4]++] = ids[i];
-    typedef struct { int h, p; uint64_t lo, n; } Job; uint64_t nj = 0, cj = 0; Job *job = NULL;
-    for (int h = 0; h < 16; h++) for (uint64_t lo = cnt[h]; lo < cnt[h + 1]; lo += CHUNK) for (int p = 0; p < parts[h].n; p++) {
-        if (nj == cj) { cj = cj ? cj * 2 : 1024; job = xrealloc(job, cj * sizeof(Job)); }
-        job[nj++] = (Job){ h, p, lo, cnt[h + 1] - lo < CHUNK ? cnt[h + 1] - lo : CHUNK }; }
-    uint64_t rows = 0;
-    #pragma omp parallel for num_threads(npg) schedule(dynamic) reduction(+:rows)
-    for (uint64_t j = 0; j < nj; j++) {
-        uint32_t k = (uint32_t)job[j].n; uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t al = ids_param(ab, by + job[j].lo, k);
-        char q[512]; snprintf(q, sizeof q, sql, parts[job[j].h].name[job[j].p]);
-        PGconn *c = pg[omp_get_thread_num()]; const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-        PGresult *r = PQexecParams(c, q, 1, NULL, v, l, f, 1); must(c, r, each ? PGRES_TUPLES_OK : PGRES_COMMAND_OK, what);
-        if (each) {
-            #pragma omp critical(forget_rows)
-            for (int x = 0; x < PQntuples(r); x++) each(r, x, into);
-            rows += (uint64_t)PQntuples(r);
-        } else rows += strtoull(PQcmdTuples(r), NULL, 10);
-        PQclear(r); free(ab);
-    }
-    free(by); free(job);
-    return rows;
+    (void)what; Groups by = { 16, digit, parts_targets, parts_target, (void *)parts }; return over_ids(pg, npg, ids, n, &by, CHUNK, sql, each, into);
 }
 
 /* ---- the sweep */
 typedef struct { lp_id id; uint32_t held; uint8_t entity, root, file; } Count;
 /* A file, and the content it is a trunk over: a file whose content is what it witnessed is kept by that content. */
 typedef struct { lp_id file, content; uint8_t curated; } Kept;
-static Kept *kept; static uint64_t nkept, ckept; static pthread_mutex_t kept_mu = PTHREAD_MUTEX_INITIALIZER;
-typedef struct { pthread_mutex_t mu; Count *c; uint64_t n, cap; lp_idmap *m; } CShard;
+static lp_vec(Kept) kept; static pthread_mutex_t kept_mu = PTHREAD_MUTEX_INITIALIZER;
+typedef struct { pthread_mutex_t mu; lp_idmap *m; } CShard;                /* the counts, by ID: each a Count */
 static CShard cs[256];
 static Count *count_of(CShard *s, const lp_id *id, int add){                /* the shard's lock is held */
-    if (!add) { int64_t i = lp_idmap_find(s->m, id); return i < 0 ? NULL : &s->c[i]; }
-    if (!s->m) s->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(s->m, id, &fresh); if (!fresh) return &s->c[i];
-    if (s->n == s->cap) { s->cap = s->cap ? s->cap * 2 : 1 << 14; s->c = xrealloc(s->c, s->cap * sizeof(Count)); }
-    Count *c = &s->c[s->n++]; memset(c, 0, sizeof *c); c->id = *id; return c;
+    if (!add) return s->m ? lp_idmap_lookup(s->m, id) : NULL;
+    if (!s->m) s->m = lp_idmap_sized(sizeof(Count)); bool fresh; Count *c = lp_idmap_get(s->m, id, &fresh); if (fresh) c->id = *id; return c;
 }
 /* A thread's pending counts, by shard, applied under that shard's lock a batch at a time. what: 0 held once more,
  * 1 it is an entity, 2 it is a root, 3 it is a file. */
@@ -132,39 +94,37 @@ static uint64_t stream(PGconn *c, const char *sql, void (*row)(PGresult *, Batch
     }
     return n;
 }
+/* A path's vertices, decoded into the thread's own array: kept and refilled row after row. */
+static __thread lp_vec(lp_vertex) vx;
+static lp_vertex *vertices(lp_path p){ lp_vec_reserve(&vx, p.n ? p.n : 1); lp_path_decode(p, vx.v, p.n); return vx.v; }
 static void row_path(PGresult *r, Batch *b){
-    lp_id e; memcpy(e.b, PQgetvalue(r, 0, 0), 16); batch_put(b, &e, 1);
-    const uint8_t *pb = (const uint8_t *)PQgetvalue(r, 0, 1); size_t pl = (size_t)PQgetlength(r, 0, 1), nv = lp_path_vertices(pb, pl, NULL, 0);
-    lp_vertex *vt = malloc(sizeof(lp_vertex) * (nv ? nv : 1)); lp_path_vertices(pb, pl, vt, nv);
+    lp_id e = *col_id(r, 0, 0); batch_put(b, &e, 1);
+    lp_path p = col_path(r, 0, 1); lp_vertex *vt = vertices(p);
     int file = 0; lp_id content; uint8_t curated = 0; memset(&content, 0, sizeof content);
-    for (size_t i = 0; i < nv; i++) { batch_put(b, &vt[i].id, 0);
+    for (size_t i = 0; i < p.n; i++) { batch_put(b, &vt[i].id, 0);
         uint32_t said = vt[i].said; if (said == LP_SAID_METADATA) file = 1; else if (file) { content = vt[i].id; curated = said == LP_SAID_RECORD || said == LP_SAID_CLAIM; } }
-    free(vt);
     if (file) {                                                                /* a file: a trunk over its metadata and its content */
         batch_put(b, &e, 3);
-        pthread_mutex_lock(&kept_mu); if (nkept == ckept) { ckept = ckept ? ckept * 2 : 1024; kept = xrealloc(kept, ckept * sizeof(Kept)); }
-        kept[nkept++] = (Kept){ e, content, curated }; pthread_mutex_unlock(&kept_mu);
+        pthread_mutex_lock(&kept_mu); lp_push(&kept, (Kept){ e, content, curated }); pthread_mutex_unlock(&kept_mu);
     }
 }
-static void row_root(PGresult *r, Batch *b){ for (int f = 0; f < PQnfields(r); f++) if (!PQgetisnull(r, 0, f)) { lp_id id; memcpy(id.b, PQgetvalue(r, 0, f), 16); batch_put(b, &id, 2); } }
+static void row_root(PGresult *r, Batch *b){ for (int f = 0; f < PQnfields(r); f++) if (!PQgetisnull(r, 0, f)) batch_put(b, col_id(r, 0, f), 2); }
 /* A curated file's content: whether any of what it witnessed is still witnessed. */
-static void each_content(PGresult *r, int j, void *into){
-    const uint8_t *pb = (const uint8_t *)PQgetvalue(r, j, 1); size_t pl = (size_t)PQgetlength(r, j, 1), nv = lp_path_vertices(pb, pl, NULL, 0); int still = 0;
-    lp_vertex *vt = malloc(sizeof(lp_vertex) * (nv ? nv : 1)); lp_path_vertices(pb, pl, vt, nv);
-    for (size_t i = 0; i < nv && !still; i++) { if (!vt[i].said) continue;
+static void each_content(const PGresult *r, int j, const uint64_t *place, void *into){
+    (void)place;
+    lp_path p = col_path(r, j, 1); lp_vertex *vt = vertices(p); int still = 0;
+    for (size_t i = 0; i < p.n && !still; i++) { if (!vt[i].said) continue;
         Count *c = count_of(&cs[vt[i].id.b[0]], &vt[i].id, 0); still = c && c->root; }
-    free(vt);
-    if (still) { lp_id id; memcpy(id.b, PQgetvalue(r, j, 0), 16); set_add(into, &id); }
+    if (still) set_add(into, col_id(r, j, 0));
 }
 /* What an entity that is going held: each counted down; whatever reaches nothing goes next. */
-static void each_release(PGresult *r, int j, void *into){
-    const uint8_t *pb = (const uint8_t *)PQgetvalue(r, j, 0); size_t pl = (size_t)PQgetlength(r, j, 0), nv = lp_path_vertices(pb, pl, NULL, 0);
-    lp_vertex *vt = malloc(sizeof(lp_vertex) * (nv ? nv : 1)); lp_path_vertices(pb, pl, vt, nv);
-    for (size_t i = 0; i < nv; i++) {
+static void each_release(const PGresult *r, int j, const uint64_t *place, void *into){
+    (void)place;
+    lp_path p = col_path(r, j, 0); lp_vertex *vt = vertices(p);
+    for (size_t i = 0; i < p.n; i++) {
         Count *c = count_of(&cs[vt[i].id.b[0]], &vt[i].id, 0); if (!c || !c->held) continue;
         if (!--c->held && c->entity && !c->root) set_add(into, &vt[i].id);
     }
-    free(vt);
 }
 static uint64_t sweep(PGconn **pg, int npg, int dry){
     double T = now(), t = now(); for (int i = 0; i < 256; i++) pthread_mutex_init(&cs[i].mu, NULL);
@@ -185,47 +145,43 @@ static uint64_t sweep(PGconn **pg, int npg, int dry){
       stream(pg[0], "SELECT id, lineage FROM witness", row_root, &b); batch_done(&b); }
     /* files: one whose content is its own stays; one whose content is what it witnessed stays while any of that is
      * witnessed still */
-    { Set live = { 0 }, ask = { 0 };
-      for (uint64_t i = 0; i < nkept; i++) if (kept[i].curated) { Count *c = count_of(&cs[kept[i].content.b[0]], &kept[i].content, 0); if (c && c->root) set_add(&live, &kept[i].content); else set_add(&ask, &kept[i].content); }
-      if (ask.n) over_parts(pg, npg, pparts, ask.id, ask.n, "SELECT entity, path FROM %s WHERE entity = ANY($1::blake3[])", each_content, &live, "what files witnessed");
-      for (uint64_t i = 0; i < nkept; i++) { Count *c = count_of(&cs[kept[i].file.b[0]], &kept[i].file, 0); if (!c) continue;
-          int stays = 1; if (kept[i].curated) { stays = 0; for (uint64_t k = 0; k < live.n && !stays; k++) stays = !memcmp(&live.id[k], &kept[i].content, 16); }
-          if (stays) c->root = 1; }
-      set_free(&live); set_free(&ask); free(kept); kept = NULL; nkept = ckept = 0; }
-    Set going = { 0 }; uint64_t entities = 0, roots = 0;
-    for (int sh = 0; sh < 256; sh++) for (uint64_t i = 0; i < cs[sh].n; i++) {
-        Count *c = &cs[sh].c[i]; entities += c->entity; roots += c->root && c->entity;
-        if (c->entity && !c->held && !c->root) set_add(&going, &c->id);
+    { Set *live = set_new(), *ask = set_new();
+      for (size_t i = 0; i < kept.n; i++) if (kept.v[i].curated) { Count *c = count_of(&cs[kept.v[i].content.b[0]], &kept.v[i].content, 0); set_add(c && c->root ? live : ask, &kept.v[i].content); }
+      if (lp_idmap_count(ask)) over_parts(pg, npg, pparts, lp_idmap_keys(ask), lp_idmap_count(ask), "SELECT entity, path FROM %s WHERE entity = ANY($1::blake3[])", each_content, live, "what files witnessed");
+      for (size_t i = 0; i < kept.n; i++) { Count *c = count_of(&cs[kept.v[i].file.b[0]], &kept.v[i].file, 0); if (!c) continue;
+          if (!kept.v[i].curated || set_has(live, &kept.v[i].content)) c->root = 1; }
+      lp_idmap_free(live); lp_idmap_free(ask); lp_vec_free(&kept); }
+    Set *going = set_new(); uint64_t entities = 0, roots = 0;
+    for (int sh = 0; sh < 256; sh++) for (size_t i = 0; i < lp_idmap_count(cs[sh].m); i++) {
+        Count *c = lp_idmap_at(cs[sh].m, i); entities += c->entity; roots += c->root && c->entity;
+        if (c->entity && !c->held && !c->root) set_add(going, &c->id);
     }
     printf("  %-52s %'12llu   of them witnessed, files and witnesses %'llu   (%.1f s)\n", "entities above tier 0", (unsigned long long)entities, (unsigned long long)roots, now() - t);
     uint64_t total = 0; int level = 0;
-    while (going.n) {
-        t = now(); level++; Set next = { 0 };
+    for (uint64_t n; (n = lp_idmap_count(going)); ) {
+        t = now(); level++; Set *next = set_new(); const lp_id *ids = lp_idmap_keys(going);
         if (level == 1) {                                                   /* what is going, shown before it goes */
             Reader *rd = reader_new(pg[0]); printf("  held by nothing, for example:");
-            for (uint64_t i = 0; i < going.n && i < 12; i++) { char *tx = reader_text(rd, &going.id[i * (going.n / 12 ? going.n / 12 : 1) % going.n], 40); printf("%s \"%s\"", i ? "," : "", tx); free(tx); }
+            for (uint64_t i = 0; i < n && i < 12; i++) { char *tx = reader_text(rd, &ids[i * (n / 12 ? n / 12 : 1) % n], 40); printf("%s \"%s\"", i ? "," : "", tx); free(tx); }
             printf("\n"); reader_free(rd);
         }
-        over_parts(pg, npg, pparts, going.id, going.n, "SELECT path FROM %s WHERE entity = ANY($1::blake3[])", each_release, &next, "what they held");
-        if (!dry) { over(pg, npg, going.id, going.n, "DELETE FROM consensus WHERE claim = ANY($1::blake3[])", NULL, NULL, "the consensus on them");
-                    over_parts(pg, npg, pparts, going.id, going.n, "DELETE FROM %s WHERE entity = ANY($1::blake3[])", NULL, NULL, "paths");
-                    over_parts(pg, npg, eparts, going.id, going.n, "DELETE FROM %s WHERE id = ANY($1::blake3[])", NULL, NULL, "entities"); }
-        total += going.n;
-        printf("  level %d: %'12llu held by nothing%s   (%.1f s)\n", level, (unsigned long long)going.n, dry ? "" : ", removed", now() - t); fflush(stdout);
-        set_free(&going); going = next;
+        over_parts(pg, npg, pparts, ids, n, "SELECT path FROM %s WHERE entity = ANY($1::blake3[])", each_release, next, "what they held");
+        if (!dry) { over(pg, npg, ids, n, "DELETE FROM consensus WHERE claim = ANY($1::blake3[])", NULL, NULL, "the consensus on them");
+                    over_parts(pg, npg, pparts, ids, n, "DELETE FROM %s WHERE entity = ANY($1::blake3[])", NULL, NULL, "paths");
+                    over_parts(pg, npg, eparts, ids, n, "DELETE FROM %s WHERE id = ANY($1::blake3[])", NULL, NULL, "entities"); }
+        total += n;
+        printf("  level %d: %'12llu held by nothing%s   (%.1f s)\n", level, (unsigned long long)n, dry ? "" : ", removed", now() - t); fflush(stdout);
+        lp_idmap_free(going); going = next;
     }
+    lp_idmap_free(going);
     printf("  %-52s %'12llu%s   (%.1f s)\n", "entities nothing held", (unsigned long long)total, dry ? "   (dry: nothing was removed)" : "", now() - T);
-    for (int sh = 0; sh < 256; sh++) { free(cs[sh].c); lp_idmap_free(cs[sh].m); memset(&cs[sh], 0, sizeof cs[sh]); }
+    for (int sh = 0; sh < 256; sh++) { lp_idmap_free(cs[sh].m); cs[sh].m = NULL; }
     return total;
 }
 int cmd_sweep(int argc, char **argv){
     const char *conninfo = laplace_db(); int npg = 0, dry = 0;
-    for (int a = 1; a < argc; a++) {
-        if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
-        else if (!strcmp(argv[a], "-j") && a + 1 < argc) npg = atoi(argv[++a]);
-        else if (!strcmp(argv[a], "--dry")) dry = 1;
-        else { fprintf(stderr, "usage: laplace sweep [-d conninfo] [-j connections] [--dry]\n"); return 2; }
-    }
+    if (opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-j", 'i', &npg }, { "--dry", 'b', &dry }, { NULL } }) < argc) {
+        fprintf(stderr, "usage: laplace sweep [-d conninfo] [-j connections] [--dry]\n"); return 2; }
     if (npg <= 0) npg = omp_get_num_procs();
     setlocale(LC_NUMERIC, "en_US.UTF-8"); tier0_open(NULL);
     PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) pg[i] = db_connect(conninfo);
@@ -236,36 +192,29 @@ int cmd_sweep(int argc, char **argv){
 }
 
 int cmd_forget(int argc, char **argv){
-    const char *conninfo = laplace_db(); int npg = 0, a = 1, except = 0;
-    for (; a < argc && argv[a][0] == '-'; a++) {
-        if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
-        else if (!strcmp(argv[a], "-j") && a + 1 < argc) npg = atoi(argv[++a]);
-        else if (!strcmp(argv[a], "--except")) except = 1;
-        else break;
-    }
+    const char *conninfo = laplace_db(); int npg = 0, except = 0;
+    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-j", 'i', &npg }, { "--except", 'b', &except }, { NULL } });
     if (a >= argc && !except) { fprintf(stderr, "usage: laplace forget [-d conninfo] [-j connections] witness...\n       laplace forget --except witness...   (every witness but these)\n"); return 2; }
     if (npg <= 0) npg = omp_get_num_procs();
     setlocale(LC_NUMERIC, "en_US.UTF-8");
     double T = now(), t; tier0_open(NULL); Ctx *c = lp_text_new(T0);
     PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) pg[i] = db_connect(conninfo);
-    Set named = { 0 }, going = { 0 };
-    for (int i = a; i < argc; i++) { lp_id id = lp_text_decompose(c, (const uint8_t *)argv[i], strlen(argv[i]), NULL, NULL).id; set_add(&named, &id); }
-    if (!except) going = named;
-    else {                                                                  /* every witness but the ones named */
-        PGresult *r = PQexecParams(pg[0], "SELECT id FROM witness", 0, NULL, NULL, NULL, NULL, 1); must(pg[0], r, PGRES_TUPLES_OK, "witnesses");
-        for (int j = 0; j < PQntuples(r); j++) { lp_id id; memcpy(id.b, PQgetvalue(r, j, 0), 16); int keep = 0;
-            for (uint64_t k = 0; k < named.n; k++) keep |= !memcmp(&named.id[k], &id, 16);
-            if (!keep) set_add(&going, &id); }
+    Set *named = set_new(), *going = named;
+    for (int i = a; i < argc; i++) { lp_id id = lp_text_decompose(c, (const uint8_t *)argv[i], strlen(argv[i]), NULL, NULL).id; set_add(named, &id); }
+    if (except) {                                                           /* every witness but the ones named */
+        going = set_new(); PGresult *r = ask_once(pg[0], "SELECT id FROM witness", NULL);
+        for (int j = 0; j < PQntuples(r); j++) if (!set_has(named, col_id(r, j, 0))) set_add(going, col_id(r, j, 0));
         PQclear(r);
     }
-    printf("laplace forget   %s   %llu witness%s\n", PQdb(pg[0]), (unsigned long long)going.n, going.n == 1 ? "" : "es");
-    if (!going.n) { printf("  nothing to forget\n"); return 1; }
-    { Reader *rd = reader_new(pg[0]); for (uint64_t i = 0; i < going.n; i++) { char *tx = reader_text(rd, &going.id[i], 80); printf("  %s\n", tx); free(tx); } reader_free(rd); }
+    uint64_t ng = lp_idmap_count(going); const lp_id *gid = lp_idmap_keys(going);
+    printf("laplace forget   %s   %llu witness%s\n", PQdb(pg[0]), (unsigned long long)ng, ng == 1 ? "" : "es");
+    if (!ng) { printf("  nothing to forget\n"); return 1; }
+    { Reader *rd = reader_new(pg[0]); for (uint64_t i = 0; i < ng; i++) { char *tx = reader_text(rd, &gid[i], 80); printf("  %s\n", tx); free(tx); } reader_free(rd); }
 
     /* what they attested goes; whatever nothing holds or witnesses any more goes with the sweep */
     t = now();
-    uint64_t nl = over(pg, 1, going.id, going.n, "DELETE FROM attestation WHERE witness = ANY($1::blake3[])", NULL, NULL, "attestation");
-    over(pg, 1, going.id, going.n, "DELETE FROM witness WHERE id = ANY($1::blake3[])", NULL, NULL, "the witnesses");
+    uint64_t nl = over(pg, 1, gid, ng, "DELETE FROM attestation WHERE witness = ANY($1::blake3[])", NULL, NULL, "attestation");
+    over(pg, 1, gid, ng, "DELETE FROM witness WHERE id = ANY($1::blake3[])", NULL, NULL, "the witnesses");
     printf("  %-52s %'12llu   (%.1f s)\n\n", "attestations", (unsigned long long)nl, now() - t); fflush(stdout);
     sweep(pg, npg, 0);
     printf("\n== total %.1f s\n", now() - T);

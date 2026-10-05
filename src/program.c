@@ -48,11 +48,11 @@ static void bit_clear(Bits *a, const Bits *b){ for (int i = 0; i < MAXOCC / 64; 
 enum { R_CLAIM, R_FOLLOWS, R_DISCOURSE, R_SCAN, R_CONTAIN, R_KINDS };
 static const char *RK[R_KINDS] = { "strand", "follows", "discourse", "reached", "containment" };
 typedef struct { lp_id id; double force, cost; Bits support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, tier; } Cell;     /* shared: how many strands hold it, up to the fan (-1: not read) */
-typedef struct { Cell *c; int n, cap; lp_idmap *m; } Field;                  /* the cells, in the order they responded; found by ID */
+typedef struct { Cell *c; int n; size_t cap; lp_idmap *m; } Field;                  /* the cells, in the order they responded; found by ID */
 static Cell *cell(Field *f, const lp_id *id){
     if (!f->m) f->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(f->m, id, &fresh);
     if (!fresh) return &f->c[i];
-    if (f->n == f->cap) { f->cap = f->cap ? f->cap * 2 : 1024; f->c = xrealloc(f->c, sizeof(Cell) * (size_t)f->cap); }
+    lp_reserve((void **)&f->c, &f->cap, (size_t)f->n + 1, sizeof(Cell));
     Cell *x = &f->c[f->n++]; memset(x, 0, sizeof *x); x->id = *id; x->cost = INFINITY; return x;
 }
 static Cell *cell_find(const Field *f, const lp_id *id){ int64_t i = lp_idmap_find(f->m, id); return i < 0 ? NULL : &f->c[i]; }
@@ -71,30 +71,22 @@ typedef struct {
     lp_id disc[MAXOCC]; int ndisc;                                                                 /* the discourse: what the session's earlier turns hold */
     lp_id traj[4096]; int ntraj;                                                                   /* the active trajectory: the occurrences, then what has been emitted */
     Bits open;                                                                                     /* the obligations still open */
-    lp_id refuse[FW_NAMES], weigh[FW_WEIGHS];
     uint64_t trips;
     uint64_t admitted;                                                        /* the prompt's entities its admission recorded new */
 } State;
 
-static PGresult *ask(State *st, const char *sql, int n, const char **v, const int *l, const int *f){ st->trips++; return db_ask(st->pg, sql, n, v, l, f); }
-static int refused_pred(const State *st, const lp_id *part, int np){
-    for (int k = 1; k + 1 < np; k++) for (int z = 0; z < st->fw->nrefuse_predicate; z++) if (!memcmp(&part[k], &st->refuse[z], 16)) return 1;
-    return 0;
-}
+static PGresult *ask_st(State *st, const char *sql, Args *a){ st->trips++; return ask(st->pg, sql, a); }
 
 /* ---- RESOLVE */
 static void resolve_roles(State *st){
-    const Firmware *fw = st->fw; lp_id by; memset(&by, 0, sizeof by); if (fw->role_by[0]) by = entity_named(st->c, fw->role_by, NULL, 0, NULL).id;
-    lp_id rid[FW_WEIGHS]; for (int z = 0; z < fw->nrole; z++) rid[z] = entity_named(st->c, fw->role_name[z], NULL, 0, NULL).id;
+    Firmware *fw = (Firmware *)st->fw;
     const lp_layout *fl = lp_flags_map(NULL); const lp_field *alpha = fl ? lp_flags_field(fl, "Alphabetic") : NULL, *gc = fl ? lp_flags_field(fl, "General_Category") : NULL; int32_t nd = gc ? lp_flags_value(fl, gc, "Nd") : -1;
     for (int i = 0; i < st->nocc; i++) { st->role[i] = 1.0; st->composed[i] = table_find(&st->occ[i]) != NULL;
         if (!st->composed[i]) { int64_t cp = lp_tier0_codepoint(T0, &st->occ[i]);      /* a word of one letter is a word: by its Unicode properties, Alphabetic or a decimal number */
             if (cp >= 0 && ((alpha && lp_flags_get(fl, (uint32_t)cp, alpha)) || (gc && nd >= 0 && lp_flags_get(fl, (uint32_t)cp, gc) == (uint32_t)nd))) st->composed[i] = 1; }
         if (!st->composed[i]) { st->role[i] = 0; continue; }                                   /* a space, a mark: no pull of its own, no obligation */
         if (!fw->role_by[0]) continue;
-        lp_id part[3] = { st->occ[i], by, by }; int have[3] = { 2, 2, 0 }, n, cap; Claim *cl = claims_like(st->pg, part, have, fw->fan, fw->k, &n, &cap); st->trips++;
-        for (int q = 0; q < n; q++) { int hit = 0; for (int z = 0; z < fw->nrole && !hit; z++) if (!memcmp(&cl[q].part[cl[q].np - 1], &rid[z], 16)) { st->role[i] = fw->role[z]; hit = 1; } if (hit) break; }
-        free(cl); }
+        double w = role_of(st->pg, fw, &st->occ[i]); st->trips++; if (w >= 0) st->role[i] = w; }
     memset(&st->open, 0, sizeof st->open);
     for (int i = 0; i < st->nocc; i++) if (st->composed[i] && st->role[i] > 0) bit_set(&st->open, i);   /* an obligation until what is attested of it says it pulls nothing */
 }
@@ -108,98 +100,73 @@ typedef struct { lp_id id; double d; lp_id *v; int nv; } Curve;              /* 
  * nearest curves were kept in near. */
 static int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_of, int kind, Curve *near, int keep){
     if (!n) return 0; const Firmware *fw = st->fw;
-    uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n);
-    char fan[24], shape[8], sn[32], kp[16]; snprintf(fan, sizeof fan, "%d", fw->fan); snprintf(shape, sizeof shape, "%d", keep > 0 ? fw->shape : -1); snprintf(sn, sizeof sn, "%.17g", fw->shape_n); snprintf(kp, sizeof kp, "%d", keep > 0 ? keep + 1 : keep);
-    int rl; const char *v[6] = { (const char *)ab, fan, refuse_param(&rl), shape, sn, kp }; int l[6] = { (int)al, 0, rl, 0, 0, 0 }, f[6] = { 1, 0, 1, 0, 0, 0 };
-    PGresult *q = ask(st, "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices FROM laplace_couple($1::blake3[], $2::bigint, $3::blake3[], $4::smallint, $5::float8, $6::integer)", 6, v, l, f);
-    if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "couple: %s", PQerrorMessage(st->pg)); exit(1); }
+    Args a = { 0 }; arg_ids(&a, ids, (size_t)n); arg_int(&a, fw->fan); arg_refused(&a); arg_int(&a, keep > 0 ? fw->shape : -1); arg_f64(&a, fw->shape_n); arg_int(&a, keep > 0 ? keep + 1 : keep);
+    PGresult *q = ask_st(st, "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices FROM laplace_couple($1::blake3[], $2::bigint, $3::blake3[], $4::smallint, $5::float8, $6::integer)", &a);
     int *held = calloc((size_t)n + 1, sizeof(int)), nn = 0;
-    for (int r = 0; r < PQntuples(q); r++) if (lp_be(PQgetvalue(q, r, 2), 2) == 0) { int o = (int)lp_be(PQgetvalue(q, r, 1), 4); if (o >= 1 && o <= n) held[o - 1]++; }
+    for (int r = 0; r < PQntuples(q); r++) if (col_int(q, r, 2) == 0) { int o = (int)col_int(q, r, 1); if (o >= 1 && o <= n) held[o - 1]++; }
     for (int r = 0; r < PQntuples(q); r++) {
-        lp_id id; memcpy(id.b, PQgetvalue(q, r, 0), 16); int o = (int)lp_be(PQgetvalue(q, r, 1), 4) - 1, route = (int)lp_be(PQgetvalue(q, r, 2), 2);
-        if (!memcmp(&id, &st->prompt, 16)) continue;                         /* the prompt, admitted, is not its own response: not even its nearest curve */
+        const lp_id *id = col_id(q, r, 0); int o = (int)col_int(q, r, 1) - 1, route = (int)col_int(q, r, 2);
+        if (lp_id_eq(id, &st->prompt)) continue;                            /* the prompt, admitted, is not its own response: not even its nearest curve */
         int occ = o >= 0 && o < n && occ_of ? occ_of[o] : -1; double pull = occ >= 0 && occ < st->nocc ? st->role[occ] : kind == R_CLAIM ? 1.0 : 0.5;
-        if (route == 2) { if (nn < keep) { Curve *c = &near[nn++]; c->id = id; c->d = lp_be_f64(PQgetvalue(q, r, 9));
-                const uint8_t *a = (const uint8_t *)PQgetvalue(q, r, 10); int na = PQgetlength(q, r, 10) >= 20 ? (int)lp_be(a + 12, 4) : 0;       /* a binary array: 20-byte header, then length and bytes per element */
-                c->v = malloc(sizeof(lp_id) * (size_t)(na ? na : 1)); c->nv = na; for (int k = 0; k < na; k++) memcpy(c->v[k].b, a + 20 + 20 * k + 4, 16); }
+        if (route == 2) { if (nn < keep) { Curve *c = &near[nn++]; c->id = *id; c->d = col_f64(q, r, 9);
+                const uint8_t *v = (const uint8_t *)PQgetvalue(q, r, 10); size_t vl = (size_t)PQgetlength(q, r, 10), na = lp_pg_ids_read(v, vl, NULL, 0);
+                c->v = malloc(sizeof(lp_id) * (na ? na : 1)); c->nv = (int)lp_pg_ids_read(v, vl, c->v, na); }
             continue; }
-        if (!memcmp(&id, &st->prompt, 16)) continue;
-        Cell *x = cell(fd, &id);
-        if (route == 1) { x->segment = 1; x->tier = (int)lp_be(PQgetvalue(q, r, 8), 2); x->force += pull; x->routes[R_CONTAIN]++; if (occ >= 0) bit_set(&x->support, occ); continue; }
-        lp_rating rt = { lp_be_f64(PQgetvalue(q, r, 3)), lp_be_f64(PQgetvalue(q, r, 4)), lp_be_f64(PQgetvalue(q, r, 5)) }; lp_id via, rel; memcpy(via.b, PQgetvalue(q, r, 6), 16); memcpy(rel.b, PQgetvalue(q, r, 7), 16);
-        lp_id part[3] = { via, rel, id }; double conf = lp_confidence(&rt, fw->k) * strand_weight(fw, st->weigh, part, 3);
+        Cell *x = cell(fd, id);
+        if (route == 1) { x->segment = 1; x->tier = (int)col_int(q, r, 8); x->force += pull; x->routes[R_CONTAIN]++; if (occ >= 0) bit_set(&x->support, occ); continue; }
+        lp_rating rt = col_rating(q, r, 3); lp_id part[3] = { *col_id(q, r, 6), *col_id(q, r, 7), *id };
+        double conf = lp_confidence(&rt, fw->k) * strand_weight(fw, fw->id.weigh, part, 3);
         x->force += conf * pull; x->routes[kind]++; if (occ >= 0) bit_set(&x->support, occ);
         if (o >= 0 && held[o] > fw->fan) x->hub = 1;                                               /* what so many strands hold is reached, not crossed */
-        if (!x->has_r || conf > lp_confidence(&x->r, fw->k)) { x->r = rt; x->has_r = 1; x->via = via; x->rel = rel; }
+        if (!x->has_r || conf > lp_confidence(&x->r, fw->k)) { x->r = rt; x->has_r = 1; x->via = part[0]; x->rel = part[1]; }
     }
-    PQclear(q); free(ab); free(held); return nn;
+    PQclear(q); args_free(&a); free(held); return nn;
 }
 /* What follows the end of the active trajectory, as a run, in what was observed: the longest observed suffix first. */
 typedef struct { lp_id id; long times; int len; } Next;
 static int follows(State *st, Next *out, int cap){
     int from = st->ntraj > 24 ? st->ntraj - 24 : 0, n = st->ntraj - from; if (n <= 0) return 0;
-    uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, st->traj + from, (uint32_t)n); char fan[24]; snprintf(fan, sizeof fan, "%d", st->fw->fan);
-    const char *v[2] = { (const char *)ab, fan }; int l[2] = { (int)al, (int)strlen(fan) }, f[2] = { 1, 0 };
-    PGresult *q = ask(st, "SELECT i, j, next, times FROM laplace_forward($1::blake3[], $2::bigint) WHERE j = array_length($1::blake3[], 1) AND next IS NOT NULL ORDER BY (j - i) DESC, times DESC", 2, v, l, f);
-    if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "follows: %s", PQerrorMessage(st->pg)); exit(1); }
+    Args a = { 0 }; arg_ids(&a, st->traj + from, (size_t)n); arg_int(&a, st->fw->fan);
+    PGresult *q = ask_st(st, "SELECT i, j, next, times FROM laplace_forward($1::blake3[], $2::bigint) WHERE j = array_length($1::blake3[], 1) AND next IS NOT NULL ORDER BY (j - i) DESC, times DESC", &a);
     int m = 0, best = -1;
-    for (int r = 0; r < PQntuples(q) && m < cap; r++) { int i = (int)lp_be(PQgetvalue(q, r, 0), 4), j = (int)lp_be(PQgetvalue(q, r, 1), 4), len = j - i + 1;
+    for (int r = 0; r < PQntuples(q) && m < cap; r++) { int len = (int)(col_int(q, r, 1) - col_int(q, r, 0) + 1);
         if (best < 0) best = len; if (len < best) break;                                           /* the longest run observed decides; shorter ones are not consulted once it answers */
-        memcpy(out[m].id.b, PQgetvalue(q, r, 2), 16); out[m].times = (long)lp_be(PQgetvalue(q, r, 3), 8); out[m].len = len; m++; }
-    PQclear(q); free(ab); return m;
+        out[m].id = *col_id(q, r, 2); out[m].times = (long)col_int(q, r, 3); out[m].len = len; m++; }
+    PQclear(q); args_free(&a); return m;
 }
 
-/* A chain the firmware names, followed from a word: each relation in turn, the strands that hold where the chain stands
- * (or, past the first step, one of the things it is made of) in their witness's order, then by standing; the top taken.
- * The first of the firmware's chains that reaches its end answers; *rating: the standing of its last strand. */
+/* A chain the firmware names, followed from a word (chain_follow), the oriented reading taken where the chain passes
+ * through it; *rating: the standing of its last strand. */
 static int chain_from(State *st, const lp_id *word, const lp_id *reading, lp_id *answer, lp_rating *rating){
-    const Firmware *fw = st->fw;
-    for (int alt = 0; alt < fw->nalt; alt++) { lp_id cur = *word; int z = 0;
-        for (; z < fw->nchain[alt]; z++) {
-            lp_id pred = entity_named(st->c, fw->chain[alt][z], NULL, 0, NULL).id, tryv[66]; int nt = 0; tryv[nt++] = cur;
-            if (z > 0 && lp_tier0_codepoint(T0, &cur) < 0) { uint8_t ab[40]; size_t al = ids_param(ab, &cur, 1); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-                PGresult *q = ask(st, "SELECT path FROM laplace_paths($1::blake3[]) LIMIT 1", 1, v, l, f);
-                if (PQresultStatus(q) == PGRES_TUPLES_OK && PQntuples(q)) { Run rn = run_of((const uint8_t *)PQgetvalue(q, 0, 0), (size_t)PQgetlength(q, 0, 0));
-                    for (int k = rn.n - 1; k >= 0 && nt < 65; k--) if (lp_tier0_codepoint(T0, &rn.id[k]) < 0 && memcmp(&rn.id[k], word, 16)) tryv[nt++] = rn.id[k]; free(rn.id); }
-                PQclear(q); tryv[nt++] = *word; }
-            Claim *cl = NULL; int n = 0, cap;
-            for (int t = 0; t < nt && !n; t++) { lp_id part[3] = { tryv[t], pred, pred }; int have[3] = { 2, 2, 0 }; cl = claims_like(st->pg, part, have, fw->fan, fw->k, &n, &cap); st->trips++; if (!n) { free(cl); cl = NULL; } }
-            if (!n) break;
-            positions_of(st->pg, cl, n); if (fw->order_witness) qsort(cl, (size_t)n, sizeof(Claim), claim_by_position);
-            int take = 0;
-            if (z == 0 && reading) for (int k = 0; k < n; k++) if (!memcmp(&cl[k].part[cl[k].np - 1], reading, 16)) { take = k; break; }    /* the oriented reading, where the chain passes through it; else the witness's order */
-            cur = cl[take].part[cl[take].np - 1]; *rating = cl[take].r; free(cl); }
-        if (z == fw->nchain[alt]) { *answer = cur; return 1; } }
-    return 0;
+    Claim last; int alt; chain_follow(st->pg, st->rd, (Firmware *)st->fw, word, reading, NULL, answer, &last, &alt);
+    if (alt < 0) return 0;
+    *rating = last.r; return 1;
 }
 /* ---- SCAN: best-first from the centres, across rated strands */
 static void scan(State *st, Field *fd, const lp_id *centre, int nc){
-    const Firmware *fw = st->fw; lp_frontier *fr = lp_frontier_new();
+    const Firmware *fw = st->fw; lp_frontier *fr = lp_frontier_new(); Ids rn = { 0 }; Args a = { 0 };
     for (int i = 0; i < nc; i++) lp_frontier_reach(fr, &centre[i], NULL, NULL, 0, 0, 0);
     int rounds = 0; const lp_reached *x;
     while (rounds++ < fw->hops) {
         lp_reached batch[16]; int n = 0; while (n < 16 && (x = lp_frontier_next(fr))) batch[n++] = *x; if (!n) break;      /* the nearest sixteen a round */
         lp_id ids[64]; int m = 0, who[64]; for (int i = 0; i < n; i++) if ((int)batch[i].hops < fw->hops) { ids[m] = batch[i].id; who[m++] = i; }
         if (!m) break;
-        uint8_t ab[20 + 20 * 64]; size_t al = ids_param(ab, ids, (uint32_t)m); char fan[24]; snprintf(fan, sizeof fan, "%d", fw->fan + 1);
-        int rl; const char *v[4] = { (const char *)ab, fan, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
-        PGresult *q = ask(st, "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
-        if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "scan: %s", PQerrorMessage(st->pg)); exit(1); }
-        int held[64] = { 0 }; for (int r = 0; r < PQntuples(q); r++) { int e = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (e >= 0 && e < m) held[e]++; }
-        for (int r = 0; r < PQntuples(q); r++) { int e = (int)lp_be(PQgetvalue(q, r, 0), 8) - 1; if (e < 0 || e >= m || held[e] > fw->fan) continue;
-            const lp_reached *at = &batch[who[e]]; Run rn = run_of((const uint8_t *)PQgetvalue(q, r, 2), (size_t)PQgetlength(q, r, 2));
-            if (rn.n < 2 || refused_pred(st, rn.id, rn.n)) { free(rn.id); continue; }
-            const lp_id *other = !memcmp(&rn.id[0], &at->id, 16) ? &rn.id[rn.n - 1] : !memcmp(&rn.id[rn.n - 1], &at->id, 16) ? &rn.id[0] : NULL;
-            if (!other || !memcmp(other, &at->id, 16)) { free(rn.id); continue; }
-            lp_rating rt = { lp_be_f64(PQgetvalue(q, r, 3)), lp_be_f64(PQgetvalue(q, r, 4)), lp_be_f64(PQgetvalue(q, r, 5)) };
-            double sw = strand_weight(fw, st->weigh, rn.id, rn.n); if (sw <= 0) { free(rn.id); continue; }
-            lp_id claim; memcpy(claim.b, PQgetvalue(q, r, 1), 16); double cost = at->cost + lp_cost(&rt, fw->k, fw->lambda) - log(sw);
-            lp_frontier_reach(fr, other, &at->id, &claim, cost, 0, at->hops + 1);
-            Cell *cx = cell(fd, other); cx->routes[R_SCAN]++; if (cost < cx->cost) { cx->cost = cost; if (!cx->has_r) { cx->r = rt; cx->has_r = 1; cx->via = at->id; cx->rel = rn.n >= 3 ? rn.id[1] : at->id; } }
-            free(rn.id); }
+        args_reset(&a); arg_ids(&a, ids, (size_t)m); arg_int(&a, fw->fan + 1); arg_text(&a, CLAIM_BITS); arg_refused(&a);
+        PGresult *q = ask_st(st, "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", &a);
+        int held[64] = { 0 }; for (int r = 0; r < PQntuples(q); r++) { int e = (int)col_int(q, r, 0) - 1; if (e >= 0 && e < m) held[e]++; }
+        for (int r = 0; r < PQntuples(q); r++) { int e = (int)col_int(q, r, 0) - 1; if (e < 0 || e >= m || held[e] > fw->fan) continue;
+            const lp_reached *at = &batch[who[e]]; path_into(&rn, col_path(q, r, 2));
+            if (lp_tuple_middle_any(rn.v, rn.n, fw->id.refuse, (size_t)fw->nrefuse_predicate)) continue;
+            int other = lp_tuple_other(rn.v, rn.n, &at->id); if (other < 0) continue;
+            lp_rating rt = col_rating(q, r, 3);
+            double sw = strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n); if (sw <= 0) continue;
+            double cost = at->cost + lp_cost(&rt, fw->k, fw->lambda) - log(sw);
+            lp_frontier_reach(fr, &rn.v[other], &at->id, col_id(q, r, 1), cost, 0, at->hops + 1);
+            Cell *cx = cell(fd, &rn.v[other]); cx->routes[R_SCAN]++; if (cost < cx->cost) { cx->cost = cost; if (!cx->has_r) { cx->r = rt; cx->has_r = 1; cx->via = at->id; cx->rel = rn.n >= 3 ? rn.v[1] : at->id; } }
+        }
         PQclear(q);
     }
-    lp_frontier_free(fr);
+    lp_frontier_free(fr); lp_vec_free(&rn); args_free(&a);
 }
 
 /* ---- the proposals of a step, and their election */
@@ -248,7 +215,7 @@ static int orient(State *st, Field *fd, Bind *bind, int *nambig){
         for (int z = 0; z < fd->n; z++) { const Cell *x = &fd->c[z]; int list; uint32_t slot;
             if (!x->routes[R_CLAIM] || !((x->support.w[i >> 6] >> (i & 63)) & 1) || !reading_of(h, &x->id, &list, &slot)) continue;
             if (lp_highway_bank_of(h, &x->rel, NULL)) continue;                       /* reached through a feature (a dependency, a part of speech): syntax, not a reading */
-            if (nc == cc) { cc = cc ? cc * 2 : 256; cand = xrealloc(cand, sizeof(Cand) * (size_t)cc); } cand[nc++] = (Cand){ z, i, list, slot }; }
+            { size_t c_ = (size_t)cc; lp_reserve((void **)&cand, &c_, (size_t)nc + 1, sizeof(Cand)); cc = (int)c_; } cand[nc++] = (Cand){ z, i, list, slot }; }
         bind[i].ncand = nc - first[i]; }
     first[st->nocc] = nc;
     for (int round = 0; round < 8; round++) { int changed = 0;
@@ -267,25 +234,17 @@ static int orient(State *st, Field *fd, Bind *bind, int *nambig){
     return bound;
 }
 int cmd_turn(int argc, char **argv){
-    const char *conninfo = laplace_db(), *fwp = NULL, *user = getenv("USER"), *session = NULL; int a = 1, seeded = 0, read_only = 0; unsigned seed = 0;
-    for (; a < argc - 1 && argv[a][0] == '-' && argv[a][1]; a++) {
-        if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
-        else if (!strcmp(argv[a], "--firmware") && a + 1 < argc) fwp = argv[++a];
-        else if (!strcmp(argv[a], "--as") && a + 1 < argc) user = argv[++a];
-        else if (!strcmp(argv[a], "--session") && a + 1 < argc) session = argv[++a];
-        else if (!strcmp(argv[a], "--seed") && a + 1 < argc) { seed = (unsigned)strtoul(argv[++a], NULL, 10); seeded = 1; }
-        else if (!strcmp(argv[a], "--read")) read_only = 1;                    /* a read: nothing is witnessed */
-        else break;
-    }
+    const char *conninfo = laplace_db(), *fwp = NULL, *user = getenv("USER"), *session = NULL; int read_only = 0; long long seedv = -1;
+    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "--firmware", 's', &fwp }, { "--as", 's', &user }, { "--session", 's', &session },
+                                            { "--seed", 'l', &seedv }, { "--read", 'b', &read_only }, { NULL } });      /* --read: a read, nothing is witnessed */
     if (a >= argc) { fprintf(stderr, "usage: laplace turn [-d conninfo] [--firmware FILE] [--as USER] [--session NAME] [--seed N] [--read] prompt\n"); return 2; }
     if (!user || !*user) user = "user"; if (!session) session = "session";
-    double T = now(); if (!seeded) seed = (unsigned)(T * 1e6);
+    double T = now(); unsigned seed = seedv >= 0 ? (unsigned)seedv : (unsigned)(T * 1e6);
     Firmware fw = firmware_for(fwp, FW_PULL);
     tier0_open(NULL); table_init(); ctx_open(1); lp_text *c = lp_text_new(T0);
     State *st = calloc(1, sizeof(State)); st->fw = &fw; st->c = c; st->seed = seed;
     st->pg = db_connect(conninfo); st->rd = reader_new(st->pg);
-    for (int z = 0; z < fw.nrefuse_predicate; z++) st->refuse[z] = entity_named(c, fw.refuse_predicate[z], NULL, 0, NULL).id;
-    weights_named(c, &fw, st->weigh);
+    firmware_ids(&fw);
     firmware_say(&fw, FW_PULL);
 
     /* ---- RESOLVE: the prompt as content; the session from the record */
@@ -296,14 +255,10 @@ int cmd_turn(int argc, char **argv){
     Ref hp[2] = { who, sname }; hp[0].said = hp[1].said = 0; Ref handle = said_tuple(compose(hp, 2, (uint8_t)((who.tier > sname.tier ? who.tier : sname.tier) + 1)));    /* the session: its name within its user's */
     int nturn = 0, ordinal = 1;
     { int have[3] = { 2, 0, 0 }, n, cap; lp_id part[3] = { handle.id, handle.id, handle.id }; Claim *tc = claims_like(st->pg, part, have, fw.fan, fw.k, &n, &cap); st->trips++;
-      positions_of(st->pg, tc, n); qsort(tc, (size_t)n, sizeof(Claim), claim_by_position);
+      positions_of(st->pg, tc, n); lp_sort(tc, (size_t)n, sizeof(Claim), claim_by_position);
       for (int i = 0; i < n; i++) { if (tc[i].np != 2 || memcmp(&tc[i].part[0], &handle.id, 16)) continue; nturn++;
           if (tc[i].position >= ordinal) ordinal = tc[i].position + 1;
-          uint8_t ab[40]; size_t al = ids_param(ab, &tc[i].part[1], 1); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-          PGresult *q = ask(st, "SELECT path FROM laplace_paths($1::blake3[]) LIMIT 1", 1, v, l, f);       /* the turn: [prompt, response]; their constituents are the discourse */
-          if (PQresultStatus(q) == PGRES_TUPLES_OK && PQntuples(q)) { Run tr = run_of((const uint8_t *)PQgetvalue(q, 0, 0), (size_t)PQgetlength(q, 0, 0));
-              for (int k = 0; k < tr.n && st->ndisc < MAXOCC; k++) st->disc[st->ndisc++] = tr.id[k]; free(tr.id); }
-          PQclear(q); }
+          st->ndisc += (int)reader_parts(st->rd, &tc[i].part[1], st->disc + st->ndisc, (size_t)(MAXOCC - st->ndisc)); st->trips++; }   /* the turn: [prompt, response]; its constituents are the discourse */
       free(tc); }
     if (!read_only) {                                                         /* the prompt, admitted as content (Forward 20.1, Sessions 21.3): what follows reads a substrate that holds it */
         const lp_trust_class *pc = lp_trust_class_named("UserPromptContent"); File pf; memset(&pf, 0, sizeof pf);
@@ -314,7 +269,7 @@ int cmd_turn(int argc, char **argv){
     resolve_roles(st); ROLE = st->role;
     memcpy(st->traj, st->occ, sizeof(lp_id) * (size_t)st->nocc); st->ntraj = st->nocc;
     for (int i = 0; i < st->nocc; i++) reader_want(st->rd, &st->occ[i]);
-    char idt[33]; id_text(&pr.id, idt);
+    char idt[33]; lp_id_hex(&pr.id, idt);
     printf("RESOLVE    prompt %s, tier %d, %d occurrences; session \"%s\" of %s, turn %d (%d before it, %d discourse entities)\n", idt, pr.tier, st->nocc, session, user, ordinal, nturn, st->ndisc);
     if (!read_only) printf("           admitted as content, the user witnessing it: %llu entities new\n", (unsigned long long)st->admitted);
     printf("           obligations:"); for (int i = 0; i < st->nocc; i++) if (st->composed[i]) { char *tx = reader_text(st->rd, &st->occ[i], 32); printf(" %s%s(%.2f)", tx, (st->open.w[i >> 6] >> (i & 63)) & 1 ? "" : "~", st->role[i]); free(tx); } printf("\n");
@@ -424,7 +379,7 @@ int cmd_turn(int argc, char **argv){
         f[1].path = "the response"; f[1].witness = lap; f[1].trust = rc ? rc->prior : 0.2; f[1].trunk = resp;
         Event e2 = { c2.id, c2.id, 1.0f, 1500.0f, 0.0f, 0, EV_CLAIM, 0, { { 0 } }, 0 }; ev_push(&f[1].ev, &e2);
         LoadStats ls = { 0 }; if (load(conninfo, 2, f, 2, &ls)) return 1;
-        char ti[33]; id_text(&turn.id, ti);
+        char ti[33]; lp_id_hex(&turn.id, ti);
         printf("WITNESS    turn %s, at %d in the session: %llu entities new, the user's [session, turn] and Laplace's [response, prompt]\n", ti, ordinal, (unsigned long long)ls.ent_rows);
         free(f[0].ev.e); free(f[1].ev.e);
     } else printf("WITNESS    %s\n", read_only ? "a read: nothing is witnessed" : "nothing emitted: nothing to witness");

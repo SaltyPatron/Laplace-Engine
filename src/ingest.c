@@ -274,20 +274,17 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
 }
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
-    int threads = 0, do_load = 1, a = 1, show_claims = 0, entities = 0, ask = 1; const char *of = NULL;
-    for (; a < argc && argv[a][0] == '-'; a++) {
-        if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a];
-        else if (!strcmp(argv[a], "-t") && a + 1 < argc) t0p = argv[++a];
-        else if (!strcmp(argv[a], "-r") && a + 1 < argc) rdir = argv[++a];
-        else if (!strcmp(argv[a], "-j") && a + 1 < argc) threads = atoi(argv[++a]);
-        else if (!strcmp(argv[a], "-s") && a + 1 < argc) of = argv[++a];            /* the files named are this source's: a part of it at a time */
-        else if (!strcmp(argv[a], "--whole")) { extern int load_whole; load_whole = 1; }   /* after a run that was cut off: every node is looked for */
-        else if (!strcmp(argv[a], "--no-load")) do_load = 0;
-        else if (!strcmp(argv[a], "--plan")) do_load = -1;
-        else if (!strcmp(argv[a], "--claims")) { show_claims = 1; do_load = 0; }     /* what the recipes attest, as text; nothing is loaded */
-        else if (!strcmp(argv[a], "--entities")) { entities = 1; show_claims = 1; do_load = 0; }   /* what the recipes would record, entities and claims; nothing is loaded */
-        else { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] [--entities] file...\n"); return 2; }
-    }
+    int threads = 0, do_load = 1, show_claims = 0, entities = 0, asking = 1; const char *of = NULL; extern int load_whole;
+    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-t", 's', &t0p }, { "-r", 's', &rdir }, { "-j", 'i', &threads },
+        { "-s", 's', &of },                                                       /* the files named are this source's: a part of it at a time */
+        { "--whole", 'b', &load_whole },                                          /* after a run that was cut off: every node is looked for */
+        { "--no-load", 'v', &do_load, 0 }, { "--plan", 'v', &do_load, -1 },
+        { "--claims", 'b', &show_claims },                                        /* what the recipes attest, as text; nothing is loaded */
+        { "--entities", 'b', &entities },                                         /* what the recipes would record, entities and claims; nothing is loaded */
+        { NULL } });
+    if (entities) show_claims = 1;
+    if (show_claims) do_load = 0;
+    if (a < argc && argv[a][0] == '-') { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] [--entities] file...\n"); return 2; }
     /* what a recipe would say is shown of files: of nothing named it is no ingest of every source, and --entities, which
      * asks the database of every composition, is of files only, never a source by its name */
     if (show_claims && a >= argc) { fprintf(stderr, "--claims and --entities show what files would record: name the files\n"); return 2; }
@@ -436,13 +433,10 @@ int cmd_ingest(int argc, char **argv){
                 gzclose(g); free(buf);
                 if (unrecorded && !pass) { free(f->said); f->said = NULL; f->nsaid = f->csaid = 0; continue; }
                 if (!pass && !failed && f->has_file) {                          /* is its trunk recorded */
-                    PGconn *pg = db_connect(conninfo); uint8_t ab[40]; size_t al = ids_param(ab, &f->file.id, 1);
-                    const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, fm[1] = { 1 };
-                    char q[96]; snprintf(q, sizeof q, "SELECT 1 FROM entity WHERE id = ANY($1::blake3[])");   /* by its ID alone: one partition */
-                    PGresult *r = PQexecParams(pg, q, 1, NULL, v, l, fm, 0);
-                    if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "%s", PQerrorMessage(pg)); return 1; }
+                    PGconn *pg = db_connect(conninfo); Args a = { 0 }; arg_ids(&a, &f->file.id, 1);
+                    PGresult *r = ask_once(pg, "SELECT 1 FROM entity WHERE id = ANY($1::blake3[])", &a);   /* by its ID alone: one partition */
                     if (PQntuples(r)) { f->known = 1; st.known++; }
-                    PQclear(r); PQfinish(pg);
+                    PQclear(r); args_free(&a); PQfinish(pg);
                 }
             }
             done++; exact++; a0 = b0; continue;
@@ -481,7 +475,7 @@ int cmd_ingest(int argc, char **argv){
         }
         t_rec += now() - td;
         for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
-        if (entities) show_entities(conninfo, ask);
+        if (entities) show_entities(conninfo, asking);
         if (do_load) { staged_mark();                                        /* what an earlier batch staged is not staged again */
             /* The batch before is written and committed first, so this batch's lookups see it. When more batches follow,
              * this one is written by a child, from its copy of the node table, while this process empties the table and

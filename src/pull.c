@@ -69,6 +69,7 @@ const char *refuse_param(int *len){
     }
     *len = refuse_len; return (const char *)refuse_ab;
 }
+void arg_refused(Args *a){ int l; const char *p = refuse_param(&l); arg_raw(a, p, (size_t)l); }
 
 /* The claims that hold the given parts in their places (a part not given is open): at most fan of them; *capped says
  * there were more. k: how many deviations below its rating a claim is read at. */
@@ -555,4 +556,53 @@ int cmd_degrees(int argc, char **argv){
     }
     free(closed); free(hub); reader_free(rd); lp_frontier_free(fw.f); PQfinish(pg);
     return 0;
+}
+
+/* ---- what the forward pass reads through the firmware, one way for every command */
+/* How hard a word pulls (its role): what is attested of it under the firmware's role kind ([word, role_by, x], read
+ * in the claims' order), the weight the firmware gives the first x it names. -1 when nothing it names is attested. */
+double role_of(PGconn *pg, Firmware *fw, const lp_id *word){
+    if (!fw->role_by[0]) return -1;
+    firmware_ids(fw); lp_id part[3] = { *word, fw->id.role_by, fw->id.role_by }; int have[3] = { 2, 2, 0 }, n, capped; double w = -1;
+    Claim *cl = claims_like(pg, part, have, fw->fan, fw->k, &n, &capped);
+    for (int q = 0; q < n && w < 0; q++) for (int z = 0; z < fw->nrole; z++) if (lp_id_eq(&cl[q].part[cl[q].np - 1], &fw->id.role[z])) { w = fw->role[z]; break; }
+    free(cl); return w;
+}
+/* The strands of a set a firmware takes: the top n, or, when the firmware says how near a tie has to be, any strand
+ * that near the one above it may be taken in its place. */
+void take_top(Claim *cl, int n, int want, const Firmware *fw, unsigned *seed){
+    if (fw->top_within <= 0 || !seed) return;
+    for (int i = 0; i < n && i < want; i++) { int tied = i; while (tied + 1 < n && cl[i].conf - cl[tied + 1].conf <= fw->top_within) tied++;
+        if (tied > i) { int pick = i + (int)(rand_r(seed) % (unsigned)(tied - i + 1)); Claim t = cl[i]; cl[i] = cl[pick]; cl[pick] = t; } }
+}
+/* A chain the firmware names, followed from a word: each relation in turn, the strands that hold where the chain stands
+ * (or, past the first step, one of the things it is made of, the last first, the word itself last) in their witness's
+ * order, then by standing. At the first step the strand to the oriented reading is taken where the chain passes
+ * through it; otherwise the top, as the firmware takes it (seed NULL: the top every time). The first of the firmware's
+ * chains that reaches its end answers. Returns the steps the answering chain took, or, when none reached its end, the
+ * most the last one tried took and -1 in *alt; *last is the last strand taken. */
+int chain_follow(PGconn *pg, Reader *rd, Firmware *fw, const lp_id *word, const lp_id *reading, unsigned *seed, lp_id *answer, Claim *last, int *alt){
+    firmware_ids(fw); int steps = 0;
+    for (*alt = 0; *alt < fw->nalt; (*alt)++) {
+        lp_id cur = *word; steps = 0;
+        for (int z = 0; z < fw->nchain[*alt]; z++) {
+            lp_id tryv[66]; int nt = 0; tryv[nt++] = cur;
+            if (z > 0 && lp_tier0_codepoint(T0, &cur) < 0) {
+                lp_id parts[64]; size_t np = reader_parts(rd, &cur, parts, 64);
+                for (size_t k = np; k-- > 0 && nt < 65; ) if (lp_tier0_codepoint(T0, &parts[k]) < 0 && !lp_id_eq(&parts[k], word)) tryv[nt++] = parts[k];
+                tryv[nt++] = *word;                                                  /* a synset of one member is that word: what is said of it is said of the word */
+            }
+            Claim *cl = NULL; int n = 0, capped;
+            for (int t = 0; t < nt && !n; t++) { lp_id part[3] = { tryv[t], fw->id.chain[*alt][z], fw->id.chain[*alt][z] }; int have[3] = { 2, 2, 0 };
+                cl = claims_like(pg, part, have, fw->fan, fw->k, &n, &capped); if (!n) { free(cl); cl = NULL; } }     /* a relation the firmware names to follow is not one it refuses */
+            if (!n) break;
+            positions_of(pg, cl, n); if (fw->order_witness) lp_sort(cl, (size_t)n, sizeof(Claim), claim_by_position);
+            int take = -1;
+            if (z == 0 && reading) for (int k = 0; k < n; k++) if (lp_id_eq(&cl[k].part[cl[k].np - 1], reading)) { take = k; break; }
+            if (take < 0) { take_top(cl, n, 1, fw, seed); take = 0; }
+            *last = cl[take]; cur = cl[take].part[cl[take].np - 1]; steps++; free(cl);
+        }
+        if (steps == fw->nchain[*alt]) { *answer = cur; return steps; }
+    }
+    *alt = -1; return steps;
 }

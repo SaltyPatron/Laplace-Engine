@@ -80,7 +80,7 @@ int cmd_deploy(int argc, char **argv){
                 while ((c = strtok_r(NULL, "\t\n", &save))) { char *s1 = strchr(c, ':'), *s2 = s1 ? strchr(s1 + 1, ':') : NULL; if (!s2) { ok = 0; break; } *s1 = 0;
                     Ref r; lp_id id; if (c[0] == 'U') r = atom((uint32_t)strtoul(c + 1, NULL, 16)); else { if (!id_parse(c, &id)) { ok = 0; break; } Node *x = table_find(&id); if (!x) { unknown++; ok = 0; break; } memset(&r, 0, sizeof r); r.id = x->id; memcpy(r.c.m, x->m, sizeof r.c.m); r.tier = x->tier; }
                     r.said = (uint8_t)atoi(s1 + 1); uint32_t run = (uint32_t)strtoul(s2 + 1, NULL, 10);
-                    for (uint32_t q = 0; q < run; q++) { if (k == cch) { cch = cch ? cch * 2 : 4096; ch = xrealloc(ch, sizeof(Ref) * cch); } ch[k++] = r; } }
+                    for (uint32_t q = 0; q < run; q++) { lp_reserve((void **)&ch, &cch, k + 1, sizeof(Ref)); ch[k++] = r; } }
                 lp_id want; if (!ok || !id_parse(hid, &want)) { wrong++; continue; }
                 Ref r = compose(ch, (uint32_t)k, (uint8_t)atoi(tr)); if (memcmp(&r.id, &want, 16)) wrong++; n++; }
             else if (kind[0] == 'S') { char *ln = strtok_r(NULL, "\t\n", &save), *sl = strtok_r(NULL, "\t\n", &save), *c = strtok_r(NULL, "\t\n", &save); if (!ln || !sl || !c) { wrong++; continue; }
@@ -114,11 +114,11 @@ int cmd_status(int argc, char **argv){
     printf("\ndatabase   %s, %s\nserver     %s\nextension  laplace %s; %s\n", PQdb(pg), size ? size : "?", srv ? srv : "?", ver ? ver : "(not installed)", isa ? isa : "");
     printf("tier 0     %s\n           %s\n", t0 && *t0 ? t0 : "(the extension's default)", fp ? fp : "(no fingerprint: extension older than 0.6)");
     const lp_tier0_record *mine = lp_tier0_map(NULL);
-    if (mine && fp) { uint8_t h[32]; char hex[65]; lp_tier0_fingerprint(mine, h); for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", h[i]);
+    if (mine && fp) { uint8_t h[32]; char hex[65]; lp_tier0_fingerprint(mine, h); lp_hex(h, 32, hex);
                       printf("           %s\n", strcmp(hex, fp) ? "DIFFERS from this engine's tier 0: the two would give the same content different coordinates" : "the same as this engine's"); }
     { char *hw = one(pg, "SELECT current_setting('laplace.highway', true)"), *hfp = one(pg, "SELECT laplace_highway_fingerprint()"); const lp_highway *h = lp_highway_map(NULL);
       printf("highway    %s\n           %s\n", hw && *hw ? hw : "(the extension's default)", hfp ? hfp : "(not generated: laplace highway)");
-      if (h && hfp) { uint8_t b[32]; char hex[65]; lp_highway_fingerprint(h, b); for (int i = 0; i < 32; i++) snprintf(hex + 2 * i, 3, "%02x", b[i]);
+      if (h && hfp) { uint8_t b[32]; char hex[65]; lp_highway_fingerprint(h, b); lp_hex(b, 32, hex);
                       printf("           %s\n", strcmp(hex, hfp) ? "DIFFERS from this engine's highway: the two would give a type different slots" : "the same as this engine's"); }
       free(hw); free(hfp); }
 
@@ -156,10 +156,9 @@ int cmd_sources(int argc, char **argv){
         int mine = 0, in = 0;
         for (int k = 0; k < nrec; k++) mine += rec[k].source == i;
         if (s[i].witness[0] && !strchr(s[i].witness, '{')) {                   /* it is in when its witness is known */
-            lp_id w = lp_text_decompose(tx, (const uint8_t *)s[i].witness, strlen(s[i].witness), NULL, NULL).id; uint8_t ab[40]; size_t al = ids_param(ab, &w, 1);
-            const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-            PGresult *r = PQexecParams(pg, "SELECT 1 FROM witness WHERE id = ANY($1::blake3[])", 1, NULL, v, l, f, 0);
-            in = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) > 0; PQclear(r);
+            lp_id w = lp_text_decompose(tx, (const uint8_t *)s[i].witness, strlen(s[i].witness), NULL, NULL).id; Args a = { 0 }; arg_ids(&a, &w, 1);
+            PGresult *r = ask_try(pg, "SELECT 1 FROM witness WHERE id = ANY($1::blake3[])", &a);
+            in = r && PQntuples(r) > 0; PQclear(r); args_free(&a);
         }
         printf("%-4d %-28s %-8d %-9s %s\n", i + 1, s[i].name, mine, in ? "yes" : "no", s[i].found[0] ? s[i].found : "(not at any of its roots)");
         if (s[i].nafter) { printf("     %-28s after", ""); for (int a = 0; a < s[i].nafter; a++) printf(" %s", s[i].after[a]); printf("\n"); }

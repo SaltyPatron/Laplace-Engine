@@ -26,13 +26,11 @@
 #include <sys/stat.h>
 
 typedef struct { char name[32], say[64]; Ref *t; size_t n, cap; lp_idmap *map; uint32_t first; } List;   /* map: a type's slot by its ID */
-typedef struct { int list; char *key; lp_id id; } Key;
+typedef struct { int list; lp_id id; } Key;                                  /* a resource's key of a type: by its list's place and the key's bytes (lp_strmap) */
 typedef struct { int list; char *key, *to; int done; } Alias;
 typedef struct { int la, lb; char *ka, *kb; } PEdge;
 typedef struct { int la, lb; uint32_t from, to; } Edge;
-struct Hw { List *l; int nl; Key *k; size_t nk, ck; uint32_t *kmap; size_t kcap; Alias *a; size_t na, ca; PEdge *e; size_t ne, ce; };
-
-static uint64_t strk(int list, const char *s){ uint64_t h = 1469598103934665603ull ^ (uint64_t)list; for (; *s; s++) h = (h ^ (uint8_t)*s) * 1099511628211ull; return h; }
+struct Hw { List *l; int nl; lp_strmap *keys; lp_vec(Alias) a; lp_vec(PEdge) e; };
 static int list_of(Hw *h, const char *name, const char *say){
     for (int i = 0; i < h->nl; i++) if (!strcmp(h->l[i].name, name)) { if (say && !h->l[i].say[0]) snprintf(h->l[i].say, sizeof h->l[i].say, "%s", say); return i; }
     h->l = xrealloc(h->l, sizeof(List) * (size_t)(h->nl + 1)); List *l = &h->l[h->nl]; memset(l, 0, sizeof *l);
@@ -43,30 +41,23 @@ static int64_t slot_in(const List *l, const lp_id *id){ return lp_idmap_find(l->
 void hw_type(Hw *h, const char *list, const char *say, Ref thing){
     int li = list_of(h, list, say); List *l = &h->l[li]; if (slot_in(l, &thing.id) >= 0) return;      /* the list first: naming a new one moves them all */
     if (!l->map) l->map = lp_idmap_new(); lp_idmap_put(l->map, &thing.id, NULL);
-    if (l->n == l->cap) { l->cap = l->cap ? l->cap * 2 : 1024; l->t = xrealloc(l->t, sizeof(Ref) * l->cap); }
-    l->t[l->n++] = thing;
+    lp_reserve((void **)&l->t, &l->cap, l->n + 1, sizeof(Ref)); l->t[l->n++] = thing;
 }
-static Key *key_find(Hw *h, int list, const char *key){
-    if (!h->kcap) return NULL; uint64_t k = strk(list, key) & (h->kcap - 1);
-    while (h->kmap[k]) { Key *x = &h->k[h->kmap[k] - 1]; if (x->list == list && !strcmp(x->key, key)) return x; k = (k + 1) & (h->kcap - 1); }
-    return NULL;
-}
+/* The map's key: the list's place, then the key's bytes. */
+static size_t key_of(int list, const char *key, char *out){ size_t n = strlen(key); if (n > 1000) n = 1000; memcpy(out, &list, sizeof list); memcpy(out + sizeof list, key, n); return sizeof list + n; }
+static Key *key_find(Hw *h, int list, const char *key){ char k[1024]; return h->keys ? lp_strmap_lookup(h->keys, k, key_of(list, key, k)) : NULL; }
 static int key_put(Hw *h, int list, const char *key, const lp_id *id){
-    if (key_find(h, list, key)) return 0;                                    /* the first that names a key keeps it */
-    if ((h->nk + 1) * 2 > h->kcap) { size_t nc = h->kcap ? h->kcap * 2 : 1 << 16; uint32_t *m = calloc(nc, 4);
-        for (size_t i = 0; i < h->nk; i++) { uint64_t k = strk(h->k[i].list, h->k[i].key) & (nc - 1); while (m[k]) k = (k + 1) & (nc - 1); m[k] = (uint32_t)i + 1; } free(h->kmap); h->kmap = m; h->kcap = nc; }
-    if (h->nk == h->ck) { h->ck = h->ck ? h->ck * 2 : 1 << 16; h->k = xrealloc(h->k, sizeof(Key) * h->ck); }
-    Key *x = &h->k[h->nk]; x->list = list; x->key = strdup(key); x->id = *id;
-    uint64_t k = strk(list, key) & (h->kcap - 1); while (h->kmap[k]) k = (k + 1) & (h->kcap - 1); h->kmap[k] = (uint32_t)++h->nk; return 1;
+    if (!h->keys) h->keys = lp_strmap_sized(sizeof(Key));
+    char k[1024]; bool fresh; Key *x = lp_strmap_get(h->keys, k, key_of(list, key, k), &fresh);
+    if (!fresh) return 0;                                                    /* the first that names a key keeps it */
+    x->list = list; x->id = *id; return 1;
 }
 void hw_key(Hw *h, const char *list, Ref thing, const char *key){ key_put(h, list_of(h, list, NULL), key, &thing.id); }
 void hw_alias(Hw *h, const char *list, const char *key, const char *to){
-    if (h->na == h->ca) { h->ca = h->ca ? h->ca * 2 : 1 << 16; h->a = xrealloc(h->a, sizeof(Alias) * h->ca); }
-    h->a[h->na++] = (Alias){ list_of(h, list, NULL), strdup(key), strdup(to), 0 };
+    lp_push(&h->a, (Alias){ list_of(h, list, NULL), strdup(key), strdup(to), 0 });
 }
 void hw_edge(Hw *h, const char *la, const char *ka, const char *lb, const char *kb){
-    if (h->ne == h->ce) { h->ce = h->ce ? h->ce * 2 : 1 << 16; h->e = xrealloc(h->e, sizeof(PEdge) * h->ce); }
-    h->e[h->ne++] = (PEdge){ list_of(h, la, NULL), list_of(h, lb, NULL), strdup(ka), strdup(kb) };
+    lp_push(&h->e, (PEdge){ list_of(h, la, NULL), list_of(h, lb, NULL), strdup(ka), strdup(kb) });
 }
 static Hw *H;
 static int edge_cmp(const void *x, const void *y){ const Edge *a = x, *b = y; int c = strcmp(H->l[a->la].name, H->l[b->la].name); if (c) return c; c = strcmp(H->l[a->lb].name, H->l[b->lb].name); if (c) return c;
@@ -75,7 +66,7 @@ static int edge_cmp(const void *x, const void *y){ const Edge *a = x, *b = y; in
 /* ---- the types' contents, as the compositions they are: every node under a type, once, before what holds it */
 typedef struct { lp_idmap *m; } Seen;
 static int seen_add(Seen *s, const lp_id *id){ if (!s->m) s->m = lp_idmap_new(); bool fresh; lp_idmap_put(s->m, id, &fresh); return fresh; }
-static void hexid(const lp_id *id, char out[33]){ id_text(id, out); }
+static void hexid(const lp_id *id, char out[33]){ lp_id_hex(id, out); }
 static void node_write(FILE *o, Seen *s, const lp_id *id, int depth){
     if (lp_tier0_codepoint(T0, id) >= 0 || depth > 256) return; Node *x = table_find(id); if (!x || !seen_add(s, id)) return;
     for (uint32_t v = 0; v < x->nv; v++) node_write(o, s, &VTX[x->voff + v].id, depth + 1);
@@ -112,8 +103,9 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
     for (int li = 0; li < h->nl; li++) {
         List *l = &h->l[li]; size_t nz; Frozen *fz = frozen_read(l->name, &nz);
         lp_idmap_free(first); first = lp_idmap_new(); fcap = 0; free(fkey); fkey = NULL;
-        for (size_t i = 0; i < h->nk; i++) if (h->k[i].list == li) { bool fresh; size_t at = lp_idmap_put(first, &h->k[i].id, &fresh);
-            if (fresh) { if (at >= fcap) { fcap = (at + 1) * 2; fkey = xrealloc(fkey, sizeof(char *) * fcap); } fkey[at] = h->k[i].key; } }
+        size_t nk = h->keys ? lp_strmap_count(h->keys) : 0;                     /* the keys in the order they were named */
+        for (size_t i = 0; i < nk; i++) { const Key *k = lp_strmap_at(h->keys, i); if (k->list != li) continue; bool fresh; size_t at = lp_idmap_put(first, &k->id, &fresh);
+            if (fresh) { if (at >= fcap) { fcap = (at + 1) * 2; fkey = xrealloc(fkey, sizeof(char *) * fcap); } size_t kl; fkey[at] = lp_strmap_key(h->keys, i, &kl) + sizeof(int); } }
         Ref *t = xrealloc(NULL, sizeof(Ref) * (nz + l->n + 1)); size_t n = 0; uint8_t *placed = calloc(l->n + 1, 1);
         for (size_t s = 0; s < nz; s++) { int64_t was = slot_in(l, &fz[s].id);
             if (was >= 0) { t[n] = l->t[was]; placed[was] = 1; (*kept)++; fz[s].retired = 0; }
@@ -151,26 +143,26 @@ int cmd_highway(int argc, char **argv){
         if (!says) continue;
         if (!src[i].found[0]) { printf("  %-28s not at any of its roots: what it says of the types is left out\n", src[i].name); continue; }
         if (recipes_broken(rc, nrc, &src[i])) return 2;
-        char **paths; Recipe **of; int np = source_files(&src[i], rc, nrc, &paths, &of); size_t types0 = 0, keys0 = hw.nk, al0 = hw.na, e0 = hw.ne; for (int l = 0; l < hw.nl; l++) types0 += hw.l[l].n;
+        char **paths; Recipe **of; int np = source_files(&src[i], rc, nrc, &paths, &of); size_t types0 = 0, keys0 = lp_strmap_count(hw.keys), al0 = hw.a.n, e0 = hw.e.n; for (int l = 0; l < hw.nl; l++) types0 += hw.l[l].n;
         for (int f = 0; f < np; f++) { if (say_has_highway(of[f])) { File one = { 0 }; one.path = paths[f]; one.recipe = of[f]; one.source = &src[i];
                 #pragma omp parallel
                 #pragma omp single
                 highway_file(CTX[omp_get_thread_num()], &one, &hw); }
             free(paths[f]); }
         free(paths); free(of); size_t types1 = 0; for (int l = 0; l < hw.nl; l++) types1 += hw.l[l].n;
-        printf("  %-28s %'zu types, %'zu keys, %'zu keys of other keys, %'zu mappings\n", src[i].name, types1 - types0, hw.nk - keys0, hw.na - al0, hw.ne - e0);
+        printf("  %-28s %'zu types, %'zu keys, %'zu keys of other keys, %'zu mappings\n", src[i].name, types1 - types0, lp_strmap_count(hw.keys) - keys0, hw.a.n - al0, hw.e.n - e0);
     }
     /* a key that names what another names: until no key is added */
     size_t added = 0; for (int more = 1; more; ) { more = 0;
-        for (size_t i = 0; i < hw.na; i++) { Alias *a = &hw.a[i]; if (a->done) continue; Key *t = key_find(&hw, a->list, a->to); if (!t) continue; lp_id id = t->id; a->done = 1; if (key_put(&hw, a->list, a->key, &id)) { added++; more = 1; } } }
+        for (size_t i = 0; i < hw.a.n; i++) { Alias *a = &hw.a.v[i]; if (a->done) continue; Key *t = key_find(&hw, a->list, a->to); if (!t) continue; lp_id id = t->id; a->done = 1; if (key_put(&hw, a->list, a->key, &id)) { added++; more = 1; } } }
     /* every list in its frozen order: slots never move */
     size_t fz_new, fz_retired, fz_kept; freeze(&hw, &fz_new, &fz_retired, &fz_kept);
     printf("  slots: %'zu kept, %'zu new, %'zu retired (%s/slots)\n", fz_kept, fz_new, fz_retired, manifest_dir());
     /* the lists, one after another in the order they were first named; the edges by slot */
     uint32_t total = 0; for (int l = 0; l < hw.nl; l++) { hw.l[l].first = total; total += (uint32_t)hw.l[l].n; }
-    Edge *ed = malloc(sizeof(Edge) * (hw.ne + 1)); size_t ne = 0, lost = 0;
+    Edge *ed = malloc(sizeof(Edge) * (hw.e.n + 1)); size_t ne = 0, lost = 0;
     typedef struct { int la, lb; size_t n; char ex[2][96]; } Lost; Lost ls[64]; int nls = 0;          /* what was left out, by the lists, with one of each side that no list holds */
-    for (size_t i = 0; i < hw.ne; i++) { const PEdge *p = &hw.e[i]; Key *a = key_find(&hw, p->la, p->ka), *b = key_find(&hw, p->lb, p->kb);
+    for (size_t i = 0; i < hw.e.n; i++) { const PEdge *p = &hw.e.v[i]; Key *a = key_find(&hw, p->la, p->ka), *b = key_find(&hw, p->lb, p->kb);
         int64_t from = a ? slot_in(&hw.l[p->la], &a->id) : -1, to = b ? slot_in(&hw.l[p->lb], &b->id) : -1;
         if (from < 0 || to < 0) { lost++; int q = 0; while (q < nls && !(ls[q].la == p->la && ls[q].lb == p->lb)) q++;
             if (q == nls && nls < 64) { memset(&ls[nls], 0, sizeof ls[0]); ls[nls].la = p->la; ls[nls].lb = p->lb; nls++; }
@@ -211,7 +203,8 @@ int cmd_highway(int argc, char **argv){
     /* the keys the resources point at their types with, beside the highway: resolved by readers, recorded nowhere */
     snprintf(lay, sizeof lay, "%s.keys", outp); o = fopen(lay, "w"); if (!o) { perror(lay); return 1; } size_t nkeys = 0, stray = 0;
     fprintf(o, "# The keys the resources point at their types with: list, the key as the resource writes it, the slot. Resolved by readers, recorded nowhere.\n");
-    for (size_t i = 0; i < hw.nk; i++) { int64_t s = slot_in(&hw.l[hw.k[i].list], &hw.k[i].id); if (s < 0) { stray++; continue; } fprintf(o, "%s\t%s\t%lld\n", hw.l[hw.k[i].list].name, hw.k[i].key, (long long)s); nkeys++; }
+    for (size_t i = 0; i < lp_strmap_count(hw.keys); i++) { const Key *k = lp_strmap_at(hw.keys, i); size_t kl; const char *kb = lp_strmap_key(hw.keys, i, &kl);
+        int64_t s = slot_in(&hw.l[k->list], &k->id); if (s < 0) { stray++; continue; } fprintf(o, "%s\t%.*s\t%lld\n", hw.l[k->list].name, (int)(kl - sizeof(int)), kb + sizeof(int), (long long)s); nkeys++; }
     fclose(o);
     /* the contents: every node under every type, before what holds it; then which type each list's slot is */
     snprintf(lay, sizeof lay, "%s.nodes", outp); o = fopen(lay, "w"); if (!o) { perror(lay); return 1; } Seen seen = { 0 };

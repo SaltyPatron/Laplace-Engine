@@ -39,11 +39,7 @@ int cmd_flags(int argc, char **argv){
     char dflt[4096], out_dflt[4096]; snprintf(dflt, sizeof dflt, "%s/Public/UCD/latest", laplace_ucd());
     snprintf(out_dflt, sizeof out_dflt, "%s", lp_tier0_path()); { char *d = strrchr(out_dflt, '.'); if (d) *d = 0; strcat(out_dflt, ".flags"); }
     const char *root = dflt, *outp = out_dflt;
-    for (int a = 1; a < argc; a++) {
-        if (!strcmp(argv[a], "-u") && a + 1 < argc) root = argv[++a];
-        else if (!strcmp(argv[a], "-o") && a + 1 < argc) outp = argv[++a];
-        else { fprintf(stderr, "usage: laplace flags [-u UCD_ROOT] [-o tier0.flags]\n"); return 2; }
-    }
+    if (opts(argc, argv, (const Opt[]){ { "-u", 's', &root }, { "-o", 's', &outp }, { NULL } }) < argc) { fprintf(stderr, "usage: laplace flags [-u UCD_ROOT] [-o tier0.flags]\n"); return 2; }
     setlocale(LC_NUMERIC, "en_US.UTF-8"); double T = now(); char line[1 << 16];
 
     /* the properties the standard lists, binary and enumerated, in its order */
