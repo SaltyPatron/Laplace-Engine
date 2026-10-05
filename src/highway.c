@@ -185,8 +185,7 @@ int cmd_highway(int argc, char **argv){
     ne = m;
     /* no resource at any of its roots writes nothing: the highway that is there stays (a run under the wrong LAPLACE_DATA
      * must not swap an empty one in) */
-    if (!total) { fprintf(stderr, "laplace highway: no resource was found at any of its roots: %s is left as it is
-", outp); return 1; }
+    if (!total) { fprintf(stderr, "laplace highway: no resource was found at any of its roots: %s is left as it is\n", outp); return 1; }
     lp_tier0_record *rec = calloc(total + 1, sizeof(lp_tier0_record));
     for (int l = 0; l < hw.nl; l++) for (size_t s = 0; s < hw.l[l].n; s++) { lp_tier0_record *x = &rec[hw.l[l].first + s]; const Ref *r = &hw.l[l].t[s];
         x->id = r->id; memcpy(x->m, r->c.m, 32); x->hilbert = lp_hilbert4(&r->c); x->rank = (uint32_t)s; x->pad = r->tier; }
