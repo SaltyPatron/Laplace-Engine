@@ -211,18 +211,19 @@ int cmd_pull(int argc, char **argv){
              * followed in turn: the claims that hold where the pull stands (or, past the first step, one of the things it
              * is made of), in the order their witness gave them, then by standing; the top is taken, and the pull stands
              * at what that claim says. Where it ends is what is returned. */
-            typedef struct { lp_id id; double w; int at; } Puller; Puller pl[64]; int npl = 0;
+            typedef struct { lp_id id; double w; int at; } Puller; Puller *pl = malloc(sizeof(Puller) * (size_t)(np ? np : 1)); int npl = 0;
             lp_id by; memset(&by, 0, sizeof by); if (fw.role_by[0]) by = entity_named(c, fw.role_by, NULL, 0, NULL).id;
             lp_id rid[FW_WEIGHS]; for (int z = 0; z < fw.nrole; z++) rid[z] = entity_named(c, fw.role_name[z], NULL, 0, NULL).id;
-            for (int i = 0; i < np && npl < 64; i++) {
-                if (!table_find(&ph[i]) || (np > 1 && !memcmp(&ph[i], &pr.id, 16))) continue;
-                int dup = 0; for (int z = 0; z < npl; z++) dup |= !memcmp(&pl[z].id, &ph[i], 16); if (dup) continue;
-                double w = fw.role_by[0] ? 0.5 : 1.0;                                     /* a word nothing says the role of pulls half */
-                if (fw.role_by[0]) { lp_id part[3] = { ph[i], by, by }; int have[3] = { 2, 2, 0 }, n, cap2; Claim *cl = claims_like(pg, part, have, fw.fan, fw.k, &n, &cap2);
-                    for (int q = 0; q < n; q++) { int hit = 0; for (int z = 0; z < fw.nrole && !hit; z++) if (!memcmp(&cl[q].part[cl[q].np - 1], &rid[z], 16)) { w = fw.role[z]; hit = 1; } if (hit) break; }
-                    free(cl); }
-                pl[npl++] = (Puller){ ph[i], w, i };
-            }
+            { lp_idmap *sm = lp_idmap_new();
+              for (int i = 0; i < np; i++) { if (!table_find(&ph[i]) || (np > 1 && !memcmp(&ph[i], &pr.id, 16))) continue;
+                  bool fresh; lp_idmap_put(sm, &ph[i], &fresh); if (fresh) pl[npl++] = (Puller){ ph[i], fw.role_by[0] ? 0.5 : 1.0, i }; }     /* a word nothing says the role of pulls half */
+              lp_idmap_free(sm); }
+            if (fw.role_by[0] && npl) {                                                  /* every word's role, one set */
+                lp_id *ws = malloc(sizeof(lp_id) * (size_t)npl); for (int i = 0; i < npl; i++) ws[i] = pl[i].id;
+                int n, *src; Claim *cl = claims_each(pg, ws, npl, &by, 1, fw.fan, fw.k, &n, &src); uint8_t *done = calloc((size_t)npl, 1);
+                for (int q = 0; q < n; q++) { if (done[src[q]]) continue;
+                    for (int z = 0; z < fw.nrole; z++) if (!memcmp(&cl[q].part[cl[q].np - 1], &rid[z], 16)) { pl[src[q]].w = fw.role[z]; done[src[q]] = 1; break; } }
+                free(cl); free(src); free(done); free(ws); }
             for (int a_ = 1; a_ < npl; a_++) { Puller x = pl[a_]; int b_ = a_; while (b_ > 0 && pl[b_ - 1].w < x.w) { pl[b_] = pl[b_ - 1]; b_--; } pl[b_] = x; }
             for (int u = 0; u < npl && u < fw.take[s].n; u++) {
                 if (pl[u].w <= 0) break;
@@ -256,6 +257,7 @@ int cmd_pull(int argc, char **argv){
                 else printf("\nanswer     %s: the chain stops after %d of %d relations: nothing is attested there   (%.1f ms)\n", who, nk, fw.nchain[alt], (now() - t) * 1000);
                 free(who);
             }
+            free(pl);
         }
     }
     printf("\n%d taken in %d step%s   %llu round trips for text   total %.1f ms\n", took, fw.ntake, fw.ntake == 1 ? "" : "s", (unsigned long long)reader_trips(rd), (now() - T) * 1000);
