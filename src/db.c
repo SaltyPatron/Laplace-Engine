@@ -49,6 +49,22 @@ static void part_name(int p, const char *table, char *out, size_t cap){ snprintf
  * Lookups during an ingest read the leaf and its stage table both. A crash empties every stage table (unlogged) and
  * leaves the real tables as they were before the run: the run is begun again. */
 static int stage_ready;
+/* A run begins with an empty stage. A merge that did not go through leaves the stage as it was, so the run can be
+ * begun again; the run begun again stages everything again, and what the stage held from before would go in twice
+ * (measured: a second unicode run's merge failed on its own duplicate ids). So what a run that did not finish left
+ * is emptied first, and said. */
+static int stage_emptied(PGconn *pg){
+    PGresult *r = PQexec(pg, "DO $$ DECLARE r record; e boolean; n int := 0; BEGIN"
+                             "  FOR r IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'stage' AND c.relkind = 'r' LOOP"
+                             "    EXECUTE format('SELECT EXISTS (SELECT 1 FROM stage.%I)', r.relname) INTO e;"
+                             "    IF e THEN EXECUTE format('TRUNCATE stage.%I', r.relname); n := n + 1; END IF;"
+                             "  END LOOP;"
+                             "  IF n > 0 THEN RAISE NOTICE 'the stage held rows in % tables from a run that did not finish: emptied', n; END IF;"
+                             "END $$");
+    int ok = PQresultStatus(r) == PGRES_COMMAND_OK;
+    if (!ok) fprintf(stderr, "the stage: %s", PQerrorMessage(pg)); PQclear(r);
+    return ok;
+}
 static int stage_open(PGconn *pg){
     if (stage_ready) return 1;
     /* made once: every leaf has its stage table already when the stage holds as many tables as the real tables have
@@ -57,7 +73,7 @@ static int stage_open(PGconn *pg){
                                "= (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' "
                                "AND c.relispartition AND c.relname ~ '^(entity|physicality|attestation|consensus)_')");
       int made = PQresultStatus(q) == PGRES_TUPLES_OK && PQntuples(q) && PQgetvalue(q, 0, 0)[0] == 't'; PQclear(q);
-      if (made) return stage_ready = 1; }
+      if (made) return stage_ready = stage_emptied(pg); }
     const char *sql =
         "CREATE SCHEMA IF NOT EXISTS stage;"
         "DO $$ DECLARE r record; BEGIN"
@@ -71,7 +87,7 @@ static int stage_open(PGconn *pg){
         "  END LOOP; END $$";
     PGresult *r = PQexec(pg, sql); int ok = PQresultStatus(r) == PGRES_COMMAND_OK;
     if (!ok) fprintf(stderr, "the stage: %s", PQerrorMessage(pg)); PQclear(r);
-    return stage_ready = ok;
+    return stage_ready = ok && stage_emptied(pg);
 }
 
 /* "I have these IDs: which do you already have?" The client composed every node, so it knows each ID's tier; an ID's
