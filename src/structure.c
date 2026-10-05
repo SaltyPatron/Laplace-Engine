@@ -4,6 +4,7 @@
  * recipe's layout says the file writes them, and nowhere else. */
 #define _GNU_SOURCE
 #include "structure.h"
+#include "os.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

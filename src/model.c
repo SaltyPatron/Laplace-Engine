@@ -15,16 +15,12 @@
  */
 #include "engine.h"
 #include "json_min.h"
-#include <fcntl.h>
 #include <locale.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
 #include <time.h>
-#include <unistd.h>
 #include <mkl.h>
 #include <immintrin.h>
 
@@ -38,9 +34,8 @@ static char *slurp(const char *path, size_t *len){
 typedef struct { const uint8_t *base; jdoc h; uint32_t root; } ST;
 typedef struct { const char *dtype; size_t shape[4]; int nd; const uint8_t *data; size_t bytes; } Tensor;
 static ST st_open(const char *path){
-    ST s = { 0 }; int fd = open(path, O_RDONLY); struct stat sb;
-    if (fd < 0 || fstat(fd, &sb)) { perror(path); exit(1); }
-    s.base = mmap(NULL, sb.st_size, PROT_READ, MAP_SHARED, fd, 0); close(fd);
+    ST s = { 0 }; size_t size;
+    if (!(s.base = os_map_read(path, &size)) || size < 8) { perror(path); exit(1); }
     uint64_t hl; memcpy(&hl, s.base, 8); s.h = j_parse((const char *)s.base + 8, hl); s.root = 0;
     s.base += 8 + hl; return s;
 }

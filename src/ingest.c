@@ -189,7 +189,17 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
                 printf("%-4d %-38s %-10s %10s   %s\n", i + 1, src[i].name, "not begun", "", why); short_of_room++; continue; } }
         char log[4300]; snprintf(log, sizeof log, "%s/%s.log", dir, src[i].name);
         printf("%-4d %-38s ", i + 1, src[i].name); fflush(stdout);
-        double t = now(); pid_t pid = fork();
+        double t = now();
+#ifdef _WIN32
+        /* No fork on Windows: the same child, started as a process of its own with its output in the log. */
+        int code;
+        { char **av = malloc(sizeof(char *) * (size_t)(argc + 3)); int n = 0; av[n++] = self; av[n++] = "ingest";
+          for (int a = 1; a < argc; a++) av[n++] = argv[a];
+          av[n++] = (char *)src[i].name; av[n] = NULL;
+          code = os_run_logged(self, av, log, "LAPLACE_INGEST_ONE", "1"); free(av);
+          if (code < 0) { perror(self); return 1; } }
+#else
+        pid_t pid = fork();
         if (pid < 0) { perror("fork"); return 1; }
         if (!pid) {
             int fd = open(log, O_WRONLY | O_CREAT | O_TRUNC, 0664); if (fd < 0) { perror(log); _exit(127); }
@@ -201,6 +211,7 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
         }
         int st = 0; while (waitpid(pid, &st, 0) < 0) { }
         int code = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+#endif
         char last[256] = ""; { FILE *f = fopen(log, "r"); char line[4096]; while (f && fgets(line, sizeof line, f)) { char *cr = strrchr(line, '\r'); const char *c = cr && cr[1] && cr[1] != '\n' ? cr + 1 : line; while (*c == ' ') c++;
               if (strstr(c, "attestations") || strstr(c, "already recorded") || (code && *c && *c != '\n')) { snprintf(last, sizeof last, "%.200s", c); char *nl = strchr(last, '\n'); if (nl) *nl = 0; } } if (f) fclose(f); }
         printf("%-10s %'10.1f   %s\n", code ? "FAILED" : "in", now() - t, last); fflush(stdout);
@@ -476,12 +487,17 @@ int cmd_ingest(int argc, char **argv){
              * this one is written by a child, from its copy of the node table, while this process empties the table and
              * decomposes the next on every core: the cores and the database work at the same time. */
             if (loader > 0 && loader_wait(&loader, loader_fd, &st)) return 1;
+#ifdef _WIN32
+            /* No fork on Windows: each batch is written here, as the last one is everywhere, before the next is decomposed. */
+            if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1; }
+#else
             if (b0 < nfiles) { int pfd[2]; if (pipe(pfd)) { perror("pipe"); return 1; } fflush(NULL); pid_t p = fork();
                 if (p < 0) { perror("fork"); return 1; }
                 if (!p) { close(pfd[0]); LoadStats cs; memset(&cs, 0, sizeof cs); int rc = load(conninfo, threads, files + a0, b0 - a0, &cs);
                           if (write(pfd[1], &cs, sizeof cs) != (ssize_t)sizeof cs) rc = 1; fflush(NULL); _exit(rc ? 1 : 0); }
                 close(pfd[1]); loader = p; loader_fd = pfd[0]; }
             else if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1; }
+#endif
         batches++;
         if (b0 < nfiles) { for (int i = a0; i < b0; i++) { free(files[i].ev.e); memset(&files[i].ev, 0, sizeof files[i].ev); } table_reset(); }
         a0 = b0;
