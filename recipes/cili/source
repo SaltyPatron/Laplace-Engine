@@ -5,6 +5,7 @@ witness Collaborative Interlingual Index
 lineage WordNet
 class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/CILI/extracted
+root $LAPLACE_DATA/CILI
 
 # Measured when it was loaded: 6,055,916 compositions from 100 MB, at 750 bytes each with their indexes and standings.
 room 46

@@ -123,10 +123,21 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
         for (size_t s = 0; s < n; s++) { char hx[33]; id_text(&t[s].id, hx); int64_t at = lp_idmap_find(first, &t[s].id);
             const char *key = at >= 0 && (size_t)at < fcap ? fkey[at] : s < nz_before ? fz[s].key : "";
             fprintf(o, "%zu\t%s\t%s\t%s\n", s, hx, s < nz_before && fz[s].retired ? "retired" : "live", key ? key : ""); }
-        if (fclose(o) || rename(tmp, p)) { perror(p); exit(1); }
+        if (fclose(o) || os_rename(tmp, p)) { perror(p); exit(1); }
         free(fz);
     }
     lp_idmap_free(first); free(fkey);
+}
+
+/* A file written fresh beside its old self and swapped in: table_init maps the highway that is there, and on Windows a
+ * mapped file cannot be truncated in place, while it can be renamed away. */
+static FILE *open_fresh(const char *path, const char *mode, char *fresh, size_t cap){ snprintf(fresh, cap, "%s.new", path); return fopen(fresh, mode); }
+static int swap_in(const char *path, const char *fresh){
+    char old[4300]; snprintf(old, sizeof old, "%s.old", path); remove(old);
+    os_rename(path, old);                                                    /* nothing to move aside is fine */
+    if (os_rename(fresh, path)) { perror(path); return 1; }
+    remove(old);                                                          /* still mapped: left for the next run */
+    return 0;
 }
 
 int cmd_highway(int argc, char **argv){
@@ -172,14 +183,18 @@ int cmd_highway(int argc, char **argv){
     qsort(ed, ne, sizeof(Edge), edge_cmp); size_t m = 0;
     for (size_t i = 0; i < ne; i++) if (!m || edge_cmp(&ed[i], &ed[m - 1])) ed[m++] = ed[i];
     ne = m;
+    /* no resource at any of its roots writes nothing: the highway that is there stays (a run under the wrong LAPLACE_DATA
+     * must not swap an empty one in) */
+    if (!total) { fprintf(stderr, "laplace highway: no resource was found at any of its roots: %s is left as it is
+", outp); return 1; }
     lp_tier0_record *rec = calloc(total + 1, sizeof(lp_tier0_record));
     for (int l = 0; l < hw.nl; l++) for (size_t s = 0; s < hw.l[l].n; s++) { lp_tier0_record *x = &rec[hw.l[l].first + s]; const Ref *r = &hw.l[l].t[s];
         x->id = r->id; memcpy(x->m, r->c.m, 32); x->hilbert = lp_hilbert4(&r->c); x->rank = (uint32_t)s; x->pad = r->tier; }
-    FILE *o = fopen(outp, "wb"); if (!o) { perror(outp); return 1; }
+    char fresh[4300]; FILE *o = open_fresh(outp, "wb", fresh, sizeof fresh); if (!o) { perror(outp); return 1; }
     if (fwrite(rec, sizeof(lp_tier0_record), total, o) != total) { perror(outp); return 1; }
     for (size_t i = 0; i < ne; i++) { uint32_t pr[2] = { ed[i].from, ed[i].to }; fwrite(pr, 4, 2, o); }
-    fclose(o);
-    char lay[4300]; snprintf(lay, sizeof lay, "%s.layout", outp); o = fopen(lay, "w"); if (!o) { perror(lay); return 1; }
+    fclose(o); if (swap_in(outp, fresh)) return 1;
+    char lay[4300]; snprintf(lay, sizeof lay, "%s.layout", outp); o = open_fresh(lay, "w", fresh, sizeof fresh); if (!o) { perror(lay); return 1; }
     fprintf(o, "# The highway: one record per type (as a tier-0 record, its rank the slot), the lists in the resources' order, then the edges as pairs of slots.\n");
     fprintf(o, "records\t%u\nedges-count\t%zu\n", total, ne);
     for (int i = 0; i < hw.nl; i++) fprintf(o, "list\t%s\t%s\t%u\t%zu\n", hw.l[i].name, hw.l[i].say, hw.l[i].first, hw.l[i].n);
@@ -199,20 +214,20 @@ int cmd_highway(int argc, char **argv){
           fprintf(o, "bank\t%s\t%s\t%s\t%s\t%zu\n", nm, ls, gr, ca, width); nbank++; }
       fclose(bf); }
     int bit = nbank;
-    fclose(o);
+    fclose(o); if (swap_in(lay, fresh)) return 1;
     /* the keys the resources point at their types with, beside the highway: resolved by readers, recorded nowhere */
-    snprintf(lay, sizeof lay, "%s.keys", outp); o = fopen(lay, "w"); if (!o) { perror(lay); return 1; } size_t nkeys = 0, stray = 0;
+    snprintf(lay, sizeof lay, "%s.keys", outp); o = open_fresh(lay, "w", fresh, sizeof fresh); if (!o) { perror(lay); return 1; } size_t nkeys = 0, stray = 0;
     fprintf(o, "# The keys the resources point at their types with: list, the key as the resource writes it, the slot. Resolved by readers, recorded nowhere.\n");
     for (size_t i = 0; i < lp_strmap_count(hw.keys); i++) { const Key *k = lp_strmap_at(hw.keys, i); size_t kl; const char *kb = lp_strmap_key(hw.keys, i, &kl);
         int64_t s = slot_in(&hw.l[k->list], &k->id); if (s < 0) { stray++; continue; } fprintf(o, "%s\t%.*s\t%lld\n", hw.l[k->list].name, (int)(kl - sizeof(int)), kb + sizeof(int), (long long)s); nkeys++; }
-    fclose(o);
+    fclose(o); if (swap_in(lay, fresh)) return 1;
     /* the contents: every node under every type, before what holds it; then which type each list's slot is */
-    snprintf(lay, sizeof lay, "%s.nodes", outp); o = fopen(lay, "w"); if (!o) { perror(lay); return 1; } Seen seen = { 0 };
+    snprintf(lay, sizeof lay, "%s.nodes", outp); o = open_fresh(lay, "w", fresh, sizeof fresh); if (!o) { perror(lay); return 1; } Seen seen = { 0 };
     fprintf(o, "# The content of every type, as the composition it is. N: a node, its ID, its tier and its path (each child: its ID, or U and a code point; what it is said to be; its run). S: a list's slot and the ID of its content. Recorded by laplace deploy.\n");
     for (int l = 0; l < hw.nl; l++) for (size_t s = 0; s < hw.l[l].n; s++) node_write(o, &seen, &hw.l[l].t[s].id, 0);
     for (int l = 0; l < hw.nl; l++) for (size_t s = 0; s < hw.l[l].n; s++) { const lp_id *id = &hw.l[l].t[s].id; int64_t cp = lp_tier0_codepoint(T0, id); char c[33];
         if (cp >= 0) snprintf(c, sizeof c, "U%llX", (long long)cp); else hexid(id, c); fprintf(o, "S\t%s\t%zu\t%s\n", hw.l[l].name, s, c); }
-    fclose(o);
+    fclose(o); if (swap_in(lay, fresh)) return 1;
     for (int l = 0; l < hw.nl; l++) printf("  %-28s %'zu\n", hw.l[l].say[0] ? hw.l[l].say : hw.l[l].name, hw.l[l].n);
     if (lost) { printf("  %'zu mappings name a key no list holds, or a type of another list: left out\n", lost);
         for (int q = 0; q < nls; q++) printf("    %-10s to %-10s %'9zu   for instance %s%s%s%s\n", hw.l[ls[q].la].name, hw.l[ls[q].lb].name, ls[q].n, ls[q].ex[0][0] ? ls[q].ex[0] : "", ls[q].ex[0][0] && ls[q].ex[1][0] ? ", " : "", ls[q].ex[1][0] ? ls[q].ex[1] : "", ""); }

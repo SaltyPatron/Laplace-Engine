@@ -3,6 +3,7 @@ name semlink
 witness SemLink
 class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/SemLink/extracted/semlink-*
+root $LAPLACE_DATA/SemLink/semlink-*
 # Measured when it was loaded: 34,623 compositions from 0.5 MB, at 750 bytes each with their indexes and standings.
 room 52
 after propbank verbnet

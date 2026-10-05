@@ -3,6 +3,7 @@ name propbank
 witness PropBank
 class AcademicCurated
 root $LAPLACE_DATA/.refresh-*/PropBank/extracted/propbank-*/frames
+root $LAPLACE_DATA/PropBank/propbank-*/frames
 # Measured when it was loaded: 1,146,056 compositions from 30 MB, at 750 bytes each with their indexes and standings.
 room 29
 after unicode iso-639

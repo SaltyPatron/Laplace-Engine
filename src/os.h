@@ -31,6 +31,10 @@ int os_list_dir(const char *dir, os_list *out);
 /* Whether anything exists at a path. */
 int os_exists(const char *path);
 
+/* A file moved over another (rename(2): the destination replaced; MoveFileEx with MOVEFILE_REPLACE_EXISTING, where
+ * rename refuses an existing destination). 0, or -1 with errno set. */
+int os_rename(const char *from, const char *to);
+
 /* fnmatch(pattern, string, 0): 0 when the string matches. '*' and '?' match '/' too; '\' escapes. */
 int os_fnmatch(const char *pattern, const char *string);
 

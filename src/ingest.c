@@ -156,7 +156,7 @@ static void room_keep(const char *path, const char *source, double times){
     char tmp[4200]; snprintf(tmp, sizeof tmp, "%s.new", path); FILE *o = fopen(tmp, "w"); if (!o) return;
     FILE *f = fopen(path, "r"); char line[512]; size_t n = strlen(source);
     while (f && fgets(line, sizeof line, f)) if (strncmp(line, source, n) || line[n] != '\t') fputs(line, o);
-    if (f) fclose(f); fprintf(o, "%s\t%.3f\n", source, times); fclose(o); rename(tmp, path);
+    if (f) fclose(f); fprintf(o, "%s\t%.3f\n", source, times); fclose(o); os_rename(tmp, path);
 }
 static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int nrec, const int *want){
     char self[4096]; ssize_t sl = readlink("/proc/self/exe", self, sizeof self - 1); if (sl <= 0) { perror("/proc/self/exe"); return 1; } self[sl] = 0;
