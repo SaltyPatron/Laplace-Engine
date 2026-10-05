@@ -185,16 +185,23 @@ int cmd_pull(int argc, char **argv){
             for (int i = 0; i < nmine && i < fw.take[s].n; i++) { show_claim(rd, &mine[i], ""); took++; }
         }
         else if (fw.take[s].what == FW_TAKE_CONSTITUENTS) {
-            lp_id seen[256]; int nseen = 0, head = 0;
-            for (int i = 0; i < np && nseen < 256; i++) {
-                if (!table_find(&ph[i]) || !memcmp(&ph[i], &pr.id, 16)) continue;                  /* a composition, and not the prompt over again */
-                int dup = 0; for (int z = 0; z < nseen; z++) dup |= !memcmp(&seen[z], &ph[i], 16); if (dup) continue; seen[nseen++] = ph[i];
-                int n, cap2; Claim *cl = claims_of(pg, &ph[i], fw.fan, fw.k, &n, &cap2); n = refused(pg, c, &fw, cl, n); weighed(c, &fw, cl, n); take_top(cl, n, fw.take[s].n, &fw, &seed);
+            lp_id *seen = malloc(sizeof(lp_id) * (size_t)(np ? np : 1)); int nseen = 0, head = 0;
+            { lp_idmap *sm = lp_idmap_new();
+              for (int i = 0; i < np; i++) { if (!table_find(&ph[i]) || !memcmp(&ph[i], &pr.id, 16)) continue;    /* a composition, and not the prompt over again */
+                  bool fresh; lp_idmap_put(sm, &ph[i], &fresh); if (fresh) seen[nseen++] = ph[i]; }
+              lp_idmap_free(sm); }
+            int nall, *src; Claim *all = claims_each(pg, seen, nseen, NULL, 0, -1, fw.k, &nall, &src);      /* every constituent's claims, one set */
+            for (int i = 0, at = 0; i < nseen; i++) {
+                int n = 0; while (at + n < nall && src[at + n] == i) n++;
+                Claim *cl = malloc(sizeof(Claim) * (size_t)(n ? n : 1)); memcpy(cl, all + at, sizeof(Claim) * (size_t)n); at += n;
+                if (fw.fan >= 0 && n > fw.fan) n = fw.fan;                                          /* the fan: its hardest pulling */
+                n = refused(pg, c, &fw, cl, n); weighed(c, &fw, cl, n); take_top(cl, n, fw.take[s].n, &fw, &seed);
                 if (!head) { printf("\nattested   of its constituents\n%10s %8s %6s %8s   %s\n", "confidence", "rating", "dev", "matches", "claim"); head = 1; }
-                if (!n) { char *tx = reader_text(rd, &ph[i], 48); printf("%10s %8s %6s %8s   %s: nothing is attested of it\n", "", "", "", "", tx); free(tx); }
+                if (!n) { char *tx = reader_text(rd, &seen[i], 48); printf("%10s %8s %6s %8s   %s: nothing is attested of it\n", "", "", "", "", tx); free(tx); }
                 for (int k = 0; k < n && k < fw.take[s].n; k++) { show_claim(rd, &cl[k], ""); took++; }
                 free(cl);
             }
+            free(all); free(src); free(seen);
             if (head) printf("           (%.1f ms)\n", (now() - t) * 1000);
         }
         else if (fw.take[s].what == FW_TAKE_CHAIN) {

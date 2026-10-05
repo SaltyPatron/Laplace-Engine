@@ -56,6 +56,7 @@ void firmware_say(const Firmware *, int op);
 lp_ref entity_named(lp_text *, const char *text, lp_ref *parts, size_t cap, size_t *np);      /* a text's trunk, computed here */
 Claim *claims_like(PGconn *, const lp_id *part, const int *have, int fan, double k, int *n, int *capped);
 Claim *claims_of(PGconn *, const lp_id *e, int fan, double k, int *n, int *capped);    /* every claim that holds an entity */
+Claim *claims_each(PGconn *, const lp_id *keys, int nk, const lp_id *rel, int subject, int fan, double k, int *n, int **src);   /* the claims of each of a set, one set: src[i] is the place in keys of claim i */
 void   positions_of(PGconn *, Claim *, int n);
 int    claim_by_position(const void *, const void *);
 int    claim_by_conf(const void *, const void *);

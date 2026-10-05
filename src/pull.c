@@ -96,6 +96,34 @@ Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, doub
     *capped = fan >= 0 && m > fan; if (*capped) *n = fan;
     return c;
 }
+/* The claims of each of a set of entities, one set (holds_pair: one probe a leaf for all of them): with rel, the claims
+ * whose middle holds rel; subject, only those that begin with the entity. Each comes back with its entity's place in
+ * keys (src), ordered by place, then by how hard it tugs; at most fan a place. */
+typedef struct { Claim c; int src; } SrcClaim;
+static int by_src_conf(const void *a, const void *b){ const SrcClaim *x = a, *y = b; return x->src != y->src ? (x->src < y->src ? -1 : 1) : claim_by_conf(&x->c, &y->c); }
+Claim *claims_each(PGconn *pg, const lp_id *keys, int nk, const lp_id *rel, int subject, int fan, double k, int *n, int **src){
+    (void)pg; *n = 0; *src = NULL; if (!nk) return NULL;
+    lp_idmap *km = lp_idmap_new(); int *head = malloc(sizeof(int) * (size_t)nk), *link = malloc(sizeof(int) * (size_t)nk);
+    for (int i = 0; i < nk; i++) head[i] = -1;
+    for (int i = nk - 1; i >= 0; i--) { bool fresh; size_t u = lp_idmap_put(km, &keys[i], &fresh); link[i] = head[u]; head[u] = i; }
+    int nh = 0; Hold *h = holds_pair(keys, nk, rel, 1, &nh); SrcClaim *s = malloc(sizeof(SrcClaim) * (size_t)(nh ? nh : 1)); int m = 0, cap = nh ? nh : 1;
+    for (int j = 0; j < nh; j++) {
+        if (!h[j].claim || !h[j].stood) continue;
+        Claim x; memset(&x, 0, sizeof x); x.id = h[j].entity; size_t np = lp_path_ids(h[j].path, (size_t)h[j].path_len, x.part, MAXPARTS); x.np = np < MAXPARTS ? (int)np : MAXPARTS; if (x.np < 2) continue;
+        int last = x.np - 1;
+        if (rel) { int in = 0; for (int i = 1; i < last || (i == 1 && x.np == 2 && i <= last); i++) in |= !memcmp(&x.part[i], rel, 16); if (!in) continue; }
+        x.r = h[j].r; x.matches = h[j].matches; x.conf = lp_confidence(&x.r, k);
+        int64_t got[MAXPARTS]; int ng = 0;
+        for (int p = 0; p < (subject ? 1 : x.np); p++) { int64_t u = lp_idmap_find(km, &x.part[p]); if (u < 0) continue;     /* every key it holds, once */
+            int dup = 0; for (int q = 0; q < ng; q++) dup |= got[q] == u; if (dup) continue; got[ng++] = u;
+            for (int i = head[u]; i >= 0; i = link[i]) { if (m == cap) { cap *= 2; s = xrealloc(s, sizeof(SrcClaim) * (size_t)cap); } s[m++] = (SrcClaim){ x, i }; } }
+    }
+    holds_free(h, nh); lp_idmap_free(km); free(head); free(link);
+    qsort(s, (size_t)m, sizeof(SrcClaim), by_src_conf);
+    Claim *c = malloc(sizeof(Claim) * (size_t)(m ? m : 1)); int *sr = malloc(sizeof(int) * (size_t)(m ? m : 1)), w = 0, per = 0;
+    for (int j = 0; j < m; j++) { per = j && s[j].src == s[j - 1].src ? per + 1 : 0; if (fan >= 0 && per >= fan) continue; c[w] = s[j].c; sr[w++] = s[j].src; }
+    free(s); *n = w; *src = sr; return c;
+}
 /* Every claim that holds an entity, wherever in it. */
 Claim *claims_of(PGconn *pg, const lp_id *e, int fan, double k, int *n, int *capped){
     lp_id part[3] = { *e, *e, *e }; int have[3] = { 1, 0, 0 };
