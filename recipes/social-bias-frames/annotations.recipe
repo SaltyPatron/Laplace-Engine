@@ -10,7 +10,7 @@ name social-bias-frames-annotations
 #   targetCategory: high-level category of the demographic group(s) targeted;  targetStereotype: implied statement;
 #   dataSource: source of the post
 # A line is one worker's reading of one post. What the worker answered of the post, the worker says, of the post;
-# what the line holds of the worker is said of the worker; where the post was taken from (dataSource) is the set's bookkeeping.
+# what the line holds of the worker is said of the worker; where the post was said (dataSource), the set says.
 # A post is its text; the HITId is the crowdsourcing task's key. A worker stands within the set: [the set, WorkerId, the id].
 match SBIC.v2.trn.csv SBIC.v2.dev.csv SBIC.v2.tst.csv
 
@@ -22,8 +22,9 @@ tier field by ,
 thing row post
 key row HITId
 own WorkerId
-omit dataSource
-content post whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype annotator*
+content post whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype annotator* dataSource
 
 attest row whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype by WorkerId
 attest row annotator* of WorkerId
+# where the post was said ("source of the post (t/...: means Twitter, r/...: means a subreddit)"), the set says
+attest row dataSource
