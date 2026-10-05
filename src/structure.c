@@ -4,6 +4,7 @@
  * recipe's layout says the file writes them, and nowhere else. */
 #define _GNU_SOURCE
 #include "structure.h"
+#include "os.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -453,10 +454,10 @@ uint64_t s_grammar_split(const Layout *l, const void *lang, const uint8_t *src, 
     { SPartTree *p = &pt[np]; p->doc = malloc(n + 1); p->seg = malloc(sizeof(Seg) * (nrs + 2)); size_t at = 0;
       for (size_t j = 0; j <= nrs; j++) { size_t b = j < nrs ? ra[j] : n; if (b > at) { p->seg[p->nseg++] = (Seg){ p->len, at }; memcpy(p->doc + p->len, src + at, b - at); p->len += b - at; } if (j < nrs) at = rb[j]; }
       if (!p->nseg) p->seg[p->nseg++] = (Seg){ 0, 0 }; }
-    struct timespec T0_, T1_, T2_, T3_; clock_gettime(CLOCK_MONOTONIC, &T0_);
+    double T0_ = os_now(), T1_, T2_, T3_;
     #pragma omp taskloop grainsize(1)
     for (size_t i = 0; i <= np; i++) part_tree(l, (const TSLanguage *)lang, &pt[i]);
-    clock_gettime(CLOCK_MONOTONIC, &T1_);
+    T1_ = os_now();
     /* every record: the nodes the part's own element (_) holds, in order */
     size_t ni = 0, ci = 1024; Item *it = malloc(sizeof(Item) * ci);
     for (size_t i = 0; i < np; i++) { const STree *t = &pt[i].t; int32_t u = -1;
@@ -477,11 +478,10 @@ uint64_t s_grammar_split(const Layout *l, const void *lang, const uint8_t *src, 
             c = next; } }
     if (l->ntier) for (int32_t c = g.m.n[0].first; c >= 0; c = g.m.n[c].next)
         if (g.m.n[c].kind == S_GROUP && !g.m.n[c].nlen) { g.m.n[c].name = (const uint8_t *)l->tier[0].name; g.m.n[c].nlen = (uint32_t)strlen(l->tier[0].name); }
-    clock_gettime(CLOCK_MONOTONIC, &T2_);
+    T2_ = os_now();
     fn(sink, &g.m, 0, 0);
-    clock_gettime(CLOCK_MONOTONIC, &T3_);
-    if (getenv("LAPLACE_TIMING")) fprintf(stderr, "\n  split: %zu parts parsed %.2f s, grafted %.2f s, read %.2f s\n", np + 1, (T1_.tv_sec - T0_.tv_sec) + (T1_.tv_nsec - T0_.tv_nsec) * 1e-9,
-        (T2_.tv_sec - T1_.tv_sec) + (T2_.tv_nsec - T1_.tv_nsec) * 1e-9, (T3_.tv_sec - T2_.tv_sec) + (T3_.tv_nsec - T2_.tv_nsec) * 1e-9);
+    T3_ = os_now();
+    if (getenv("LAPLACE_TIMING")) fprintf(stderr, "\n  split: %zu parts parsed %.2f s, grafted %.2f s, read %.2f s\n", np + 1, T1_ - T0_, T2_ - T1_, T3_ - T2_);
     uint64_t bad = 0;
     for (size_t i = 0; i <= np; i++) { bad += pt[i].bad; tree_free(&pt[i].t); free(pt[i].doc); free(pt[i].seg); }
     tree_free(&g.m); free(pt); free(it); free(first);

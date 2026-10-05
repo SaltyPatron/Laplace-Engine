@@ -6,13 +6,12 @@
  * trunk in the DAG, over its metadata and its content (file.c); a file whose trunk is recorded already is recorded,
  * and nothing of it is written again. Then new nodes are written, and what was attested is played and recorded. Live counters go to stderr, phase times to stdout. */
 #include "engine.h"
+#ifndef _WIN32
 #include <arpa/inet.h>
+#endif
 #include <locale.h>
-#include <ftw.h>
-#include <sys/stat.h>
 #include <omp.h>
 #include <zlib.h>
-#include <glob.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -75,12 +74,7 @@ static void add_path(const char *p){
     if (npaths == cpaths) { cpaths = cpaths ? cpaths * 2 : 1024; paths = xrealloc(paths, sizeof(char *) * cpaths); path_of = xrealloc(path_of, sizeof(Source *) * cpaths); }
     path_of[npaths] = walking; paths[npaths++] = strdup(p);
 }
-static int walk_cb(const char *p, const struct stat *st, int type, struct FTW *fw){
-    const char *b = p + fw->base;
-    if (type == FTW_D && b[0] == '.' && fw->level > 0) return FTW_SKIP_SUBTREE;          /* hidden directories */
-    if (type == FTW_F && b[0] != '.' && st->st_size > 0) add_path(p);
-    return FTW_CONTINUE;
-}
+static void walk_add(const char *p, uint64_t size, void *arg){ (void)arg; if (size > 0) add_path(p); }   /* os_walk passes over hidden names and links */
 
 /* A claim or a tuple as text: its parts between brackets, a part that is itself a tuple the same way. */
 static void show_tuple(const lp_id *id){
@@ -107,17 +101,17 @@ static void show_held(const lp_id *id, int depth){
  * kept in a log of its own. A source none of whose files is here is said so and passed over; a source that fails
  * stops the run, since what comes after it counts on it. What is already recorded is passed over by its bytes, so
  * a run that was cut off is taken up by running it again. */
+#ifndef _WIN32
 #include <sys/wait.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <sys/statvfs.h>
+#endif
 /* How much a source's files hold, as its recipes would read them (what gzip holds is taken as eight times its size). */
 static uint64_t source_bytes(const Source *sc, Recipe *rec, int nrec){
     int from = npaths; const Source *was = walking; walking = sc;
-    if (sc->nfiles) for (int z = 0; z < sc->nfiles; z++) { glob_t g; if (!glob(sc->files[z], 0, NULL, &g)) for (size_t y = 0; y < g.gl_pathc; y++) add_path(g.gl_pathv[y]); globfree(&g); }
-    else nftw(sc->found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+    if (sc->nfiles) for (int z = 0; z < sc->nfiles; z++) { os_list g; os_glob(sc->files[z], &g); for (size_t y = 0; y < g.n; y++) add_path(g.item[y]); os_list_free(&g); }
+    else os_walk(sc->found, walk_add, NULL);
     walking = was; uint64_t sum = 0;
-    for (int i = from; i < npaths; i++) { struct stat st; if (recipe_for(rec, nrec, paths[i], sc) && !stat(paths[i], &st)) { size_t l = strlen(paths[i]); sum += (uint64_t)st.st_size * (l > 3 && !strcmp(paths[i] + l - 3, ".gz") ? 8 : 1); } free(paths[i]); }
+    for (int i = from; i < npaths; i++) { uint64_t sz; if (recipe_for(rec, nrec, paths[i], sc) && !os_file_size(paths[i], &sz)) { size_t l = strlen(paths[i]); sum += sz * (l > 3 && !strcmp(paths[i] + l - 3, ".gz") ? 8 : 1); } free(paths[i]); }
     npaths = from; return sum;
 }
 /* A source's files its recipes read, in the order they are read: what refers to another recipe's keys after it, and
@@ -128,8 +122,8 @@ static int by_depth(const void *x, const void *y){ const char *a = *(char *const
     return da != db ? da - db : strcmp(a, b); }
 int source_files(const Source *sc, Recipe *rec, int nrec, char ***out, Recipe ***of){
     int from = npaths; const Source *was = walking; walking = sc;
-    if (sc->nfiles) for (int z = 0; z < sc->nfiles; z++) { glob_t g; if (!glob(sc->files[z], 0, NULL, &g)) for (size_t y = 0; y < g.gl_pathc; y++) add_path(g.gl_pathv[y]); globfree(&g); }
-    else nftw(sc->found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+    if (sc->nfiles) for (int z = 0; z < sc->nfiles; z++) { os_list g; os_glob(sc->files[z], &g); for (size_t y = 0; y < g.n; y++) add_path(g.item[y]); os_list_free(&g); }
+    else os_walk(sc->found, walk_add, NULL);
     int n = 0; char **p = malloc(sizeof(char *) * (size_t)(npaths - from + 1));
     for (int i = from; i < npaths; i++) { if (recipe_for(rec, nrec, paths[i], sc)) p[n++] = paths[i]; else free(paths[i]); }
     npaths = from; rec_now = rec; nrec_now = nrec; qsort(p, (size_t)n, sizeof(char *), by_depth);
@@ -140,14 +134,14 @@ int source_files(const Source *sc, Recipe *rec, int nrec, char ***out, Recipe **
 static double room_left(const char *conninfo){
     PGconn *pg = PQconnectdb(conninfo); double gb = -1;
     if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SHOW data_directory");
-        if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) { struct statvfs v; if (!statvfs(PQgetvalue(r, 0, 0), &v)) gb = (double)v.f_bavail * (double)v.f_frsize / 1e9; }
+        if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) { double fr, tot; if (!os_disk_space(PQgetvalue(r, 0, 0), &fr, &tot)) gb = fr / 1e9; }
         PQclear(r); }
     PQfinish(pg); return gb;
 }
 static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int nrec, const int *want){
-    char self[4096]; ssize_t sl = readlink("/proc/self/exe", self, sizeof self - 1); if (sl <= 0) { perror("/proc/self/exe"); return 1; } self[sl] = 0;
-    const char *work = getenv("LAPLACE_WORK"); char dir[4096]; snprintf(dir, sizeof dir, "%s/logs/ingest", work && *work ? work : "."); 
-    { char cmd[4200]; snprintf(cmd, sizeof cmd, "%s", dir); for (char *c = cmd + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(cmd, 0775); *c = '/'; } mkdir(cmd, 0775); }
+    char self[4096]; if (os_self_path(self, sizeof self)) { fprintf(stderr, "this program's own path cannot be found\n"); return 1; }
+    const char *work = getenv("LAPLACE_WORK"); char dir[4096]; snprintf(dir, sizeof dir, "%s/logs/ingest", work && *work ? work : ".");
+    os_mkdirs(dir);
     setlocale(LC_NUMERIC, "en_US.UTF-8");
     const char *conninfo = laplace_db(); int loads = 1;
     for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[a + 1]; if (!strcmp(argv[a], "--no-load") || !strcmp(argv[a], "--plan") || !strcmp(argv[a], "--claims")) loads = 0; }
@@ -167,24 +161,18 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
         int mine = 0; for (int k = 0; k < nrec; k++) mine += rec[k].source == i; mine += src[i].nreads;
         if (!mine) { printf("%-4d %-38s %-10s %10s   no recipe reads it yet\n", i + 1, src[i].name, "passed", ""); empty++; wentin[i] = 1; continue; }
         if (!src[i].found[0]) { printf("%-4d %-38s %-10s %10s   it is at none of its roots\n", i + 1, src[i].name, "absent", ""); absent++; continue; }
-        if (loads) { double have = room_left(conninfo), need = (double)source_bytes(&src[i], rec, nrec) * (src[i].room > 0 ? src[i].room : factor) / 1e9; struct statvfs v; double whole = 0;
-            { PGconn *pg = PQconnectdb(conninfo); if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SHOW data_directory"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !statvfs(PQgetvalue(r, 0, 0), &v)) whole = (double)v.f_blocks * (double)v.f_frsize / 1e9; PQclear(r); } PQfinish(pg); }
+        if (loads) { double have = room_left(conninfo), need = (double)source_bytes(&src[i], rec, nrec) * (src[i].room > 0 ? src[i].room : factor) / 1e9; double fr, tot, whole = 0;
+            { PGconn *pg = PQconnectdb(conninfo); if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SHOW data_directory"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !os_disk_space(PQgetvalue(r, 0, 0), &fr, &tot)) whole = tot / 1e9; PQclear(r); } PQfinish(pg); }
             if (have >= 0 && have - need < whole / 10) { char why[128]; snprintf(why, sizeof why, "no room: it may take %.0f GB, and %.0f GB is left", need, have);
                 printf("%-4d %-38s %-10s %10s   %s\n", i + 1, src[i].name, "not begun", "", why); short_of_room++; continue; } }
         char log[4300]; snprintf(log, sizeof log, "%s/%s.log", dir, src[i].name);
         printf("%-4d %-38s ", i + 1, src[i].name); fflush(stdout);
-        double t = now(); pid_t pid = fork();
-        if (pid < 0) { perror("fork"); return 1; }
-        if (!pid) {
-            int fd = open(log, O_WRONLY | O_CREAT | O_TRUNC, 0664); if (fd < 0) { perror(log); _exit(127); }
-            dup2(fd, 1); dup2(fd, 2); close(fd); setenv("LAPLACE_INGEST_ONE", "1", 1);   /* the child takes this source alone: what it comes after went in before it */
-            char **av = malloc(sizeof(char *) * (size_t)(argc + 3)); int n = 0; av[n++] = self; av[n++] = "ingest";
-            for (int a = 1; a < argc; a++) av[n++] = argv[a];                            /* the options, as they were given */
-            av[n++] = (char *)src[i].name; av[n] = NULL;
-            execv(self, av); perror(self); _exit(127);
-        }
-        int st = 0; while (waitpid(pid, &st, 0) < 0) { }
-        int code = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+        double t = now();
+        char **av = malloc(sizeof(char *) * (size_t)(argc + 3)); int n = 0; av[n++] = self; av[n++] = "ingest";
+        for (int a = 1; a < argc; a++) av[n++] = argv[a];                                /* the options, as they were given */
+        av[n++] = (char *)src[i].name; av[n] = NULL;
+        /* the child takes this source alone (LAPLACE_INGEST_ONE): what it comes after went in before it */
+        int code = os_run_logged(self, av, log, "LAPLACE_INGEST_ONE", "1"); free(av);
         char last[256] = ""; { FILE *f = fopen(log, "r"); char line[4096]; while (f && fgets(line, sizeof line, f)) { char *cr = strrchr(line, '\r'); const char *c = cr && cr[1] && cr[1] != '\n' ? cr + 1 : line; while (*c == ' ') c++;
               if (strstr(c, "attestations") || strstr(c, "already recorded") || (code && *c && *c != '\n')) { snprintf(last, sizeof last, "%.200s", c); char *nl = strchr(last, '\n'); if (nl) *nl = 0; } } if (f) fclose(f); }
         printf("%-10s %'10.1f   %s\n", code ? "FAILED" : "in", now() - t, last); fflush(stdout);
@@ -198,6 +186,7 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
 static const uint64_t *by_size_of;                                    /* the batch's files, longest first, ties in the order given */
 static int by_size(const void *a, const void *b){ int i = *(const int *)a, j = *(const int *)b; uint64_t x = by_size_of[i], y = by_size_of[j]; return x < y ? 1 : x > y ? -1 : i - j; }
 /* The child writing a batch: waited for, its counts added to the run's. Nonzero when it failed. */
+#ifndef _WIN32
 static int loader_wait(pid_t *pid, int fd, LoadStats *st){
     LoadStats cs; memset(&cs, 0, sizeof cs); ssize_t got = read(fd, &cs, sizeof cs); close(fd);
     int status = 0; while (waitpid(*pid, &status, 0) < 0) { } *pid = 0;
@@ -206,6 +195,7 @@ static int loader_wait(pid_t *pid, int fd, LoadStats *st){
     double *x = &st->t_dedup, *y = &cs.t_dedup; for (size_t k = 0; k < (sizeof(LoadStats) - offsetof(LoadStats, t_dedup)) / sizeof(double); k++) x[k] += y[k];
     return 0;
 }
+#endif
 /* Which files are recorded, before any is read (the inventor: "if you have the file's trunk node (and it's hash metadata
  * matches), you know you have everything in that file already"). A file's metadata tree begins with the OS's record of
  * it, one node computed from stat alone (say.c, file_os); the container index gives what holds that node: the file's
@@ -264,27 +254,27 @@ int cmd_ingest(int argc, char **argv){
      * asks the database of every composition, is of files only, never a source by its name */
     if (show_claims && a >= argc) { fprintf(stderr, "--claims and --entities show what files would record: name the files\n"); return 2; }
     Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec), nsrc; Source *src = sources_loaded(&nsrc);
-    if (entities) for (int i = a; i < argc; i++) { struct stat st_; if (stat(argv[i], &st_)) { fprintf(stderr, "--entities shows what files would record: %s is no file (a sample of a source: -s SOURCE FILE)\n", argv[i]); return 2; } }
+    if (entities) for (int i = a; i < argc; i++) { if (!os_exists(argv[i])) { fprintf(stderr, "--entities shows what files would record: %s is no file (a sample of a source: -s SOURCE FILE)\n", argv[i]); return 2; } }
     for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, "file")) file_record_stock(&rec[k]);   /* what the OS keeps of every file: the stock recipe file */
     if (of) { int k = 0; while (k < nsrc && strcmp(src[k].name, of)) k++; if (k == nsrc) { fprintf(stderr, "%s is not a source\n", of); return 2; } walking = &src[k]; }
-    { int named = 0; for (int i = a; i < argc; i++) { struct stat st_; int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++; named += k < nsrc && stat(argv[i], &st_); }
+    { int named = 0; for (int i = a; i < argc; i++) { int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++; named += k < nsrc && !os_exists(argv[i]); }
       if (named && named == argc - a && !of && !getenv("LAPLACE_INGEST_ONE")) {   /* sources by name: each its own run, in recipes/order, after everything it comes after */
           int *want = calloc((size_t)nsrc, sizeof(int)); for (int i = a; i < argc; i++) for (int k = 0; k < nsrc; k++) if (!strcmp(src[k].name, argv[i])) want[k] = 1;
           for (int k = nsrc - 1; k >= 0; k--) if (want[k]) for (int x = 0; x < src[k].nafter; x++) for (int j = 0; j < k; j++) if (!strcmp(src[j].name, src[k].after[x])) want[j] = 1;   /* sources is in order: what one comes after is before it */
           int rc = ingest_every(a, argv, src, nsrc, rec, nrec, want); free(want); return rc; } }
     for (int i = a; i < argc; i++) {                                         /* a source by its name, or files and directories */
-        struct stat st; int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++;
-        if (k < nsrc && stat(argv[i], &st)) {
+        int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++;
+        if (k < nsrc && !os_exists(argv[i])) {
             if (!src[k].found[0]) { fprintf(stderr, "source %s is not at any of its roots\n", src[k].name); return 1; }
             const Source *was = walking; walking = &src[k];
-            if (src[k].nfiles) for (int z = 0; z < src[k].nfiles; z++) { glob_t g; if (!glob(src[k].files[z], 0, NULL, &g)) for (size_t y = 0; y < g.gl_pathc; y++) add_path(g.gl_pathv[y]); globfree(&g); }
-            else nftw(src[k].found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+            if (src[k].nfiles) for (int z = 0; z < src[k].nfiles; z++) { os_list g; os_glob(src[k].files[z], &g); for (size_t y = 0; y < g.n; y++) add_path(g.item[y]); os_list_free(&g); }
+            else os_walk(src[k].found, walk_add, NULL);
             walking = was;
         }
         else {                                                               /* a file or directory: under a source's root, it is that source's */
-            const Source *was = walking; char real[4096]; if (!walking && realpath(argv[i], real))
+            const Source *was = walking; char real[4096]; if (!walking && os_realpath(argv[i], real, sizeof real))
                 for (int z = 0; z < nsrc; z++) { size_t l = strlen(src[z].found); if (l && !strncmp(real, src[z].found, l) && (real[l] == '/' || !real[l])) { walking = &src[z]; break; } }
-            if (!stat(argv[i], &st) && S_ISDIR(st.st_mode)) nftw(argv[i], walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+            if (os_is_dir(argv[i])) os_walk(argv[i], walk_add, NULL);
             else add_path(argv[i]);
             walking = was;
         }
@@ -350,11 +340,13 @@ int cmd_ingest(int argc, char **argv){
     t = now();
     uint64_t batch = (uint64_t)(getenv("LAPLACE_BATCH_MB") ? atoll(getenv("LAPLACE_BATCH_MB")) : 1024) << 20;
     uint64_t bytes = 0, nev = 0; int done = 0, exact = 0, mism = 0, batches = 0; double t_dec = 0, t_rec = 0; LoadStats st = { 0 };
+#ifndef _WIN32
     pid_t loader = 0; int loader_fd = -1;                                     /* the child writing the batch before, if one is */
+#endif
     st.known += (uint64_t)nknown;                                            /* found by their OS record, never read */
     uint64_t *size = calloc((size_t)nfiles, 8);
-    for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
-        size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
+    for (int i = 0; i < nfiles; i++) { uint64_t sz; if (files[i].known || files[i].skipped || os_file_size(files[i].path, &sz)) continue;
+        size_t l = strlen(files[i].path); size[i] = sz * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
     #define SHOW(F) do { if (show_claims) for (uint64_t e = 0; e < (F)->ev.n; e++) { const Event *x_ = &(F)->ev.e[e]; \
         if (x_->kind == EV_RECORD) { printf("-- record %u", x_->position); if (x_->own_witness) { printf("   by "); show_tuple(&x_->witness); } putchar('\n'); show_held(&x_->witnessed, 0); continue; } \
         if (!table_find(&x_->claim)) continue; \
@@ -457,6 +449,7 @@ int cmd_ingest(int argc, char **argv){
             /* The batch before is written and committed first, so this batch's lookups see it. When more batches follow,
              * this one is written by a child, from its copy of the node table, while this process empties the table and
              * decomposes the next on every core: the cores and the database work at the same time. */
+#ifndef _WIN32
             if (loader > 0 && loader_wait(&loader, loader_fd, &st)) return 1;
             if (b0 < nfiles) { int pfd[2]; if (pipe(pfd)) { perror("pipe"); return 1; } fflush(NULL); pid_t p = fork();
                 if (p < 0) { perror("fork"); return 1; }
@@ -464,13 +457,19 @@ int cmd_ingest(int argc, char **argv){
                           if (write(pfd[1], &cs, sizeof cs) != (ssize_t)sizeof cs) rc = 1; fflush(NULL); _exit(rc ? 1 : 0); }
                 close(pfd[1]); loader = p; loader_fd = pfd[0]; }
             else if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1; }
+#else
+            /* No fork on Windows: the batch is written before the next is decomposed, from the one node table. */
+            if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1; }
+#endif
         batches++;
         if (b0 < nfiles) { for (int i = a0; i < b0; i++) { free(files[i].ev.e); memset(&files[i].ev, 0, sizeof files[i].ev); } table_reset(); }
         a0 = b0;
     }
     #undef SHOW
     #undef WHOLE
+#ifndef _WIN32
     if (loader > 0 && loader_wait(&loader, loader_fd, &st)) return 1;        /* the last batch a child wrote */
+#endif
     fputc('\n', stderr);
     extern uint64_t table_total(void), table_hits(void);
     printf("\n== decomposition: %d files, %.1f MB, content recomposed byte for byte or curated %d, mismatched %d%s\n", nfiles, bytes / 1e6, exact, mism, batches > 1 ? ", a batch at a time" : "");

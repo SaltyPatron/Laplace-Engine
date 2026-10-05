@@ -124,7 +124,7 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
         lp_idmap_free(l->map); l->map = lp_idmap_new(); for (size_t s = 0; s < n; s++) lp_idmap_put(l->map, &t[s].id, NULL);
         free(l->t); l->t = t; l->n = n; l->cap = n + 1; free(placed);
         /* the registry, written back: the slots it held, then the new ones */
-        char d[4096], p[4200], tmp[4300]; snprintf(d, sizeof d, "%s/slots", manifest_dir()); mkdir(d, 0775);
+        char d[4096], p[4200], tmp[4300]; snprintf(d, sizeof d, "%s/slots", manifest_dir()); os_mkdir(d);
         snprintf(p, sizeof p, "%s/%s.tsv", d, l->name); snprintf(tmp, sizeof tmp, "%s.tmp", p); FILE *o = fopen(tmp, "w"); if (!o) { perror(tmp); exit(1); }
         fprintf(o, "# The frozen slots of the highway list %s (%s). A slot never moves: a type no resource lists any longer is\n# retired and keeps its slot; a new type takes the next. Written by laplace highway; never edited by hand.\n", l->name, l->say);
         fprintf(o, "slot\tid\tstatus\tkey\n");

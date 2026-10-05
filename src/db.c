@@ -2,7 +2,9 @@
  * connection, and the semantics (witnesses, attestation, consensus). SQL only fetches and writes. */
 #define _GNU_SOURCE
 #include "engine.h"
+#ifndef _WIN32
 #include <arpa/inet.h>
+#endif
 #include <locale.h>
 #include <omp.h>
 #include <stdio.h>

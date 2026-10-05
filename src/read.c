@@ -2,7 +2,9 @@
  * round trip, and are decoded and expanded here. A containment is not one backend walking every partition: each leaf
  * is its own statement, and the leaves run on every core (the same shape as a load's writes). */
 #include "engine.h"
+#ifndef _WIN32
 #include <arpa/inet.h>
+#endif
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>

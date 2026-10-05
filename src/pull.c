@@ -14,7 +14,9 @@
  * How a standing is read, how far a search walks, how many claims are read and what is refused are the firmware's
  * decisions (firmware.c), not the program's; --k, --fan, --hops and --per-hop are there to measure against it. */
 #include "engine.h"
+#ifndef _WIN32
 #include <arpa/inet.h>
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

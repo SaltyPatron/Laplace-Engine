@@ -7,10 +7,13 @@
 #define LAPLACE_ENGINE_H
 
 #include "laplace/laplace.h"
+#include "os.h"
 #include <libpq-fe.h>
 #include <stdint.h>
 #include <stddef.h>
+#ifndef _WIN32
 #include <pthread.h>
+#endif
 
 /* ---- where things are: the environment (laplace.env), else what the engine was built with */
 const char *laplace_db(void);                        /* LAPLACE_CONNINFO: a libpq connection string */

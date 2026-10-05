@@ -39,6 +39,71 @@ int os_exists(const char *path){ struct stat st; return stat(path, &st) == 0; }
 int os_fnmatch(const char *pattern, const char *string){ return fnmatch(pattern, string, 0); }
 void os_slashes(char *path){ (void)path; }
 
+#include <errno.h>
+#include <fcntl.h>
+#include <ftw.h>
+#include <limits.h>
+#include <stdio.h>
+#include <sys/mman.h>
+#include <sys/statvfs.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+int os_is_dir(const char *path){ struct stat st; return stat(path, &st) == 0 && S_ISDIR(st.st_mode); }
+int os_file_size(const char *path, uint64_t *size){ struct stat st; if (stat(path, &st) || !S_ISREG(st.st_mode)) return -1; *size = (uint64_t)st.st_size; return 0; }
+int os_mkdir(const char *path){ return mkdir(path, 0775) == 0 || errno == EEXIST ? 0 : -1; }
+int os_mkdirs(const char *path){
+    char p[4096]; snprintf(p, sizeof p, "%s", path);
+    for (char *c = p + 1; *c; c++) if (*c == '/') { *c = 0; os_mkdir(p); *c = '/'; }
+    return os_mkdir(p);
+}
+char *os_realpath(const char *path, char *out, size_t cap){
+    char r[PATH_MAX]; if (!realpath(path, r) || strlen(r) >= cap) return NULL;
+    return strcpy(out, r);
+}
+int os_self_path(char *out, size_t cap){ ssize_t n = readlink("/proc/self/exe", out, cap - 1); if (n <= 0) return -1; out[n] = 0; return 0; }
+
+static __thread void (*walk_fn)(const char *, uint64_t, void *); static __thread void *walk_arg;
+static int walk_cb(const char *p, const struct stat *st, int type, struct FTW *fw){
+    const char *b = p + fw->base;
+    if (type == FTW_D && b[0] == '.' && fw->level > 0) return FTW_SKIP_SUBTREE;          /* hidden directories */
+    if (type == FTW_F && b[0] != '.') walk_fn(p, (uint64_t)st->st_size, walk_arg);
+    return FTW_CONTINUE;
+}
+void os_walk(const char *dir, void (*cb)(const char *, uint64_t, void *), void *arg){
+    walk_fn = cb; walk_arg = arg; nftw(dir, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+}
+int os_disk_space(const char *path, double *free_bytes, double *total_bytes){
+    struct statvfs v; if (statvfs(path, &v)) return -1;
+    *free_bytes = (double)v.f_bavail * (double)v.f_frsize; *total_bytes = (double)v.f_blocks * (double)v.f_frsize; return 0;
+}
+void *os_map_file(const char *path, size_t *len){
+    int fd = open(path, O_RDONLY); struct stat sb; if (fd < 0) return NULL;
+    if (fstat(fd, &sb)) { close(fd); return NULL; }
+    void *p = mmap(NULL, (size_t)sb.st_size, PROT_READ, MAP_SHARED, fd, 0); close(fd);
+    if (p == MAP_FAILED) return NULL; *len = (size_t)sb.st_size; return p;
+}
+void *os_reserve(size_t bytes){
+    void *p = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (p == MAP_FAILED) { perror("mmap"); exit(1); }
+    madvise(p, bytes, MADV_HUGEPAGE);                   /* random probes over gigabytes: fewer TLB misses */
+    return p;
+}
+void os_discard(void *p, size_t bytes){ madvise(p, bytes, MADV_DONTNEED); }
+double os_now(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
+int os_run_logged(const char *program, char *const argv[], const char *log, const char *envname, const char *envval){
+    fflush(NULL); pid_t pid = fork();
+    if (pid < 0) { perror("fork"); return 127; }
+    if (!pid) {
+        int fd = open(log, O_WRONLY | O_CREAT | O_TRUNC, 0664); if (fd < 0) { perror(log); _exit(127); }
+        dup2(fd, 1); dup2(fd, 2); close(fd); if (envname) setenv(envname, envval, 1);
+        execv(program, argv); perror(program); _exit(127);
+    }
+    int st = 0; while (waitpid(pid, &st, 0) < 0) { }
+    return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+}
+
 #else
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -149,5 +214,216 @@ void os_glob(const char *pattern, os_list *out){
     else if (p[0] == '/') { base[0] = '/'; base[1] = 0; }
     expand(base, rest, out);
     qsort(out->item, out->n, sizeof(char *), by_bytes);
+}
+
+/* ---- what the C library lacks */
+void *os_memmem(const void *hay, size_t hn, const void *needle, size_t nn){
+    if (!nn) return (void *)hay;
+    if (nn > hn) return NULL;
+    const unsigned char *h = hay, *n = needle, *end = h + hn - nn;
+    for (; h <= end; h++) { h = memchr(h, n[0], (size_t)(end - h) + 1); if (!h) return NULL; if (!memcmp(h, n, nn)) return (void *)h; }
+    return NULL;
+}
+char *os_strndup(const char *s, size_t n){
+    size_t l = 0; while (l < n && s[l]) l++;
+    char *c = malloc(l + 1); if (c) { memcpy(c, s, l); c[l] = 0; } return c;
+}
+ssize_t os_getline(char **line, size_t *cap, FILE *f){
+    if (!*line || !*cap) { *cap = 256; *line = malloc(*cap); if (!*line) return -1; }
+    size_t n = 0; int c;
+    while ((c = fgetc(f)) != EOF) {
+        if (n + 2 > *cap) { size_t nc = *cap * 2; char *g = realloc(*line, nc); if (!g) return -1; *line = g; *cap = nc; }
+        (*line)[n++] = (char)c; if (c == '\n') break;
+    }
+    if (!n && c == EOF) return -1;
+    (*line)[n] = 0; return (ssize_t)n;
+}
+/* The format without the ' flag (thousands grouping), which the Universal CRT does not know. */
+static const char *plain(const char *fmt, char *buf, size_t cap){
+    if (!strchr(fmt, '\'')) return fmt;
+    size_t j = 0; int in = 0;
+    for (const char *p = fmt; *p && j + 1 < cap; p++) {
+        if (in && *p == '\'') continue;
+        if (*p == '%') in = !in || p[-1] != '%'; else if (in && !strchr("-+ #0123456789.*hlLqjzt", *p)) in = 0;
+        buf[j++] = *p;
+    }
+    buf[j] = 0; return buf;
+}
+#undef printf
+#undef fprintf
+#undef snprintf
+#include <stdarg.h>
+int os_printf(const char *fmt, ...){ char b[2048]; va_list ap; va_start(ap, fmt); int r = vprintf(plain(fmt, b, sizeof b), ap); va_end(ap); return r; }
+int os_fprintf(FILE *f, const char *fmt, ...){ char b[2048]; va_list ap; va_start(ap, fmt); int r = vfprintf(f, plain(fmt, b, sizeof b), ap); va_end(ap); return r; }
+int os_snprintf(char *s, size_t n, const char *fmt, ...){ char b[2048]; va_list ap; va_start(ap, fmt); int r = vsnprintf(s, n, plain(fmt, b, sizeof b), ap); va_end(ap); return r; }
+
+/* ---- files and directories */
+int os_is_dir(const char *path){
+    wchar_t *w = wide(path); DWORD a = w ? GetFileAttributesW(w) : INVALID_FILE_ATTRIBUTES; free(w);
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+}
+int os_file_size(const char *path, uint64_t *size){
+    wchar_t *w = wide(path); WIN32_FILE_ATTRIBUTE_DATA d; BOOL ok = w && GetFileAttributesExW(w, GetFileExInfoStandard, &d); free(w);
+    if (!ok || (d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return -1;
+    *size = ((uint64_t)d.nFileSizeHigh << 32) | d.nFileSizeLow; return 0;
+}
+int os_mkdir(const char *path){
+    wchar_t *w = wide(path); BOOL ok = w && (CreateDirectoryW(w, NULL) || GetLastError() == ERROR_ALREADY_EXISTS); free(w);
+    return ok ? 0 : -1;
+}
+int os_mkdirs(const char *path){
+    char p[4096]; snprintf(p, sizeof p, "%s", path); os_slashes(p);
+    for (char *c = p + 1; *c; c++) if (*c == '/' && c[-1] != ':') { *c = 0; os_mkdir(p); *c = '/'; }
+    return os_mkdir(p);
+}
+char *os_realpath(const char *path, char *out, size_t cap){
+    wchar_t *w = wide(path); if (!w) return NULL;
+    HANDLE h = CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL); free(w);
+    if (h == INVALID_HANDLE_VALUE) return NULL;
+    wchar_t full[4096]; DWORD n = GetFinalPathNameByHandleW(h, full, 4096, FILE_NAME_NORMALIZED); CloseHandle(h);
+    if (!n || n >= 4096) return NULL;
+    const wchar_t *f = full; if (!wcsncmp(f, L"\\\\?\\UNC\\", 8)) f += 6; else if (!wcsncmp(f, L"\\\\?\\", 4)) f += 4;   /* the extended prefix off */
+    char *s = narrow(f); if (!s) return NULL;
+    if (strlen(s) >= cap) { free(s); return NULL; }
+    strcpy(out, s); free(s); os_slashes(out); return out;
+}
+int os_self_path(char *out, size_t cap){
+    wchar_t w[4096]; DWORD n = GetModuleFileNameW(NULL, w, 4096); if (!n || n >= 4096) return -1;
+    char *s = narrow(w); if (!s || strlen(s) >= cap) { free(s); return -1; }
+    strcpy(out, s); free(s); os_slashes(out); return 0;
+}
+void os_walk(const char *dir, void (*cb)(const char *, uint64_t, void *), void *arg){
+    char pat[4096]; snprintf(pat, sizeof pat, "%s/*", dir);
+    wchar_t *w = wide(pat); WIN32_FIND_DATAW fd; HANDLE h = w ? FindFirstFileW(w, &fd) : INVALID_HANDLE_VALUE; free(w);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        char *nm = narrow(fd.cFileName); if (!nm) continue;
+        if (nm[0] == '.' || (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) { free(nm); continue; }   /* hidden, '.', '..', links */
+        char p[4096]; snprintf(p, sizeof p, "%s/%s", dir, nm); free(nm);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) os_walk(p, cb, arg);
+        else cb(p, ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow, arg);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
+int os_disk_space(const char *path, double *free_bytes, double *total_bytes){
+    wchar_t *w = wide(path); ULARGE_INTEGER avail, total; BOOL ok = w && GetDiskFreeSpaceExW(w, &avail, &total, NULL); free(w);
+    if (!ok) return -1;
+    *free_bytes = (double)avail.QuadPart; *total_bytes = (double)total.QuadPart; return 0;
+}
+
+/* ---- memory and time */
+void *os_map_file(const char *path, size_t *len){
+    wchar_t *w = wide(path); if (!w) return NULL;
+    HANDLE f = CreateFileW(w, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL); free(w);
+    if (f == INVALID_HANDLE_VALUE) return NULL;
+    LARGE_INTEGER sz; if (!GetFileSizeEx(f, &sz)) { CloseHandle(f); return NULL; }
+    HANDLE m = CreateFileMappingW(f, NULL, PAGE_READONLY, 0, 0, NULL); CloseHandle(f);
+    if (!m) return NULL;
+    void *p = MapViewOfFile(m, FILE_MAP_READ, 0, 0, 0); CloseHandle(m);
+    if (p) *len = (size_t)sz.QuadPart; return p;
+}
+void *os_reserve(size_t bytes){
+    /* Reserved, and committed in whole: Windows commits against the pagefile limit but hands out pages only as they
+     * are touched, so the untouched tail of a 2^32-slot table costs nothing until used, as MAP_NORESERVE memory does. */
+    void *p = VirtualAlloc(NULL, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!p) { fprintf(stderr, "VirtualAlloc(%zu bytes): error %lu\n", bytes, GetLastError()); exit(1); }
+    return p;
+}
+void os_discard(void *p, size_t bytes){
+    /* Decommitted and committed again, so the pages read as zero when next touched, as MADV_DONTNEED leaves them.
+     * Both calls keep the reservation; a failure to commit again would surface at the next write, so it is fatal here. */
+    if (!bytes) return;
+    VirtualFree(p, bytes, MEM_DECOMMIT);
+    if (!VirtualAlloc(p, bytes, MEM_COMMIT, PAGE_READWRITE)) { fprintf(stderr, "VirtualAlloc(MEM_COMMIT, %zu bytes): error %lu\n", bytes, GetLastError()); exit(1); }
+}
+double os_now(void){
+    static LARGE_INTEGER freq; LARGE_INTEGER t;
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&t); return (double)t.QuadPart / (double)freq.QuadPart;
+}
+
+/* ---- threads, random numbers, sorting with an argument */
+int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *a){ (void)a; InitializeSRWLock((PSRWLOCK)m); return 0; }
+int pthread_mutex_destroy(pthread_mutex_t *m){ (void)m; return 0; }
+int pthread_mutex_lock(pthread_mutex_t *m){ AcquireSRWLockExclusive((PSRWLOCK)m); return 0; }
+int pthread_mutex_unlock(pthread_mutex_t *m){ ReleaseSRWLockExclusive((PSRWLOCK)m); return 0; }
+int os_rand_r(unsigned *seed){                        /* glibc stdlib/rand_r.c */
+    unsigned next = *seed; int result;
+    next *= 1103515245; next += 12345; result = (int)((next / 65536) % 2048);
+    next *= 1103515245; next += 12345; result <<= 10; result ^= (int)((next / 65536) % 1024);
+    next *= 1103515245; next += 12345; result <<= 10; result ^= (int)((next / 65536) % 1024);
+    *seed = next; return result;
+}
+static __declspec(thread) int (*qs_cmp)(const void *, const void *, void *); static __declspec(thread) void *qs_arg;
+static int qs_call(const void *a, const void *b){ return qs_cmp(a, b, qs_arg); }
+void os_qsort_r(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *, void *), void *arg){
+    int (*wc)(const void *, const void *, void *) = qs_cmp; void *wa = qs_arg;   /* one per thread, and reentrant */
+    qs_cmp = cmp; qs_arg = arg; qsort(base, n, size, qs_call); qs_cmp = wc; qs_arg = wa;
+}
+
+/* ---- statx from what Windows keeps */
+static void when(const FILETIME *ft, struct statx_timestamp *t){
+    uint64_t v = ((uint64_t)ft->dwHighDateTime << 32) | ft->dwLowDateTime, u = v - 116444736000000000ull;   /* 1601 to 1970 */
+    t->tv_sec = (int64_t)(u / 10000000ull); t->tv_nsec = (uint32_t)(u % 10000000ull) * 100; t->pad_ = 0;
+}
+int statx(int dirfd, const char *path, int flags, unsigned mask, struct statx *out){
+    (void)dirfd; (void)flags; (void)mask;
+    wchar_t *w = wide(path); if (!w) return -1;
+    HANDLE h = CreateFileW(w, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL); free(w);
+    if (h == INVALID_HANDLE_VALUE) { errno = ENOENT; return -1; }
+    BY_HANDLE_FILE_INFORMATION bi; FILE_BASIC_INFO fb; int ok = GetFileInformationByHandle(h, &bi) && GetFileInformationByHandleEx(h, FileBasicInfo, &fb, sizeof fb);
+    CloseHandle(h); if (!ok) { errno = EIO; return -1; }
+    memset(out, 0, sizeof *out);
+    int dir = (bi.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0, ro = (bi.dwFileAttributes & FILE_ATTRIBUTE_READONLY) != 0;
+    out->stx_mode = (uint16_t)((dir ? 0040000 : 0100000) | (ro ? 0555 : 0755)); out->stx_nlink = bi.nNumberOfLinks;
+    out->stx_ino = ((uint64_t)bi.nFileIndexHigh << 32) | bi.nFileIndexLow; out->stx_size = ((uint64_t)bi.nFileSizeHigh << 32) | bi.nFileSizeLow;
+    out->stx_blocks = (out->stx_size + 511) / 512; out->stx_blksize = 4096; out->stx_attributes = bi.dwFileAttributes;
+    out->stx_dev_major = bi.dwVolumeSerialNumber >> 16; out->stx_dev_minor = bi.dwVolumeSerialNumber & 0xffff;
+    when(&bi.ftLastAccessTime, &out->stx_atime); when(&bi.ftCreationTime, &out->stx_btime); when(&bi.ftLastWriteTime, &out->stx_mtime);
+    FILETIME ct = { (DWORD)fb.ChangeTime.LowPart, (DWORD)fb.ChangeTime.HighPart }; when(&ct, &out->stx_ctime);
+    out->stx_mask = STATX_TYPE | STATX_MODE | STATX_NLINK | STATX_INO | STATX_SIZE | STATX_BLOCKS | STATX_ATIME | STATX_BTIME | STATX_CTIME | STATX_MTIME;
+    return 0;
+}
+
+/* ---- processes */
+/* An argument quoted as CommandLineToArgvW reads it back: in double quotes when it holds a space, a tab or a quote,
+ * each inner quote and the backslashes before it escaped. */
+static void quote_arg(const char *a, char *out, size_t *n, size_t cap){
+    int plain_ = *a && !strpbrk(a, " \t\"");
+    if (!plain_ && *n < cap) out[(*n)++] = '"';
+    for (const char *p = a; *p; p++) {
+        size_t bs = 0; while (*p == '\\') { bs++; p++; }
+        if (!*p) { for (size_t i = 0; i < bs * (plain_ ? 1 : 2) && *n < cap; i++) out[(*n)++] = '\\'; break; }
+        if (*p == '"') { for (size_t i = 0; i < bs * 2 + 1 && *n < cap; i++) out[(*n)++] = '\\'; }
+        else for (size_t i = 0; i < bs && *n < cap; i++) out[(*n)++] = '\\';
+        if (*n < cap) out[(*n)++] = *p;
+    }
+    if (!plain_ && *n < cap) out[(*n)++] = '"';
+}
+int os_run_logged(const char *program, char *const argv[], const char *log, const char *envname, const char *envval){
+    fflush(NULL);
+    size_t cap = 1; for (int i = 0; argv[i]; i++) cap += strlen(argv[i]) * 2 + 4;
+    char *cmd = malloc(cap); size_t n = 0;
+    for (int i = 0; argv[i]; i++) { if (i) cmd[n++] = ' '; quote_arg(argv[i], cmd, &n, cap - 1); }
+    cmd[n] = 0;
+    wchar_t *wcmd = wide(cmd), *wprog = wide(program), *wlog = wide(log); free(cmd);
+    if (envname) { wchar_t *wn = wide(envname), *wv = wide(envval); SetEnvironmentVariableW(wn, wv); free(wn); free(wv); }
+    SECURITY_ATTRIBUTES sa = { sizeof sa, NULL, TRUE };
+    HANDLE out = wlog ? CreateFileW(wlog, GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL) : INVALID_HANDLE_VALUE;
+    int code = 127;
+    if (out != INVALID_HANDLE_VALUE && wcmd && wprog) {
+        STARTUPINFOW si; memset(&si, 0, sizeof si); si.cb = sizeof si; si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput = GetStdHandle(STD_INPUT_HANDLE); si.hStdOutput = out; si.hStdError = out;
+        PROCESS_INFORMATION pi;
+        if (CreateProcessW(wprog, wcmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+            WaitForSingleObject(pi.hProcess, INFINITE); DWORD ec = 127; GetExitCodeProcess(pi.hProcess, &ec);
+            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+            code = ec > 255 ? 128 + (int)(ec & 127) : (int)ec;               /* a crash (0xC000....) as a signal would be */
+        } else fprintf(stderr, "%s: CreateProcess error %lu\n", program, GetLastError());
+    } else if (out == INVALID_HANDLE_VALUE) fprintf(stderr, "%s: cannot be written (error %lu)\n", log, GetLastError());
+    if (out != INVALID_HANDLE_VALUE) CloseHandle(out);
+    if (envname) { wchar_t *wn = wide(envname); SetEnvironmentVariableW(wn, NULL); free(wn); }
+    free(wcmd); free(wprog); free(wlog);
+    return code;
 }
 #endif

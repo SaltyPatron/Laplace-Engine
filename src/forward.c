@@ -8,7 +8,9 @@
  * The lookups are the ones hop and fills make: the container index finds what holds an entity, O(log N), and the set
  * is read, O(K). Nothing here changes a standing, and nothing here is a record: the choice is the firmware's. */
 #include "engine.h"
+#ifndef _WIN32
 #include <arpa/inet.h>
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

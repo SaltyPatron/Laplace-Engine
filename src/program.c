@@ -29,7 +29,9 @@
  *           dependence on the prompt ([response, prompt], ResponseContent).
  * Every stage's state is printed as the pass's trace. Nothing here changes a standing except by witnessing. */
 #include "engine.h"
+#ifndef _WIN32
 #include <arpa/inet.h>
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

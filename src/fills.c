@@ -7,7 +7,9 @@
  *      the parent holds it, runs included; a sentence repeated in fifty books counts fifty times.
  *   5. Every continuation is weighted by the occurrences of the path it came from. */
 #include "engine.h"
+#ifndef _WIN32
 #include <arpa/inet.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
