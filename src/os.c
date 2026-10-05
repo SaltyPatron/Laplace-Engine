@@ -39,6 +39,7 @@ int os_exists(const char *path){ struct stat st; return stat(path, &st) == 0; }
 int os_fnmatch(const char *pattern, const char *string){ return fnmatch(pattern, string, 0); }
 void os_slashes(char *path){ (void)path; }
 
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
