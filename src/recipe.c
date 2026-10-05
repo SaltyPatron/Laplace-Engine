@@ -144,8 +144,9 @@ static int source_parse(const char *path, Source *s){
     }
     fclose(f);
     if (s->nfiles) { os_list g; os_glob(s->files[0], &g); if (g.n) snprintf(s->found, sizeof s->found, "%s", s->files[0]); os_list_free(&g); }
-    for (int i = 0; i < s->nroot && !s->found[0]; i++) {                   /* the first root that exists; of a pattern, the newest */
-        os_list g; os_glob(s->root[i], &g); if (g.n) snprintf(s->found, sizeof s->found, "%s", g.item[g.n - 1]);
+    for (int i = 0; i < s->nroot && !s->found[0]; i++) {                   /* the first root that exists; of a pattern, the newest directory */
+        os_list g; os_glob(s->root[i], &g);                                 /* (the archive a directory was extracted from matches the pattern too) */
+        for (size_t k = g.n; k-- > 0 && !s->found[0]; ) if (os_is_dir(g.item[k])) snprintf(s->found, sizeof s->found, "%s", g.item[k]);
         os_list_free(&g);
     }
     return s->name[0] != 0;

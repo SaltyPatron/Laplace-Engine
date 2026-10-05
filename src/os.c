@@ -322,20 +322,31 @@ void *os_map_file(const char *path, size_t *len){
     void *p = MapViewOfFile(m, FILE_MAP_READ, 0, 0, 0); CloseHandle(m);
     if (p) *len = (size_t)sz.QuadPart; return p;
 }
+/* MAP_NORESERVE memory on Windows: the range is reserved, and Windows counts committed pages against the paging file,
+ * so a 2^32-slot table (hundreds of GB) is committed a 2 MB piece at a time, at the first touch of each: the access
+ * violation the touch raises is answered by committing the piece and resuming. A piece handed back (os_discard) is
+ * decommitted, and reads as zero when touched again, as MADV_DONTNEED leaves it. */
+static struct { char *base; size_t len; } reserved[16]; static int nreserved, faults_on;
+#define PIECE ((size_t)1 << 21)
+static LONG CALLBACK commit_on_fault(EXCEPTION_POINTERS *e){
+    if (e->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || e->ExceptionRecord->NumberParameters < 2) return EXCEPTION_CONTINUE_SEARCH;
+    char *at = (char *)e->ExceptionRecord->ExceptionInformation[1];
+    for (int i = 0; i < nreserved; i++) if (at >= reserved[i].base && at < reserved[i].base + reserved[i].len) {
+        char *from = reserved[i].base + ((size_t)(at - reserved[i].base) & ~(PIECE - 1)), *end = reserved[i].base + reserved[i].len;
+        size_t n = (size_t)(end - from) < PIECE ? (size_t)(end - from) : PIECE;
+        return VirtualAlloc(from, n, MEM_COMMIT, PAGE_READWRITE) ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
 void *os_reserve(size_t bytes){
-    /* Reserved, and committed in whole: Windows commits against the pagefile limit but hands out pages only as they
-     * are touched, so the untouched tail of a 2^32-slot table costs nothing until used, as MAP_NORESERVE memory does. */
-    void *p = VirtualAlloc(NULL, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if (!p) { fprintf(stderr, "VirtualAlloc(%zu bytes): error %lu\n", bytes, GetLastError()); exit(1); }
+    void *p = VirtualAlloc(NULL, bytes, MEM_RESERVE, PAGE_READWRITE);
+    if (!p) { fprintf(stderr, "VirtualAlloc(reserve %zu bytes): error %lu\n", bytes, GetLastError()); exit(1); }
+    if (nreserved == 16) { fprintf(stderr, "os_reserve: more than 16 reservations\n"); exit(1); }
+    reserved[nreserved].base = p; reserved[nreserved].len = bytes; nreserved++;
+    if (!faults_on) { AddVectoredExceptionHandler(1, commit_on_fault); faults_on = 1; }
     return p;
 }
-void os_discard(void *p, size_t bytes){
-    /* Decommitted and committed again, so the pages read as zero when next touched, as MADV_DONTNEED leaves them.
-     * Both calls keep the reservation; a failure to commit again would surface at the next write, so it is fatal here. */
-    if (!bytes) return;
-    VirtualFree(p, bytes, MEM_DECOMMIT);
-    if (!VirtualAlloc(p, bytes, MEM_COMMIT, PAGE_READWRITE)) { fprintf(stderr, "VirtualAlloc(MEM_COMMIT, %zu bytes): error %lu\n", bytes, GetLastError()); exit(1); }
-}
+void os_discard(void *p, size_t bytes){ if (bytes) VirtualFree(p, bytes, MEM_DECOMMIT); }
 double os_now(void){
     static LARGE_INTEGER freq; LARGE_INTEGER t;
     if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
