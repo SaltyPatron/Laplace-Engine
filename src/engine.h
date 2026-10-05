@@ -10,7 +10,7 @@
 #include <libpq-fe.h>
 #include <stdint.h>
 #include <stddef.h>
-#include <pthread.h>
+#include "os.h"                                     /* pthread mutexes and the other POSIX calls, on Windows too */
 
 /* ---- where things are: the environment (laplace.env), else what the engine was built with */
 const char *laplace_db(void);                        /* LAPLACE_CONNINFO: a libpq connection string */

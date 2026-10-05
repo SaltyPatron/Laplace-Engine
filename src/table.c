@@ -9,7 +9,6 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
-#include <sys/mman.h>
 #include <immintrin.h>
 
 Node *NODE; Vtx *VTX;
@@ -28,9 +27,8 @@ static uint64_t *slot, smask, node_top, vtx_top, node_cap, vtx_cap, grow_at;
 static uint64_t *area[2]; static int side, resizing;          /* the slots alternate between two reserved areas as the table doubles */
 
 static void *reserve(size_t bytes){
-    void *p = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-    if (p == MAP_FAILED) { perror("mmap"); exit(1); }
-    madvise(p, bytes, MADV_HUGEPAGE);                   /* random probes over gigabytes: fewer TLB misses */
+    void *p = os_reserve(bytes);
+    if (!p) { perror("reserve"); exit(1); }
     return p;
 }
 /* The table sized for what one batch can make: twice the nodes it is expected to hold, so it stays at most half full.
@@ -110,7 +108,7 @@ static void grow(void){
         uint64_t old = smask + 1, n = old * 2, m = n - 1, end = table_end(); uint64_t *ns = area[!side];
         for (uint64_t i = 0; i < end; i++) { const Node *x = &NODE[i]; if (!x->live) continue;
             uint64_t k = hkey(&x->id) & m; while (ns[k]) k = (k + 1) & m; ns[k] = tag_of(&x->id) | (i + 1); }
-        madvise(slot, old * sizeof *slot, MADV_DONTNEED);                    /* the old slots, empty for the next time */
+        os_discard(slot, old * sizeof *slot);                    /* the old slots, empty for the next time */
         slot = ns; side = !side; smask = m; node_cap = n - n / 8; grow_at = n / 2;
     }
     __atomic_store_n(&resizing, 0, __ATOMIC_SEQ_CST);
@@ -233,9 +231,9 @@ void table_reset(void){
     strings_forget();
     nodes_before += seen_sum(2); seen_sum(3); hits_before += seen_sum(0); seen_sum(1);
     uint64_t ne = table_end(), nv = __atomic_load_n(&vtx_top, __ATOMIC_ACQUIRE);
-    madvise(slot, (smask + 1) * sizeof *slot, MADV_DONTNEED);
-    madvise(NODE, ne * sizeof(Node), MADV_DONTNEED);
-    madvise(VTX, (nv < vtx_cap ? nv : vtx_cap) * sizeof(Vtx), MADV_DONTNEED);
+    os_discard(slot, (smask + 1) * sizeof *slot);
+    os_discard(NODE, ne * sizeof(Node));
+    os_discard(VTX, (nv < vtx_cap ? nv : vtx_cap) * sizeof(Vtx));
     node_top = vtx_top = 0;
     __atomic_fetch_add(&epoch, 1, __ATOMIC_RELEASE);                    /* every thread's cache and chunks are of a table that is gone */
 }
