@@ -293,9 +293,10 @@ static int resolve_parts(PGconn *pg){
 int load_whole;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     table_kinds();                                                           /* what each child is said to be: on the child, for its mask */
-    /* what a witness attested is a claim, whatever holds it or nothing does: its row says so, so every read finds it */
-    for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { if (files[fi].ev.e[i].kind == EV_RECORD) continue;
-        Node *c = table_find(&files[fi].ev.e[i].claim); if (c) c->kind |= (uint8_t)(1u << LP_KIND_CLAIM); }
+    /* what a witness attested is a claim, and what it attested together is a record, whatever holds it or nothing does:
+     * its row says so, so every read finds it (a record is held by nothing, so no holder ever says it) */
+    for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) {
+        Node *c = table_find(&files[fi].ev.e[i].claim); if (c) c->kind |= (uint8_t)(1u << (files[fi].ev.e[i].kind == EV_RECORD ? LP_KIND_RECORD : LP_KIND_CLAIM)); }
     PGconn **pg = malloc(sizeof(PGconn *) * npg);
     for (int i = 0; i < npg; i++) {
         pg[i] = db_connect(conninfo);
