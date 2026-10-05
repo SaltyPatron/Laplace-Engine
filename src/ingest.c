@@ -145,17 +145,12 @@ static double room_left(const char *conninfo){
     PQfinish(pg); return gb;
 }
 /* What a source took, measured as it went in: the database's growth over what its files hold, kept in the work
- * directory (room.tsv: source, times), one line a source, the last measure kept. The room check reads it before the
- * recipe's room N, which was measured once by hand. */
+ * directory (room.tsv: source, times), one line a source, the last measure kept. It is a measure, not a forecast:
+ * what is recorded once is not recorded again, so no later source is held to it. */
 static double db_bytes(const char *conninfo){
     PGconn *pg = PQconnectdb(conninfo); double b = -1;
     if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SELECT pg_database_size(current_database())"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) b = atof(PQgetvalue(r, 0, 0)); PQclear(r); }
     PQfinish(pg); return b;
-}
-static double room_measured(const char *path, const char *source){
-    FILE *f = fopen(path, "r"); if (!f) return 0; char line[512]; double x = 0; size_t n = strlen(source);
-    while (fgets(line, sizeof line, f)) if (!strncmp(line, source, n) && line[n] == '\t') x = atof(line + n + 1);
-    fclose(f); return x;
 }
 static void room_keep(const char *path, const char *source, double times){
     char tmp[4200]; snprintf(tmp, sizeof tmp, "%s.new", path); FILE *o = fopen(tmp, "w"); if (!o) return;
@@ -170,10 +165,10 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
     setlocale(LC_NUMERIC, "en_US.UTF-8");
     const char *conninfo = laplace_db(); int loads = 1;
     for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[a + 1]; if (!strcmp(argv[a], "--no-load") || !strcmp(argv[a], "--plan") || !strcmp(argv[a], "--claims")) loads = 0; }
-    /* What a source takes in the database is what its source file says was measured (room N, in times what its files
-     * hold), or 65 times, the most measured of any, when it says nothing (LAPLACE_ROOM_FACTOR). A source is not begun when the volume would be
-     * left with less than a tenth of itself, and that is said. */
-    double factor = getenv("LAPLACE_ROOM_FACTOR") ? atof(getenv("LAPLACE_ROOM_FACTOR")) : 65.0; int short_of_room = 0, short_of_order = 0;
+    /* What a source takes is not its bytes times a ratio: content is recorded once, so what an earlier source measured
+     * (bytes the database grew over bytes its files hold, room.tsv) falls as what is recorded covers more of what is read.
+     * A source is not begun only when the volume is already left with less than a tenth of itself, and that is said. */
+    int short_of_room = 0, short_of_order = 0;
     char roomf[4200]; snprintf(roomf, sizeof roomf, "%s/room.tsv", work && *work ? work : ".");
     int *wentin = calloc((size_t)nsrc, sizeof(int));                       /* 1: it went in in this run, or has nothing to go in */
     printf("laplace ingest   %s, in order   logs in %s\n\n", want ? "the sources named" : "every source", dir);
@@ -187,10 +182,10 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
         int mine = 0; for (int k = 0; k < nrec; k++) mine += rec[k].source == i; mine += src[i].nreads;
         if (!mine) { printf("%-4d %-38s %-10s %10s   no recipe reads it yet\n", i + 1, src[i].name, "passed", ""); empty++; wentin[i] = 1; continue; }
         if (!src[i].found[0]) { printf("%-4d %-38s %-10s %10s   it is at none of its roots\n", i + 1, src[i].name, "absent", ""); absent++; continue; }
-        double measured = room_measured(roomf, src[i].name), bytes_in = (double)source_bytes(&src[i], rec, nrec), before = loads ? db_bytes(conninfo) : -1;
-        if (loads) { double have = room_left(conninfo), need = bytes_in * (measured > 0 ? measured : src[i].room > 0 ? src[i].room : factor) / 1e9; struct statvfs v; double whole = 0;
+        double bytes_in = (double)source_bytes(&src[i], rec, nrec), before = loads ? db_bytes(conninfo) : -1;
+        if (loads) { double have = room_left(conninfo); struct statvfs v; double whole = 0;
             { PGconn *pg = PQconnectdb(conninfo); if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SHOW data_directory"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !statvfs(PQgetvalue(r, 0, 0), &v)) whole = (double)v.f_blocks * (double)v.f_frsize / 1e9; PQclear(r); } PQfinish(pg); }
-            if (have >= 0 && have - need < whole / 10) { char why[128]; snprintf(why, sizeof why, "no room: it may take %.0f GB, and %.0f GB is left", need, have);
+            if (have >= 0 && have < whole / 10) { char why[128]; snprintf(why, sizeof why, "no room: %.0f GB is left of %.0f GB", have, whole);
                 printf("%-4d %-38s %-10s %10s   %s\n", i + 1, src[i].name, "not begun", "", why); short_of_room++; continue; } }
         char log[4300]; snprintf(log, sizeof log, "%s/%s.log", dir, src[i].name);
         printf("%-4d %-38s ", i + 1, src[i].name); fflush(stdout);
