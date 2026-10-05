@@ -56,6 +56,9 @@ const void *os_map_read(const char *path, size_t *size){
     *size = (size_t)st.st_size; return p;
 }
 void os_discard(void *p, size_t bytes){ if (bytes) madvise(p, bytes, MADV_DONTNEED); }
+int os_run_logged(const char *exe, char *const argv[], const char *log, const char *var, const char *value){
+    (void)exe; (void)argv; (void)log; (void)var; (void)value; errno = ENOSYS; return -1;      /* POSIX callers fork */
+}
 
 #else
 #define WIN32_LEAN_AND_MEAN
@@ -328,6 +331,38 @@ int statvfs(const char *path, struct statvfs *v){
     return 0;
 }
 pid_t fork(void){ errno = ENOSYS; return -1; }
+/* The command line as CommandLineToArgvW reads it back: each argument quoted, backslashes before a quote doubled. */
+static void quote(wchar_t *out, size_t *n, size_t cap, const char *arg){
+    wchar_t *w = wide(arg); if (!w) return;
+    if (*n + 1 < cap) out[(*n)++] = L'"';
+    for (const wchar_t *p = w; ; p++) {
+        size_t bs = 0; while (*p == L'\\') { bs++; p++; }
+        if (!*p) { for (size_t i = 0; i < bs * 2 && *n + 1 < cap; i++) out[(*n)++] = L'\\'; break; }
+        if (*p == L'"') { for (size_t i = 0; i < bs * 2 + 1 && *n + 1 < cap; i++) out[(*n)++] = L'\\'; }
+        else for (size_t i = 0; i < bs && *n + 1 < cap; i++) out[(*n)++] = L'\\';
+        if (*n + 1 < cap) out[(*n)++] = *p;
+    }
+    if (*n + 1 < cap) out[(*n)++] = L'"';
+    free(w);
+}
+int os_run_logged(const char *exe, char *const argv[], const char *log, const char *var, const char *value){
+    static wchar_t cmd[32768]; size_t n = 0;
+    for (int i = 0; argv[i]; i++) { if (i && n + 1 < 32768) cmd[n++] = L' '; quote(cmd, &n, 32768, argv[i]); }
+    cmd[n] = 0;
+    SECURITY_ATTRIBUTES sa = { sizeof sa, NULL, TRUE };
+    wchar_t *wl = wide(log), *we = wide(exe); if (!wl || !we) { free(wl); free(we); errno = ENOMEM; return -1; }
+    HANDLE h = CreateFileW(wl, GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL); free(wl);
+    if (h == INVALID_HANDLE_VALUE) { free(we); errno = EACCES; return -1; }
+    STARTUPINFOW si = { sizeof si }; si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE); si.hStdOutput = h; si.hStdError = h;
+    char *was = getenv(var) ? _strdup(getenv(var)) : NULL; _putenv_s(var, value);   /* the child inherits it */
+    PROCESS_INFORMATION pi; BOOL ok = CreateProcessW(we, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+    _putenv_s(var, was ? was : ""); free(was); free(we); CloseHandle(h);
+    if (!ok) { errno = ENOEXEC; return -1; }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD code = 1; GetExitCodeProcess(pi.hProcess, &code); CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+    return (int)code;
+}
 pid_t waitpid(pid_t pid, int *status, int options){ (void)pid; (void)status; (void)options; errno = ECHILD; return -1; }
 int pipe(int fd[2]){ return _pipe(fd, 1 << 16, _O_BINARY); }
 long long readlink(const char *path, char *buf, size_t size){

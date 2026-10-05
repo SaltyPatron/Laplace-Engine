@@ -44,6 +44,9 @@ void *os_reserve(size_t bytes);
 const void *os_map_read(const char *path, size_t *size);
 /* Pages of reserved memory handed back: they read as zero when touched again (madvise MADV_DONTNEED). */
 void os_discard(void *p, size_t bytes);
+/* A program run to its end with its standard output and error in a log file (truncated) and one variable set in its
+ * environment: its exit status, or -1 if it could not be started (errno set). */
+int os_run_logged(const char *exe, char *const argv[], const char *log, const char *var, const char *value);
 
 #ifdef _WIN32
 /* The POSIX calls the Engine uses, on Windows: same names and semantics, so callers do not change. */
