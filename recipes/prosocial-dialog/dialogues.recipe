@@ -12,6 +12,6 @@ tier record by \n
 thing record context
 key record dialogue_id
 key record response_id
-content context response rots safety_label safety_annotations safety_annotation_reasons
-omit source episode_done etc
-attest record response rots safety_label safety_annotations safety_annotation_reasons
+content context response rots safety_label safety_annotations safety_annotation_reasons source etc
+omit episode_done
+attest record response rots safety_label safety_annotations safety_annotation_reasons source etc
