@@ -123,7 +123,7 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
         for (size_t s = 0; s < n; s++) { char hx[33]; id_text(&t[s].id, hx); int64_t at = lp_idmap_find(first, &t[s].id);
             const char *key = at >= 0 && (size_t)at < fcap ? fkey[at] : s < nz_before ? fz[s].key : "";
             fprintf(o, "%zu\t%s\t%s\t%s\n", s, hx, s < nz_before && fz[s].retired ? "retired" : "live", key ? key : ""); }
-        if (fclose(o) || rename(tmp, p)) { perror(p); exit(1); }
+        if (fclose(o) || os_rename(tmp, p)) { perror(p); exit(1); }
         free(fz);
     }
     lp_idmap_free(first); free(fkey);
@@ -134,8 +134,8 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
 static FILE *open_fresh(const char *path, const char *mode, char *fresh, size_t cap){ snprintf(fresh, cap, "%s.new", path); return fopen(fresh, mode); }
 static int swap_in(const char *path, const char *fresh){
     char old[4300]; snprintf(old, sizeof old, "%s.old", path); remove(old);
-    rename(path, old);                                                    /* nothing to move aside is fine */
-    if (rename(fresh, path)) { perror(path); return 1; }
+    os_rename(path, old);                                                    /* nothing to move aside is fine */
+    if (os_rename(fresh, path)) { perror(path); return 1; }
     remove(old);                                                          /* still mapped: left for the next run */
     return 0;
 }

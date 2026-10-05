@@ -37,6 +37,7 @@ int os_list_dir(const char *dir, os_list *out){
     closedir(d); return 0;
 }
 int os_exists(const char *path){ struct stat st; return stat(path, &st) == 0; }
+int os_rename(const char *from, const char *to){ return rename(from, to); }
 int os_fnmatch(const char *pattern, const char *string){ return fnmatch(pattern, string, 0); }
 void os_slashes(char *path){ (void)path; }
 
@@ -98,6 +99,11 @@ void os_slashes(char *path){ for (char *c = path; *c; c++) if (*c == '\\') *c = 
 int os_exists(const char *path){
     wchar_t *w = wide(path); DWORD a = w ? GetFileAttributesW(w) : INVALID_FILE_ATTRIBUTES; free(w);
     return a != INVALID_FILE_ATTRIBUTES;
+}
+int os_rename(const char *from, const char *to){
+    wchar_t *f = wide(from), *t = wide(to); BOOL ok = MoveFileExW(f, t, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED); free(f); free(t);
+    if (!ok) { errno = GetLastError() == ERROR_FILE_NOT_FOUND ? ENOENT : EACCES; return -1; }
+    return 0;
 }
 
 int os_list_dir(const char *dir, os_list *out){
