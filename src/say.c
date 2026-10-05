@@ -587,19 +587,13 @@ static void claim(Sink *k, Ref *part, int n){
     Event x = { c.id, c.id, k->score, k->er, k->ed, 0, EV_CLAIM }; if (k->voiced) { x.own_witness = 1; x.witness = k->voice.id; } ev_push(&k->ev, &x);
     push(&k->grp, &c);
 }
-/* What a part said, with everything inside it, said together: its claims one record, the path of them, witnessed once,
- * each claim within it. e0 .. the end: the events it and what is inside it made. */
+/* What a part said, with everything inside it, in the order its source gave it: each claim is attested on its own, by
+ * its witness, and keeps its place among the part's claims (attestation.position: the place a witness gave the claim
+ * among its like). No entity is made of the claims together: a source's record is its own row, not a composition.
+ * e0 .. the end: the events it and what is inside it made. */
 static void together(Sink *k, uint64_t e0, const Ref *about){
-    uint64_t m = k->ev.n - e0; if (m < 2) return;
-    Ref *c = malloc(sizeof(Ref) * (size_t)(m + 1)); uint32_t n = 0;
-    if (about) { c[n] = *about; c[n].said = 0; n++; }                         /* the record is of what the part is, first: a sentence with what is said within it */
-    for (uint64_t i = e0; i < k->ev.n; i++) { if (k->ev.e[i].kind != EV_CLAIM) continue; Node *x = table_find(&k->ev.e[i].claim); if (!x) continue;
-        Ref r; memset(&r, 0, sizeof r); r.id = x->id; memcpy(r.c.m, x->m, sizeof r.c.m); r.tier = x->tier; r.said = LP_SAID_CLAIM; c[n++] = r; }
-    if (n < 2 + (about ? 1 : 0)) { free(c); return; }
-    Ref rec = said_record(compose(c, n, ref_above(c, n))); free(c);
-    Event r = { rec.id, rec.id, 1.0f, k->er, k->ed, 0, EV_RECORD }; ev_push(&k->ev, &r);
-    memmove(&k->ev.e[e0 + 1], &k->ev.e[e0], sizeof(Event) * (size_t)(k->ev.n - 1 - e0)); k->ev.e[e0] = r;     /* the record first: its claims are within the record before them */
-    for (uint64_t i = e0 + 1; i < k->ev.n; i++) if (k->ev.e[i].kind == EV_CLAIM) { k->ev.e[i].kind = EV_MEMBER; k->ev.e[i].witnessed = rec.id; }
+    (void)about; uint32_t at = 0;
+    for (uint64_t i = e0; i < k->ev.n; i++) if (k->ev.e[i].kind == EV_CLAIM && !k->ev.e[i].position) k->ev.e[i].position = ++at;
 }
 /* The last node inside a part: its subtree is the nodes from it to there. */
 static int32_t subtree_end(const STree *t, int32_t g){ while (t->n[g].last >= 0) g = t->n[g].last; return g; }

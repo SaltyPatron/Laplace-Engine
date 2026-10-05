@@ -381,6 +381,7 @@ int cmd_ingest(int argc, char **argv){
         if (x_->kind == EV_RECORD) { printf("-- record %u", x_->position); if (x_->own_witness) { printf("   by "); show_tuple(&x_->witness); } putchar('\n'); show_held(&x_->witnessed, 0); continue; } \
         if (!table_find(&x_->claim)) continue; \
         show_tuple(&x_->claim); \
+        if (x_->position) printf("   #%u", x_->position); \
         if (x_->score != 1.0f) printf("   score %.3g", (double)x_->score); \
         if (x_->own_witness) { printf("   by "); show_tuple(&x_->witness); } \
         putchar('\n'); } } while (0)
