@@ -22,18 +22,32 @@ So:
   entities and two claims, not one string. Stop at words.
 - A claim is a **tuple of entities** (`[subject, predicate, object]`, a pair, or a longer path). Every part is content.
 - Whatever a source leaves empty (its own empty marker) attests nothing.
-- The witness is named **as the source names itself** (its README title, its own `label`).
+- The witness is named **as the source names itself** (its README title, its own `label`). That name is content in
+  the source's record; the witness itself is the source's trunk, `[source record, its files' trunks in path order]`
+  (`file.c`), the same as any other composition, so a new release, having other files, is another witness. Today the
+  engine cites the witness's name, as text, as the witness of each attestation (`recipe.c`); the law requires the
+  source's trunk.
 - **Testimony, not bookkeeping.** A witness provides content and attestations about it: that is what a recipe reads.
   A file's bookkeeping about its own records (dates an entry was made, colours, versions, licences, usage notes,
   templates, who edited a row) is not testimony: name it with `omit`, or leave the column out of `attest`. Never
   `attest *`.
-- **A source's identifiers are keys, never content.** A synset id, a sense key, an ILI number, a sentence id, a
-  geonameid, a case id, a roleset id, an `ID` attribute, an entry's etymology number: these are how the source points
-  at its own things. Name them with `key` (never recorded), `refer` (read as the thing another row or element of the
-  same source defines) or `type` (read as the type in the highway's list that the key points at). No claim may hold one.
+- **A source's identifiers are content.** A synset offset, a sense key, an ILI, a roleset, a VerbNet class, a FrameNet
+  id, an ISO code, a geonameid, a case id, an `ID` attribute, a game id: `i46360` is `[i,4,6,3,6,0]` exactly as
+  `3.14159` is `[3,.,1,4,1,5,9]`, the same entity wherever that text stands. A structured identifier breaks down into
+  the parts its notation gives it: `06975898-n` is an offset and a part of speech, `run-51.3.2` is `run`, `51`, `3` and
+  `2`. That an identifier is an ILI, a roleset or a class is attested by the source that says so, and that it names the
+  row or element that defines it is that source's claim like any other. **Where a record stands is not an
+  identifier**: its line, its row number, its byte offset, a number that only counts a file's own records (a word's
+  `ID` in its sentence, the `-- record N` of `--claims`) are occurrence under the file's trunk, never part of any ID.
+  Today an identifier is read with `key` (it resolves the rows that point at it to the thing it defines, and its text
+  is recorded nowhere), `refer` (its text is read as the thing another row or element of the same source defines) or
+  `type` (its text is read as the type in the highway's list that it names). All three drop the identifier itself, and
+  the law requires it recorded as content beside what it resolves to. So: an identifier that nothing in the source
+  points at is `content`, never `key`; a positional number is `key` or `omit`; and every identifier column you name
+  with `key`, `refer` or `type` goes in your report, as an identifier the engine does not yet record.
 - **Whoever said it is a witness, and what they said is theirs.** A worker, an annotator, an author, an owner, a
   contributor, a speaker: when the source names who wrote, answered or said something, that is a witness of its own,
-  and its id is its name, not a key. Name it with `own` (`[the source's witness, COLUMN, id]`) and attribute what it
+  and it is its name, as content. Name it with `own` (`[the source's witness, COLUMN, id]`) and attribute what it
   said with `by` (or `voices` for a column per annotator); what the source says of that witness is attested `of` it.
   A book is attested to its author, a quote to its speaker, an annotation to its annotator. "Who edited a row" in the
   bookkeeping list below means housekeeping about the file's records, never the person whose words or answers the row
@@ -41,11 +55,24 @@ So:
 - **A thing is its content.** A word is what the lemma writes; a synset is the words it lists; a sentence is its text
   or its words; a place is its name, latitude and longitude; a case or a post is its text. Say `identity`, `subject in`
   or `named ... by` over content, never over an id column.
-- **Types are the highway's.** Parts of speech, dependency relations, ILI concepts, VerbNet classes and roles, FrameNet
-  frames, frame elements and lexical units, PropBank rolesets, VerbAtlas frames are listed by `laplace highway`. A
-  source that writes a key of one (`i46360`, `va:0001f`, `abandon.01`, `leave-51.2`, an FE's `ID`) names it with
-  `type COLUMN LIST`. A file that is only a mapping between such keys (SemLink, PredicateMatrix, CILI's maps,
-  VerbAtlas's bridges) is the highway's input and gets no recipe.
+- **Types are attested; the highway is their perf-cache.** Parts of speech, dependency relations, ILI concepts,
+  VerbNet classes and roles, FrameNet frames, frame elements and lexical units, PropBank rolesets, VerbAtlas frames are
+  listed by `laplace highway`: a perf-cache whose lists resolve the sources' identifiers to their slots, a stable slot
+  being an index over content, never the identity of a meaning. A source that writes one (`i46360`, `va:0001f`,
+  `abandon.01`, `leave-51.2`, an FE's `ID`) writes content, and what it is is what the source attests. Today such a
+  column is named with `type COLUMN LIST`, which reads its text as the highway's type and records nothing of the
+  identifier; the law requires the identifier recorded as content as well. A file that maps such identifiers onto one
+  another (SemLink, PredicateMatrix, CILI's maps, VerbAtlas's bridges) is read by the highway through its recipe's
+  `types`, `keyed`, `alias` and `maps` lines (`semlink/pb-vn.recipe`); its mappings are what that source attests.
+- **An enumerated value lands where the source asserts it.** A UPOS, XPOS, feature or dependency relation is said of
+  a token in its sentence, the sentence's annotation layer, not of the word everywhere; a Unicode property is said of
+  the codepoint. These set the registry's mask bit at that tier, and a word's mask is derived from them, never
+  blanketed across tiers. WordNet says a concept is a noun and the word lexicalizes it; that is not the same claim as a
+  token tagged NOUN. Today `attest row UPOS` (`universal-dependencies/conllu.recipe`) says it of the row's word, the
+  law requires it of the token in its sentence.
+- **A repeat is games, not rows.** When a witness asserts one claim several times, each is a game; the engine folds a
+  witness's repeats of one claim into one rating period and sends one update per claim per witness. A number the
+  source states (a usage count, a sense's order) is content the source writes, never a count of games.
 
 ## Where you work, and what you must not touch
 
@@ -86,18 +113,18 @@ Working examples to copy from, all under `recipes/`:
 |---|---|
 | table with a header row, every column said of one column's value | `iso-639/iso-639-3.recipe` (`attest *`) |
 | table without a header, predicate in the file's name | `princeton-wordnet/exceptions.recipe` |
-| table whose id column is a key, other files pointing at its rows | `tatoeba/sentences.recipe` (`key`), `tatoeba/links.recipe` (`refer`) |
-| table whose column is a resource's key of a type | `verbatlas/frame-info.recipe`, `princeton-wordnet/cntlist.recipe` (`type`) |
+| table whose identifier column other files point at | `tatoeba/sentences.recipe` (`key`), `tatoeba/links.recipe` (`refer`) |
+| table whose column is a resource's identifier of a type | `verbatlas/frame-info.recipe`, `princeton-wordnet/cntlist.recipe` (`type`) |
 | table of pairs (nothing written between the two) | `unicode/aliases.recipe` (`pair`) |
 | table whose row is one record, said together | use `together` in the claims block |
 | records of rows (a sentence, a row per word, a tree by heads) | `universal-dependencies/conllu.recipe` |
 | records of `Key: Value` lines | `iso-639/iana.recipe` (`grammar fields`) |
-| XML, elements that are things, keys resolved, types by a resource's key | `wn-lmf.recipe` (`key`, `refer`, `type`, `link`), `framenet/framenet.recipe`, `propbank/frames.recipe`, `verbnet/classes.recipe` |
+| XML, elements that are things, identifiers resolved, types by a resource's identifier | `wn-lmf.recipe` (`key`, `refer`, `type`, `link`), `framenet/framenet.recipe`, `propbank/frames.recipe`, `verbnet/classes.recipe` |
 | XML, a sentence as its words | `wsd-evaluation-framework/data.recipe` (`words`) |
 | XML by tree-sitter patterns (slower; only when `identity` cannot say it) | `unicode/ucd.recipe` |
 | Turtle | `turtle.recipe`, used through `like turtle` (`framebase/schema.recipe`) |
 | JSON whose keys are the things | `universal-dependencies-tools/data.recipe` (`keys things`) |
-| JSON objects named by members, keys never recorded; `records` for a value on every line | `wiktionary-kaikki/kaikki.recipe` (`named ... by`, `key`) |
+| JSON objects named by members; `records` for a value on every line | `wiktionary-kaikki/kaikki.recipe` (`named ... by`, `key`) |
 | ordinary text (READMEs, documentation) | add `reads text` to the `source` file |
 
 A `source` file:

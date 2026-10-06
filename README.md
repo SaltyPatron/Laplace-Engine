@@ -15,7 +15,7 @@ Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github
 | `laplace text text` | a text's ID, tier, coordinate and constituents, computed here without the database |
 | `laplace pull prompt` | the forward pass: the prompt broken down, and the segments and strands its firmware takes |
 | `laplace hop text` | everything attested about an entity, by how hard each strand tugs back, and the content that holds it |
-| `laplace hop subject predicate object` | the claims that hold the given parts in their places, with `?` for a part left open |
+| `laplace hop subject predicate object` | the claims that hold the given parts in their places, with `?` for a part left open; a claim is a tuple or longer path of any arity, and this asks for those with three parts |
 | `laplace translate word from to...` | a word up to its concepts and down into other languages, two lookups |
 | `laplace degrees from [to]` | how far one entity is from another over rated claims, or what is nearest one |
 | `laplace forget witness` | what one witness attested, taken back out, and whatever nothing holds any more with it |
@@ -46,6 +46,6 @@ How a pull reads the records is not in the program and not in the records: it is
 
 ## Recipes
 
-A recipe says how a kind of file decomposes and what it attests. `recipes/*.recipe`; the format is described at the top of `src/recipe.c`. A recipe with a query is a curated source: what is recorded is the claims it attests and the entities they are about, never the file's own identifiers. A `map` binds the source's identifiers to what they stand for, and each kind of claim says the stock default it enters at.
+A recipe says how a kind of file decomposes and what it attests. `recipes/*.recipe`; the format is described at the top of `src/recipe.c`. A recipe that says what a file's parts are is a curated source: what is recorded is the file's tree as its recipe reads it, over its metadata tree, and the claims it attests. A source's identifiers are content like any other text, a structured one broken into its parts, and what an identifier is (an ILI, a roleset, a class) is what the source attests; the highway's lists are the perf-cache that resolves them to their slots. Where a record stands in its file is occurrence, never identity. Today `key`, `refer` and `type` resolve an identifier to what it names and record nothing of the identifier itself; the law requires it recorded as content as well. The witness of what a source attests is the source's trunk, `[source record, its files' trunks]`; today the engine cites the witness's name as text.
 
 Queries run inside the parts of a file's syntax tree no larger than the recipe's `unit`, in reading order. A pattern should name a record's parts by position (anchors), not pair any two siblings: tree-sitter checks text predicates after it has matched structure, so pairing siblings costs the square of their number. When a unit holds more partial matches than a query keeps, ingestion says so.
