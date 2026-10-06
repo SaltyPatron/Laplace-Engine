@@ -60,7 +60,8 @@ int cmd_pull(int argc, char **argv){
           int words = 0; for (int k = i - 1; k < j; k++) words += table_find(&ph[k]) != NULL; if (!words || !paths) continue;
           segments++; if (shown >= 32) continue; shown++;
           printf("%-10s \"", shown == 1 ? "segments" : i == 1 ? "" : "   also"); for (int k = i - 1; k < j; k++) { char *tx = reader_text(rd, &ph[k], 0); printf("%s", tx); free(tx); }
-          printf("\"   %ld held, %ld as a run", paths, runs); if (paths >= fw.fan) printf(" (the fan)");
+          if (paths > fw.fan) printf("\"   more than the fan (%d) hold it: reached, not counted", fw.fan);           /* laplace_forward: a hub segment */
+          else printf("\"   %ld held, %ld as a run", paths, runs);
           int shownext = 0; for (int z = r0; z < r && shownext < 6; z++) { if (PQgetisnull(q, z, 4)) continue; long times = (long)lp_be(PQgetvalue(q, z, 5), 8); if (times < 2 && shownext) break;
               lp_id x; memcpy(x.b, PQgetvalue(q, z, 4), 16); char *tx = reader_text(rd, &x, 0); printf("%s %s×%ld", shownext ? "" : "  then", strcmp(tx, " ") ? tx : "␠", times); free(tx); shownext++; }
           printf("\n"); }
