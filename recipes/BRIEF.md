@@ -23,10 +23,10 @@ So:
 - A claim is a **tuple of entities** (`[subject, predicate, object]`, a pair, or a longer path). Every part is content.
 - Whatever a source leaves empty (its own empty marker) attests nothing.
 - The witness is named **as the source names itself** (its README title, its own `label`). That name is content in
-  the source's record; the witness itself is the source's trunk, `[source record, its files' trunks in path order]`
-  (`file.c`), the same as any other composition, so a new release, having other files, is another witness. Today the
-  engine cites the witness's name, as text, as the witness of each attestation (`recipe.c`); the law requires the
-  source's trunk.
+  the source's record. A witness is a content-derived entity, never a made-up key or a hash of a string; the name as
+  content qualifies, and it is what the engine cites as the witness of each attestation today (`recipe.c`). Whether a
+  witness is the source's trunk, `[source record, its files' trunks in path order]` (`file.c`), or the composition
+  `[authority, release]` is not decided.
 - **Testimony, not bookkeeping.** A witness provides content and attestations about it: that is what a recipe reads.
   A file's bookkeeping about its own records (dates an entry was made, colours, versions, licences, usage notes,
   templates, who edited a row) is not testimony: name it with `omit`, or leave the column out of `attest`. Never
@@ -64,15 +64,17 @@ So:
   identifier; the law requires the identifier recorded as content as well. A file that maps such identifiers onto one
   another (SemLink, PredicateMatrix, CILI's maps, VerbAtlas's bridges) is read by the highway through its recipe's
   `types`, `keyed`, `alias` and `maps` lines (`semlink/pb-vn.recipe`); its mappings are what that source attests.
-- **An enumerated value lands where the source asserts it.** A UPOS, XPOS, feature or dependency relation is said of
-  a token in its sentence, the sentence's annotation layer, not of the word everywhere; a Unicode property is said of
-  the codepoint. These set the registry's mask bit at that tier, and a word's mask is derived from them, never
-  blanketed across tiers. WordNet says a concept is a noun and the word lexicalizes it; that is not the same claim as a
-  token tagged NOUN. Today `attest row UPOS` (`universal-dependencies/conllu.recipe`) says it of the row's word, the
-  law requires it of the token in its sentence.
+- **An enumerated value lands where the source asserts it.** "dog is a noun" stands in several shapes, each where a
+  source says it. A treebank's sentence carries one layer claim per layer (its UPOS, its relations), a path of slots
+  aligned to its tokens; what the treebank says of a word by itself is the claim `[dog, NOUN]`, NOUN a registry slot,
+  every tagging act a game, and the bit on `dog`'s row a filter. That is what `attest row UPOS`
+  (`universal-dependencies/conllu.recipe`) gives. WordNet says the concept is a noun and the word lexicalizes it;
+  FrameNet's `dog.n` has the part of speech as a part; a Unicode property is said of the codepoint. Each source's code
+  (`n`, `.n`, `NOUN`) is recorded as written and sets the same slot; nothing is blanketed across tiers it was not
+  asserted at, and a mask miss is never absence.
 - **A repeat is games, not rows.** When a witness asserts one claim several times, each is a game; the engine folds a
-  witness's repeats of one claim into one rating period and sends one update per claim per witness. A number the
-  source states (a usage count, a sense's order) is content the source writes, never a count of games.
+  witness's repeats of one claim into one rating period per claim per witness. A number the source states (a usage
+  count, a sense's order) is content, never games.
 
 ## Where you work, and what you must not touch
 
