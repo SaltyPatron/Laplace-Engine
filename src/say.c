@@ -354,18 +354,21 @@ static int all_path(const STree *t, int32_t g, const char *path, int32_t *out, i
 static int is_local(const Say *s, const char *tier){ for (int i = 0; i < s->nkey; i++) if (!strcmp(s->key[i].tier, tier)) return 1; return 0; }
 /* The key index of a tree: every part with a key, by its tier and the key's text, built once per tree. A key is its
  * tier, a NUL, the key's text; compared whole, never by its hash alone. */
+/* The key is written by key_of and its length read from b->n: never as two arguments of one call, whose order C leaves
+ * open (icx on Windows, as MSVC does, evaluates them right to left, and read the length of the key before it). */
 static const void *key_of(lp_buf *b, const char *tier, const uint8_t *v, size_t n){ b->n = 0; lp_buf_put(b, tier, strlen(tier) + 1); lp_buf_put(b, v, n); return b->b; }
 static void index_keys(Sink *k, const STree *t){
     const Say *s = k->s;
     if (k->ix) lp_strmap_free(k->ix); k->ix = lp_strmap_sized(sizeof(int32_t)); k->ix_tree = t; k->ix_count = t->count;
     for (uint32_t g = 0; g < t->count; g++) { const SNode *y = &t->n[g]; if (y->kind != S_GROUP || !y->nlen) continue;
         for (int i = 0; i < s->nkey; i++) { if (!s_named(y, s->key[i].tier, strlen(s->key[i].tier))) continue; int32_t kc = s_child(t, (int32_t)g, s->key[i].name, -1); if (kc < 0 || !t->n[kc].vlen) continue;
-            bool fresh; int32_t *at = lp_strmap_get(k->ix, key_of(&k->ix_key, s->key[i].tier, t->n[kc].val, t->n[kc].vlen), k->ix_key.n, &fresh);
+            const void *kb = key_of(&k->ix_key, s->key[i].tier, t->n[kc].val, t->n[kc].vlen); bool fresh; int32_t *at = lp_strmap_get(k->ix, kb, k->ix_key.n, &fresh);
             if (fresh) *at = (int32_t)g; } }                                        /* the first that names a key keeps it */
 }
 static int32_t keyed(Sink *k, const STree *t, const char *tier, const uint8_t *v, size_t n){
     if (k->ix_tree != t || k->ix_count != t->count) index_keys(k, t);
-    const int32_t *at = lp_strmap_lookup(k->ix, key_of(&k->ix_key, tier, v, n), k->ix_key.n); return at ? *at : -1;
+    const void *kb = key_of(&k->ix_key, tier, v, n);                       /* written first: its length is read after it is written */
+    const int32_t *at = lp_strmap_lookup(k->ix, kb, k->ix_key.n); return at ? *at : -1;
 }
 static int left_empty(const Say *s, const SNode *x){ return s_empty(&s->lay, x->val, x->vlen); }
 static Ref text_of(const uint8_t *p, size_t n){ return n > 256 ? text_ref(CTX[omp_get_thread_num()], p, n) : string_ref(p, n); }
@@ -648,6 +651,8 @@ static void worker_of(Sink *w, const Sink *k){
     *w = *k; memset(&w->ev, 0, sizeof w->ev); memset(&w->things, 0, sizeof w->things); memset(&w->meta, 0, sizeof w->meta); memset(&w->grp, 0, sizeof w->grp);
     memset(w->open, 0, sizeof w->open); w->nopen = 0; w->unknown = 0; w->nunk = 0; w->hr = NULL; w->nhr = w->chr = 0; w->worker = 1;
     w->cs = NULL; w->cs_cap = w->cs_n = 0;                                    /* the claims it has made: its own, never the parent's table */
+    memset(&w->ix_key, 0, sizeof w->ix_key);                                  /* the buffer a key is written into to be looked up (keyed): its own; the
+                                                                               * parent's, copied, was written by every worker at once */
 }
 static void sink_merge(Sink *k, Sink *w){
     for (uint64_t i = 0; i < w->ev.n; i++) ev_push(&k->ev, &w->ev.e[i]);
@@ -656,7 +661,7 @@ static void sink_merge(Sink *k, Sink *w){
     for (int i = 0; i < 256; i++) k->open[i] += w->open[i];
     for (int i = 0; i < w->nopen; i++) { int dup = 0; for (int j = 0; j < k->nopen && !dup; j++) dup = !strcmp(k->opennm[j], w->opennm[i]); if (!dup && k->nopen < 16) strcpy(k->opennm[k->nopen++], w->opennm[i]); }
     k->unknown += w->unknown; for (int i = 0; i < w->nunk && k->nunk < 8; i++) strcpy(k->unknm[k->nunk++], w->unknm[i]);
-    free(w->ev.e); free(w->meta.c); free(w->things.c); free(w->grp.c); free(w->cs);
+    free(w->ev.e); free(w->meta.c); free(w->things.c); free(w->grp.c); free(w->cs); lp_buf_free(&w->ix_key);
 }
 /* A thread may take up a part while it waits inside its own reading: what it was in the middle of is put back after. */
 typedef struct { const STree *tt; int16_t *dm; int base, nbusy; long self_cp; char self_mark; } Tls;
