@@ -187,14 +187,19 @@ typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; 
                  Ref *said; uint64_t nsaid, csaid;     /* what it witnessed, in the order it was read: a curated file's content */
                  int partial;                          /* more of it is still to come: it is not yet a recorded source */
                  uint64_t records;
+                 uint32_t order;                       /* its place among the run's files, as ingest orders them */
+                 uint64_t at;                          /* where the bytes being read begin in it: a stretch's offset */
                  int laid; } File;                     /* laid: its trunk, metadata tree and content tree came from the recipe's layout (say.c) */
 int  say_says(Recipe *, const char *path, char *tok);                       /* a recipe's line, if it lays the file out or disposes of a part */
 int  say_lays(const Recipe *);
 int  say_stretches(const Recipe *);                                         /* 1: a file it lays out can be read a line at a time; 2: a record ending at an empty line at a time; 0: whole */
 void comment_off(char *line);                                               /* a recipe line without its comment */
 const char *say_refers(const Recipe *, int i);                              /* the i-th recipe whose rows' keys this one's parts refer to, or NULL */
-/* A source's keys across its files: what a key names, kept for the files read after (recipe.c). */
-void keys_put(const char *recipe, const uint8_t *k, size_t n, Ref x);
+/* A source's keys across its files: what a key names, kept for the files read after (recipe.c). A key defined more than
+ * once is kept as the first in the file's order defines it, whichever thread puts it first: its rank is the file's place
+ * in the run, the offset of the part of it read, and the unit's place in that part. */
+typedef struct { uint64_t file, at, unit; } KeyRank;
+void keys_put(const char *recipe, const uint8_t *k, size_t n, Ref x, const KeyRank *rank);
 int  keys_get(const char *recipe, const uint8_t *k, size_t n, Ref *out);
 void attest_layout(const Recipe *, File *, const uint8_t *src, size_t n);             /* records read so far: a stretch's positions go on from the last */
 /* The highway, read from the resources by their recipes (types, keyed, alias, maps lines): what a file says of its

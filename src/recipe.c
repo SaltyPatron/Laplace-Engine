@@ -323,7 +323,8 @@ void ev_push(Events *e, const Event *x){                         /* by address: 
 
 /* ---- a source's keys across its files: what a key column holds, resolved to its row's subject, for the rows of the
  * source's other files that point at it (refer COLUMN RECIPE). Process-wide, in stripes: a source is read in one process,
- * and the files that refer are read after the files referred to (ingest orders them). The first row to define a key keeps it. */
+ * and the files that refer are read after the files referred to (ingest orders them). The first row to define a key keeps it:
+ * first in the order of the files and of the rows in them (KeyRank), not in the order the threads reach them. */
 /* A stripe is a string map, its key the recipe's name, a NUL, and the key's bytes; the stripe is the key's hash's top bits. */
 typedef struct { pthread_mutex_t mu; lp_strmap *m; } KStripe;
 static KStripe kstripe[64] = { [0 ... 63] = { PTHREAD_MUTEX_INITIALIZER, NULL } };
@@ -332,15 +333,17 @@ static KStripe *key_at(const char *recipe, const uint8_t *k, size_t n, uint8_t *
     memcpy(*key, recipe, rl + 1); memcpy(*key + rl + 1, k, n);
     return &kstripe[(lp_hash_bytes(*key, *len) >> 58) & 63];
 }
-void keys_put(const char *recipe, const uint8_t *k, size_t n, Ref x){
+typedef struct { Ref x; KeyRank r; } KeyHeld;
+static int rank_before(const KeyRank *a, const KeyRank *b){ return a->file != b->file ? a->file < b->file : a->at != b->at ? a->at < b->at : a->unit < b->unit; }
+void keys_put(const char *recipe, const uint8_t *k, size_t n, Ref x, const KeyRank *rank){
     uint8_t stack[512], *key; size_t len; KStripe *s = key_at(recipe, k, n, &key, &len, stack, sizeof stack);
-    pthread_mutex_lock(&s->mu); if (!s->m) s->m = lp_strmap_sized(sizeof(Ref));
-    bool fresh; Ref *r = lp_strmap_get(s->m, key, len, &fresh); if (fresh) *r = x;          /* the first row to define a key keeps it */
+    pthread_mutex_lock(&s->mu); if (!s->m) s->m = lp_strmap_sized(sizeof(KeyHeld));
+    bool fresh; KeyHeld *h = lp_strmap_get(s->m, key, len, &fresh); if (fresh || rank_before(rank, &h->r)) { h->x = x; h->r = *rank; }     /* the first row to define a key keeps it */
     pthread_mutex_unlock(&s->mu); if (key != stack) free(key);
 }
 int keys_get(const char *recipe, const uint8_t *k, size_t n, Ref *out){
     uint8_t stack[512], *key; size_t len; KStripe *s = key_at(recipe, k, n, &key, &len, stack, sizeof stack);
-    pthread_mutex_lock(&s->mu); const Ref *r = s->m ? lp_strmap_lookup(s->m, key, len) : NULL; if (r) *out = *r;
+    pthread_mutex_lock(&s->mu); const KeyHeld *r = s->m ? lp_strmap_lookup(s->m, key, len) : NULL; if (r) *out = r->x;
     pthread_mutex_unlock(&s->mu); if (key != stack) free(key); return r != NULL;
 }
 uint64_t keys_held(void){ uint64_t n = 0; for (int i = 0; i < 64; i++) n += lp_strmap_count(kstripe[i].m); return n; }
