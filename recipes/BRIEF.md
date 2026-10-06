@@ -25,12 +25,16 @@ So:
 - The witness is named **as the source names itself** (its README title, its own `label`), and that name is content
   inside the source's record. The witness is the source's trunk, `[source record, its files' trunks in path order]`
   (`file.c`): content-derived, never a made-up key or a hash of a string, and a new release, having other files, is
-  another trunk. Provenance is containment: a record is a path over the claims it asserts, inside its file's content
-  tree, so walking up from a claim finds every source that asserts it, and a claim's standing is kept beside the path,
-  keyed by the claim. As built, the engine cites the name's text as the witness of each attestation (`named_for` in
-  `recipe.c`) and keeps provenance in attestation rows; records as paths of their claims under the file's trunk, with
-  the source's trunk as the witness, are the target (Laplace-Engine#22). Either way the `witness` line is written the
-  same.
+  another trunk. The corpus is the trunk: Universal Dependencies, the Open Multilingual Wordnet, the WSD evaluation
+  framework and HateCheck are each one source trunk and one witness, and a treebank, a lexicon or a data set under it
+  is files, with their paths, under that trunk, never a witness of its own. A claim's standing is stored on every
+  claim, keyed by the claim. As built, the engine cites the name's text as the witness of each attestation (`named_for`
+  in `recipe.c`) and keeps provenance in attestation rows, one per claim and witness, holding its games, score and
+  position. The target is provenance by containment: a record is a path over the claims it asserts,
+  inside its file's content tree, so walking up from a claim finds every source that asserts it, with the source's
+  trunk as the witness (Laplace-Engine#22). The attestation rows stay until a working prototype on real data shows
+  containment answers everything they answer today (who said a claim, its games, score and position, its qualifiers,
+  forgetting and replaying a source) with nothing lost. Either way the `witness` line is written the same.
 - **Testimony, not bookkeeping.** A witness provides content and attestations about it: that is what a recipe reads.
   A file's bookkeeping about its own records (dates an entry was made, colours, versions, licences, usage notes,
   templates, who edited a row) is not testimony: name it with `omit`, or leave the column out of `attest`. Never
@@ -53,27 +57,35 @@ So:
   - **A pointer's notation still carries facts.** Decompose it by the source's own notation, declared in the recipe,
     never by word breaks, and attest the facts it carries: a WordNet offset's type `v`, a sense key's lexicographer
     file (`drop%2:38:00::` is lemma `drop`, type 2, lexicographer file 38, lex_id 00). The facts are attested; the
-    pointer is not. Whether a sense key is a pointer or a lexicalization in its own right is not decided: report how
-    you read one.
+    pointer is not. A sense key (`dog%1:05:00::`) is WordNet's pointer to a lexicalization: it is decomposed for its
+    facts (lemma, type, lexicographer file), resolved through the highway's perf-cache to the lexicalization, and not
+    recorded.
   - **Where a record stands is not an identifier**: its line, its row number, its byte offset, a number that only
     counts a file's own records (a word's `ID` in its sentence, the `-- record N` of `--claims`) are occurrence under
     the file's trunk, never part of any ID.
-- **Whoever said it is a witness, and what they said is theirs.** A worker, an annotator, an author, an owner, a
-  contributor, a speaker: when the source names who wrote, answered or said something, that is a witness of its own,
-  and it is its name, as content. Name it with `own` (`[the source's witness, COLUMN, id]`) and attribute what it
-  said with `by` (or `voices` for a column per annotator); what the source says of that witness is attested `of` it.
-  A book is attested to its author, a quote to its speaker, an annotation to its annotator. "Who edited a row" in the
-  bookkeeping list below means housekeeping about the file's records, never the person whose words or answers the row
-  holds.
+- **Whoever a corpus names is content; the corpus is the witness.** A worker, an annotator, an author, an owner, a
+  contributor, a speaker, a member named inside a corpus is content, not a witness. The corpus witnesses what it
+  reports of them, and those reports are relations the corpus attests, added explicitly: this annotator labelled this
+  case hateful, this speaker said this sentence, this member added this sentence, this author wrote this book. As
+  built, `own` (`[the source's witness, COLUMN, id]`) names such a person as a witness of its own, `by` (or `voices`,
+  for a column per annotator) attributes what they said to that witness, and what the source says of them is attested
+  `of` them; the target is the corpus as the one witness, with the person and what the corpus reports of them as
+  content and relations under it. "Who edited a row" in the bookkeeping list below means housekeeping about the file's
+  records, never the person whose words or answers the row holds.
 - **A thing is its content.** A word is what the lemma writes; a sentence is its text or its words; a place is its
   name, latitude and longitude; a case or a post is its text. A concept is its hub: a synset is its ILI, never its word
   list (19,619 of WordNet 3.0's 117,659 synsets list exactly the words another lists; 11 verb synsets are just `drop`).
   As built, `wn-lmf.recipe` makes a synset the words it lists and reads its `ili` with `type`; the ILI is the target.
+  How a synset whose ILI is `in` (a new concept CILI has not yet numbered) is named is not decided: report how you
+  read one. A word in a language is the lexicalization `[lemma, language, ILI]`, the language (an ISO 639 hub) a part
+  of it, never a context column or a mask bit; another language is the same hub with another language part.
   Say `identity`, `subject in` or `named ... by` over content, never over a pointer column.
 - **Types are attested; the highway is their perf-cache.** Parts of speech, dependency relations, ILI concepts,
   VerbNet classes and roles, FrameNet frames, frame elements and lexical units, PropBank rolesets, VerbAtlas frames are
   listed by `laplace highway`: a perf-cache whose lists resolve the sources' hubs to their slots, a stable slot being an
-  index over content, never the identity of a meaning. What a hub is (an ILI, a roleset, a class) is what the source
+  index over content, never the identity of a meaning. A roleset, a VerbNet class, a FrameNet frame, frame element or
+  lexical unit and a VerbAtlas frame are hubs exactly as an ILI is: concept nodes of the linguistic highway, which a
+  word bubbles up to and the highway's mappings hop between. What a hub is (an ILI, a roleset, a class) is what the source
   that says so attests. A file that maps hubs onto one another (SemLink, PredicateMatrix, CILI's maps, VerbAtlas's
   bridges) is read by the highway through its recipe's `types`, `keyed`, `alias` and `maps` lines
   (`semlink/pb-vn.recipe`); its mappings are what that source attests.
@@ -179,7 +191,9 @@ Notes:
   documentation gives, quoted in a comment.
 - `match` globs are matched against the file's name only, and the most specific wins. Inside one source make them
   unambiguous.
-- A set that gives several witnesses (one per file or directory) names them with `{dir}` or `{first NAME}`.
+- As built, a set can give a witness per file or directory, named with `{dir}` or `{first NAME}` (a treebank, a
+  lexicon or a data set each its own witness). The target is one witness per corpus, its source trunk, with each file
+  under it by its path; write the `witness` line as the corpus names itself.
 - Files a source's recipes do not match are simply not read. Your report must list them.
 
 ## What to deliver
@@ -196,6 +210,7 @@ Your final report, in plain text, per set:
 6. Engine features that are missing, each with three raw lines of data that need it.
 
 Do not summarize what the data "means". Do not propose schema changes. As built there are five database tables
-(entity, physicality, witness, attestation, consensus); the target replaces the per-claim, per-witness attestation rows
-with containment under the source's trunk and keeps standing in one table keyed by the claim (Laplace-Engine#22). A
+(entity, physicality, witness, attestation, consensus). The target is provenance by containment under the source's
+trunk, with standing stored in one table keyed by the claim (Laplace-Engine#22); the per-claim, per-witness attestation
+rows stay until a working prototype on real data shows containment answers everything they answer with nothing lost. A
 recipe is written the same for both.
