@@ -309,11 +309,8 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
      * its row says so, so every read finds it (a record is held by nothing, so no holder ever says it) */
     for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) {
         Node *c = table_find(&files[fi].ev.e[i].claim); if (c) c->kind |= (uint8_t)(1u << (files[fi].ev.e[i].kind == EV_RECORD ? LP_KIND_RECORD : LP_KIND_CLAIM)); }
-    PGconn **pg = malloc(sizeof(PGconn *) * npg);
-    for (int i = 0; i < npg; i++) {
-        pg[i] = db_connect(conninfo);
-        PQclear(PQexec(pg[i], "SET synchronous_commit = off"));
-    }
+    PGconn **pg = malloc(sizeof(PGconn *) * npg); db_connect_many(conninfo, npg, pg);
+    for (int i = 0; i < npg; i++) PQclear(PQexec(pg[i], "SET synchronous_commit = off"));
     parts_plan(pg[0]);
     if (!stage_open(pg[0])) return 1;
     if (!resolve_parts(pg[0])) return 1;                                       /* a batch that stopped between its parts' commits, finished first */
@@ -615,11 +612,17 @@ static int merge_leaf(PGconn *w, PGconn *rd, const MLeaf *L, uint64_t *rows){
         free(buf);
     } else {
         if (L->table >= M_ATT) {
-            /* one pass along the primary key: a staged row is new, or takes the recorded one's place */
-            const char *set = L->table == M_ATT ? "(claim, witness) DO UPDATE SET score = excluded.score, games = excluded.games"
-                                                : "(claim) DO UPDATE SET rating = excluded.rating, deviation = excluded.deviation, volatility = excluded.volatility, matches = excluded.matches";
-            snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s ORDER BY %s ON CONFLICT %s", L->name, cols, cols, L->name, M_ORDER[L->table], set);
-            bad = !must(w, sql); }
+            /* A staged row is new, or takes the recorded one's place: two set operations along the primary key, the
+             * recorded rows updated by a join and the new ones inserted by an anti-join, each one statement over the
+             * leaf (Ingestion: Deduplication: set-based, never per-row conflict handling). ON CONFLICT arbitrated every
+             * row through the index: 2.3 s a leaf-call on 13 sources (pg_stat_statements, 2026-10-05). */
+            const char *key = L->table == M_ATT ? "p.claim = s.claim AND p.witness = s.witness" : "p.claim = s.claim";
+            const char *set = L->table == M_ATT ? "score = s.score, games = s.games"
+                                                : "rating = s.rating, deviation = s.deviation, volatility = s.volatility, matches = s.matches";
+            snprintf(sql, sl, "UPDATE public.%s p SET %s FROM stage.%s s WHERE %s", L->name, set, L->name, key);
+            bad = !must(w, sql);
+            if (!bad) { snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s s WHERE NOT EXISTS (SELECT 1 FROM public.%s p WHERE %s) ORDER BY %s",
+                                 L->name, cols, cols, L->name, L->name, key, M_ORDER[L->table]); bad = !must(w, sql); } }
         else { snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s ORDER BY %s", L->name, cols, cols, L->name, M_ORDER[L->table]); bad = !must(w, sql); }   /* new by the descent: the primary key refuses anything that is not */
         *rows += (uint64_t)L->staged_rows;
     }
@@ -630,6 +633,17 @@ static int merge_leaf(PGconn *w, PGconn *rd, const MLeaf *L, uint64_t *rows){
         PGresult *q = PQexecParams(w, "SELECT gin_clean_pending_list(i.indexrelid::regclass) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am a ON a.oid = c.relam "
                                       "WHERE i.indrelid = ('public.' || quote_ident($1))::regclass AND a.amname = 'gin'", 1, NULL, v, NULL, NULL, 0);
         if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "merge %s, container index: %s", L->name, PQerrorMessage(w)); bad = 1; } PQclear(q); }
+    /* The reference a path makes to its entity, checked as one set over what this leaf took (the stage still holds it),
+     * not row by row: with the referential triggers out of the writers' transaction, this is what keeps the ordering
+     * honest. A path is partitioned by its entity, so the entity is in the entity leaf of the same range, written by
+     * this writer before any of its paths (entities first) and visible to it. A path without an entity fails the
+     * merge, which rolls back whole. */
+    if (!bad && L->table == M_PHYS) {
+        snprintf(sql, sl, "SELECT count(*) FROM stage.%s s WHERE NOT EXISTS (SELECT 1 FROM public.entity_%s e WHERE e.id = s.entity)", L->name, strrchr(L->name, '_') + 1);
+        PGresult *q = PQexec(w, sql);
+        if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "merge %s, paths and their entities: %s", L->name, PQerrorMessage(w)); bad = 1; }
+        else if (strcmp(PQgetvalue(q, 0, 0), "0")) { fprintf(stderr, "merge %s: %s paths name an entity that is not recorded: the system is wrong\n", L->name, PQgetvalue(q, 0, 0)); bad = 1; }
+        PQclear(q); }
     if (!bad) { snprintf(sql, sl, "TRUNCATE stage.%s", L->name); bad = !must(w, sql); }
     free(sql); free(cols); return bad;
 }
@@ -648,7 +662,8 @@ int merge(const char *conninfo, int npg){
         L[i].table = !strncmp(L[i].name, "entity", 6) ? M_ENTITY : !strncmp(L[i].name, "physicality", 11) ? M_PHYS : !strncmp(L[i].name, "attestation", 11) ? M_ATT : M_CONS; }
     PQclear(r);
     PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg), **rd = malloc(sizeof(PGconn *) * (size_t)npg);
-    for (int i = 0; i < npg; i++) { pg[i] = db_connect(conninfo); rd[i] = db_connect(conninfo); PQclear(PQexec(pg[i], "SET synchronous_commit = off")); }
+    db_connect_many(conninfo, npg, pg); db_connect_many(conninfo, npg, rd);
+    for (int i = 0; i < npg; i++) PQclear(PQexec(pg[i], "SET synchronous_commit = off"));
     int bad = 0;
     #pragma omp parallel for num_threads(npg) schedule(dynamic, 1) reduction(+:bad)
     for (int i = 0; i < nl; i++) {
@@ -678,7 +693,12 @@ int merge(const char *conninfo, int npg){
     printf("  %d leaves have rows staged: %d rewritten (%.1f GB held, written without WAL), %d appended (%'.0f rows, logged)%s\n",
            nm, nrw, rw_bytes / 1e9, nm - nrw, ap_rows, minimal ? "" : "; wal_level is not minimal, so none is rewritten");
     /* one transaction in parts: each writer's part prepared, part 0 last, then part 0 committed, which decides */
-    char xid0[32] = ""; for (int j = 0; j < npg; j++) if (!must(pg[j], "BEGIN")) return 1;
+    /* The writers' transactions. The foreign key from a path to its entity holds by construction: entities go in
+     * first, and the descent stages no path whose entity is not staged or recorded (Ingestion: Deduplication). Checked
+     * row by row it cost 3,829,527 lookups and 261 s of backend time in a 333 s run of unicode and iso-639 (SELECT 1
+     * FROM entity WHERE id = $1 FOR KEY SHARE, pg_stat_statements, 2026-10-05), a 35 s floor under the smallest source;
+     * replica mode leaves the referential triggers out for this transaction alone. */
+    char xid0[32] = ""; for (int j = 0; j < npg; j++) if (!must(pg[j], "BEGIN") || !must(pg[j], "SET LOCAL session_replication_role = replica")) return 1;
     r = PQexec(pg[0], "SELECT pg_current_xact_id()"); if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "merge: %s", PQerrorMessage(pg[0])); return 1; }
     snprintf(xid0, sizeof xid0, "%s", PQgetvalue(r, 0, 0)); PQclear(r);
     uint64_t rows = 0;
@@ -717,7 +737,7 @@ int cmd_merge(int argc, char **argv){
  * that holds some is told which it holds. Returns 0, or 1 when the database refused. */
 int tier0_write(const char *conninfo, int npg){
     double T = now(); uint32_t want[NPART] = { 0 }; for (uint32_t cp = 0; cp < LP_NCP; cp++) want[part_of(&T0[cp].id, 0)]++;
-    PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) { pg[i] = db_connect(conninfo); PQclear(PQexec(pg[i], "SET synchronous_commit = off")); }
+    PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); db_connect_many(conninfo, npg, pg); for (int i = 0; i < npg; i++) PQclear(PQexec(pg[i], "SET synchronous_commit = off"));
     uint64_t wrote = 0; int bad = 0;
     #pragma omp parallel for num_threads(npg) schedule(dynamic, 1) reduction(+:wrote, bad)
     for (int p = 0; p < NPART; p++) {

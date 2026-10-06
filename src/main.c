@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <omp.h>
 
 static const char *env_or(const char *name, const char *dflt){ const char *v = getenv(name); return v && *v ? v : dflt; }
 const char *laplace_db(void){ return env_or("LAPLACE_CONNINFO", LAPLACE_CONNINFO_DEFAULT); }
@@ -34,10 +35,24 @@ const char *laplace_ucd(void){ return env_or("LAPLACE_UCD", LAPLACE_UCD_DEFAULT)
 uint32_t id_oid;
 static char noted_conn[8192];
 const char *db_noted(void){ return noted_conn; }
+static PGconn *connect_one(const char *conninfo);
 PGconn *db_connect(const char *conninfo){
     if (!conninfo) conninfo = "";
     /* pool_open passes db_noted(), which is this buffer: copying it onto itself is undefined */
     if (conninfo != noted_conn) snprintf(noted_conn, sizeof noted_conn, "%s", conninfo);
+    return connect_one(conninfo);
+}
+/* Many connections at once. A backend takes its time to start (measured on Windows, where each is a new process that
+ * loads the preloaded libraries again: about 1.5 s under load, 0.5 s idle), so 32 opened one after another were 16 s
+ * under every batch and under the source's trunk, and 49 were half the merge's floor. The first is opened alone (it
+ * notes the conninfo and the id type's oid); the rest open together. */
+void db_connect_many(const char *conninfo, int n, PGconn **out){
+    if (n <= 0) return;
+    out[0] = db_connect(conninfo);
+    #pragma omp parallel for schedule(static, 1)
+    for (int i = 1; i < n; i++) out[i] = connect_one(db_noted());
+}
+static PGconn *connect_one(const char *conninfo){
     PGconn *pg = PQconnectdb(conninfo);
     if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "%s (LAPLACE_CONNINFO: %s)\n", PQerrorMessage(pg), conninfo); exit(1); }
     PQclear(PQexec(pg, "SET client_min_messages = warning"));
@@ -46,7 +61,7 @@ PGconn *db_connect(const char *conninfo){
      * The database default stays off (a 1 ms lookup must not start workers). Measured on
      * laplace_containers of Sherlock Holmes: 3780 ms with it off, 573 ms with it on, 101 rows either way. */
     PQclear(PQexec(pg, "SET enable_parallel_append = on"));
-    if (!id_oid) { PGresult *r = PQexec(pg, "SELECT 'blake3'::regtype::oid");          /* a database not deployed yet has no such type */
+    if (!id_oid && !omp_in_parallel()) { PGresult *r = PQexec(pg, "SELECT 'blake3'::regtype::oid");          /* a database not deployed yet has no such type */
                    if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) id_oid = (uint32_t)strtoul(PQgetvalue(r, 0, 0), NULL, 10); PQclear(r); }
     return pg;
 }
