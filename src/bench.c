@@ -103,6 +103,7 @@ int cmd_bench(int argc, char **argv){
     printf("\nconsensus\n");
     lp_rating rt = { 1500, 350, 0.06 }; N = 1000000;
     t = now(); for (size_t i = 0; i < N; i++) { lp_attest(&rt, 0.9, (double)(i & 1), 1500, 0.5, 30); } row("Glicko-2 attestation (one matchup)", N, now() - t, 0);
+    t = now(); for (size_t i = 0; i < N; i++) { lp_rating x = lp_rating_stock(); lp_attest_series(&x, 0.9, 1u + (uint32_t)(i % 100000), 0.9, LP_ATTEST_FLOOR); rt.rating += x.rating * 1e-9; } row("an attestation's series, solved as one update", N, now() - t, 0);
     sink += (uint64_t)rt.rating;
     (void)argc; (void)argv;
     return 0;
