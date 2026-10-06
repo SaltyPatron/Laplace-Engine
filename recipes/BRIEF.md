@@ -22,29 +22,42 @@ So:
   entities and two claims, not one string. Stop at words.
 - A claim is a **tuple of entities** (`[subject, predicate, object]`, a pair, or a longer path). Every part is content.
 - Whatever a source leaves empty (its own empty marker) attests nothing.
-- The witness is named **as the source names itself** (its README title, its own `label`). That name is content in
-  the source's record. A witness is a content-derived entity, never a made-up key or a hash of a string; the name as
-  content qualifies, and it is what the engine cites as the witness of each attestation today (`recipe.c`). Whether a
-  witness is the source's trunk, `[source record, its files' trunks in path order]` (`file.c`), or the composition
-  `[authority, release]` is not decided.
+- The witness is named **as the source names itself** (its README title, its own `label`), and that name is content
+  inside the source's record. The witness is the source's trunk, `[source record, its files' trunks in path order]`
+  (`file.c`): content-derived, never a made-up key or a hash of a string, and a new release, having other files, is
+  another trunk. Provenance is containment: a record is a path over the claims it asserts, inside its file's content
+  tree, so walking up from a claim finds every source that asserts it, and a claim's standing is kept beside the path,
+  keyed by the claim. As built, the engine cites the name's text as the witness of each attestation (`named_for` in
+  `recipe.c`) and keeps provenance in attestation rows; records as paths of their claims under the file's trunk, with
+  the source's trunk as the witness, are the target (Laplace-Engine#22). Either way the `witness` line is written the
+  same.
 - **Testimony, not bookkeeping.** A witness provides content and attestations about it: that is what a recipe reads.
   A file's bookkeeping about its own records (dates an entry was made, colours, versions, licences, usage notes,
   templates, who edited a row) is not testimony: name it with `omit`, or leave the column out of `attest`. Never
   `attest *`.
-- **A source's identifiers are content.** A synset offset, a sense key, an ILI, a roleset, a VerbNet class, a FrameNet
-  id, an ISO code, a geonameid, a case id, an `ID` attribute, a game id: `i46360` is `[i,4,6,3,6,0]` exactly as
-  `3.14159` is `[3,.,1,4,1,5,9]`, the same entity wherever that text stands. A structured identifier breaks down into
-  the parts its notation gives it: `06975898-n` is an offset and a part of speech, `run-51.3.2` is `run`, `51`, `3` and
-  `2`. That an identifier is an ILI, a roleset or a class is attested by the source that says so, and that it names the
-  row or element that defines it is that source's claim like any other. **Where a record stands is not an
-  identifier**: its line, its row number, its byte offset, a number that only counts a file's own records (a word's
-  `ID` in its sentence, the `-- record N` of `--claims`) are occurrence under the file's trunk, never part of any ID.
-  Today an identifier is read with `key` (it resolves the rows that point at it to the thing it defines, and its text
-  is recorded nowhere), `refer` (its text is read as the thing another row or element of the same source defines) or
-  `type` (its text is read as the type in the highway's list that it names). All three drop the identifier itself, and
-  the law requires it recorded as content beside what it resolves to. So: an identifier that nothing in the source
-  points at is `content`, never `key`; a positional number is `key` or `omit`; and every identifier column you name
-  with `key`, `refer` or `type` goes in your report, as an identifier the engine does not yet record.
+- **A source's identifiers are of two kinds: hubs, which are content, and its own pointers, which resolve.**
+  - **A hub is content.** An ILI (`i46360`), a PropBank roleset (`abandon.01`), a VerbNet class (`leave-51.2`), a
+    FrameNet frame, frame element or lexical unit, a VerbAtlas frame (`va:0001f`), a language code: a vocabulary many
+    sources share, the lists `laplace highway` holds. The hub's own text is the hub, an entity whose ID is BLAKE3 of
+    its content: `i46360` is `[i,4,6,3,6,0]` exactly as `3.14159` is `[3,.,1,4,1,5,9]`, so every source that cites it
+    lands on the same node. A source that writes a hub its own way (`mcr:ili-30-01976841-v`, `vn:51.3.1`, an FE's
+    `ID`) names the column with `type COLUMN LIST`, which reads it as that hub; that is right. Never rewrite a hub to a
+    made-up key.
+  - **A pointer resolves, and is recorded nowhere.** A WordNet synset offset, a synset or sense id, a FrameNet numeric
+    `ID`, a UD token number or `sent_id`, a Tatoeba sentence number, a geonameid, a data set's row or case id, a line
+    number: how a source addresses its own records (or another release's). It is packaging. A WordNet 3.0 offset is
+    the byte position of the synset's line in that release's `data.<pos>` file (byte 1,976,841 of `data.verb` starts
+    `01976841 38 v 01 drop`), unique only with its type and only within its release. Name a pointer with `key` (the
+    rows that point at it resolve to the thing it defines), `refer` (it is read as the thing another row or element of
+    the same source defines) or `omit`: it resolves to the ID of what it points at and nothing of it is recorded.
+  - **A pointer's notation still carries facts.** Decompose it by the source's own notation, declared in the recipe,
+    never by word breaks, and attest the facts it carries: a WordNet offset's type `v`, a sense key's lexicographer
+    file (`drop%2:38:00::` is lemma `drop`, type 2, lexicographer file 38, lex_id 00). The facts are attested; the
+    pointer is not. Whether a sense key is a pointer or a lexicalization in its own right is not decided: report how
+    you read one.
+  - **Where a record stands is not an identifier**: its line, its row number, its byte offset, a number that only
+    counts a file's own records (a word's `ID` in its sentence, the `-- record N` of `--claims`) are occurrence under
+    the file's trunk, never part of any ID.
 - **Whoever said it is a witness, and what they said is theirs.** A worker, an annotator, an author, an owner, a
   contributor, a speaker: when the source names who wrote, answered or said something, that is a witness of its own,
   and it is its name, as content. Name it with `own` (`[the source's witness, COLUMN, id]`) and attribute what it
@@ -52,18 +65,18 @@ So:
   A book is attested to its author, a quote to its speaker, an annotation to its annotator. "Who edited a row" in the
   bookkeeping list below means housekeeping about the file's records, never the person whose words or answers the row
   holds.
-- **A thing is its content.** A word is what the lemma writes; a synset is the words it lists; a sentence is its text
-  or its words; a place is its name, latitude and longitude; a case or a post is its text. Say `identity`, `subject in`
-  or `named ... by` over content, never over an id column.
+- **A thing is its content.** A word is what the lemma writes; a sentence is its text or its words; a place is its
+  name, latitude and longitude; a case or a post is its text. A concept is its hub: a synset is its ILI, never its word
+  list (19,619 of WordNet 3.0's 117,659 synsets list exactly the words another lists; 11 verb synsets are just `drop`).
+  As built, `wn-lmf.recipe` makes a synset the words it lists and reads its `ili` with `type`; the ILI is the target.
+  Say `identity`, `subject in` or `named ... by` over content, never over a pointer column.
 - **Types are attested; the highway is their perf-cache.** Parts of speech, dependency relations, ILI concepts,
   VerbNet classes and roles, FrameNet frames, frame elements and lexical units, PropBank rolesets, VerbAtlas frames are
-  listed by `laplace highway`: a perf-cache whose lists resolve the sources' identifiers to their slots, a stable slot
-  being an index over content, never the identity of a meaning. A source that writes one (`i46360`, `va:0001f`,
-  `abandon.01`, `leave-51.2`, an FE's `ID`) writes content, and what it is is what the source attests. Today such a
-  column is named with `type COLUMN LIST`, which reads its text as the highway's type and records nothing of the
-  identifier; the law requires the identifier recorded as content as well. A file that maps such identifiers onto one
-  another (SemLink, PredicateMatrix, CILI's maps, VerbAtlas's bridges) is read by the highway through its recipe's
-  `types`, `keyed`, `alias` and `maps` lines (`semlink/pb-vn.recipe`); its mappings are what that source attests.
+  listed by `laplace highway`: a perf-cache whose lists resolve the sources' hubs to their slots, a stable slot being an
+  index over content, never the identity of a meaning. What a hub is (an ILI, a roleset, a class) is what the source
+  that says so attests. A file that maps hubs onto one another (SemLink, PredicateMatrix, CILI's maps, VerbAtlas's
+  bridges) is read by the highway through its recipe's `types`, `keyed`, `alias` and `maps` lines
+  (`semlink/pb-vn.recipe`); its mappings are what that source attests.
 - **An enumerated value lands where the source asserts it.** "dog is a noun" stands in several shapes, each where a
   source says it. A treebank's sentence carries one layer claim per layer (its UPOS, its relations), a path of slots
   aligned to its tokens; what the treebank says of a word by itself is the claim `[dog, NOUN]`, NOUN a registry slot,
@@ -75,6 +88,22 @@ So:
 - **A repeat is games, not rows.** When a witness asserts one claim several times, each is a game; the engine folds a
   witness's repeats of one claim into one rating period per claim per witness. A number the source states (a usage
   count, a sense's order) is content, never games.
+
+Three more are stated design for recipe authors. The engine does not do all of them yet: read a file this way, and
+report where a recipe cannot say it.
+
+- **A mapping row is one correspondence.** A row that states one correspondence across resources (a PredicateMatrix
+  row aligning a VerbNet class, a FrameNet frame, a PropBank roleset and a WordNet sense; a SemLink entry) is one
+  correspondence claim, a path over the resolved hubs, never split into a claim per column. Where a file lays its rows
+  out as a cross product (each of one side's members against each of the other's, a row apiece), the repeats are the
+  layout's packaging, not games. As built, `predicate-matrix/matrix.recipe` attests each column of a row
+  (`attest row *`).
+- **A declared default attests nothing.** A value that stands only because the source's format declares it the
+  default (Unicode's `nv=NaN`; an `scx` that is only `sc` again) is not something the source says of that thing, just
+  as its own empty marker is not.
+- **An automatic tagger's layer is a calculation.** Tags a program assigned (a tagger's or parser's per-token parts of
+  speech, lemmas, relations) are one calculation with one root, its analyzer's, recorded as a layer per sentence, never
+  as testimony per token.
 
 ## Where you work, and what you must not touch
 
@@ -115,18 +144,18 @@ Working examples to copy from, all under `recipes/`:
 |---|---|
 | table with a header row, every column said of one column's value | `iso-639/iso-639-3.recipe` (`attest *`) |
 | table without a header, predicate in the file's name | `princeton-wordnet/exceptions.recipe` |
-| table whose identifier column other files point at | `tatoeba/sentences.recipe` (`key`), `tatoeba/links.recipe` (`refer`) |
-| table whose column is a resource's identifier of a type | `verbatlas/frame-info.recipe`, `princeton-wordnet/cntlist.recipe` (`type`) |
+| table whose pointer column other files point at | `tatoeba/sentences.recipe` (`key`), `tatoeba/links.recipe` (`refer`) |
+| table whose column is a resource's way of writing a hub | `verbatlas/frame-info.recipe`, `princeton-wordnet/cntlist.recipe` (`type`) |
 | table of pairs (nothing written between the two) | `unicode/aliases.recipe` (`pair`) |
 | table whose row is one record, said together | use `together` in the claims block |
 | records of rows (a sentence, a row per word, a tree by heads) | `universal-dependencies/conllu.recipe` |
 | records of `Key: Value` lines | `iso-639/iana.recipe` (`grammar fields`) |
-| XML, elements that are things, identifiers resolved, types by a resource's identifier | `wn-lmf.recipe` (`key`, `refer`, `type`, `link`), `framenet/framenet.recipe`, `propbank/frames.recipe`, `verbnet/classes.recipe` |
+| XML, elements that are things, pointers resolved, hubs as a resource writes them | `wn-lmf.recipe` (`key`, `refer`, `type`, `link`), `framenet/framenet.recipe`, `propbank/frames.recipe`, `verbnet/classes.recipe` |
 | XML, a sentence as its words | `wsd-evaluation-framework/data.recipe` (`words`) |
 | XML by tree-sitter patterns (slower; only when `identity` cannot say it) | `unicode/ucd.recipe` |
 | Turtle | `turtle.recipe`, used through `like turtle` (`framebase/schema.recipe`) |
 | JSON whose keys are the things | `universal-dependencies-tools/data.recipe` (`keys things`) |
-| JSON objects named by members; `records` for a value on every line | `wiktionary-kaikki/kaikki.recipe` (`named ... by`, `key`) |
+| JSON objects named by members, pointers never recorded; `records` for a value on every line | `wiktionary-kaikki/kaikki.recipe` (`named ... by`, `key`) |
 | ordinary text (READMEs, documentation) | add `reads text` to the `source` file |
 
 A `source` file:
@@ -166,5 +195,7 @@ Your final report, in plain text, per set:
 5. Every place you were unsure whether a name was the source's own. Say so plainly; do not guess in the recipe.
 6. Engine features that are missing, each with three raw lines of data that need it.
 
-Do not summarize what the data "means". Do not propose schema changes. There are exactly five database tables
-(entity, physicality, witness, attestation, consensus) and there will be no others.
+Do not summarize what the data "means". Do not propose schema changes. As built there are five database tables
+(entity, physicality, witness, attestation, consensus); the target replaces the per-claim, per-witness attestation rows
+with containment under the source's trunk and keeps standing in one table keyed by the claim (Laplace-Engine#22). A
+recipe is written the same for both.
