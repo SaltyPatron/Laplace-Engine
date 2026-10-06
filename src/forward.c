@@ -43,7 +43,7 @@ int cmd_pull(int argc, char **argv){
     printf("prompt     %s   tier %d   %d constituent%s", idt, pr.tier, np, np == 1 ? "" : "s");
     { int words = 0; for (int i = 0; i < np; i++) words += table_find(&ph[i]) != NULL; printf(", %d of them compositions\n", words); }
 
-    PGconn *pg = db_connect(conninfo); Reader *rd = reader_new(pg);
+    PGconn *pg = db_read(conninfo); Reader *rd = reader_new(pg);
     /* every segment of the prompt at once (laplace_forward): "The", "The dog", "The dog barked" and every other run of it,
      * the observations that hold each, how many as a run, and what follows the run in them, counted. The whole pass is one
      * set; a segment that is only tier-0 atoms (a space, a letter) is a hub and is not shown. */
@@ -60,7 +60,8 @@ int cmd_pull(int argc, char **argv){
           int words = 0; for (int k = i - 1; k < j; k++) words += table_find(&ph[k]) != NULL; if (!words || !paths) continue;
           segments++; if (shown >= 32) continue; shown++;
           printf("%-10s \"", shown == 1 ? "segments" : i == 1 ? "" : "   also"); for (int k = i - 1; k < j; k++) { char *tx = reader_text(rd, &ph[k], 0); printf("%s", tx); free(tx); }
-          printf("\"   %ld held, %ld as a run", paths, runs); if (paths >= fw.fan) printf(" (the fan)");
+          if (paths > fw.fan) printf("\"   more than the fan (%d) hold it: reached, not counted", fw.fan);           /* laplace_forward: a hub segment */
+          else printf("\"   %ld held, %ld as a run", paths, runs);
           int shownext = 0; for (int z = r0; z < r && shownext < 6; z++) { if (PQgetisnull(q, z, 4)) continue; long times = (long)lp_be(PQgetvalue(q, z, 5), 8); if (times < 2 && shownext) break;
               lp_id x; memcpy(x.b, PQgetvalue(q, z, 4), 16); char *tx = reader_text(rd, &x, 0); printf("%s %s×%ld", shownext ? "" : "  then", strcmp(tx, " ") ? tx : "␠", times); free(tx); shownext++; }
           printf("\n"); }

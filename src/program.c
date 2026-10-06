@@ -243,7 +243,7 @@ int cmd_turn(int argc, char **argv){
     Firmware fw = firmware_for(fwp, FW_PULL);
     tier0_open(NULL); table_init(); ctx_open(1); lp_text *c = lp_text_new(T0);
     State *st = calloc(1, sizeof(State)); st->fw = &fw; st->c = c; st->seed = seed;
-    st->pg = db_connect(conninfo); st->rd = reader_new(st->pg);
+    st->pg = db_read(conninfo); st->rd = reader_new(st->pg);
     firmware_ids(&fw);
     firmware_say(&fw, FW_PULL);
 

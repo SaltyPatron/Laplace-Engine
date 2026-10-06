@@ -112,6 +112,11 @@ static void pool_open(void){
     npool = omp_get_num_procs(); if (npool < 1) npool = 1;
     pool = calloc((size_t)npool, sizeof *pool);
     for (int i = 0; i < npool; i++) pool[i] = db_connect(ci);
+    const char *snap = db_snapshot();                                    /* a read: every leaf read at the instant the command's first statement saw */
+    if (snap) for (int i = 0; i < npool; i++) {
+        char q[160]; snprintf(q, sizeof q, "BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY; SET TRANSACTION SNAPSHOT '%s'", snap);
+        PGresult *r = PQexec(pool[i], q);
+        if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "snapshot: %s", PQerrorMessage(pool[i])); exit(1); } PQclear(r); }
 }
 typedef struct { char name[64]; int tier; } Leaf;
 static Leaf *phy, *entleaves; static int nphy, nent;
@@ -152,6 +157,10 @@ int tier_max(const lp_id *ids, int n){
     return mx;
 }
 
+static int hold_order(const void *a, const void *b){
+    const Hold *x = a, *y = b; int c = memcmp(x->entity.b, y->entity.b, 16);
+    return c ? c : x->src != y->src ? (x->src < y->src ? -1 : 1) : 0;
+}
 typedef struct { Hold *h; int n, cap; } Bag;
 static void bag_put(Bag *b, Hold x){
     if (b->n == b->cap) { b->cap = b->cap ? b->cap * 2 : 32; b->h = xrealloc(b->h, (size_t)b->cap * sizeof(Hold)); }
@@ -210,6 +219,9 @@ static Hold *holds_core(const lp_id *keys, int nkeys, int floor, int each, int s
     Hold *h = calloc((size_t)(n ? n : 1), sizeof(Hold)); int w = 0;
     for (int j = 0; j < nj; j++) { memcpy(h + w, bag[j].h, (size_t)bag[j].n * sizeof(Hold)); w += bag[j].n; free(bag[j].h); }
     free(bag);
+    /* In content order: rows come out of each leaf as its heap lies, which differs between two installs of the same
+     * content and after a vacuum. Every caller that caps, sums or takes the first of a set would otherwise depend on it. */
+    if (n > 1) qsort(h, (size_t)n, sizeof(Hold), hold_order);
     if (standing && n) {
         int *ix[16], nx[16]; memset(nx, 0, sizeof nx);
         for (int i = 0; i < n; i++) nx[h[i].entity.b[0] >> 4]++;
