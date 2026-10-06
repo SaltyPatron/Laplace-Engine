@@ -27,8 +27,16 @@ So:
   (`file.c`): content-derived, never a made-up key or a hash of a string, and a new release, having other files, is
   another trunk. The corpus is the trunk: Universal Dependencies, the Open Multilingual Wordnet, the WSD evaluation
   framework and HateCheck are each one source trunk and one witness, and a treebank, a lexicon or a data set under it
-  is files, with their paths, under that trunk, never a witness of its own. A claim's standing is stored on every
-  claim, keyed by the claim. As built, the engine cites the name's text as the witness of each attestation (`named_for`
+  is files, with their paths, under that trunk, never a witness of its own. One organization's corpus set is one
+  source: UD's treebanks, its documentation pages (UD's own definitions of each UPOS, relation and feature) and its
+  validator data (derived by UD's own system from those pages) are one trunk and one witness; as built,
+  `universal-dependencies-tools` and `universal-dependencies-documentation` are sources of their own. ToxiGen is one
+  corpus witnessing its records, like a PGN: the generator (model, prompt) and the annotators are participants recorded
+  in each record, as White and Black are in a game, and ToxiGen attests that these annotators rated this statement
+  so, never that the statement is true. ISO 639 is each authority its own corpus (the Library of Congress's 639-2 with
+  the 2-letter codes, SIL's 639-3, IANA's registry, Unicode's CLDR supplemental data, Glottolog), and the 2↔3-letter
+  links and macrolanguage relations are relations those corpora attest; as built, the one `iso-639` source names a
+  witness per recipe. A claim's standing is stored on every claim, keyed by the claim. As built, the engine cites the name's text as the witness of each attestation (`named_for`
   in `recipe.c`) and keeps provenance in attestation rows, one per claim and witness, holding its games, score and
   position. The target is provenance by containment: a record is a path over the claims it asserts,
   inside its file's content tree, so walking up from a claim finds every source that asserts it, with the source's
@@ -66,6 +74,10 @@ So:
     pointer, decomposed by that notation, to the ILI node whose own text is `i46360`) names the column with
     `type COLUMN LIST`, which resolves it to that node; the written form is not the node's content and is not recorded.
     A FrameNet numeric `ID` is a pointer, below, not a highway node. Never rewrite a highway node to a made-up key.
+    Any publicly known identifier used across sources and languages is a highway node the same way: a FIDE ID is the
+    node for a player, as an ILI is for a concept, and the player's names in every language and script are its
+    lexicalizations. An identifier is decomposed by its notation (`va:0001f`: namespace `va`, number, kind), and a name
+    such as `TOLERATE` is a label attested of the node, used only to realize it: never ask which text "is" the node.
   - **A pointer resolves, and is recorded nowhere.** A WordNet synset offset, a synset or sense id, a FrameNet numeric
     `ID`, a UD token number or `sent_id`, a Tatoeba sentence number, a geonameid, a data set's row or case id, a line
     number: how a source addresses its own records (or another release's). It is packaging. A WordNet 3.0 offset is
@@ -96,8 +108,10 @@ So:
   name, latitude and longitude; a case or a post is its text. A concept is its highway node: a synset is its ILI, never its word
   list (19,619 of WordNet 3.0's 117,659 synsets list exactly the words another lists; 11 verb synsets are just `drop`).
   As built, `wn-lmf.recipe` makes a synset the words it lists and reads its `ili` with `type`; the ILI is the target.
-  How a synset whose ILI is `in` (a new concept CILI has not yet numbered) is named is not decided: report how you
-  read one. A word in a language is the lexicalization `[lemma, language, ILI]`, the language (an ISO 639 highway node) a
+  Nothing is order-dependent: every node is content-derived, so what two sources say links by entity collision
+  whichever is ingested first, and no placeholder waits for another source. A synset whose ILI is `in` (a new concept
+  CILI has not yet numbered) is given no stand-in identity; its content-derived nodes link by collision when CILI
+  states its ILI. A word in a language is the lexicalization `[lemma, language, ILI]`, the language (an ISO 639 highway node) a
   part of it, never a context column or a mask bit; another language is the same ILI with another language part.
   Say `identity`, `subject in` or `named ... by` over content, never over a pointer column.
 - **Types are attested; the highway is their perf-cache.** Parts of speech, dependency relations, ILI concepts,
@@ -219,7 +233,7 @@ Working examples to copy from, all under `recipes/`:
 | table with a header row, every column said of one column's value | `iso-639/iso-639-3.recipe` (`attest *`) |
 | table without a header, predicate in the file's name | `princeton-wordnet/exceptions.recipe` |
 | table whose pointer column other files point at | `tatoeba/sentences.recipe` (`key`), `tatoeba/links.recipe` (`refer`) |
-| table whose column is a source's key that `type` resolves to a highway node | `verbatlas/frame-info.recipe` (`type "prototypical synset" ili`; the frame's `va:0001f` is `key`), `princeton-wordnet/cntlist.recipe` (as built, `type sense_key ili`; the target resolves a sense key to its lexicalization strand) |
+| table whose column is a source's key that `type` resolves to a highway node | `verbatlas/frame-info.recipe` (`type "prototypical synset" ili`; as built the frame's `va:0001f` is `key` and the frame is its name; the target is the frame as its node `va:0001f`, its name `TOLERATE` a label), `princeton-wordnet/cntlist.recipe` (as built, `type sense_key ili`; the target resolves a sense key to its lexicalization strand) |
 | table of pairs (nothing written between the two) | `unicode/aliases.recipe` (`pair`) |
 | table whose row is one record, said together | use `together` in the claims block |
 | records of rows (a sentence, a row per word, a tree by heads) | `universal-dependencies/conllu.recipe` |
