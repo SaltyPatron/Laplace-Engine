@@ -345,6 +345,7 @@ int cmd_ingest(int argc, char **argv){
     for (int i = 1; i < nfiles; i++) { File x = files[i]; int d = depth[i], j = i;
         while (j > 0 && depth[j - 1] > d) { files[j] = files[j - 1]; depth[j] = depth[j - 1]; j--; }
         files[j] = x; depth[j] = d; }
+    for (int i = 0; i < nfiles; i++) files[i].order = (uint32_t)i;              /* the order a key defined in two files is kept by */
     if (uncovered) {                                                                  /* what no recipe covers yet, by extension */
         typedef struct { char ext[16]; int n; } Ext; Ext ex[512]; int ne = 0;
         for (int i = 0; i < nfiles; i++) if (!files[i].recipe) {
@@ -413,7 +414,7 @@ int cmd_ingest(int argc, char **argv){
                     last = have < cap - (1u << 20); size_t end = have;
                     if (!last) { end = 0; for (size_t i = have; i > 1; i--) if (buf[i - 1] == '\n' && (boundary == 1 || (i >= 2 && buf[i - 2] == '\n') || (i >= 3 && buf[i - 2] == '\r' && buf[i - 3] == '\n'))) { end = i; break; }
                                  if (!end) { fprintf(stderr, "\n  %s: a record longer than a stretch (%zu MB): the file cannot be read in stretches of this length\n", f->path, cap >> 20); mism++; failed = 1; break; } }
-                    f->partial = !last;
+                    f->partial = !last; f->at = f->bytes;                    /* where this stretch begins: its keys rank after the last's */
                     #pragma omp parallel
                     #pragma omp single
                     decompose_bytes(CTX[omp_get_thread_num()], f, buf, end, first);

@@ -257,7 +257,7 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  const STree *tc_tree; uint32_t tc_n, tc_cap; Ref *tc; uint8_t *ts;
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
-                 Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int32_t wide_of; int16_t *dm; uint32_t dm_cap;
+                 Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int32_t wide_of; KeyRank kr; int16_t *dm; uint32_t dm_cap;
                  struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; } Sink;          /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
@@ -627,7 +627,7 @@ static void keep_keys(Sink *k, const STree *t, int32_t root){
     const Say *s = k->s; if (!s->nkey) return; int32_t end = subtree_end(t, root);
     for (int32_t g = root; g <= end; g++) { const SNode *x = &t->n[g]; if (x->kind != S_GROUP || !x->nlen) continue;
         for (int i = 0; i < s->nkey; i++) if (s_named(x, s->key[i].tier, strlen(s->key[i].tier))) { int32_t kc = s_child(t, g, s->key[i].name, -1); Ref S;
-            if (kc >= 0 && t->n[kc].vlen && thing_of(k, t, g, &S, 0)) keys_put(k->r->name, t->n[kc].val, t->n[kc].vlen, S); } }
+            if (kc >= 0 && t->n[kc].vlen && thing_of(k, t, g, &S, 0)) keys_put(k->r->name, t->n[kc].val, t->n[kc].vlen, S, &k->kr); } }
 }
 /* A part read for the highway: the types it is, their keys, and the keys it maps to one another. */
 static void unit_highway(Sink *k, const STree *t, int32_t root){
@@ -814,7 +814,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
     *npp = np_;
 }
 static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
-    Sink *k = sink; const Say *s = k->s; (void)ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f; TT = t;
+    Sink *k = sink; const Say *s = k->s; k->kr.unit = ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f; TT = t;
     k->cs_epoch++; k->cs_n = 0;                                              /* a new part: none of its claims made yet */
     if (k->dm_cap < t->count) { k->dm_cap = t->count * 2; k->dm = xrealloc(k->dm, sizeof(int16_t) * k->dm_cap); } memset(k->dm, 0, sizeof(int16_t) * t->count); DM = k->dm;
     if (k->tc_cap < t->count) { k->tc_cap = t->count * 2; k->tc = xrealloc(k->tc, sizeof(Ref) * k->tc_cap); k->ts = xrealloc(k->ts, k->tc_cap); }
@@ -927,7 +927,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         for (size_t i = 1; i < want; i++) { size_t c = s_boundary(&s.lay, src, n, n / want * i); if (c > cut[nc - 1] && c < n) cut[nc++] = c; }
         cut[nc] = n; part = calloc(nc, sizeof(Sink)); const STier *t0 = &s.lay.tier[0];
         #pragma omp taskloop grainsize(1)
-        for (size_t i = 0; i < nc; i++) { Sink *k = &part[i]; k->r = r; k->s = &s; k->er = er; k->ed = ed; k->fw = f->witness; k->fname = fname; k->fstem = fstem; k->hw = hw;
+        for (size_t i = 0; i < nc; i++) { Sink *k = &part[i]; k->r = r; k->s = &s; k->er = er; k->ed = ed; k->fw = f->witness; k->fname = fname; k->fstem = fstem; k->hw = hw; k->kr.file = f->order; k->kr.at = f->at + cut[i];
             TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang);
             for (size_t a = cut[i]; a < cut[i + 1]; ) { const uint8_t *e0 = memmem(src + a, cut[i + 1] - a, t0->sep, (size_t)t0->seplen); size_t e = e0 ? (size_t)(e0 - src) : cut[i + 1];
                 size_t b = a; while (b < e && (src[b] == ' ' || src[b] == '\t' || src[b] == '\r')) b++;
@@ -959,12 +959,12 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         /* parsed a part at a time on every core, read as the one tree the whole file is (s_grammar_split) */
         #undef BEGINS
         size_t *ra = malloc(sizeof(size_t) * (nrs + 1)), *rb = malloc(sizeof(size_t) * (nrs + 1)); for (size_t i = 0; i < nrs; i++) { ra[i] = rs[i].a; rb[i] = rs[i].b; }
-        part = calloc(1, sizeof(Sink)); part[0].r = r; part[0].s = &s; part[0].er = er; part[0].ed = ed; part[0].fw = f->witness; part[0].fname = fname; part[0].fstem = fstem; part[0].hw = hw;
+        part = calloc(1, sizeof(Sink)); part[0].kr.file = f->order; part[0].kr.at = f->at; part[0].r = r; part[0].s = &s; part[0].er = er; part[0].ed = ed; part[0].fw = f->witness; part[0].fname = fname; part[0].fstem = fstem; part[0].hw = hw;
         uint64_t bad = s_grammar_split(&s.lay, r->lang, src, n, ra, rb, nrs, unit, &part[0]); nc = 1;
         free(ra); free(rb); free(rs); free(around);
         if (bad) { fprintf(stderr, "\n  %s: %llu parts of %s do not parse whole by the grammar; what parses is read\n", r->name, (unsigned long long)bad, f->path); f->incomplete += bad; }
     } else if (s.lay.g.n && r->lang) {                                       /* the grammar gives the tree: the file parsed once, its tree read by the same dispositions */
-        part = calloc(1, sizeof(Sink)); part[0].r = r; part[0].s = &s; part[0].er = er; part[0].ed = ed; part[0].fw = f->witness; part[0].fname = fname; part[0].fstem = fstem; part[0].hw = hw;
+        part = calloc(1, sizeof(Sink)); part[0].kr.file = f->order; part[0].kr.at = f->at; part[0].r = r; part[0].s = &s; part[0].er = er; part[0].ed = ed; part[0].fw = f->witness; part[0].fname = fname; part[0].fstem = fstem; part[0].hw = hw;
         TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang); TSTree *tt = ts_parser_parse_string(ps, NULL, (const char *)src, (uint32_t)n);
         TSNode root = ts_tree_root_node(tt); if (ts_node_has_error(root)) { fprintf(stderr, "\n  %s: %s does not parse whole by its grammar; what parses is read\n", r->name, f->path); f->incomplete++; }
         s_grammar(&s.lay, &root, src, n, unit, &part[0]); ts_tree_delete(tt); ts_parser_delete(ps);
@@ -974,7 +974,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         for (size_t i = 1; i < want; i++) { size_t c = s_boundary(&s.lay, src, n, at + (n - at) / want * i); if (c > cut[nc - 1] && c < n) cut[nc++] = c; }
         cut[nc] = n; part = calloc(nc, sizeof(Sink));
         #pragma omp taskloop grainsize(1)
-        for (size_t i = 0; i < nc; i++) { part[i].r = r; part[i].s = &s; part[i].er = er; part[i].ed = ed; part[i].fw = f->witness; part[i].fname = fname; part[i].fstem = fstem; part[i].hw = hw; part[i].fabout = fabout; part[i].has_fabout = has_fabout; s_decompose(&s.lay, src + cut[i], cut[i + 1] - cut[i], unit, &part[i]); }
+        for (size_t i = 0; i < nc; i++) { part[i].kr.file = f->order; part[i].kr.at = f->at + cut[i]; part[i].r = r; part[i].s = &s; part[i].er = er; part[i].ed = ed; part[i].fw = f->witness; part[i].fname = fname; part[i].fstem = fstem; part[i].hw = hw; part[i].fabout = fabout; part[i].has_fabout = has_fabout; s_decompose(&s.lay, src + cut[i], cut[i + 1] - cut[i], unit, &part[i]); }
     }
     Refs things = { 0 }, meta = { 0 }; uint64_t open = 0;
     for (size_t i = 0; i < nc; i++) {
