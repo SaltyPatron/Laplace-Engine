@@ -31,7 +31,7 @@
 #   restart P                  how often a walker goes home instead of stepping (0 to 1)
 #   sure N                     how many standard errors separate two counts of the walks; within them, nothing tells them apart
 #   lift N                     how much more often than its base rate a word is observed beside a position for that to ground it
-#   elect KEY...               the order the evidence is compared in: grounds continuity agree cooccur walks confidence shared
+#   elect KEY...               the order the evidence is compared in: grounds continuity agree cooccur walks shape confidence shared
 #   tie first | draw | ask     what proposals the evidence cannot tell apart get: the first by ID, a draw, or a question
 #   seed observation | session the seed is the observation and this firmware's text, or those and the session and turn too
 #
@@ -95,7 +95,7 @@ for pull
   restart 0.25
   sure 2
   lift 2
-  elect grounds continuity agree cooccur walks confidence shared
+  elect grounds continuity agree cooccur walks shape confidence shared
   tie first
   seed observation
   # strands of a kind the pull does not navigate (Sequence: Web 15.x): a sentence's tag layers and an example's marked

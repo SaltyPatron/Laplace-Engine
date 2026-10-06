@@ -25,7 +25,7 @@ Firmware firmware_for(const char *path, int op){
     Firmware fw; memset(&fw, 0, sizeof fw);
     fw.k = 2.0; fw.lambda = 0.05; fw.fan = op == FW_SEARCH ? 512 : 4096; fw.hops = 8; fw.emit = 32; fw.top_within = 0; fw.fact = 2.0; fw.order_witness = 1; fw.shape = FW_FRECHET;
     fw.walks = 64; fw.steps = 4; fw.walk_fan = 512; fw.restart = 0.25; fw.sure = 2.0; fw.lift = 2.0; fw.tie = FW_TIE_FIRST;
-    { static const int E[] = { FW_E_GROUNDS, FW_E_CONTINUITY, FW_E_AGREE, FW_E_COOCCUR, FW_E_WALKS, FW_E_CONFIDENCE, FW_E_SHARED }; memcpy(fw.elect, E, sizeof E); fw.nelect = FW_E_KEYS; }
+    { static const int E[] = { FW_E_GROUNDS, FW_E_CONTINUITY, FW_E_AGREE, FW_E_COOCCUR, FW_E_WALKS, FW_E_SHAPE, FW_E_CONFIDENCE, FW_E_SHARED }; memcpy(fw.elect, E, sizeof E); fw.nelect = FW_E_KEYS; }
     snprintf(fw.path, sizeof fw.path, "%s", path && *path ? path : firmware_path());
     FILE *f = fopen(fw.path, "r"); if (!f) { perror(fw.path); fprintf(stderr, "LAPLACE_FIRMWARE names the firmware a pull runs under\n"); exit(1); }
     char buf[1024]; int line = 0, in = -1;                                  /* in: the operation whose instruction set is being read */
@@ -79,9 +79,9 @@ Firmware firmware_for(const char *path, int op){
         else if (!strcmp(tok, "seed")) { v = strtok(NULL, " \t\r\n");
             if (v && !strcmp(v, "observation")) fw.seed_session = 0; else if (v && !strcmp(v, "session")) fw.seed_session = 1;
             else { fprintf(stderr, "%s:%d: seed observation | session\n", fw.path, line); exit(2); } }
-        else if (!strcmp(tok, "elect")) { static const char *K[FW_E_KEYS] = { "grounds", "continuity", "agree", "cooccur", "walks", "confidence", "shared" }; char *nm; fw.nelect = 0;
+        else if (!strcmp(tok, "elect")) { static const char *K[FW_E_KEYS] = { "grounds", "continuity", "agree", "cooccur", "walks", "shape", "confidence", "shared" }; char *nm; fw.nelect = 0;
             while ((nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') { int k = -1; for (int i = 0; i < FW_E_KEYS; i++) if (!strcmp(nm, K[i])) k = i;
-                if (k < 0 || fw.nelect >= FW_E_KEYS) { fprintf(stderr, "%s:%d: elect KEY... (grounds continuity agree cooccur walks confidence shared)\n", fw.path, line); exit(2); } fw.elect[fw.nelect++] = k; }
+                if (k < 0 || fw.nelect >= FW_E_KEYS) { fprintf(stderr, "%s:%d: elect KEY... (grounds continuity agree cooccur walks shape confidence shared)\n", fw.path, line); exit(2); } fw.elect[fw.nelect++] = k; }
             if (!fw.nelect) { fprintf(stderr, "%s:%d: elect KEY...\n", fw.path, line); exit(2); } }
         else if (!strcmp(tok, "shape")) { v = strtok(NULL, " \t\r\n");
             if (v && !strcmp(v, "frechet")) fw.shape = FW_FRECHET; else if (v && !strcmp(v, "dtw")) fw.shape = FW_DTW;
