@@ -126,7 +126,9 @@ static void each_release(const PGresult *r, int j, const uint64_t *place, void *
         if (!--c->held && c->entity && !c->root) set_add(into, &vt[i].id);
     }
 }
-static uint64_t sweep(PGconn **pg, int npg, int dry){
+/* seed: under containment, a forgotten trunk: what goes is what it alone held, level by level down from it; a file is
+ * no root of its own there, since its trunk holds it (the source trunk [record, files]) */
+static uint64_t sweep(PGconn **pg, int npg, int dry, const Set *seed){
     double T = now(), t = now(); for (int i = 0; i < 256; i++) pthread_mutex_init(&cs[i].mu, NULL);
     static Parts eparts[16], pparts[16]; parts_of(pg[0], "entity", eparts); parts_of(pg[0], "physicality", pparts);
     /* every partition of paths, each on a connection; the paths above tier 0 */
@@ -145,16 +147,17 @@ static uint64_t sweep(PGconn **pg, int npg, int dry){
       stream(pg[0], "SELECT id, lineage FROM witness", row_root, &b); batch_done(&b); }
     /* files: one whose content is its own stays; one whose content is what it witnessed stays while any of that is
      * witnessed still */
-    { Set *live = set_new(), *ask = set_new();
+    if (!seed) { Set *live = set_new(), *ask = set_new();
       for (size_t i = 0; i < kept.n; i++) if (kept.v[i].curated) { Count *c = count_of(&cs[kept.v[i].content.b[0]], &kept.v[i].content, 0); set_add(c && c->root ? live : ask, &kept.v[i].content); }
       if (lp_idmap_count(ask)) over_parts(pg, npg, pparts, lp_idmap_keys(ask), lp_idmap_count(ask), "SELECT entity, path FROM %s WHERE entity = ANY($1::blake3[])", each_content, live, "what files witnessed");
       for (size_t i = 0; i < kept.n; i++) { Count *c = count_of(&cs[kept.v[i].file.b[0]], &kept.v[i].file, 0); if (!c) continue;
           if (!kept.v[i].curated || set_has(live, &kept.v[i].content)) c->root = 1; }
-      lp_idmap_free(live); lp_idmap_free(ask); lp_vec_free(&kept); }
+      lp_idmap_free(live); lp_idmap_free(ask); } lp_vec_free(&kept);
     Set *going = set_new(); uint64_t entities = 0, roots = 0;
     for (int sh = 0; sh < 256; sh++) for (size_t i = 0; i < lp_idmap_count(cs[sh].m); i++) {
         Count *c = lp_idmap_at(cs[sh].m, i); entities += c->entity; roots += c->root && c->entity;
-        if (c->entity && !c->held && !c->root) set_add(going, &c->id);
+        if (!seed && c->entity && !c->held && !c->root) set_add(going, &c->id);
+        if (seed && c->entity && !c->root && set_has(seed, &c->id)) set_add(going, &c->id);
     }
     printf("  %-52s %'12llu   of them witnessed, files and witnesses %'llu   (%.1f s)\n", "entities above tier 0", (unsigned long long)entities, (unsigned long long)roots, now() - t);
     uint64_t total = 0; int level = 0;
@@ -186,21 +189,23 @@ int cmd_sweep(int argc, char **argv){
     setlocale(LC_NUMERIC, "en_US.UTF-8"); tier0_open(NULL);
     PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) pg[i] = db_connect(conninfo);
     printf("laplace sweep   %s%s\n", PQdb(pg[0]), dry ? "   (dry)" : "");
-    sweep(pg, npg, dry);
+    sweep(pg, npg, dry, NULL);
     for (int i = 0; i < npg; i++) PQfinish(pg[i]);
     return 0;
 }
 
 int cmd_forget(int argc, char **argv){
-    const char *conninfo = laplace_db(); int npg = 0, except = 0;
-    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-j", 'i', &npg }, { "--except", 'b', &except }, { NULL } });
+    const char *conninfo = laplace_db(); int npg = 0, except = 0, trunk = 0;
+    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-j", 'i', &npg }, { "--except", 'b', &except }, { "--trunk", 'b', &trunk }, { NULL } });
     if (a >= argc && !except) { fprintf(stderr, "usage: laplace forget [-d conninfo] [-j connections] witness...\n       laplace forget --except witness...   (every witness but these)\n"); return 2; }
     if (npg <= 0) npg = omp_get_num_procs();
     setlocale(LC_NUMERIC, "en_US.UTF-8");
     double T = now(), t; tier0_open(NULL); Ctx *c = lp_text_new(T0);
     PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) pg[i] = db_connect(conninfo);
     Set *named = set_new(), *going = named;
-    for (int i = a; i < argc; i++) { lp_id id = lp_text_decompose(c, (const uint8_t *)argv[i], strlen(argv[i]), NULL, NULL).id; set_add(named, &id); }
+    /* --trunk: each named by its ID, a source's trunk: the witness under containment, and what it alone holds goes with it */
+    for (int i = a; i < argc; i++) { lp_id id; if (trunk) { if (!id_parse(argv[i], &id)) { fprintf(stderr, "%s: not an ID\n", argv[i]); return 2; } }
+        else id = lp_text_decompose(c, (const uint8_t *)argv[i], strlen(argv[i]), NULL, NULL).id; set_add(named, &id); }
     if (except) {                                                           /* every witness but the ones named */
         going = set_new(); PGresult *r = ask_once(pg[0], "SELECT id FROM witness", NULL);
         for (int j = 0; j < PQntuples(r); j++) if (!set_has(named, col_id(r, j, 0))) set_add(going, col_id(r, j, 0));
@@ -216,7 +221,7 @@ int cmd_forget(int argc, char **argv){
     uint64_t nl = over(pg, 1, gid, ng, "DELETE FROM attestation WHERE witness = ANY($1::blake3[])", NULL, NULL, "attestation");
     over(pg, 1, gid, ng, "DELETE FROM witness WHERE id = ANY($1::blake3[])", NULL, NULL, "the witnesses");
     printf("  %-52s %'12llu   (%.1f s)\n\n", "attestations", (unsigned long long)nl, now() - t); fflush(stdout);
-    sweep(pg, npg, 0);
+    sweep(pg, npg, 0, trunk ? going : NULL);
     printf("\n== total %.1f s\n", now() - T);
     for (int i = 0; i < npg; i++) PQfinish(pg[i]);
     return 0;

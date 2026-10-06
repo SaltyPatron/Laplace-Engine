@@ -272,6 +272,7 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
     if (pg) PQfinish(pg); free(want); free(of); table_reset();              /* what was composed to ask is composed again for the files that are read */
     return found;
 }
+static lp_id witness_trunk; static double witness_trust; static int has_witness_trunk;   /* a contained source: its trunk, the witness */
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
     int threads = 0, do_load = 1, show_claims = 0, entities = 0, asking = 1; const char *of = NULL; extern int load_whole;
@@ -524,7 +525,11 @@ int cmd_ingest(int argc, char **argv){
       if (one && !many && !mism && !of) { table_reset(); table_size(64u << 20);   /* the last batch is written: an empty table for the trunk alone */
           if (source_trunk(one, files, nfiles, &trunk)) { File sf; memset(&sf, 0, sizeof sf); sf.path = one->name; sf.source = one; sf.trunk = trunk; sf.file = trunk; sf.has_file = 1;
               LoadStats ss = { 0 }; double ts = now(); staged_mark(); if (load(conninfo, threads, &sf, 1, &ss)) return 1;
-              printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded"); }
+              printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded");
+              { char hx[33]; id_text(&trunk.id, hx); printf("  %-44s %s\n", "its ID", hx); }
+              /* provenance by containment: the witness is the source's trunk, its trust and lineage keyed by it */
+              int contains = 0; double trust = 0; for (int i = 0; i < nfiles; i++) if (!files[i].skipped && say_contains(files[i].recipe)) { contains = 1; trust = files[i].trust; }
+              if (contains) { witness_trunk = trunk.id; witness_trust = trust; has_witness_trunk = 1; } }
           else printf("  the source's trunk: none, since its source file names no record (witness or called)\n");
           table_reset(); } }
     /* What this ingest staged goes into the real tables now, before anything after it: a source is in once its records
@@ -533,6 +538,10 @@ int cmd_ingest(int argc, char **argv){
      * what is in can be read while the rest goes in. Each leaf takes what was staged for it by rewriting or by
      * appending, whichever writes less (merge): a small source appends. */
     if (do_load > 0 && !mism) { printf("\nmerge\n"); fflush(stdout); if (merge(conninfo, threads)) return 1; }
+    if (do_load > 0 && !mism && has_witness_trunk) {                          /* the source's trunk is the witness: written once it is in */
+        PGconn *pg = db_connect(conninfo); Args a = { 0 }; arg_ids(&a, &witness_trunk, 1); arg_f64(&a, witness_trust);
+        PQclear(ask_once(pg, "INSERT INTO witness (id, lineage, trust) VALUES (($1::blake3[])[1], NULL, $2) ON CONFLICT (id) DO NOTHING", &a));
+        args_free(&a); PQfinish(pg); printf("  %-44s trust %.3f\n", "the witness: the source's trunk", witness_trust); }
     printf("\n== total %.1f s\n", now() - T);
     return mism ? 1 : 0;
 }
