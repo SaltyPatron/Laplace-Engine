@@ -35,18 +35,34 @@ So:
   trunk as the witness (Laplace-Engine#22). The attestation rows stay until a working prototype on real data shows
   containment answers everything they answer today (who said a claim, its games, score and position, its qualifiers,
   forgetting and replaying a source) with nothing lost. Either way the `witness` line is written the same.
+- **The corpus is the trunk, from the trunk to its leaves.** Universal Dependencies is one source trunk, `[source
+  record, its files' trunks in path order]`, and one witness. Its treebanks (`UD_English-EWT/`) are directories of
+  files: a directory's path is a file's metadata, and a treebank is never a witness of its own. Every file is
+  `[metadata, content]`, and its README, LICENSE, `stats.xml` and `.txt` files are files under the trunk like the
+  `.conllu`. A `.conllu` file's content is its records, one per sentence block, and a record is a path over what the
+  corpus says of that sentence: the sentence (its `# text`, down to codepoints); its tokens, as UD segments them; its
+  UPOS, XPOS, LEMMA and FEATS layers aligned to the tokens; its dependency tree, each DEPREL by its HEAD; its notes
+  (`text_en` and the like) as sentence-tier strands; its speaker and annotators as content the corpus attests
+  (`[sentence, speaker, SP]`, `[token, Annotator, Sv]`); and the strands it says of each word (`[forces, NOUN]`,
+  `[forces, force]`, `[forces, Number=Plur]`). Its pointers (`ID`, `HEAD`, `sent_id`, `newdoc`, `newpar`, the MISC
+  ids) resolve into the tree and are not recorded. As built, `universal-dependencies/source` says `witness {dir}`
+  (each treebank its own witness), `conllu.recipe` names `speaker_id` and MISC `Annotator` as witnesses of their own
+  (`own`, `by`), emits claims as events outside the tree without composing the layers, and says
+  `relate row DEPREL to HEAD`, which makes the type-level `[word, nsubj, head word]` and loses the sentence; the
+  READMEs are not read. The Open Multilingual Wordnet is likewise one trunk and one witness, its lexicons files under
+  it; its `witness {first label}` (each lexicon a witness) is the same mistake as built.
 - **Testimony, not bookkeeping.** A witness provides content and attestations about it: that is what a recipe reads.
   A file's bookkeeping about its own records (dates an entry was made, colours, versions, licences, usage notes,
   templates, who edited a row) is not testimony: name it with `omit`, or leave the column out of `attest`. Never
   `attest *`.
-- **A source's identifiers are of two kinds: hubs, which are content, and its own pointers, which resolve.**
-  - **A hub is content.** An ILI (`i46360`), a PropBank roleset (`abandon.01`), a VerbNet class (`leave-51.2`), a
+- **A source's identifiers are of two kinds: highway nodes, which are content, and its own pointers, which resolve.**
+  - **A highway node is content.** An ILI (`i46360`), a PropBank roleset (`abandon.01`), a VerbNet class (`leave-51.2`), a
     FrameNet frame, frame element or lexical unit, a VerbAtlas frame (`va:0001f`), a language code: a vocabulary many
-    sources share, the lists `laplace highway` holds. The hub's own text is the hub, an entity whose ID is BLAKE3 of
+    sources share, the road classes whose lists `laplace highway` holds. Its own text is the node, an entity whose ID is BLAKE3 of
     its content: `i46360` is `[i,4,6,3,6,0]` exactly as `3.14159` is `[3,.,1,4,1,5,9]`, so every source that cites it
-    lands on the same node. A source that writes a hub its own way (`mcr:ili-30-01976841-v`, `vn:51.3.1`, an FE's
-    `ID`) names the column with `type COLUMN LIST`, which reads it as that hub; that is right. Never rewrite a hub to a
-    made-up key.
+    lands on the same node. A source that writes a highway node its own way (`mcr:ili-30-01976841-v`, `vn:51.3.1`, an
+    FE's `ID`) names the column with `type COLUMN LIST`, which reads it as that node; that is right. Never rewrite a
+    highway node to a made-up key.
   - **A pointer resolves, and is recorded nowhere.** A WordNet synset offset, a synset or sense id, a FrameNet numeric
     `ID`, a UD token number or `sent_id`, a Tatoeba sentence number, a geonameid, a data set's row or case id, a line
     number: how a source addresses its own records (or another release's). It is packaging. A WordNet 3.0 offset is
@@ -73,49 +89,66 @@ So:
   content and relations under it. "Who edited a row" in the bookkeeping list below means housekeeping about the file's
   records, never the person whose words or answers the row holds.
 - **A thing is its content.** A word is what the lemma writes; a sentence is its text or its words; a place is its
-  name, latitude and longitude; a case or a post is its text. A concept is its hub: a synset is its ILI, never its word
+  name, latitude and longitude; a case or a post is its text. A concept is its highway node: a synset is its ILI, never its word
   list (19,619 of WordNet 3.0's 117,659 synsets list exactly the words another lists; 11 verb synsets are just `drop`).
   As built, `wn-lmf.recipe` makes a synset the words it lists and reads its `ili` with `type`; the ILI is the target.
   How a synset whose ILI is `in` (a new concept CILI has not yet numbered) is named is not decided: report how you
-  read one. A word in a language is the lexicalization `[lemma, language, ILI]`, the language (an ISO 639 hub) a part
-  of it, never a context column or a mask bit; another language is the same hub with another language part.
+  read one. A word in a language is the lexicalization `[lemma, language, ILI]`, the language (an ISO 639 highway node) a
+  part of it, never a context column or a mask bit; another language is the same ILI with another language part.
   Say `identity`, `subject in` or `named ... by` over content, never over a pointer column.
 - **Types are attested; the highway is their perf-cache.** Parts of speech, dependency relations, ILI concepts,
   VerbNet classes and roles, FrameNet frames, frame elements and lexical units, PropBank rolesets, VerbAtlas frames are
-  listed by `laplace highway`: a perf-cache whose lists resolve the sources' hubs to their slots, a stable slot being an
+  listed by `laplace highway`: a perf-cache whose lists resolve the sources' highway nodes to their slots, a stable slot being an
   index over content, never the identity of a meaning. A roleset, a VerbNet class, a FrameNet frame, frame element or
-  lexical unit and a VerbAtlas frame are hubs exactly as an ILI is: concept nodes of the linguistic highway, which a
-  word bubbles up to and the highway's mappings hop between. What a hub is (an ILI, a roleset, a class) is what the source
-  that says so attests. A file that maps hubs onto one another (SemLink, PredicateMatrix, CILI's maps, VerbAtlas's
+  lexical unit and a VerbAtlas frame are highway nodes exactly as an ILI is: concept nodes of the linguistic highway,
+  each kind a road class, which a word goes up to and the interchanges connect. What a node is (an ILI, a roleset, a
+  class) is what the source that says so attests. A node holding more claims than a read's fan (NOUN, `eng`) is a
+  fan-limited node: a route reaches it and does not cross it. A file that maps highway nodes onto one another (SemLink, PredicateMatrix, CILI's maps, VerbAtlas's
   bridges) is read by the highway through its recipe's `types`, `keyed`, `alias` and `maps` lines
-  (`semlink/pb-vn.recipe`); its mappings are what that source attests.
+  (`semlink/pb-vn.recipe`); its mappings are the interchanges, and they are what that source attests.
 - **An enumerated value lands where the source asserts it.** "dog is a noun" stands in several shapes, each where a
   source says it. A treebank's sentence carries one layer claim per layer (its UPOS, its relations), a path of slots
   aligned to its tokens; what the treebank says of a word by itself is the claim `[dog, NOUN]`, NOUN a registry slot,
-  every tagging act a game, and the bit on `dog`'s row a filter. That is what `attest row UPOS`
+  the treebank's taggings of it the claim's run length, and the bit on `dog`'s row a filter. That is what `attest row UPOS`
   (`universal-dependencies/conllu.recipe`) gives. WordNet says the concept is a noun and the word lexicalizes it;
   FrameNet's `dog.n` has the part of speech as a part; a Unicode property is said of the codepoint. Each source's code
   (`n`, `.n`, `NOUN`) is recorded as written and sets the same slot; nothing is blanketed across tiers it was not
   asserted at, and a mask miss is never absence.
-- **A repeat is games, not rows.** When a witness asserts one claim several times, each is a game; the engine folds a
-  witness's repeats of one claim into one rating period per claim per witness. A number the source states (a usage
-  count, a sense's order) is content, never games.
+- **A repeat is run length, not rows and not games.** When a witness asserts one claim n times, n is the claim's run
+  length, read off the tree: the strand occurring n times under the corpus's trunk. The witness plays one matchup per
+  claim per ingestion, its outcome or score at its trust, with n carried as the certainty of its assertion, and the
+  database takes one update per claim per witness. n is never played as n Glicko-2 games: n identical games in one
+  period approach a full Newton step, larger for a low-trust witness (a million refutations at an opponent deviation
+  of 1500 take a claim at 2300 with deviation 60 to -720 with deviation 1.9). The run count is also kept beside the
+  claim, never only merged into its standing. A number the source states (a usage count, a sense's order) is content,
+  an observation, never games. Packaging is not repetition: a cross-product layout or an automatic tagger's per-token
+  output repeating one fact is not the source saying it again (UD EWT's README says its UPOS and features were mainly
+  assigned automatically). As built, each attestation a record emits plays as one Glicko-2 matchup at the witness's
+  trust (`db.c`; the same witnessed thing plays once per lineage), so a claim a witness asserts in n records plays n
+  matchups, and the attestation row counts its games.
 
-Three more are stated design for recipe authors. The engine does not do all of them yet: read a file this way, and
+These are stated design for recipe authors. The engine does not do all of them yet: read a file this way, and
 report where a recipe cannot say it.
 
-- **A mapping row is one correspondence.** A row that states one correspondence across resources (a PredicateMatrix
+- **Seeding is extraction.** A recipe extracts the raw product from the packaging: the content and what the source
+  states, out of its formats, records and layout, which stay as provenance with their trunks. The format's grammar
+  exposes the structure; the recipe says what each node becomes. Content decomposes to codepoints for identity; a
+  claim attaches once, at the tier the source asserts it, never sprayed over the words below it; an XML attribute is
+  said of its element. OpenSubtitles says that this sentence translates to that sentence, both languages, at the
+  sentence tier.
+
+- **A mapping row is one interchange.** A row that states one correspondence across resources (a PredicateMatrix
   row aligning a VerbNet class, a FrameNet frame, a PropBank roleset and a WordNet sense; a SemLink entry) is one
-  correspondence claim, a path over the resolved hubs, never split into a claim per column. Where a file lays its rows
-  out as a cross product (each of one side's members against each of the other's, a row apiece), the repeats are the
-  layout's packaging, not games. As built, `predicate-matrix/matrix.recipe` attests each column of a row
+  correspondence strand, an interchange, a path over the resolved highway nodes, never split into a claim per column.
+  Where a file lays its rows out as a cross product (each of one side's members against each of the other's, a row
+  apiece), the repeats are the layout's packaging, not repetition. As built, `predicate-matrix/matrix.recipe` attests each column of a row
   (`attest row *`).
 - **A declared default attests nothing.** A value that stands only because the source's format declares it the
   default (Unicode's `nv=NaN`; an `scx` that is only `sc` again) is not something the source says of that thing, just
   as its own empty marker is not.
 - **An automatic tagger's layer is a calculation.** Tags a program assigned (a tagger's or parser's per-token parts of
   speech, lemmas, relations) are one calculation with one root, its analyzer's, recorded as a layer per sentence, never
-  as testimony per token.
+  as testimony per token, and its per-token output is packaging, not repetition.
 
 ## Where you work, and what you must not touch
 
@@ -157,12 +190,12 @@ Working examples to copy from, all under `recipes/`:
 | table with a header row, every column said of one column's value | `iso-639/iso-639-3.recipe` (`attest *`) |
 | table without a header, predicate in the file's name | `princeton-wordnet/exceptions.recipe` |
 | table whose pointer column other files point at | `tatoeba/sentences.recipe` (`key`), `tatoeba/links.recipe` (`refer`) |
-| table whose column is a resource's way of writing a hub | `verbatlas/frame-info.recipe`, `princeton-wordnet/cntlist.recipe` (`type`) |
+| table whose column is a resource's way of writing a highway node | `verbatlas/frame-info.recipe`, `princeton-wordnet/cntlist.recipe` (`type`) |
 | table of pairs (nothing written between the two) | `unicode/aliases.recipe` (`pair`) |
 | table whose row is one record, said together | use `together` in the claims block |
 | records of rows (a sentence, a row per word, a tree by heads) | `universal-dependencies/conllu.recipe` |
 | records of `Key: Value` lines | `iso-639/iana.recipe` (`grammar fields`) |
-| XML, elements that are things, pointers resolved, hubs as a resource writes them | `wn-lmf.recipe` (`key`, `refer`, `type`, `link`), `framenet/framenet.recipe`, `propbank/frames.recipe`, `verbnet/classes.recipe` |
+| XML, elements that are things, pointers resolved, highway nodes as a resource writes them | `wn-lmf.recipe` (`key`, `refer`, `type`, `link`), `framenet/framenet.recipe`, `propbank/frames.recipe`, `verbnet/classes.recipe` |
 | XML, a sentence as its words | `wsd-evaluation-framework/data.recipe` (`words`) |
 | XML by tree-sitter patterns (slower; only when `identity` cannot say it) | `unicode/ucd.recipe` |
 | Turtle | `turtle.recipe`, used through `like turtle` (`framebase/schema.recipe`) |
