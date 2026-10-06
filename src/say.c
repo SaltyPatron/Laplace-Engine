@@ -869,10 +869,16 @@ static const Dis *dis_named(const Say *s, const char *name){
     const STree *was = TT; TT = NULL; const Dis *d = dis_scan(s, &x); TT = was; return d;
 }
 static uint64_t record_open;                                                  /* the parts no recipe disposed of, said once */
-static void record_part(const Recipe *r, Ref *out, size_t *n, size_t cap, int k, const char *name, Ref value){
+/* Whether a part of the OS's record is kept in the metadata tree. Asked before its value is made: a value is composed
+ * into the node table as it is made, and one the recipe omits (the access time, which reading the file changes) would
+ * leave nodes of its own there, different on every read. */
+static int record_kept(const Recipe *r, int k, const char *name){
     const Dis *d = dis_named(r ? r->say : NULL, name); if (!d && stock_file) d = dis_named(stock_file->say, name);
-    if (!d) { if (!(__atomic_fetch_or(&record_open, 1ull << k, __ATOMIC_RELAXED) & (1ull << k))) fprintf(stderr, "  the OS's record of a file: %s is disposed of by no recipe (metadata or omit, in the file recipe)\n", name); return; }
-    if (d->what != D_METADATA || *n >= cap) return;
+    if (!d) { if (!(__atomic_fetch_or(&record_open, 1ull << k, __ATOMIC_RELAXED) & (1ull << k))) fprintf(stderr, "  the OS's record of a file: %s is disposed of by no recipe (metadata or omit, in the file recipe)\n", name); return 0; }
+    return d->what == D_METADATA;
+}
+static void record_part(const Recipe *r, Ref *out, size_t *n, size_t cap, int k, const char *name, Ref value){
+    (void)r; (void)k; if (*n >= cap) return;
     Ref p[2] = { string_ref((const uint8_t *)name, strlen(name)), value }; p[0].said = p[1].said = 0;
     out[(*n)++] = said_tuple(compose(p, 2, ref_above(p, 2)));
 }
@@ -882,10 +888,11 @@ size_t file_record(const Recipe *r, const File *f, Ref *out, size_t cap){
     size_t n = 0; int k = 0; Ref seg[256]; uint32_t ns = 0; const char *p = f->path;
     while (*p && ns < 256) { const char *e = strchr(p, '/'); size_t l = e ? (size_t)(e - p) : strlen(p);
         if (l) { seg[ns] = string_ref((const uint8_t *)p, l); seg[ns].said = 0; ns++; } p += l; if (*p == '/') p++; }
-    if (ns) { Ref path = compose(seg, ns, ref_above(seg, ns)); path.said = 0; record_part(r, out, &n, cap, k++, "pathname", path); record_part(r, out, &n, cap, k++, "filename", seg[ns - 1]); }
+    if (ns) { if (record_kept(r, k, "pathname")) { Ref path = compose(seg, ns, ref_above(seg, ns)); path.said = 0; record_part(r, out, &n, cap, k, "pathname", path); } k++;
+              if (record_kept(r, k, "filename")) record_part(r, out, &n, cap, k, "filename", seg[ns - 1]); k++; }
     struct statx x; if (statx(AT_FDCWD, f->path, 0, STATX_BASIC_STATS | STATX_BTIME, &x)) return n;
-    #define NUM(F, M) do { if (!(M) || (x.stx_mask & (M))) record_part(r, out, &n, cap, k, #F, number_ref((uint64_t)x.F)); k++; } while (0)
-    #define WHEN(F, M) do { if (x.stx_mask & (M)) record_part(r, out, &n, cap, k, #F, when_ref(&x.F)); k++; } while (0)
+    #define NUM(F, M) do { if ((!(M) || (x.stx_mask & (M))) && record_kept(r, k, #F)) record_part(r, out, &n, cap, k, #F, number_ref((uint64_t)x.F)); k++; } while (0)
+    #define WHEN(F, M) do { if ((x.stx_mask & (M)) && record_kept(r, k, #F)) record_part(r, out, &n, cap, k, #F, when_ref(&x.F)); k++; } while (0)
     NUM(stx_mode, STATX_MODE); NUM(stx_uid, STATX_UID); NUM(stx_gid, STATX_GID); NUM(stx_nlink, STATX_NLINK); NUM(stx_ino, STATX_INO);
     NUM(stx_size, STATX_SIZE); NUM(stx_blocks, STATX_BLOCKS); NUM(stx_blksize, 0); NUM(stx_attributes, 0);
     NUM(stx_dev_major, 0); NUM(stx_dev_minor, 0); NUM(stx_rdev_major, 0); NUM(stx_rdev_minor, 0);
