@@ -203,7 +203,7 @@ static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led,
     typedef struct { lp_id w, by; uint32_t games, position; double sum; } Series;
     Series *ser = NULL; uint64_t ns = 0, cs = 0; lp_idmap *mine = lp_idmap_new(); char sql[1024];
     for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i];
-        if (e->kind == EV_MEMBER || (e->witnessed.b[0] >> 4) != h) continue;                /* witnessed within its record: the record's row */
+        if (e->kind == EV_MEMBER || e->inner || (e->witnessed.b[0] >> 4) != h) continue;    /* witnessed within its record: the record's row; contained: its record path is its provenance */
         const lp_id *by = e->own_witness ? &e->witness : &files[fi].witness.id;
         lp_id pair; for (int b = 0; b < 16; b++) pair.b[b] = e->witnessed.b[b] ^ by->b[(b + 7) & 15];   /* both are hashes: their mix names the pair */
         bool fresh; size_t at = lp_idmap_put(mine, &pair, &fresh);
@@ -504,7 +504,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         Copy c = { 0 };
         /* witnesses: each once, and only those the database does not know yet */
         lp_id *wid = malloc(sizeof(lp_id) * (size_t)nfiles); int *wfile = malloc(sizeof(int) * (size_t)nfiles), nw = 0; lp_idmap *wmap = lp_idmap_new();
-        for (int fi = 0; fi < nfiles; fi++) if (files[fi].ev.n) {                  /* the map's places are the order of first meeting: wid's */
+        for (int fi = 0; fi < nfiles; fi++) if (files[fi].ev.n && !say_contains(files[fi].recipe)) {   /* the map's places are the order of first meeting: wid's. A contained file's witness is its source's trunk (ingest.c) */
             bool fresh; lp_idmap_put(wmap, &files[fi].witness.id, &fresh);
             if (fresh) { wid[nw] = files[fi].witness.id; wfile[nw++] = fi; }
         }

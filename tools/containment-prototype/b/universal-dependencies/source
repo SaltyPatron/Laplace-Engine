@@ -1,0 +1,8 @@
+name universal-dependencies
+# Universal Dependencies: treebanks of sentences, each with a row for every word and what the treebank says of it.
+# PROTOTYPE (Engine#22, provenance by containment): one witness, the source's trunk [its record, its files' trunks];
+# a treebank is files under it. Only UD_English-EWT of release 2.18, and nothing it comes after.
+witness Universal Dependencies
+class AcademicCurated
+files $LAPLACE_DATA/.refresh-20260903/UD-Treebanks/extracted/ud-treebanks-v2.18/UD_English-EWT/*.conllu
+room 24

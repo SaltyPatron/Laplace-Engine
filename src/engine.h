@@ -92,6 +92,8 @@ int cmd_flags(int argc, char **argv);
 int cmd_highway(int argc, char **argv);
 int cmd_bench(int argc, char **argv);
 int cmd_model(int argc, char **argv);
+int cmd_held(int argc, char **argv);                                  /* provenance.c: who said a strand, by containment or by the table */
+int cmd_replay(int argc, char **argv);                                /* provenance.c: standings from containment, against the recorded */
 int cmd_structure(int argc, char **argv);
 
 /* ---- the bits a row must have (physicality.mask): what it is, by LP_KIND_*; as the text of a smallint[] parameter */
@@ -202,6 +204,7 @@ void attest_layout(const Recipe *, File *, const uint8_t *src, size_t n);       
 typedef struct Hw Hw;
 void say_highway(const Recipe *, File *, const uint8_t *src, size_t n, Hw *);
 int  say_has_highway(const Recipe *);
+int  say_contains(const Recipe *);                                         /* its records hold what they say: provenance by containment (say.c contain) */
 void hw_type(Hw *, const char *list, const char *say, Ref thing);                 /* a type of the list: the thing it is */
 void hw_key(Hw *, const char *list, Ref thing, const char *key);                  /* a resource's key of that type */
 void hw_alias(Hw *, const char *list, const char *key, const char *to);           /* a key that names the type another key names */

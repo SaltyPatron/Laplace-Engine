@@ -27,6 +27,12 @@ static const Param
     BATCH    = { "batch", "--batch", ARG_INT, NULL, "B" },
     DRY      = { "dry", "--dry", ARG_FLAG, NULL, "dry" },
     EXCEPT   = { "except", "--except", ARG_FLAG, NULL, "every witness but these" },
+    TRUNK    = { "trunk", "--trunk", ARG_FLAG, NULL, "each witness named by its ID, a source's trunk: what it alone holds goes with it (provenance by containment)" },
+    TABLE    = { "table", "--table", ARG_FLAG, NULL, "read the attestation table, as built, instead of the containment" },
+    FILES    = { "files", "--files", ARG_FLAG, NULL, "the count under each file as well" },
+    TSV      = { "tsv", "--tsv", ARG_PATH, NULL, "FILE: one line a strand and witness, to compare" },
+    WRITE    = { "write", "--write", ARG_FLAG, NULL, "put the replayed standings in place" },
+    PART     = { "part", NULL, ARG_TEXT, NULL, "a part of the strand: a text, LIST:KEY for a type of the highway, ? for a part left open" },
     SOURCE   = { "source", "-s", ARG_TEXT, NULL, "the files named are this source's: a part of it at a time" },
     WHOLE    = { "whole", "--whole", ARG_FLAG, NULL, "after a run that was cut off: every node is looked for" },
     NO_LOAD  = { "no_load", "--no-load", ARG_FLAG, NULL, "no-load" },
@@ -63,8 +69,10 @@ static const Arg A_HIGHWAY[] = { O(OUT_HW), END };
 static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(WHOLE), O(NO_LOAD), O(PLAN), O(CLAIMS), O(ENTITIES),
                                 { &WHAT, ARG_MANY, NULL, NULL }, END };
 static const Arg A_MERGE[] = { O(CONNINFO), { &JOBS, 0, NULL, "every processor" }, END };
-static const Arg A_FORGET[] = { O(CONNINFO), O(JOBS), O(EXCEPT), { &WITNESS, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
+static const Arg A_FORGET[] = { O(CONNINFO), O(JOBS), O(EXCEPT), O(TRUNK), { &WITNESS, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
 static const Arg A_SWEEP[] = { O(CONNINFO), O(JOBS), O(DRY), END };
+static const Arg A_HELD[] = { O(CONNINFO), O(TABLE), O(FILES), O(TSV), { &PART, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
+static const Arg A_REPLAY[] = { O(CONNINFO), O(WRITE), O(TSV), END };
 static const Arg A_STRUCTURE[] = { { &NODES, 0, NULL, "60" }, { &LAYOUT, ARG_REQUIRED, NULL, NULL }, { &FILE_, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_TREE[] = { O(RECIPES), O(GRAMMAR), { &NODES, 0, NULL, "400" }, { &FILE_, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_TEXT[] = { { &TEXT, ARG_REQUIRED, NULL, NULL }, END };
@@ -93,6 +101,8 @@ const Op OPS[] = {
     { "merge",     cmd_merge,     "what the ingest staged, into the real tables at once", A_MERGE, W_DB, "text" },
     { "forget",    cmd_forget,    "what one witness attested, taken back out", A_FORGET, W_DB | EFFECT_DESTROYS, "text" },
     { "sweep",     cmd_sweep,     "whatever nothing holds, removed", A_SWEEP, W_DB | EFFECT_DESTROYS, "text" },
+    { "held",      cmd_held,      "who said a strand and how many times: a walk up the container index from it to the records, files and trunks that hold it", A_HELD, R_DB | R_F, "text" },
+    { "replay",    cmd_replay,    "the standings again from containment: each trunk down to the strands its records assert, played and compared", A_REPLAY, W_DB | R_F, "text" },
     { "index",     cmd_index,     "the indexes, if one was dropped: deploy makes them", A_NONE, W_DB, "text" },
     { "structure", cmd_structure, "a file's tree, as a layout parts it", A_STRUCTURE, R_F, "text" },
     { "tree",      cmd_tree,      "a file's syntax tree, as its recipe's grammar reads it", A_TREE, R_F, "text" },

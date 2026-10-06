@@ -63,7 +63,10 @@ typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thi
                  char selfmark;                                              /* what the source writes, in a value, for the code point the part is (UCD: #) */
                  regex_t about_re; int has_about;                            /* a page's lines: the first that matches names what the page is about */
                  struct { regex_t re; int mode; char pred[64]; } line[8]; int nline;    /* a line that matches says its parts: 0 of what the page is about, 1 the claim itself, 2 a pair, 3 under a name */
-                 Score score[4]; int nscore; Where where[16]; int nwhere; uint32_t whole, now; Pair voice; } Say;   /* whole: the conditions on the outermost part (where); now: the ones the lines being read are said under (when) */
+                 Score score[4]; int nscore; Where where[16]; int nwhere; uint32_t whole, now; Pair voice;   /* whole: the conditions on the outermost part (where); now: the ones the lines being read are said under (when) */
+                 /* provenance by containment (Engine#22): a TIER whose record is a path over what it says, in the file's
+                  * content tree; its layers down its rows, its tree by head, and the strands it asserts as vertices */
+                 char contain[32], lay_tier[32], lay_row[32], layer[16][64]; int nlayer; char tree_row[32], tree_head[64], tree_rel[64]; } Say;
 
 static char *name_next(char **at, char *out, size_t cap){
     char *p = *at; if (!p) return NULL; while (*p == ' ' || *p == '\t') p++;
@@ -140,6 +143,22 @@ int say_says(Recipe *r, const char *path, char *tok){
             x->from = atof(lo); x->to = atof(hi); x->mapped = 1; }
         return 1; }                                                          /* the part is still what its own disposition says (content, usually) */
     if (!strcmp(tok, "always") && LAID) { s->now = 0; return 1; }
+    /* contain TIER                       the TIER's record is a path in the file's content tree over what it says: its
+     *                                    thing, its layers, its tree, and the strands it asserts, each strand a vertex
+     *                                    whose run is how many times the record says it. Its provenance is that
+     *                                    containment under the source's trunk: no attestation row is written for it.
+     * layers TIER ROW NAME...            each NAME a path down the TIER's ROWs, aligned to them: a value the row leaves
+     *                                    empty stands as the file writes empty
+     * tree TIER ROW HEAD REL             the ROWs' tree by HEAD (a row's key, or 0 for none), each subtree the path of its
+     *                                    dependents' subtrees and [REL, the row's thing] in the rows' order */
+    if (!strcmp(tok, "contain") && LAID) { char *a = strtok(NULL, " \t\r\n"); if (!a) { fprintf(stderr, "%s: contain TIER\n", path); return -1; } snprintf(s->contain, sizeof s->contain, "%s", a); return 1; }
+    if (!strcmp(tok, "layers") && LAID) { at = strtok(NULL, "\r\n");
+        if (!name_next(&at, s->lay_tier, sizeof s->lay_tier) || !name_next(&at, s->lay_row, sizeof s->lay_row)) { fprintf(stderr, "%s: layers TIER ROW NAME...\n", path); return -1; }
+        while (s->nlayer < 16 && name_next(&at, s->layer[s->nlayer], sizeof s->layer[0])) s->nlayer++;
+        if (!s->nlayer) { fprintf(stderr, "%s: layers TIER ROW NAME...\n", path); return -1; } return 1; }
+    if (!strcmp(tok, "tree") && LAID) { at = strtok(NULL, "\r\n"); char tt[32];
+        if (!name_next(&at, tt, sizeof tt) || !name_next(&at, s->tree_row, sizeof s->tree_row) || !name_next(&at, s->tree_head, sizeof s->tree_head) || !name_next(&at, s->tree_rel, sizeof s->tree_rel)) { fprintf(stderr, "%s: tree TIER ROW HEAD REL\n", path); return -1; }
+        return 1; }
     if ((!strcmp(tok, "where") || !strcmp(tok, "when")) && LAID) { char op[16]; int when = tok[2] == 'e' && tok[3] == 'n'; at = strtok(NULL, "\r\n");
         if (!name_next(&at, nm, sizeof nm) || !name_next(&at, op, sizeof op) || s->nwhere == 16) { fprintf(stderr, "%s: %s NAME is VALUE | is-not VALUE | matches PATTERN\n", path, tok); return -1; }
         if (when) s->now |= 1u << s->nwhere; else s->whole |= 1u << s->nwhere;
@@ -258,7 +277,8 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
                  Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int16_t *dm; uint32_t dm_cap;
-                 struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; } Sink;          /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
+                 struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch;
+                 Refs held; } Sink;          /* held: under contain, every strand the part being read says, each time it says it */          /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
     if (k->nhr == k->chr) { k->chr = k->chr ? k->chr * 2 : 1024; k->hr = xrealloc(k->hr, sizeof(HwRec) * k->chr); }
@@ -575,6 +595,7 @@ static int said_already(Sink *k, const lp_id *c){
 static void claim(Sink *k, Ref *part, int n){
     for (int i = 0; i < n; i++) if (part[i].said != LP_SAID_TUPLE) part[i].said = 0;      /* a tuple held by a claim stays a tuple: M says so, the ID is the same */
     Ref c = said_claim(compose(part, (uint32_t)n, ref_above(part, (size_t)n)));
+    if (k->s->contain[0]) push(&k->held, &c);                                /* contained: every time the part says it, its run in the record */
     if (said_already(k, &c.id)) return;
     Event x = { c.id, c.id, k->score, k->er, k->ed, 0, EV_CLAIM }; if (k->voiced) { x.own_witness = 1; x.witness = k->voice.id; } ev_push(&k->ev, &x);
     push(&k->grp, &c);
@@ -647,12 +668,13 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
 static void worker_of(Sink *w, const Sink *k){
     *w = *k; memset(&w->ev, 0, sizeof w->ev); memset(&w->things, 0, sizeof w->things); memset(&w->meta, 0, sizeof w->meta); memset(&w->grp, 0, sizeof w->grp);
     memset(w->open, 0, sizeof w->open); w->nopen = 0; w->unknown = 0; w->nunk = 0; w->hr = NULL; w->nhr = w->chr = 0; w->worker = 1;
-    w->cs = NULL; w->cs_cap = w->cs_n = 0;                                    /* the claims it has made: its own, never the parent's table */
+    memset(&w->held, 0, sizeof w->held); w->cs = NULL; w->cs_cap = w->cs_n = 0;                                    /* the claims it has made: its own, never the parent's table */
 }
 static void sink_merge(Sink *k, Sink *w){
     for (uint64_t i = 0; i < w->ev.n; i++) ev_push(&k->ev, &w->ev.e[i]);
     for (size_t i = 0; i < w->meta.n; i++) push(&k->meta, &w->meta.c[i]);
     for (size_t i = 0; i < w->things.n; i++) push(&k->things, &w->things.c[i]);
+    for (size_t i = 0; i < w->held.n; i++) push(&k->held, &w->held.c[i]); free(w->held.c);
     for (int i = 0; i < 256; i++) k->open[i] += w->open[i];
     for (int i = 0; i < w->nopen; i++) { int dup = 0; for (int j = 0; j < k->nopen && !dup; j++) dup = !strcmp(k->opennm[j], w->opennm[i]); if (!dup && k->nopen < 16) strcpy(k->opennm[k->nopen++], w->opennm[i]); }
     k->unknown += w->unknown; for (int i = 0; i < w->nunk && k->nunk < 8; i++) strcpy(k->unknm[k->nunk++], w->unknm[i]);
@@ -721,6 +743,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
             Ref X; if (!thing_of(k, t, (int32_t)g, &X, 0)) break;
             int32_t who[WHO]; int nw = whos(s, t, (int32_t)g, s->itself[a].by, who), was = k->voiced; Ref wv = k->voice;
             for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !voice_of(k, t, who[wi])) continue;
+                if (s->contain[0]) push(&k->held, &X);
                 Event e = { X.id, X.id, sc, k->er, k->ed, 0, EV_CLAIM }; if (k->voiced) { e.own_witness = 1; e.witness = k->voice.id; } ev_push(&k->ev, &e); }
             k->voiced = was; k->voice = wv; }
         for (int a = 0; a < s->npair; a++) { if (!named_as(x, s->pair[a].tier) || !spoken_of(s, t, (int32_t)g, s->pair[a].when)) continue;      /* nothing written between the two: the pair */
@@ -805,9 +828,74 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
     }
     *npp = np_;
 }
+/* ---- provenance by containment (Engine#22): a record is a path over what the source says of it, under its file's
+ * content tree, under the source's trunk:
+ *   record   [its thing (the sentence), each layer, its tree, its strands]
+ *   layer    the values of one name down the record's rows, aligned to them; one the row leaves empty as the file writes it
+ *   tree     each row's subtree: its dependents' subtrees and [REL, its thing], in the rows' order; a leaf is its pair
+ *   strands  every strand the record asserts, in ID order, each a vertex said to be a claim whose run is how many times
+ *            the record says it (a strand said once is that vertex itself)
+ * Pointers (the row's key, HEAD) resolve here and are written nowhere. Who said a strand, and how many times, is a walk
+ * up the container index from the strand to the records, files and trunk that hold it (provenance.c). */
+static int by_ref_id(const void *a, const void *b){ return memcmp(&((const Ref *)a)->id, &((const Ref *)b)->id, 16); }
+static Ref empty_ref(const Say *s){ return s->lay.nempty ? string_ref((const uint8_t *)s->lay.empty[0], (size_t)s->lay.emptylen[0]) : string_ref((const uint8_t *)"_", 1); }
+static int field_of(Sink *k, const STree *t, int32_t row, const char *name, Ref *out){
+    int32_t c = s_child(t, row, name, -1); if (c < 0) return 0;
+    Ref v; if (!entity_of(k, t, c, &v)) return 0; if (v.said != LP_SAID_TUPLE) v.said = 0; *out = v; return 1;
+}
+static int32_t text_int(const STree *t, int32_t row, const char *name, int *ok){
+    int32_t c = s_child(t, row, name, -1); *ok = 0; if (c < 0) return 0;
+    const SNode *x = &t->n[c]; if (x->kind == S_GROUP && x->first >= 0 && t->n[x->first].next < 0) x = &t->n[x->first];
+    if (!x->vlen || x->vlen > 9) return 0; int32_t v = 0; for (uint32_t i = 0; i < x->vlen; i++) { if (x->val[i] < '0' || x->val[i] > '9') return 0; v = v * 10 + (x->val[i] - '0'); }
+    *ok = 1; return v;
+}
+typedef struct { Ref head; int parent, first, next, last; } TNode;
+static Ref subtree(TNode *tn, int i, int depth, int n){
+    Ref part[256]; uint32_t np = 0; int put = 0;
+    for (int c = tn[i].first; c >= 0 && depth < n; c = tn[c].next) {
+        if (!put && c > i && np < 256) { part[np++] = tn[i].head; put = 1; }
+        if (np < 256) { part[np] = subtree(tn, c, depth + 1, n); part[np].said = 0; np++; } }
+    if (!put && np < 256) part[np++] = tn[i].head;
+    return np == 1 ? part[0] : compose(part, np, ref_above(part, np));
+}
+static int contained(Sink *k, const STree *t, int32_t root, Ref *out){
+    const Say *s = k->s; Ref part[24]; uint32_t np = 0, nrow = 0;
+    Ref S; if (thing_of(k, t, root, &S, 0)) { S.said = 0; part[np++] = S; }
+    int32_t rows_s[512], *rows = rows_s; uint32_t cap = 512;
+    if (s->nlayer || s->tree_row[0]) for (int32_t c = t->n[root].first; c >= 0; c = t->n[c].next) {
+        if (t->n[c].kind != S_GROUP || !named_as(&t->n[c], s->nlayer ? s->lay_row : s->tree_row)) continue;
+        if (nrow == cap) { cap *= 2; rows = rows == rows_s ? memcpy(malloc(sizeof(int32_t) * cap), rows_s, sizeof rows_s) : xrealloc(rows, sizeof(int32_t) * cap); }
+        rows[nrow++] = c; }
+    Ref empty = empty_ref(s), *v = malloc(sizeof(Ref) * (nrow ? nrow : 1));
+    for (int L = 0; L < s->nlayer && nrow && np < 20; L++) {                    /* each layer down the rows */
+        for (uint32_t r = 0; r < nrow; r++) if (!field_of(k, t, rows[r], s->layer[L], &v[r])) v[r] = empty;
+        Ref x = nrow == 1 ? v[0] : compose(v, nrow, ref_above(v, nrow)); x.said = 0; part[np++] = x; }
+    if (s->tree_row[0] && nrow) {                                             /* the tree by head: pointers resolved, written nowhere */
+        const char *key = NULL; for (int i = 0; i < s->nkey; i++) if (!strcmp(s->key[i].tier, s->tree_row)) key = s->key[i].name;
+        TNode *tn = calloc(nrow, sizeof(TNode)); int32_t *id = malloc(sizeof(int32_t) * nrow); int nw = 0, *at = malloc(sizeof(int) * nrow);
+        for (uint32_t r = 0; r < nrow; r++) { int ok; int32_t x = key ? text_int(t, rows[r], key, &ok) : 0; if (!key || !ok) continue;   /* a range or an empty node: no word of the tree */
+            Ref w, rel; if (!thing_of(k, t, rows[r], &w, 0)) continue; if (!field_of(k, t, rows[r], s->tree_rel, &rel)) rel = empty;
+            w.said = 0; rel.said = 0; Ref p2[2] = { rel, w }; tn[nw].head = said_tuple(compose(p2, 2, ref_above(p2, 2))); tn[nw].first = tn[nw].last = -1; tn[nw].next = -1; id[nw] = x; at[nw] = (int)r; nw++; }
+        int nroot = 0, roots[64];
+        for (int i = 0; i < nw; i++) { int ok; int32_t h = text_int(t, rows[at[i]], s->tree_head, &ok); tn[i].parent = -2;
+            if (ok && h == 0) { tn[i].parent = -1; if (nroot < 64) roots[nroot++] = i; continue; }
+            for (int j = 0; ok && j < nw; j++) if (id[j] == h && j != i) { tn[i].parent = j; break; }
+            if (tn[i].parent >= 0) { int p = tn[i].parent; if (tn[p].last < 0) tn[p].first = i; else tn[tn[p].last].next = i; tn[p].last = i; } }
+        if (nroot) { Ref rt[64]; for (int i = 0; i < nroot; i++) { rt[i] = subtree(tn, roots[i], 0, nw); rt[i].said = 0; }
+            Ref x = nroot == 1 ? rt[0] : compose(rt, (uint32_t)nroot, ref_above(rt, (size_t)nroot)); x.said = 0; part[np++] = x; }
+        free(tn); free(id); free(at); }
+    free(v); if (rows != rows_s) free(rows);
+    if (k->held.n) {                                                          /* the strands it asserts: ID order, each its run */
+        qsort(k->held.c, k->held.n, sizeof(Ref), by_ref_id);
+        for (size_t i = 0; i < k->held.n; i++) k->held.c[i].said = LP_SAID_CLAIM;
+        Ref x = k->held.n == 1 ? k->held.c[0] : compose(k->held.c, (uint32_t)k->held.n, ref_above(k->held.c, k->held.n)); x.said = LP_SAID_CLAIM; part[np++] = x; }
+    if (!np) return 0;
+    *out = np == 1 ? part[0] : compose(part, np, ref_above(part, np)); return 1;
+}
+int say_contains(const Recipe *r){ const Say *s = r ? r->say : NULL; return s && s->contain[0]; }
 static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
     Sink *k = sink; const Say *s = k->s; (void)ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f; TT = t;
-    k->cs_epoch++; k->cs_n = 0;                                              /* a new part: none of its claims made yet */
+    k->cs_epoch++; k->cs_n = 0; k->held.n = 0;                               /* a new part: none of its claims made yet */
     if (k->dm_cap < t->count) { k->dm_cap = t->count * 2; k->dm = xrealloc(k->dm, sizeof(int16_t) * k->dm_cap); } memset(k->dm, 0, sizeof(int16_t) * t->count); DM = k->dm;
     if (k->tc_cap < t->count) { k->tc_cap = t->count * 2; k->tc = xrealloc(k->tc, sizeof(Ref) * k->tc_cap); k->ts = xrealloc(k->ts, k->tc_cap); }
     k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); k->ix_tree = NULL;      /* a new tree: nothing of the last is known of it */
@@ -830,6 +918,10 @@ static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
      * claim), the tree holds it as the claim it is. A part the recipe does not speak of (a row its where leaves out)
      * is in no tree: a recipe that says what a file's parts are reads a curated source, mined for what it says and
      * not kept byte for byte (Storage: curated sources are mined for knowledge, not recorded bit-perfect) */
+    if (speaks && s->contain[0] && named_as(&t->n[root], s->contain)) {     /* the record is the path of what it says, and holds its strands */
+        Ref R; if (contained(k, t, root, &R)) { R.said = LP_SAID_RECORD; push(&k->things, &R); }
+        for (uint64_t e = ev0; e < k->ev.n; e++) k->ev.e[e].inner = 1;       /* its provenance is that containment: no attestation row */
+        k->held.n = 0; return; }
     Ref T; int whole = speaks ? entity_of(k, t, root, &T) : 0;
     if (whole) { T.said = 0; for (uint64_t e = ev0; e < k->ev.n; e++) if (!memcmp(&k->ev.e[e].claim, &T.id, 16)) { T.said = LP_SAID_CLAIM; break; } push(&k->things, &T); }
 }
