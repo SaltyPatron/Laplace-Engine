@@ -33,8 +33,9 @@ So:
   position. The target is provenance by containment: a record is a path over the claims it asserts,
   inside its file's content tree, so walking up from a claim finds every source that asserts it, with the source's
   trunk as the witness (Laplace-Engine#22). The attestation rows stay until a working prototype on real data shows
-  containment answers everything they answer today (who said a claim, its games, score and position, its qualifiers,
-  forgetting and replaying a source) with nothing lost. Either way the `witness` line is written the same.
+  containment answers everything they answer today (who said a claim, its games, score and position, and forgetting
+  a source: `laplace forget` deletes the source's rows and the standing of what no other witness attested, and replays
+  no standing) with nothing lost. Either way the `witness` line is written the same.
 - **The corpus is the trunk, from the trunk to its leaves.** Universal Dependencies is one source trunk, `[source
   record, its files' trunks in path order]`, and one witness. Its treebanks (`UD_English-EWT/`) are directories of
   files: a directory's path is a file's metadata, and a treebank is never a witness of its own. Every file is
@@ -60,16 +61,19 @@ So:
     FrameNet frame, frame element or lexical unit, a VerbAtlas frame (`va:0001f`), a language code: a vocabulary many
     sources share, the road classes whose lists `laplace highway` holds. Its own text is the node, an entity whose ID is BLAKE3 of
     its content: `i46360` is `[i,4,6,3,6,0]` exactly as `3.14159` is `[3,.,1,4,1,5,9]`, so every source that cites it
-    lands on the same node. A source that writes a highway node its own way (`mcr:ili-30-01976841-v`, `vn:51.3.1`, an
-    FE's `ID`) names the column with `type COLUMN LIST`, which reads it as that node; that is right. Never rewrite a
-    highway node to a made-up key.
+    lands on the same node. A source that writes a highway node its own way (`vn:51.3.1` for a VerbNet class) or
+    points at one with its own pointer (`mcr:ili-30-01976841-v` is prefix, scheme, release 30, offset and type: a
+    pointer, decomposed by that notation, to the ILI node whose own text is `i46360`) names the column with
+    `type COLUMN LIST`, which resolves it to that node; the written form is not the node's content and is not recorded.
+    A FrameNet numeric `ID` is a pointer, below, not a highway node. Never rewrite a highway node to a made-up key.
   - **A pointer resolves, and is recorded nowhere.** A WordNet synset offset, a synset or sense id, a FrameNet numeric
     `ID`, a UD token number or `sent_id`, a Tatoeba sentence number, a geonameid, a data set's row or case id, a line
     number: how a source addresses its own records (or another release's). It is packaging. A WordNet 3.0 offset is
     the byte position of the synset's line in that release's `data.<pos>` file (byte 1,976,841 of `data.verb` starts
     `01976841 38 v 01 drop`), unique only with its type and only within its release. Name a pointer with `key` (the
     rows that point at it resolve to the thing it defines), `refer` (it is read as the thing another row or element of
-    the same source defines) or `omit`: it resolves to the ID of what it points at and nothing of it is recorded.
+    the same source defines) or, for a source's own key of a highway node, `type`: it resolves to the ID of what it
+    points at and nothing of it is recorded. `omit` resolves nothing: it drops the part, and nothing reads it (`say.c`).
   - **A pointer's notation still carries facts.** Decompose it by the source's own notation, declared in the recipe,
     never by word breaks, and attest the facts it carries: a WordNet offset's type `v`, a sense key's lexicographer
     file (`drop%2:38:00::` is lemma `drop`, type 2, lexicographer file 38, lex_id 00). The facts are attested; the
@@ -109,8 +113,10 @@ So:
 - **An enumerated value lands where the source asserts it.** "dog is a noun" stands in several shapes, each where a
   source says it. A treebank's sentence carries one layer claim per layer (its UPOS, its relations), a path of slots
   aligned to its tokens; what the treebank says of a word by itself is the claim `[dog, NOUN]`, NOUN a registry slot,
-  the treebank's taggings of it the claim's run length, and the bit on `dog`'s row a filter. That is what `attest row UPOS`
-  (`universal-dependencies/conllu.recipe`) gives. WordNet says the concept is a noun and the word lexicalizes it;
+  the treebank's taggings of it the claim's run length, and the bit on `dog`'s row a filter. As built,
+  `attest row LEMMA UPOS XPOS FEATS by MISC.Annotator` (`universal-dependencies/conllu.recipe`) says `[forces, UPOS,
+  NOUN]` of each token row, witnessed by the annotator MISC names or else by the treebank, and no layer claim is
+  composed. WordNet says the concept is a noun and the word lexicalizes it;
   FrameNet's `dog.n` has the part of speech as a part; a Unicode property is said of the codepoint. Each source's code
   (`n`, `.n`, `NOUN`) is recorded as written and sets the same slot; nothing is blanketed across tiers it was not
   asserted at, and a mask miss is never absence.
@@ -190,7 +196,7 @@ Working examples to copy from, all under `recipes/`:
 | table with a header row, every column said of one column's value | `iso-639/iso-639-3.recipe` (`attest *`) |
 | table without a header, predicate in the file's name | `princeton-wordnet/exceptions.recipe` |
 | table whose pointer column other files point at | `tatoeba/sentences.recipe` (`key`), `tatoeba/links.recipe` (`refer`) |
-| table whose column is a resource's way of writing a highway node | `verbatlas/frame-info.recipe`, `princeton-wordnet/cntlist.recipe` (`type`) |
+| table whose column is a source's key that `type` resolves to a highway node | `verbatlas/frame-info.recipe` (`type "prototypical synset" ili`; the frame's `va:0001f` is `key`), `princeton-wordnet/cntlist.recipe` (as built, `type sense_key ili`; the target resolves a sense key to its lexicalization strand) |
 | table of pairs (nothing written between the two) | `unicode/aliases.recipe` (`pair`) |
 | table whose row is one record, said together | use `together` in the claims block |
 | records of rows (a sentence, a row per word, a tree by heads) | `universal-dependencies/conllu.recipe` |
