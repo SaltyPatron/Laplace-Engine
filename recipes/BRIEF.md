@@ -113,25 +113,24 @@ So:
 - **An enumerated value lands where the source asserts it.** "dog is a noun" stands in several shapes, each where a
   source says it. A treebank's sentence carries one layer claim per layer (its UPOS, its relations), a path of slots
   aligned to its tokens; what the treebank says of a word by itself is the claim `[dog, NOUN]`, NOUN a registry slot,
-  the treebank's taggings of it the claim's run length, and the bit on `dog`'s row a filter. As built,
+  the treebank's taggings of it the claim's games, and the bit on `dog`'s row a filter. As built,
   `attest row LEMMA UPOS XPOS FEATS by MISC.Annotator` (`universal-dependencies/conllu.recipe`) says `[forces, UPOS,
   NOUN]` of each token row, witnessed by the annotator MISC names or else by the treebank, and no layer claim is
   composed. WordNet says the concept is a noun and the word lexicalizes it;
   FrameNet's `dog.n` has the part of speech as a part; a Unicode property is said of the codepoint. Each source's code
   (`n`, `.n`, `NOUN`) is recorded as written and sets the same slot; nothing is blanketed across tiers it was not
   asserted at, and a mask miss is never absence.
-- **A repeat is run length, not rows and not games.** When a witness asserts one claim n times, n is the claim's run
-  length, read off the tree: the strand occurring n times under the corpus's trunk. The witness plays one matchup per
-  claim per ingestion, its outcome or score at its trust, with n carried as the certainty of its assertion, and the
-  database takes one update per claim per witness. n is never played as n Glicko-2 games: n identical games in one
-  period approach a full Newton step, larger for a low-trust witness (a million refutations at an opponent deviation
-  of 1500 take a claim at 2300 with deviation 60 to -720 with deviation 1.9). The run count is also kept beside the
-  claim, never only merged into its standing. A number the source states (a usage count, a sense's order) is content,
-  an observation, never games. Packaging is not repetition: a cross-product layout or an automatic tagger's per-token
-  output repeating one fact is not the source saying it again (UD EWT's README says its UPOS and features were mainly
-  assigned automatically). As built, each attestation a record emits plays as one Glicko-2 matchup at the witness's
-  trust (`db.c`; the same witnessed thing plays once per lineage), so a claim a witness asserts in n records plays n
-  matchups, and the attestation row counts its games.
+- **A repeat is games, not rows.** If WordNet says a dog is a noun 30 times, that is one attestation with 30 games:
+  a witness that asserts one claim n times gives one attestation of n games with a score, Glicko-2 plays that series
+  as the witness's rating period, and the client folds the source's repeats so the database takes one update per
+  claim per witness. Run length is content structure only, identical consecutive children in a path; it attests
+  nothing. A number the source states (a usage count, a sense's order) is content, an observation, never games.
+  Packaging is not the source asserting again: a cross-product layout or an automatic tagger's per-token output
+  repeating one fact is not the source saying it again (UD EWT's README says its UPOS and features were mainly
+  assigned automatically). As built (`db.c`), a claim plays one Glicko-2 matchup at the witness's trust the first
+  time a witness lineage attests it, at that attestation's score; every later attestation of it by that lineage, in
+  the same file, a later batch or a later ingestion, plays no matchup and adds a game to the attestation row, whose
+  score is the mean over its games.
 
 These are stated design for recipe authors. The engine does not do all of them yet: read a file this way, and
 report where a recipe cannot say it.
