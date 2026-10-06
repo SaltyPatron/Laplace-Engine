@@ -157,17 +157,13 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
 /* ---- standings: a map from claim ID to its slot */
 typedef struct { lp_id id; lp_rating r; uint32_t matches, m0; uint8_t had, entered; } Standing;     /* m0: the matches it was recorded with */
 static Standing *stand; static lp_idmap *smap; static uint64_t sn;          /* the standings in play, in the order met; found by claim ID */
-/* The stock default a claim enters at: Glicko-2's rating for the unrated, and the uncertainty of the witness that brings
- * it (the deviation its trust plays with), unless the recipe gives this kind of statement its own. */
-static double entry_deviation(const Event *e, double trust){
-    if (e->enter_deviation > 0) return e->enter_deviation;
-    double t = trust < 0 ? -trust : trust; if (t == 0.0) return 350.0;
-    double d = lp_trust_deviation(t); return d < 30.0 ? 30.0 : d;
-}
-static Standing *stand_get(const lp_id *id, const Event *add, double trust){
+/* A claim enters at the stock default, Glicko-2's unrated (LP_GLICKO_RATING, LP_GLICKO_DEVIATION), whoever brings it:
+ * what its witnesses say moves it from there (entering at the witness's deviation ranked a claim higher the lower its
+ * witness's trust). matches: the games played into it. */
+static Standing *stand_get(const lp_id *id, bool add){
     if (!add) { int64_t i = lp_idmap_find(smap, id); return i < 0 ? NULL : &stand[i]; }
     bool fresh; size_t i = lp_idmap_put(smap, id, &fresh); if (!fresh) return &stand[i];
-    stand[i] = (Standing){ *id, { add->enter_rating, entry_deviation(add, trust), 0.06 }, 0, 0, 0 };  /* the stock default for its level of attestation */
+    stand[i] = (Standing){ *id, lp_rating_stock(), 0, 0, 0, 0 };
     sn = lp_idmap_count(smap); return &stand[i];
 }
 
@@ -396,7 +392,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     /* What the files attested goes in the same transaction as their nodes: all of it is recorded, or none. */
     if (nev) {
         smap = lp_idmap_new(); stand = malloc(sizeof(Standing) * (nev + 1)); sn = 0;
-        for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) if (files[fi].ev.e[i].kind != EV_RECORD) stand_get(&files[fi].ev.e[i].claim, &files[fi].ev.e[i], files[fi].trust);
+        for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) if (files[fi].ev.e[i].kind != EV_RECORD) stand_get(&files[fi].ev.e[i].claim, true);
         /* claims already recorded start from their recorded standing */
         /* the statistics are partitioned by the claim's first hex digit: each read goes to its one partition */
         lp_id *old = malloc(sizeof(lp_id) * (sn + 1)); uint64_t nold = 0, ocnt[17] = { 0 };
@@ -416,7 +412,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
                 if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "standing: %s", PQerrorMessage(c)); exit(1); }
                 #pragma omp critical
                 for (int j = 0; j < PQntuples(q); j++) {
-                    lp_id id; memcpy(id.b, PQgetvalue(q, j, 0), 16); Standing *s = stand_get(&id, NULL, 0); if (!s) continue;
+                    lp_id id; memcpy(id.b, PQgetvalue(q, j, 0), 16); Standing *s = stand_get(&id, false); if (!s) continue;
                     double d[3]; for (int z = 0; z < 3; z++) { uint64_t u = 0; const uint8_t *b = (const uint8_t *)PQgetvalue(q, j, 1 + z); for (int y = 0; y < 8; y++) u = u << 8 | b[y]; memcpy(&d[z], &u, 8); }
                     const uint8_t *mb = (const uint8_t *)PQgetvalue(q, j, 4);
                     s->r = (lp_rating){ d[0], d[1], d[2] }; s->matches = s->m0 = (uint32_t)mb[0] << 24 | mb[1] << 16 | mb[2] << 8 | mb[3]; s->had = 1;
@@ -425,21 +421,12 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             free(ab);
         }
         free(old); free(oj);
-        /* What was witnessed plays once per lineage: a copy of it is an attestation and nothing more. What this
-         * lineage witnessed before is read from attestation; what it witnesses in this run is kept here. */
-        typedef struct { lp_id witnessed, lin; uint8_t used; } Seen;
+        /* What attestation already holds for this batch's witnessed things, by witness: a pair recorded or staged
+         * gains this batch's games where it is (part_write). */
         uint64_t nrec = 0; for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) nrec += files[fi].ev.e[i].kind != EV_MEMBER;
-        lp_id *wold = malloc(sizeof(lp_id) * (nrec + 1)); uint64_t nwold = 0;
+        lp_id *wold = malloc(sizeof(lp_id) * (nrec + 1)); uint64_t nwold = 0, lin_at[17] = { 0 };
         for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (e->kind == EV_MEMBER) continue;
             Node *x = table_find(&e->witnessed); if (!x || x->keep != 1) wold[nwold++] = e->witnessed; }   /* a new claim was witnessed by nothing before */
-        uint64_t lin_at[17] = { 0 }; uint64_t pcap = 1024; while (pcap < nrec * 3) pcap <<= 1; Seen *seen = calloc(pcap, sizeof(Seen)); uint64_t nseen = 0;
-        #define SEEN_AT(w, l, found) do { uint64_t h_; memcpy(&h_, (w)->b, 8); uint64_t c_; memcpy(&c_, (l)->b + 8, 8); h_ ^= c_ * 0x9E3779B97F4A7C15ull; k_ = h_ & (pcap - 1); found = 0; \
-            while (seen[k_].used) { if (!memcmp(seen[k_].witnessed.b, (w)->b, 16) && !memcmp(seen[k_].lin.b, (l)->b, 16)) { found = 1; break; } k_ = (k_ + 1) & (pcap - 1); } } while (0)
-        /* half full: twice the room. It is sized by the batch's records, and attestation adds every lineage it already
-         * holds for them, as many as there are: a full table probed for ever */
-        #define SEEN_PUT(w, l) do { if ((nseen + 1) * 2 > pcap) { uint64_t oc_ = pcap; Seen *o_ = seen; pcap <<= 1; seen = calloc(pcap, sizeof(Seen)); \
-                for (uint64_t q_ = 0; q_ < oc_; q_++) if (o_[q_].used) { uint64_t k_; int f_; SEEN_AT(&o_[q_].witnessed, &o_[q_].lin, f_); (void)f_; seen[k_] = o_[q_]; } free(o_); } \
-            uint64_t k_; int f_; SEEN_AT(w, l, f_); if (!f_) { seen[k_].used = 1; seen[k_].witnessed = *(w); seen[k_].lin = *(l); nseen++; } } while (0)
         /* each claim read from the one partition of attestation it is in (its ID's first hex digit): asked of the whole
          * table, every one of the 16 partitions probes every claim of the batch */
         { lp_id *by = malloc(sizeof(lp_id) * (nwold + 1)); uint64_t at[17] = { 0 };
@@ -454,52 +441,44 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
             uint64_t i0 = lj[jx].lo; uint32_t k = (uint32_t)lj[jx].n; uint8_t *ab = malloc(20 + 20 * (size_t)k);
             size_t len = ids_param(ab, wold + i0, k); PGconn *c = pg[omp_get_thread_num()];
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 }; char sql[512];
-            snprintf(sql, sizeof sql, "SELECT a.claim, w.id, w.lineage FROM (SELECT claim, witness FROM public.attestation_%x WHERE claim = ANY($1::blake3[]) "
-                                      "UNION SELECT claim, witness FROM stage.attestation_%x WHERE claim = ANY($1::blake3[])) a JOIN witness w ON w.id = a.witness", lj[jx].h, lj[jx].h);
+            snprintf(sql, sizeof sql, "SELECT claim, witness FROM public.attestation_%x WHERE claim = ANY($1::blake3[]) "
+                                      "UNION SELECT claim, witness FROM stage.attestation_%x WHERE claim = ANY($1::blake3[])", lj[jx].h, lj[jx].h);
             PGresult *q = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
-            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "lineage: %s", PQerrorMessage(c)); exit(1); }
+            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "attested: %s", PQerrorMessage(c)); exit(1); }
             #pragma omp critical
             for (int j = 0; j < PQntuples(q); j++) {
-                lp_id wit, wid, lin; memcpy(wit.b, PQgetvalue(q, j, 0), 16); memcpy(wid.b, PQgetvalue(q, j, 1), 16);
-                if (PQgetisnull(q, j, 2)) lin = wid; else memcpy(lin.b, PQgetvalue(q, j, 2), 16);
-                SEEN_PUT(&wit, &lin);
+                lp_id wit, wid; memcpy(wit.b, PQgetvalue(q, j, 0), 16); memcpy(wid.b, PQgetvalue(q, j, 1), 16);
                 ldg_put(&wit, &wid);
             }
             PQclear(q); free(ab);
         }
         free(wold); free(lj);
         st->t_read += now() - tp; tp = now();
-        /* The matchups, first in, first out: each attestation is played as one Glicko-2 matchup at the witness's trust.
-         * A claim entering for the first time enters at its stock default and plays its first attestation from there;
-         * every attestation plays the witness at the rating its record would enter at, with the deviation its trust
-         * gives, and the outcome it attests. */
-        /* Which attestations play, in reading order (what is witnessed plays once per lineage; a claim within a record
-         * plays as its record does); then the plays, a claim's in its reading order, the claims on every core: a
-         * standing is moved by its own claim's matchups and by nothing else, so the standings are those of one
-         * reading in order. play: the core that plays each attestation, or none. */
-        const int NP = 64; uint64_t ne = 0; for (int fi = 0; fi < nfiles; fi++) ne += files[fi].ev.n;
-        uint8_t *play = malloc(ne ? ne : 1);
-        { uint64_t x = 0;
-          for (int fi = 0; fi < nfiles; fi++) {
-            int copy = 0; const lp_id *flin = files[fi].has_lineage ? &files[fi].lineage.id : &files[fi].witness.id;
-            for (uint64_t i = 0; i < files[fi].ev.n; i++, x++) {
-                const Event *e = &files[fi].ev.e[i]; const lp_id *lin = e->own_witness ? &e->witness : flin; play[x] = 255;
-                if (e->kind != EV_MEMBER) {                                  /* what is witnessed: once per lineage */
-                    uint64_t k_; SEEN_AT(&e->witnessed, lin, copy);
-                    if (!copy) SEEN_PUT(&e->witnessed, lin);
-                    if (e->kind == EV_RECORD) continue;
-                }
-                if (!copy) play[x] = (uint8_t)(e->claim.b[7] % NP);
-            } } }
-        free(seen);
+        /* The series: what one lineage attests of one claim in this batch is one series, its games every time the
+         * lineage attests it here and its score their mean, played once as one solved update (lp_attest_series): each
+         * outcome pulled toward a draw by the witness's trust, against the anchor, the deviation never below what one
+         * witness of that trust can give. A claim within a record is attested each time its record is. Content
+         * already recorded attests nothing again (a file whose content tree is recorded brings no events), so the
+         * same content ingested twice plays nothing the second time. A claim's series are played in the order their
+         * lineages first attest it, the claims on every core: a standing is moved by its own claim's series and by
+         * nothing else. Trust is the witness's class prior. */
+        typedef struct { lp_id claim; uint32_t games; double sum, trust; } Series;
+        const int NP = 64; lp_idmap *smine = lp_idmap_new(); Series *ser = NULL; uint64_t nser = 0, cser = 0;
+        for (int fi = 0; fi < nfiles; fi++) { const lp_id *flin = files[fi].has_lineage ? &files[fi].lineage.id : &files[fi].witness.id;
+            for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (e->kind == EV_RECORD) continue;
+                const lp_id *lin = e->own_witness ? &e->witness : flin;
+                lp_id pair; for (int b = 0; b < 16; b++) pair.b[b] = e->claim.b[b] ^ lin->b[(b + 7) & 15];   /* both are hashes: their mix names the pair */
+                bool fresh; size_t at = lp_idmap_put(smine, &pair, &fresh);
+                if (fresh) { if (nser == cser) { cser = cser ? cser * 2 : 4096; ser = xrealloc(ser, sizeof(Series) * cser); } ser[nser++] = (Series){ e->claim, 0, 0, files[fi].trust }; }
+                ser[at].games++; ser[at].sum += e->score; } }
+        lp_idmap_free(smine);
         #pragma omp parallel for schedule(dynamic, 1)
-        for (int p = 0; p < NP; p++) { uint64_t x = 0;
-            for (int fi = 0; fi < nfiles; fi++) { double trust = files[fi].trust;
-                for (uint64_t i = 0; i < files[fi].ev.n; i++, x++) { if (play[x] != p) continue; const Event *e = &files[fi].ev.e[i];
-                    Standing *s = stand_get(&e->claim, NULL, 0);
-                    if (!s->had && !s->entered) s->entered = 1;
-                    lp_attest(&s->r, trust, e->score, e->enter_rating, 0.5, 30.0); s->matches++; } } }
-        free(play);
+        for (int p = 0; p < NP; p++)
+            for (uint64_t x = 0; x < nser; x++) { const Series *q = &ser[x]; if (q->claim.b[7] % NP != p) continue;
+                Standing *s = stand_get(&q->claim, false);
+                if (!s->had && !s->entered) s->entered = 1;
+                lp_attest_series(&s->r, q->trust, q->games, q->sum / q->games, LP_ATTEST_FLOOR); s->matches += q->games; }
+        free(ser);
         st->t_play += now() - tp; tp = now();
         Copy c = { 0 };
         /* witnesses: each once, and only those the database does not know yet */
