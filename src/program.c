@@ -9,18 +9,28 @@
  *           and what follows the run in them; every strand that holds an occurrence, the prompt or a discourse
  *           entity, read at the firmware's k. The field keeps its kinds apart: what responds, by which route, from
  *           which occurrences, with what standing.
+ *           Then the walks: from every word, the firmware's walkers step across rated strands, each strand taken as
+ *           often as it tugs, going home as often as the firmware says; where they stand is how the rest of the
+ *           prompt reaches an entity in more than one hop (a transformer's deeper layers). Every draw is BLAKE3 of the
+ *           seed and the walker's place, so the walks replay bit for bit. And the context: the observations that hold
+ *           each word and what else they hold, what the prompt's words are observed beside.
  * ORIENT    the joint interpretation: an occurrence is an obligation unless what is attested of it under the
  *           firmware's role kind says it pulls nothing; the interpretation is the responding entities that ground the
- *           most obligations together; unique, ambiguous, or nothing responds.
+ *           most obligations together; two readings level there are told apart by how the other words' walkers reach
+ *           them and how many of the other words' strands do; ambiguous only when nothing tells them apart.
  * ROUTE     the program: the firmware's hops, fan, tax and emission budget, over the oriented centres.
  * SCAN      best-first from the centres across rated strands, to the hop and fan limits: what is reached, by which
  *           strand, at what cost.
  * COMPOSE   the frontier: what was reached, folded by entity, its routes and supporting occurrences kept apart.
  * PROPOSE   the next constituents: what follows the active trajectory (the prompt and what has been emitted) as a run
  *           in what was observed; and what a result-bearing strand of an oriented entity says.
- * STEER     the firmware's election: grounded obligations first, then ordinal continuity, then the conservative
- *           bound (confidence at k), then the least shared; a hub never wins election.
- * SELECT    the top, or, as the firmware's temperature allows, a strand that near it.
+ * STEER     every proposal is weighed against every word still owed, through every channel: a strand of the word
+ *           reaches it, the word's walkers reach it, it is observed beside the word more often than its base rate.
+ *           The firmware's election order compares them key by key: the obligations they ground, continuity, how many
+ *           channels agree, how often observed beside the words, how often the walkers reach it, confidence at k,
+ *           the least shared. Typed, never one number; a hub never wins election.
+ * SELECT    the top. Proposals the evidence cannot tell apart, every key equal or within the walks' error, are a
+ *           tie, and the firmware says what a tie gets: the first by ID, a draw, or a question.
  * REALIZE   its text.
  * WITNESS   the emitted constituent joins the active trajectory, the obligations it grounds close, and the coupling
  *           of the next step is recomputed from that state. At the end of the turn, unless --read, the prompt and the
@@ -29,6 +39,7 @@
  *           dependence on the prompt ([response, prompt], ResponseContent).
  * Every stage's state is printed as the pass's trace. Nothing here changes a standing except by witnessing. */
 #include "engine.h"
+#include "blake3.h"
 #include <arpa/inet.h>
 #include <math.h>
 #include <stdio.h>
@@ -66,14 +77,39 @@ static int constituents(const lp_id *id, lp_id *out, int cap){
 
 /* ---- the state a turn carries from one emitted constituent to the next */
 typedef struct {
-    const Firmware *fw; PGconn *pg; Reader *rd; lp_text *c; unsigned seed;
+    const Firmware *fw; PGconn *pg; Reader *rd; lp_text *c;
     lp_id prompt; lp_id occ[MAXOCC]; int nocc; double role[MAXOCC]; int composed[MAXOCC];        /* the occurrences, how hard each pulls, which are compositions */
     lp_id disc[MAXOCC]; int ndisc;                                                                 /* the discourse: what the session's earlier turns hold */
     lp_id traj[4096]; int ntraj;                                                                   /* the active trajectory: the occurrences, then what has been emitted */
     Bits open;                                                                                     /* the obligations still open */
     uint64_t trips;
     uint64_t admitted;                                                        /* the prompt's entities its admission recorded new */
+    uint8_t seed[32];                                                         /* every draw of the pass is BLAKE3 of this and the draw's place */
+    int npos;                                                                 /* positions: the prompt's occurrences, then each word emitted (attention reads both) */
+    lp_idmap *walk_at; int *walk_visits; size_t walk_cap; uint64_t walk_steps, walk_homes; int walk_read;    /* where each position's walkers stood, MAXOCC counts an entity */
+    lp_idmap *walk_am; struct Adj_ *walk_adj; size_t walk_acap; int walk_nadj;  /* the strands of every place stood on, read once a pass */
+    lp_idmap *ctx[MAXOCC]; int ctx_n[MAXOCC], ctx_hub[MAXOCC]; lp_idmap *ctx_all; int ctx_total;            /* what the observations holding each word hold */
 } State;
+
+/* A draw: uniform in [0, 1), from the pass's seed and where the draw is made. The same seed, the same draws, on every
+ * machine: no generator state, nothing that depends on the order anything arrived in. */
+static double draw(const State *st, uint32_t a, uint32_t b, uint32_t c){
+    blake3_hasher h; blake3_hasher_init(&h); blake3_hasher_update(&h, st->seed, 32); uint32_t v[3] = { a, b, c }; blake3_hasher_update(&h, v, sizeof v);
+    uint8_t o[8]; blake3_hasher_finalize(&h, o, 8); uint64_t x; memcpy(&x, o, 8); return (double)(x >> 11) * 0x1.0p-53;
+}
+/* Rows in content order: a result comes in the order the server's scans met its rows, which another install of the
+ * same content meets differently; what is folded from it (a sum, the first of a level set) is folded in this order. */
+static const PGresult *ORD_Q; static const int *ORD_C; static int ORD_N;
+static int row_cmp(const void *a, const void *b){
+    int x = *(const int *)a, y = *(const int *)b;
+    for (int k = 0; k < ORD_N; k++) { int c = ORD_C[k], lx = PQgetlength(ORD_Q, x, c), ly = PQgetlength(ORD_Q, y, c), d = memcmp(PQgetvalue(ORD_Q, x, c), PQgetvalue(ORD_Q, y, c), (size_t)(lx < ly ? lx : ly));
+        if (d) return d; if (lx != ly) return lx < ly ? -1 : 1; }
+    return x < y ? -1 : x > y;
+}
+static int *rows_in_order(const PGresult *q, const int *cols, int ncols){
+    int n = PQntuples(q), *o = malloc(sizeof(int) * (size_t)(n ? n : 1)); for (int i = 0; i < n; i++) o[i] = i;
+    ORD_Q = q; ORD_C = cols; ORD_N = ncols; qsort(o, (size_t)n, sizeof(int), row_cmp); return o;
+}
 
 static PGresult *ask_st(State *st, const char *sql, Args *a){ st->trips++; return ask(st->pg, sql, a); }
 
@@ -104,7 +140,8 @@ static int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_
     PGresult *q = ask_st(st, "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices FROM laplace_couple($1::blake3[], $2::bigint, $3::blake3[], $4::smallint, $5::float8, $6::integer)", &a);
     int *held = calloc((size_t)n + 1, sizeof(int)), nn = 0;
     for (int r = 0; r < PQntuples(q); r++) if (col_int(q, r, 2) == 0) { int o = (int)col_int(q, r, 1); if (o >= 1 && o <= n) held[o - 1]++; }
-    for (int r = 0; r < PQntuples(q); r++) {
+    static const int OC[] = { 2, 1, 9, 0, 6, 7 }; int *ord = rows_in_order(q, OC, 6);      /* route, occurrence, distance, entity, via, relation */
+    for (int r_ = 0; r_ < PQntuples(q); r_++) { int r = ord[r_];
         const lp_id *id = col_id(q, r, 0); int o = (int)col_int(q, r, 1) - 1, route = (int)col_int(q, r, 2);
         if (lp_id_eq(id, &st->prompt)) continue;                            /* the prompt, admitted, is not its own response: not even its nearest curve */
         int occ = o >= 0 && o < n && occ_of ? occ_of[o] : -1; double pull = occ >= 0 && occ < st->nocc ? st->role[occ] : kind == R_CLAIM ? 1.0 : 0.5;
@@ -120,25 +157,145 @@ static int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_
         if (o >= 0 && held[o] > fw->fan) x->hub = 1;                                               /* what so many strands hold is reached, not crossed */
         if (!x->has_r || conf > lp_confidence(&x->r, fw->k)) { x->r = rt; x->has_r = 1; x->via = part[0]; x->rel = part[1]; }
     }
-    PQclear(q); args_free(&a); free(held); return nn;
+    PQclear(q); args_free(&a); free(held); free(ord); return nn;
 }
 /* What follows the end of the active trajectory, as a run, in what was observed: the longest observed suffix first. */
 typedef struct { lp_id id; long times; int len; } Next;
 static int follows(State *st, Next *out, int cap){
     int from = st->ntraj > 24 ? st->ntraj - 24 : 0, n = st->ntraj - from; if (n <= 0) return 0;
     Args a = { 0 }; arg_ids(&a, st->traj + from, (size_t)n); arg_int(&a, st->fw->fan);
-    PGresult *q = ask_st(st, "SELECT i, j, next, times FROM laplace_forward($1::blake3[], $2::bigint) WHERE j = array_length($1::blake3[], 1) AND next IS NOT NULL ORDER BY (j - i) DESC, times DESC", &a);
-    int m = 0, best = -1;
-    for (int r = 0; r < PQntuples(q) && m < cap; r++) { int len = (int)(col_int(q, r, 1) - col_int(q, r, 0) + 1);
-        if (best < 0) best = len; if (len < best) break;                                           /* the longest run observed decides; shorter ones are not consulted once it answers */
+    /* every run that ends the trajectory, not only the longest: as attention reads every position, a word that follows
+     * only the last two is still a proposal, at the run it follows (its continuity) */
+    PGresult *q = ask_st(st, "SELECT i, j, next, times FROM laplace_forward($1::blake3[], $2::bigint) WHERE j = array_length($1::blake3[], 1) AND next IS NOT NULL ORDER BY (j - i) DESC, times DESC, next", &a);
+    int m = 0; lp_idmap *seen = lp_idmap_new();
+    for (int r = 0; r < PQntuples(q) && m < cap; r++) { int len = (int)(col_int(q, r, 1) - col_int(q, r, 0) + 1); bool fresh; lp_idmap_put(seen, col_id(q, r, 2), &fresh); if (!fresh) continue;
         out[m].id = *col_id(q, r, 2); out[m].times = (long)col_int(q, r, 3); out[m].len = len; m++; }
-    PQclear(q); args_free(&a); return m;
+    lp_idmap_free(seen); PQclear(q); args_free(&a); return m;
 }
 
+/* ---- the walks (Monte Carlo over the web, deterministic): from every word, the firmware's walkers; a step takes a
+ * strand of where the walker stands as often as that strand tugs (its confidence at k, by the firmware's weights), or
+ * goes home; an entity more than the fan holds is reached and not crossed: a walker there goes home. The strands of
+ * every place stood on are read once, a set a step, and kept in content order, so a draw picks the same strand on
+ * every install. What is counted is how often each word's walkers stand on each entity. */
+typedef struct { lp_id to; double w; } Hop_;
+typedef struct Adj_ { Hop_ *h; int n; size_t cap; int hub; } Adj;
+static int hop_cmp(const void *a, const void *b){ const Hop_ *x = a, *y = b; int c = memcmp(&x->to, &y->to, 16); return c ? c : (x->w < y->w ? -1 : x->w > y->w); }
+static int visits(const State *st, const lp_id *id, int o){ if (!st->walk_at) return 0; int64_t i = lp_idmap_find(st->walk_at, id); return i < 0 ? 0 : st->walk_visits[(size_t)i * MAXOCC + (size_t)o]; }
+static void walk(State *st, int from, int to){                                 /* the walkers of positions [from, to) */
+    const Firmware *fw = st->fw; if (fw->walks <= 0 || fw->steps <= 0) return;
+    int org[MAXOCC], no = 0; for (int i = from; i < to; i++) if (st->composed[i] && st->role[i] > 0) org[no++] = i;
+    if (!no) return;
+    int W = fw->walks, nw = no * W; lp_id *pos = malloc(sizeof(lp_id) * (size_t)nw), *need = malloc(sizeof(lp_id) * (size_t)nw);
+    for (int o = 0; o < no; o++) for (int w = 0; w < W; w++) pos[o * W + w] = st->occ[org[o]];
+    if (!st->walk_am) st->walk_am = lp_idmap_new(); if (!st->walk_at) st->walk_at = lp_idmap_new();
+    lp_idmap *am = st->walk_am; Adj *adj = st->walk_adj; size_t acap = st->walk_acap; int nadj = st->walk_nadj; Ids rn = { 0 }; Args a = { 0 };
+    for (int s = 0; s < fw->steps; s++) {
+        int nn = 0;
+        for (int i = 0; i < nw; i++) { bool fresh; lp_idmap_put(am, &pos[i], &fresh);
+            if (fresh) { lp_reserve((void **)&adj, &acap, (size_t)nadj + 1, sizeof(Adj)); memset(&adj[nadj++], 0, sizeof(Adj)); need[nn++] = pos[i]; } }
+        if (nn) {                                                             /* the strands of every place not stood on before: one set */
+            args_reset(&a); arg_ids(&a, need, (size_t)nn); arg_int(&a, fw->walk_fan + 1); arg_text(&a, CLAIM_BITS); arg_refused(&a);
+            PGresult *q = ask_st(st, "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", &a);
+            int *held = calloc((size_t)nn, sizeof(int)); for (int r = 0; r < PQntuples(q); r++) { int e = (int)col_int(q, r, 0) - 1; if (e >= 0 && e < nn) held[e]++; }
+            for (int r = 0; r < PQntuples(q); r++) { int e = (int)col_int(q, r, 0) - 1; if (e < 0 || e >= nn || held[e] > fw->walk_fan) continue;
+                path_into(&rn, col_path(q, r, 2));
+                if (lp_tuple_middle_any(rn.v, rn.n, fw->id.refuse, (size_t)fw->nrefuse_predicate)) continue;
+                int other = lp_tuple_other(rn.v, rn.n, &need[e]); if (other < 0 || lp_id_eq(&rn.v[other], &need[e])) continue;
+                lp_rating rt = col_rating(q, r, 3); double w = lp_confidence(&rt, fw->k) * strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n); if (!(w > 0)) continue;
+                Adj *x = &adj[lp_idmap_find(am, &need[e])]; lp_reserve((void **)&x->h, &x->cap, (size_t)x->n + 1, sizeof(Hop_)); x->h[x->n++] = (Hop_){ rn.v[other], w }; }
+            for (int e = 0; e < nn; e++) { Adj *x = &adj[lp_idmap_find(am, &need[e])]; x->hub = held[e] > fw->walk_fan; if (x->n > 1) qsort(x->h, (size_t)x->n, sizeof(Hop_), hop_cmp); }
+            st->walk_read += nn; free(held); PQclear(q);
+        }
+        for (int o = 0; o < no; o++) for (int w = 0; w < W; w++) { int i = o * W + w; const Adj *x = &adj[lp_idmap_find(am, &pos[i])];
+            if (draw(st, (uint32_t)org[o], (uint32_t)w, (uint32_t)(2 * s)) < fw->restart || x->hub || !x->n) { pos[i] = st->occ[org[o]]; st->walk_homes++; continue; }
+            double tot = 0; for (int k = 0; k < x->n; k++) tot += x->h[k].w;
+            double u = draw(st, (uint32_t)org[o], (uint32_t)w, (uint32_t)(2 * s + 1)) * tot; int k = 0; while (k + 1 < x->n && u >= x->h[k].w) { u -= x->h[k].w; k++; }
+            pos[i] = x->h[k].to; st->walk_steps++;
+            bool fresh; size_t vi = lp_idmap_put(st->walk_at, &pos[i], &fresh);
+            if (fresh) { size_t need_ = (vi + 1) * MAXOCC, old = st->walk_cap; lp_reserve((void **)&st->walk_visits, &st->walk_cap, need_, sizeof(int)); memset(st->walk_visits + old, 0, (st->walk_cap - old) * sizeof(int)); }
+            st->walk_visits[vi * MAXOCC + (size_t)org[o]]++; }
+        st->walk_adj = adj; st->walk_acap = acap; st->walk_nadj = nadj;     /* kept: a later position's walkers read only where no one has stood */
+    }
+    free(pos); free(need); lp_vec_free(&rn); args_free(&a);
+}
+/* ---- the context: for each word, the observations that hold it (not claims) and what else they hold, counted once an
+ * observation. A word held by more than the fan is a hub and has none: reached, not crossed. ctx_all counts each
+ * observation once however many of the words it holds: the base rate a word is observed at, in this context. */
+static lp_idmap *CTX_OBS;                                                     /* every observation counted into ctx_all, once */
+static void context(State *st, int from, int to){                              /* the context of positions [from, to) */
+    if (!CTX_OBS) CTX_OBS = lp_idmap_new(); if (!st->ctx_all) st->ctx_all = lp_idmap_new(); lp_idmap *obs = CTX_OBS; Ids ids = { 0 };
+    for (int i = from; i < to; i++) { st->ctx[i] = NULL; st->ctx_n[i] = 0; st->ctx_hub[i] = 0;
+        if (!st->composed[i] || st->role[i] <= 0) continue;
+        int dup = -1; for (int j = 0; j < i && dup < 0; j++) if ((st->ctx[j] || st->ctx_hub[j]) && lp_id_eq(&st->occ[j], &st->occ[i])) dup = j;
+        if (dup >= 0) { st->ctx[i] = st->ctx[dup]; st->ctx_n[i] = st->ctx_n[dup]; st->ctx_hub[i] = st->ctx_hub[dup]; continue; }      /* the same word again: the same context */
+        const Node *nd = table_find(&st->occ[i]); int nh = 0; Hold *h = holds_above(&st->occ[i], 1, nd ? nd->tier : 0, 0, 0, &nh); st->trips++;
+        int n = 0; for (int z = 0; z < nh; z++) n += !h[z].claim;
+        if (n > st->fw->fan) { st->ctx_hub[i] = 1; holds_free(h, nh); continue; }
+        lp_idmap *m = lp_idmap_new(); st->ctx[i] = m; st->ctx_n[i] = n;
+        for (int z = 0; z < nh; z++) { if (h[z].claim) continue; bool once; lp_idmap_put(obs, &h[z].entity, &once);
+            lp_vec_reserve(&ids, 1); size_t nv = lp_path_ids(h[z].path, (size_t)h[z].path_len, NULL, 0); lp_vec_reserve(&ids, nv ? nv : 1); nv = lp_path_ids(h[z].path, (size_t)h[z].path_len, ids.v, nv);
+            lp_idmap *here = lp_idmap_new();
+            for (size_t v = 0; v < nv; v++) { bool f1; lp_idmap_put(here, &ids.v[v], &f1); if (!f1) continue;
+                bool f; (*lp_idmap_value(m, lp_idmap_put(m, &ids.v[v], &f)))++;
+                if (once) (*lp_idmap_value(st->ctx_all, lp_idmap_put(st->ctx_all, &ids.v[v], &f)))++; }
+            lp_idmap_free(here); if (once) st->ctx_total++; }
+        holds_free(h, nh); }
+    lp_vec_free(&ids);
+}
+static int beside(const State *st, int i, const lp_id *id){ if (!st->ctx[i]) return 0; int64_t k = lp_idmap_find(st->ctx[i], id); return k < 0 ? 0 : (int)*lp_idmap_value(st->ctx[i], (size_t)k); }
+/* Observed beside word i more often than its base rate in this context, by the firmware's lift, and more than once. */
+static int beside_grounds(const State *st, int i, const lp_id *id){
+    int c = beside(st, i, id); if (c < 2 || !st->ctx_n[i] || !st->ctx_total) return 0;
+    int64_t k = lp_idmap_find(st->ctx_all, id); double base = k < 0 ? 0 : (double)*lp_idmap_value(st->ctx_all, (size_t)k) / st->ctx_total;
+    return base > 0 && ((double)c / st->ctx_n[i]) >= st->fw->lift * base;
+}
+
+/* ---- a fork of a chain: which branch the rest of the prompt supports (a word's senses, a sense's synsets). A branch's
+ * record set is what its strands reach in two hops (the sense, its synset, the synset's gloss and examples, its
+ * relations) and the words the observations among them hold. The context is the prompt's other words. A branch holds a
+ * word when its record set does, weighed by how hard the word pulls: the intersection Research: Trust measured at 66.2
+ * on the WSD sets. Then how often the other words' walkers stood on the branch's record set, within the walks' error.
+ * When neither tells the branches apart, -1: the chain keeps its own order (the witness's, a sense's frequency). */
+typedef struct { State *st; const lp_id *word; int last_hold, last_n; } ForkCtx;
+static int fork_choice(void *vc, const Claim *cl, int n){
+    ForkCtx *fc = vc; State *st = fc->st; const Firmware *fw = st->fw;
+    lp_id *ends = malloc(sizeof(lp_id) * (size_t)n); for (int k = 0; k < n; k++) ends[k] = cl[k].part[cl[k].np - 1];
+    lp_idmap **rec = calloc((size_t)n, sizeof *rec); for (int k = 0; k < n; k++) { bool f; rec[k] = lp_idmap_new(); lp_idmap_put(rec[k], &ends[k], &f); }
+    /* hop one: each branch's strands; hop two: the strands of what they reach, words left out (a word's strands are its own record, not the branch's) */
+    int m1, *s1; Claim *c1 = claims_each(st->pg, ends, n, NULL, 0, fw->fan, fw->k, &m1, &s1); st->trips++;
+    lp_id *mid = malloc(sizeof(lp_id) * (size_t)(m1 * MAXPARTS + 1)); int *mof = malloc(sizeof(int) * (size_t)(m1 * MAXPARTS + 1)), nm = 0;
+    for (int r = 0; r < m1; r++) { int o = lp_tuple_other(c1[r].part, (size_t)c1[r].np, &ends[s1[r]]); if (o < 0) continue;     /* the strand's other end; its middle (a relation) is not the branch's record */
+        const lp_id *x = &c1[r].part[o]; bool f; lp_idmap_put(rec[s1[r]], x, &f);
+        if (f && !lp_id_eq(x, fc->word) && !table_find(x)) { mid[nm] = *x; mof[nm++] = s1[r]; } }
+    int m2 = 0, *s2 = NULL; Claim *c2 = nm ? claims_each(st->pg, mid, nm, NULL, 0, fw->fan, fw->k, &m2, &s2) : NULL; if (nm) st->trips++;
+    for (int r = 0; r < m2; r++) { int o = lp_tuple_other(c2[r].part, (size_t)c2[r].np, &mid[s2[r]]); if (o < 0) continue; bool f; lp_idmap_put(rec[mof[s2[r]]], &c2[r].part[o], &f); }
+    /* the words of every observation a record set holds: its gloss, its examples */
+    for (int k = 0; k < n; k++) for (size_t i = 0; i < lp_idmap_count(rec[k]); i++) reader_want(st->rd, lp_idmap_key(rec[k], i));
+    lp_id parts[256];
+    for (int k = 0; k < n; k++) { size_t cnt = lp_idmap_count(rec[k]);
+        for (size_t i = 0; i < cnt; i++) { lp_id x = *lp_idmap_key(rec[k], i); size_t np = reader_parts(st->rd, &x, parts, 256);
+            for (size_t v = 0; v < np && v < 256; v++) { bool f; lp_idmap_put(rec[k], &parts[v], &f); } } }
+    /* the context: the prompt's other words, each once */
+    double *hold = calloc((size_t)n, sizeof(double)), *walks = calloc((size_t)n, sizeof(double));
+    for (int k = 0; k < n; k++) { size_t cnt = lp_idmap_count(rec[k]);
+        for (int j = 0; j < st->npos; j++) { if (!st->composed[j] || st->role[j] <= 0 || lp_id_eq(&st->occ[j], fc->word)) continue;
+            int seen = 0; for (int i = 0; i < j && !seen; i++) seen = lp_id_eq(&st->occ[i], &st->occ[j]); if (seen) continue;
+            if (lp_idmap_find(rec[k], &st->occ[j]) >= 0) hold[k] += st->role[j];
+            for (size_t i = 0; i < cnt; i++) walks[k] += st->role[j] * visits(st, lp_idmap_key(rec[k], i), j); } }
+    int best = 0; for (int k = 1; k < n; k++) { double tol = fw->sure * sqrt(walks[k] + walks[best]);
+        if (hold[k] > hold[best] || (hold[k] == hold[best] && walks[k] > walks[best] + tol)) best = k; }
+    int told = 0; for (int k = 0; k < n; k++) if (k != best && (hold[best] > hold[k] || walks[best] > walks[k] + fw->sure * sqrt(walks[k] + walks[best]))) told++;
+    int pick = told == n - 1 && (hold[best] > 0 || walks[best] > 0) ? best : -1;
+    fc->last_hold = (int)(hold[best] * 1000 + 0.5); fc->last_n = n;
+    for (int k = 0; k < n; k++) lp_idmap_free(rec[k]);
+    free(rec); free(ends); free(c1); free(s1); free(c2); free(s2); free(mid); free(mof); free(hold); free(walks);
+    return pick;
+}
 /* A chain the firmware names, followed from a word (chain_follow), the oriented reading taken where the chain passes
- * through it; *rating: the standing of its last strand. */
+ * through it, and at every other fork the branch the context supports; *rating: the standing of its last strand. */
 static int chain_from(State *st, const lp_id *word, const lp_id *reading, lp_id *answer, lp_rating *rating){
-    Claim last; int alt; chain_follow(st->pg, st->rd, (Firmware *)st->fw, word, reading, NULL, answer, &last, &alt);
+    Claim last; int alt; ForkCtx fc = { st, word, 0, 0 }; chain_follow(st->pg, st->rd, (Firmware *)st->fw, word, reading, NULL, fork_choice, &fc, answer, &last, &alt);
     if (alt < 0) return 0;
     *rating = last.r; return 1;
 }
@@ -154,7 +311,8 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
         args_reset(&a); arg_ids(&a, ids, (size_t)m); arg_int(&a, fw->fan + 1); arg_text(&a, CLAIM_BITS); arg_refused(&a);
         PGresult *q = ask_st(st, "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", &a);
         int held[64] = { 0 }; for (int r = 0; r < PQntuples(q); r++) { int e = (int)col_int(q, r, 0) - 1; if (e >= 0 && e < m) held[e]++; }
-        for (int r = 0; r < PQntuples(q); r++) { int e = (int)col_int(q, r, 0) - 1; if (e < 0 || e >= m || held[e] > fw->fan) continue;
+        static const int SC[] = { 0, 1 }; int *ord = rows_in_order(q, SC, 2);
+        for (int r_ = 0; r_ < PQntuples(q); r_++) { int r = ord[r_]; int e = (int)col_int(q, r, 0) - 1; if (e < 0 || e >= m || held[e] > fw->fan) continue;
             const lp_reached *at = &batch[who[e]]; path_into(&rn, col_path(q, r, 2));
             if (lp_tuple_middle_any(rn.v, rn.n, fw->id.refuse, (size_t)fw->nrefuse_predicate)) continue;
             int other = lp_tuple_other(rn.v, rn.n, &at->id); if (other < 0) continue;
@@ -164,21 +322,59 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
             lp_frontier_reach(fr, &rn.v[other], &at->id, col_id(q, r, 1), cost, 0, at->hops + 1);
             Cell *cx = cell(fd, &rn.v[other]); cx->routes[R_SCAN]++; if (cost < cx->cost) { cx->cost = cost; if (!cx->has_r) { cx->r = rt; cx->has_r = 1; cx->via = at->id; cx->rel = rn.n >= 3 ? rn.v[1] : at->id; } }
         }
-        PQclear(q);
+        PQclear(q); free(ord);
     }
     lp_frontier_free(fr); lp_vec_free(&rn); args_free(&a);
 }
 
 /* ---- the proposals of a step, and their election */
 enum { P_FOLLOW, P_CHAIN };
-typedef struct { lp_id id; int kind, grounds, cont; double conf, hub; long times; int occ; } Prop;     /* occ: the occurrence a chain answers, or -1 */
-static int elect(const void *a, const void *b){                               /* grounded obligations, continuity, the conservative bound, the least shared */
+typedef struct { lp_id id; int kind, grounds, cont; double conf, hub; long times; int occ; int agree; long cooc, walk; Bits by[3]; } Prop;     /* occ: the occurrence a chain answers, or -1; by: which obligations each channel grounds */
+enum { CH_STRAND, CH_WALK, CH_BESIDE };
+/* A proposal against every word still owed, through every channel (the attention of a transformer, read from the
+ * records): a strand of the word reaches it (the field's support), the word's walkers stand on it, it is observed beside
+ * the word more than its base rate. grounds: what the union owes, weighed by role; agree: how many channels ground
+ * anything; cooc, walk: how often, over the words owed. */
+static void weigh_prop(const State *st, const Field *fd, Prop *p){
+    const Cell *x = cell_find(fd, &p->id); memset(p->by, 0, sizeof p->by); p->cooc = p->walk = 0;
+    int atom = lp_tier0_codepoint(T0, &p->id) >= 0;                          /* a letter, a space, a mark: it may continue a run, it grounds nothing */
+    for (int j = 0; j < st->npos; j++) { if (lp_id_eq(&st->occ[j], &p->id)) continue;
+        int v = visits(st, &p->id, j), b = beside(st, j, &p->id); p->walk += v; p->cooc += b;      /* how the whole trajectory so far, prompt and emitted, attends to it */
+        if (atom || j >= st->nocc || !((st->open.w[j >> 6] >> (j & 63)) & 1)) continue;            /* grounding: only what is still owed, and only by a composition */
+        if (x && ((x->support.w[j >> 6] >> (j & 63)) & 1)) bit_set(&p->by[CH_STRAND], j);
+        if (v >= 2) bit_set(&p->by[CH_WALK], j);
+        if (beside_grounds(st, j, &p->id)) bit_set(&p->by[CH_BESIDE], j); }
+    Bits u; memset(&u, 0, sizeof u); p->agree = 0;
+    for (int c = 0; c < 3; c++) { int any = 0; for (int w = 0; w < MAXOCC / 64; w++) { u.w[w] |= p->by[c].w[w]; any |= p->by[c].w[w] != 0; } p->agree += any; }
+    if (p->kind == P_CHAIN && p->occ >= 0) bit_set(&u, p->occ);              /* a chain's answer grounds the word it answers */
+    p->grounds = owed(&u, &st->open);
+}
+static const Firmware *ELECT;
+static int key_cmp(const Prop *x, const Prop *y, int k){                      /* -1: x first */
+    switch (k) {
+    case FW_E_GROUNDS:    return x->grounds != y->grounds ? (x->grounds > y->grounds ? -1 : 1) : 0;
+    case FW_E_CONTINUITY: return x->cont != y->cont ? (x->cont > y->cont ? -1 : 1) : 0;
+    case FW_E_AGREE:      return x->agree != y->agree ? (x->agree > y->agree ? -1 : 1) : 0;
+    case FW_E_COOCCUR:    return x->cooc != y->cooc ? (x->cooc > y->cooc ? -1 : 1) : 0;
+    case FW_E_WALKS:      return x->walk != y->walk ? (x->walk > y->walk ? -1 : 1) : 0;
+    case FW_E_CONFIDENCE: return x->conf != y->conf ? (x->conf > y->conf ? -1 : 1) : 0;
+    case FW_E_SHARED:     return x->hub != y->hub ? (x->hub < y->hub ? -1 : 1) : 0;
+    } return 0;
+}
+static int elect(const void *a, const void *b){                               /* the firmware's election order, key by key; then the ID */
     const Prop *x = a, *y = b;
-    if (x->grounds != y->grounds) return y->grounds - x->grounds;
-    if (x->cont != y->cont) return y->cont - x->cont;
-    if (x->conf != y->conf) return x->conf < y->conf ? 1 : -1;
-    if (x->hub != y->hub) return x->hub > y->hub ? 1 : -1;
+    for (int i = 0; i < ELECT->nelect; i++) { int c = key_cmp(x, y, ELECT->elect[i]); if (c) return c; }
     return memcmp(&x->id, &y->id, 16);
+}
+/* Whether the evidence cannot tell y from x: every key of the election equal, the walks' counts within the firmware's
+ * standard errors of each other (a count of n walkers' visits is uncertain by about its square root), and confidence
+ * within the firmware's temperature. */
+static int cannot_tell(const Prop *x, const Prop *y, const Firmware *fw){
+    for (int i = 0; i < fw->nelect; i++) { int k = fw->elect[i];
+        if (k == FW_E_WALKS) { if (fabs((double)x->walk - (double)y->walk) > fw->sure * sqrt((double)x->walk + (double)y->walk)) return 0; continue; }
+        if (k == FW_E_CONFIDENCE) { if (fabs(x->conf - y->conf) > fw->top_within) return 0; continue; }
+        if (key_cmp(x, y, k)) return 0; }
+    return 1;
 }
 /* ---- ORIENT: the joint interpretation (Sequence 20.3; INVENTION §7, "Joint interpretation before policy"). A winning
  * interpretation is a jointly compatible subgraph, not the definition with the largest global score. A word's readings
@@ -205,32 +401,62 @@ static int mapped(const lp_highway *h, const Cand *a, const Cand *b){        /* 
 static int holds_with(const lp_highway *h, const Cand *a, const Cand *b){
     return (a->list == b->list && a->slot == b->slot) || mapped(h, a, b) || mapped(h, b, a);
 }
-static int orient(State *st, Field *fd, Bind *bind, int *nambig){
-    const lp_highway *h = lp_highway_map(NULL); *nambig = 0;
+static const Field *CAND_FD;
+static int cand_by_id(const void *a, const void *b){ return memcmp(&CAND_FD->c[((const Cand *)a)->cell].id, &CAND_FD->c[((const Cand *)b)->cell].id, 16); }
+/* How the positions in [0, upto), other than i, reach a reading: their walkers' visits, weighed by how hard each pulls,
+ * and how many of their strands reach it. */
+static void reach_of(const State *st, const Cell *x, int i, int upto, double *walks, int *strands){
+    *walks = 0; *strands = 0;
+    for (int j = 0; j < upto; j++) { if (j == i || !st->composed[j] || st->role[j] <= 0) continue;
+        *walks += st->role[j] * visits(st, &x->id, j); *strands += (int)((x->support.w[j >> 6] >> (j & 63)) & 1); }
+}
+/* Every position's readings, once: the types its own strands reach, in content order. */
+typedef struct { const lp_highway *h; Cand *cand; int nc, *first; } Readings;
+static void readings_build(State *st, Field *fd, Bind *bind, Readings *R){
+    R->h = lp_highway_map(NULL); R->cand = NULL; R->nc = 0; R->first = calloc((size_t)st->nocc + 1, sizeof(int)); int cc = 0;
     for (int i = 0; i < st->nocc; i++) { memset(&bind[i], 0, sizeof bind[i]); bind[i].choice = -1; }
-    if (!h) return 0;
-    Cand *cand = NULL; int nc = 0, cc = 0, *first = calloc((size_t)st->nocc + 1, sizeof(int));
-    for (int i = 0; i < st->nocc; i++) { first[i] = nc;
+    if (!R->h) return;
+    for (int i = 0; i < st->nocc; i++) { R->first[i] = R->nc;
         if (!st->composed[i] || st->role[i] <= 0) continue;
         for (int z = 0; z < fd->n; z++) { const Cell *x = &fd->c[z]; int list; uint32_t slot;
-            if (!x->routes[R_CLAIM] || !((x->support.w[i >> 6] >> (i & 63)) & 1) || !reading_of(h, &x->id, &list, &slot)) continue;
-            if (lp_highway_bank_of(h, &x->rel, NULL)) continue;                       /* reached through a feature (a dependency, a part of speech): syntax, not a reading */
-            { size_t c_ = (size_t)cc; lp_reserve((void **)&cand, &c_, (size_t)nc + 1, sizeof(Cand)); cc = (int)c_; } cand[nc++] = (Cand){ z, i, list, slot }; }
-        bind[i].ncand = nc - first[i]; }
-    first[st->nocc] = nc;
+            if (!x->routes[R_CLAIM] || !((x->support.w[i >> 6] >> (i & 63)) & 1) || !reading_of(R->h, &x->id, &list, &slot)) continue;
+            if (lp_highway_bank_of(R->h, &x->rel, NULL)) continue;                   /* reached through a feature (a dependency, a part of speech): syntax, not a reading */
+            { size_t c_ = (size_t)cc; lp_reserve((void **)&R->cand, &c_, (size_t)R->nc + 1, sizeof(Cand)); cc = (int)c_; } R->cand[R->nc++] = (Cand){ z, i, list, slot }; }
+        bind[i].ncand = R->nc - R->first[i];
+        CAND_FD = fd; if (bind[i].ncand > 1) qsort(R->cand + R->first[i], (size_t)bind[i].ncand, sizeof(Cand), cand_by_id); }   /* in content order, not as the rows came */
+    R->first[st->nocc] = R->nc;
+}
+/* The reading position i takes against the positions in [0, upto) other than i: how many of them hold together with it
+ * (a position's chosen reading, or any of its readings while it has none chosen), weighed by how hard each pulls; two
+ * level there told apart by what reaches each from those positions, the walks within their error. -1: none holds.
+ * Returns a candidate's index in R. */
+static int reading_for(const State *st, const Field *fd, const Bind *bind, const Readings *R, int i, int upto, double *score, int *level){
+    double best = 0, bw = 0; int pick = -1, lvl = 0, bs = 0;
+    for (int a = R->first[i]; a < R->first[i] + bind[i].ncand; a++) { double s = 0;
+        for (int j = 0; j < upto; j++) { if (j == i || !bind[j].ncand) continue; int hold = 0;
+            if (bind[j].choice >= 0) hold = holds_with(R->h, &R->cand[a], &R->cand[bind[j].choice]);
+            else for (int c = R->first[j]; c < R->first[j] + bind[j].ncand && !hold; c++) hold = holds_with(R->h, &R->cand[a], &R->cand[c]);
+            s += hold * st->role[j]; }
+        double w; int sn; reach_of(st, &fd->c[R->cand[a].cell], i, upto, &w, &sn);
+        if (s > best) { best = s; pick = a; lvl = 0; bw = w; bs = sn; }
+        else if (s == best && s > 0) {
+            double tol = st->fw->sure * sqrt(w + bw);
+            if (w > bw + tol || (!(bw > w + tol) && sn > bs)) { pick = a; lvl = 0; bw = w; bs = sn; }
+            else if (!(bw > w + tol) && sn == bs) lvl = 1; } }
+    *score = best; *level = lvl; return pick;
+}
+/* ORIENT, consolidated: from the readings READ chose position by position, every position again against all the
+ * others, round after round until no choice changes. The disposition: how many owed positions are bound, how many
+ * stay level (ambiguous). bind[].choice becomes the reading's cell. */
+static int orient(State *st, Field *fd, Bind *bind, const Readings *R, int *nambig){
+    *nambig = 0; if (!R->h) return 0;
     for (int round = 0; round < 8; round++) { int changed = 0;
-        for (int i = 0; i < st->nocc; i++) { if (!bind[i].ncand) continue; double best = 0; int pick = -1, level = 0;
-            for (int a = first[i]; a < first[i] + bind[i].ncand; a++) { double s = 0;
-                for (int j = 0; j < st->nocc; j++) { if (j == i || !bind[j].ncand) continue; int hold = 0;
-                    if (round && bind[j].choice >= 0) hold = holds_with(h, &cand[a], &cand[bind[j].choice]);
-                    else if (!round) for (int b = first[j]; b < first[j] + bind[j].ncand && !hold; b++) hold = holds_with(h, &cand[a], &cand[b]);
-                    s += hold * st->role[j]; }
-                if (s > best) { best = s; pick = a; level = 0; } else if (s == best && s > 0) level = 1; }
-            if (pick != bind[i].choice) { bind[i].choice = pick; changed = 1; } bind[i].score = best; bind[i].level = level; }
-        if (round && !changed) break; }
+        for (int i = 0; i < st->nocc; i++) { if (!bind[i].ncand) continue; double sc; int lv;
+            int pick = reading_for(st, fd, bind, R, i, st->nocc, &sc, &lv);
+            if (pick != bind[i].choice) { bind[i].choice = pick; changed = 1; } bind[i].score = sc; bind[i].level = lv; }
+        if (!changed) break; }
     int bound = 0; for (int i = 0; i < st->nocc; i++) { int owes = (st->open.w[i >> 6] >> (i & 63)) & 1;
-        if (bind[i].choice >= 0) { bound += owes; if (bind[i].level && owes) (*nambig)++; bind[i].choice = cand[bind[i].choice].cell; } }
-    free(cand); free(first);
+        if (bind[i].choice >= 0) { bound += owes; if (bind[i].level && owes) (*nambig)++; bind[i].choice = R->cand[bind[i].choice].cell; } }
     return bound;
 }
 int cmd_turn(int argc, char **argv){
@@ -239,10 +465,10 @@ int cmd_turn(int argc, char **argv){
                                             { "--seed", 'l', &seedv }, { "--read", 'b', &read_only }, { NULL } });      /* --read: a read, nothing is witnessed */
     if (a >= argc) { fprintf(stderr, "usage: laplace turn [-d conninfo] [--firmware FILE] [--as USER] [--session NAME] [--seed N] [--read] prompt\n"); return 2; }
     if (!user || !*user) user = "user"; if (!session) session = "session";
-    double T = now(); unsigned seed = seedv >= 0 ? (unsigned)seedv : (unsigned)(T * 1e6);
-    Firmware fw = firmware_for(fwp, FW_PULL);
+    double T = now();
+    Firmware fw = firmware_for(fwp, FW_PULL); ELECT = &fw;
     tier0_open(NULL); table_init(); ctx_open(1); lp_text *c = lp_text_new(T0);
-    State *st = calloc(1, sizeof(State)); st->fw = &fw; st->c = c; st->seed = seed;
+    State *st = calloc(1, sizeof(State)); st->fw = &fw; st->c = c;
     st->pg = db_read(conninfo); st->rd = reader_new(st->pg);
     firmware_ids(&fw);
     firmware_say(&fw, FW_PULL);
@@ -266,6 +492,13 @@ int cmd_turn(int argc, char **argv){
         LoadStats ls = { 0 }; if (load(conninfo, 2, &pf, 1, &ls)) return 1; st->admitted = ls.ent_rows;
         TABLE_EACH(x) x->keep = 0;                                            /* recorded now: the turn's witnessing finds it, and writes it again nowhere */
     }
+    /* the seed: BLAKE3 of the observation and the firmware's text (and, when the firmware says so, the session and the
+     * turn), or of --seed: the same prompt under the same firmware draws the same, and the receipt can say from what */
+    { blake3_hasher h; blake3_hasher_init(&h);
+      if (seedv >= 0) { int64_t sv = seedv; blake3_hasher_update(&h, &sv, sizeof sv); }
+      else { blake3_hasher_update(&h, &pr.id, 16); FILE *ff = fopen(fw.path, "rb"); if (ff) { char b[4096]; size_t k; while ((k = fread(b, 1, sizeof b, ff)) > 0) blake3_hasher_update(&h, b, k); fclose(ff); }
+             if (fw.seed_session) { blake3_hasher_update(&h, &handle.id, 16); int32_t od = ordinal; blake3_hasher_update(&h, &od, sizeof od); } }
+      blake3_hasher_finalize(&h, st->seed, 32); }
     resolve_roles(st); ROLE = st->role;
     memcpy(st->traj, st->occ, sizeof(lp_id) * (size_t)st->nocc); st->ntraj = st->nocc;
     for (int i = 0; i < st->nocc; i++) reader_want(st->rd, &st->occ[i]);
@@ -282,7 +515,40 @@ int cmd_turn(int argc, char **argv){
       nnear = couple(st, &fd, st->occ, st->nocc, oo, R_CLAIM, near, 8); couple(st, &fd, &st->prompt, 1, &none, R_CLAIM, NULL, 0); couple(st, &fd, st->disc, st->ndisc, NULL, R_DISCOURSE, NULL, 0);
       for (int i = 0; i < st->nocc; i++) { Cell *x = cell_find(&fd, &st->occ[i]); if (x) x->force = 0; }      /* the prompt's own words are not what it is about */
       int routes[R_KINDS] = { 0 }; for (int z = 0; z < fd.n; z++) for (int k = 0; k < R_KINDS; k++) routes[k] += fd.c[z].routes[k];
-      printf("COUPLE     %d entities respond:", fd.n); for (int k = 0; k < R_KINDS; k++) if (routes[k]) printf(" %d by %s", routes[k], RK[k]); printf("   (%.1f ms)\n", (now() - t) * 1000); }
+      printf("COUPLE     %d entities respond:", fd.n); for (int k = 0; k < R_KINDS; k++) if (routes[k]) printf(" %d by %s", routes[k], RK[k]); printf("   (%.1f ms)\n", (now() - t) * 1000);
+      st->npos = st->nocc; t = now(); walk(st, 0, st->nocc); char sd[17]; for (int k = 0; k < 8; k++) snprintf(sd + 2 * k, 3, "%02x", st->seed[k]);
+      printf("           walks: %d from each word, %d steps, seed %s: %llu steps taken, %llu home, %zu entities stood on, %d read   (%.1f ms)\n", fw.walks, fw.steps, sd,
+             (unsigned long long)st->walk_steps, (unsigned long long)st->walk_homes, st->walk_at ? lp_idmap_count(st->walk_at) : (size_t)0, st->walk_read, (now() - t) * 1000);
+      t = now(); context(st, 0, st->nocc); int nctx = 0, nhub = 0; for (int i = 0; i < st->nocc; i++) { nctx += st->ctx_n[i]; nhub += st->ctx_hub[i]; }
+      printf("           context: %d observations hold the words (%d distinct), %d word%s held by more than the fan   (%.1f ms)\n", nctx, st->ctx_total, nhub, nhub == 1 ? "" : "s", (now() - t) * 1000); }
+    /* READ, position by position, in the prompt's order: what the fetches above hold is read the way the prompt is,
+     * each position's state depending on the positions before it. For each position: whether what came before
+     * predicted it (what follows the longest observed run ending just before it), its reading against the readings
+     * chosen before it, and the earlier positions it makes read otherwise (reanalysis). */
+    Bind *bind = calloc((size_t)st->nocc + 1, sizeof(Bind)); Readings R; readings_build(st, &fd, bind, &R);
+    { double t = now(); Args ra = { 0 }; arg_ids(&ra, st->occ, (size_t)st->nocc); arg_int(&ra, fw.fan);
+      PGresult *fq = ask_st(st, "SELECT i, j, paths, next, times FROM laplace_forward($1::blake3[], $2::bigint) ORDER BY j, i, times DESC, next", &ra);
+      int expected = 0, surprised = 0, revised = 0;
+      for (int p = 0; p < st->nocc; p++) {
+          char *w = reader_text(st->rd, &st->occ[p], 24); printf("READ %-3d   %-12s", p + 1, w); free(w);
+          /* expectation: the longest run ending at p - 1 that something follows, and whether it is followed by this */
+          if (p > 0) { int seg = -1; long times = -1, total = 0;
+              for (int r = 0; r < PQntuples(fq); r++) { int i_ = (int)col_int(fq, r, 0), j_ = (int)col_int(fq, r, 1); if (j_ != p || PQgetisnull(fq, r, 3) || col_int(fq, r, 2) > fw.fan) continue;
+                  if (seg < 0 || i_ < seg) { seg = i_; times = -1; total = 0; } if (i_ != seg) continue;
+                  long tm = (long)col_int(fq, r, 4); total += tm; if (lp_id_eq(col_id(fq, r, 3), &st->occ[p])) times = tm; }
+              if (seg < 0) printf(" nothing observed before it predicts what follows");
+              else if (times > 0) { expected++; printf(" expected after %d before it: %ld of %ld", p - seg + 1, times, total); }
+              else { surprised++; printf(" not what %d before it is observed followed by (%ld continuations)", p - seg + 1, total); } }
+          /* its reading, against the readings chosen before it; then the earlier positions it changes */
+          if (bind[p].ncand) { double sc; int lv; int pick = reading_for(st, &fd, bind, &R, p, p, &sc, &lv); bind[p].choice = pick; bind[p].level = lv;
+              if (pick >= 0) { reader_want(st->rd, &fd.c[R.cand[pick].cell].id); char *rt = reader_text(st->rd, &fd.c[R.cand[pick].cell].id, 40); printf("; reads %s%s (held with %.2f before it)", lv ? "level, e.g. " : "", rt, sc); free(rt); }
+              else printf("; %d reading%s, none held with what came before", bind[p].ncand, bind[p].ncand == 1 ? "" : "s"); }
+          printf("\n");
+          for (int j = 0; j < p; j++) { if (!bind[j].ncand) continue; double sc; int lv; int np_ = reading_for(st, &fd, bind, &R, j, p + 1, &sc, &lv);
+              if (np_ >= 0 && np_ != bind[j].choice) { revised++; reader_want(st->rd, &fd.c[R.cand[np_].cell].id); char *wj = reader_text(st->rd, &st->occ[j], 24), *rt = reader_text(st->rd, &fd.c[R.cand[np_].cell].id, 40);
+                  printf("           and %s now reads %s\n", wj, rt); free(wj); free(rt); bind[j].choice = np_; bind[j].level = lv; } } }
+      printf("           read: %d positions expected, %d not, %d readings revised   (%.1f ms)\n", expected, surprised, revised, (now() - t) * 1000);
+      PQclear(fq); args_free(&ra); }
     /* ORIENT, the frame: the observed curves nearest the prompt's under the firmware's shape measure. The prompt's words
      * the nearest holds are the frame the question is asked in; the words it does not hold, where the curves part, are
      * the slots, what the question is about. While the frame holds part of the prompt and leaves a slot, the slots are
@@ -301,8 +567,8 @@ int cmd_turn(int argc, char **argv){
           else printf("           %s\n", nframe ? "the nearest holds every word owed" : "the nearest holds none of the words owed: every word is owed"); } }
     for (int i = 0; i < nnear; i++) free(near[i].v);
     /* ORIENT: the joint interpretation; its bindings are the centres SCAN starts from and what a chain answers from */
-    Bind *bind = calloc((size_t)st->nocc + 1, sizeof(Bind)); int nambig = 0, nbound, ncentre = 0, capped = 0; lp_id centre[MAXOCC];
-    { double t = now(); nbound = orient(st, &fd, bind, &nambig);
+    int nambig = 0, nbound, ncentre = 0, capped = 0; lp_id centre[MAXOCC];
+    { double t = now(); nbound = orient(st, &fd, bind, &R, &nambig); free(R.cand); free(R.first);
       for (int i = 0; i < st->nocc; i++) { capped |= bind[i].capped; if (bind[i].choice >= 0 && !bind[i].level && ((st->open.w[i >> 6] >> (i & 63)) & 1)) centre[ncentre++] = fd.c[bind[i].choice].id;    /* the program routes from what is owed (Sequence 20.4) */ }
       int ambiguous_ = nambig > 0;
       printf("ORIENT     %s", !nbound ? (capped ? "resource-bounded: no joint binding among the candidates weighed" : "inconsistent: no reading of one word is compatible with a reading of another")
@@ -338,16 +604,28 @@ int cmd_turn(int argc, char **argv){
          * state: it orients and is scanned from, and is not output for being renderable. */
         Prop *pp = malloc(sizeof(Prop) * (size_t)(80)); int np = 0;
         Next nx[64]; int nn = follows(st, nx, 64);
-        for (int i = 0; i < nn; i++) { Prop p = { nx[i].id, P_FOLLOW, 0, nx[i].len, 0, 0, nx[i].times, -1 };
-            { const Cell *x = cell_find(&fd, &nx[i].id); if (x) { p.grounds = owed(&x->support, &st->open); p.conf = x->has_r ? lp_confidence(&x->r, fw.k) : 0; p.hub = x->hub; } }
-            pp[np++] = p; }
-        for (int q = 0; q < nchains; q++) { int o = chains[q].occ; if (!((st->open.w[o >> 6] >> (o & 63)) & 1)) continue; pp[np++] = chains[q]; }     /* a chain's answer, while its word is owed */
+        const lp_highway *hw = lp_highway_map(NULL);
+        for (int i = 0; i < nn; i++) { if (hw && lp_highway_bank_of(hw, &nx[i].id, NULL)) continue;   /* a bank's value (a part of speech, a relation) is a feature, never what is said */
+            Prop p; memset(&p, 0, sizeof p); p.id = nx[i].id; p.kind = P_FOLLOW; p.cont = nx[i].len; p.times = nx[i].times; p.occ = -1;
+            { const Cell *x = cell_find(&fd, &nx[i].id); if (x) { p.conf = x->has_r ? lp_confidence(&x->r, fw.k) : 0; p.hub = x->hub; } }
+            weigh_prop(st, &fd, &p); pp[np++] = p; }
+        for (int q = 0; q < nchains; q++) { int o = chains[q].occ; if (!((st->open.w[o >> 6] >> (o & 63)) & 1)) continue; Prop p = chains[q]; weigh_prop(st, &fd, &p); pp[np++] = p; }     /* a chain's answer, while its word is owed */
         if (!np) { free(pp); if (!nemit) disposition = ncentre ? "unresolved: nothing follows and nothing grounds what is open" : disposition; break; }
         /* STEER, SELECT */
         qsort(pp, (size_t)np, sizeof(Prop), elect);
         if (!pp[0].grounds && bit_count_and(&st->open, &st->open)) {            /* while obligations are open, what grounds none of them is not emitted (Sequence 20.8) */
             free(pp); if (!nemit) disposition = "unresolved: what follows grounds nothing that is owed"; break; }
-        int pick = 0; if (fw.top_within > 0) { int tied = 0; while (tied + 1 < np && pp[tied + 1].grounds == pp[0].grounds && pp[tied + 1].cont == pp[0].cont && pp[0].conf - pp[tied + 1].conf <= fw.top_within) tied++; pick = (int)(rand_r(&st->seed) % (unsigned)(tied + 1)); }
+        /* the evidence for the head of the election, as the trace's attention: each channel, the words it grounds */
+        for (int z = 0; z < np && z < 3; z++) { reader_want(st->rd, &pp[z].id); char *tz = reader_text(st->rd, &pp[z].id, 40);
+            printf("           %s \"%s\": grounds %.2f by %d channel%s (strand %d, walks %d, beside %d words), continuity %d, beside %ld, walks %ld, confidence %.3f\n", z ? "  then" : "elect", tz,
+                   pp[z].grounds / 1000.0, pp[z].agree, pp[z].agree == 1 ? "" : "s", bit_count_and(&pp[z].by[CH_STRAND], &pp[z].by[CH_STRAND]), bit_count_and(&pp[z].by[CH_WALK], &pp[z].by[CH_WALK]),
+                   bit_count_and(&pp[z].by[CH_BESIDE], &pp[z].by[CH_BESIDE]), pp[z].cont, pp[z].cooc, pp[z].walk, pp[z].conf); free(tz); }
+        int tied[80], nt = 0; for (int z = 0; z < np && nt < 80; z++) if (!z || cannot_tell(&pp[0], &pp[z], &fw)) tied[nt++] = z;
+        int pick = 0;
+        if (nt > 1) {                                                         /* nothing in the evidence tells these apart: the firmware's tie */
+            printf("           a tie: %d proposals the evidence cannot tell apart; the firmware %s\n", nt, fw.tie == FW_TIE_DRAW ? "draws" : fw.tie == FW_TIE_ASK ? "asks" : "takes the first by ID");
+            if (fw.tie == FW_TIE_DRAW) pick = tied[(int)(draw(st, 0x5e1ec7u, (uint32_t)step, 0) * nt)];
+            else if (fw.tie == FW_TIE_ASK) { free(pp); if (!nemit) disposition = "ambiguous: proposals the evidence cannot tell apart, and the firmware asks"; break; } }
         Prop sel = pp[pick]; free(pp);
         /* REALIZE */
         reader_want(st->rd, &sel.id); char *tx = reader_text(st->rd, &sel.id, 400);
@@ -360,6 +638,10 @@ int cmd_turn(int argc, char **argv){
         { const Cell *x = cell_find(&fd, &sel.id); if (x) bit_clear(&st->open, &x->support); }
         if (sel.kind == P_CHAIN && sel.occ >= 0) st->open.w[sel.occ >> 6] &= ~(1ull << (sel.occ & 63));        /* the word the chain answers is owed no longer */
         couple(st, &fd, &sel.id, 1, NULL, R_DISCOURSE, NULL, 0);
+        if (st->npos < MAXOCC && lp_tier0_codepoint(T0, &sel.id) < 0) {        /* a composition emitted: a position the next step attends to, its walkers and its context */
+            int q = st->npos++; st->occ[q] = sel.id; st->composed[q] = 1; st->role[q] = 1.0; double tw = now(); uint64_t before = st->walk_steps;
+            walk(st, q, q + 1); context(st, q, q + 1);
+            printf("           it walks: %llu steps, %d observations beside it   (%.1f ms)\n", (unsigned long long)(st->walk_steps - before), st->ctx_n[q], (now() - tw) * 1000); }
         if (sel.kind != P_FOLLOW && owed(&st->open, &st->open) <= (int)(fw.enough * owed0 + 0.5)) { disposition = bit_count_and(&st->open, &st->open) ? "complete: what is still owed is within what the firmware leaves open" : "complete: every obligation is grounded"; break; }
         disposition = bit_count_and(&st->open, &st->open) ? "open: obligations remain" : "complete: every obligation is grounded";
     }

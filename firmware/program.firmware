@@ -25,6 +25,15 @@
 #   role N VALUE...            a word of that VALUE pulls N as hard (0 to 1)
 #   shape frechet | outliers N | dtw | edr N
 #                              which shape of the tree to favor, and how many variable vertices a match may skip
+#   walks N                    a turn's walkers from each position (0: none); every draw is BLAKE3 of the seed and its place
+#   walkfan N                  a place holding more strands than this is reached by a walker, not crossed: it goes home
+#   steps N                    how many steps each walker takes
+#   restart P                  how often a walker goes home instead of stepping (0 to 1)
+#   sure N                     how many standard errors separate two counts of the walks; within them, nothing tells them apart
+#   lift N                     how much more often than its base rate a word is observed beside a position for that to ground it
+#   elect KEY...               the order the evidence is compared in: grounds continuity agree cooccur walks confidence shared
+#   tie first | draw | ask     what proposals the evidence cannot tell apart get: the first by ID, a draw, or a question
+#   seed observation | session the seed is the observation and this firmware's text, or those and the session and turn too
 #
 # An instruction set takes the steps of one operation of the forward pass: "for OPERATION", then the decisions that
 # hold for it, and for a pull the segments a step takes, in order:
@@ -78,6 +87,17 @@ for translate
 
 for pull
   fan 4096
+  # the evidence a turn weighs: walks from every position, how the trajectory so far attends to a proposal, and the
+  # election order over it; a tie is what nothing in the evidence tells apart, and this firmware takes the first by ID
+  walks 64
+  walkfan 512
+  steps 4
+  restart 0.25
+  sure 2
+  lift 2
+  elect grounds continuity agree cooccur walks confidence shared
+  tie first
+  seed observation
   # strands of a kind the pull does not navigate (Sequence: Web 15.x): a sentence's tag layers and an example's marked
   # arguments pull back their tags, not what the sentence is about. A default to be ruled on; the firmware is the inventor's.
   refuse predicate BNC PENN GF PT NER WSL Target Other Sent Verb Noun Adj Prep Adv UPOS XPOS DEPREL FEATS MISC LEMMA type n f itype

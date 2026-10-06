@@ -27,6 +27,8 @@ PGresult *db_ask(PGconn *, const char *sql, int n, const char *const *v, const i
 enum { FW_HOP, FW_SEARCH, FW_TRANSLATE, FW_FOLLOWS, FW_PULL, FW_OPS };
 enum { FW_FRECHET, FW_OUTLIERS, FW_DTW, FW_EDR };
 enum { FW_TAKE_FACT, FW_TAKE_SEGMENT, FW_TAKE_ATTESTATIONS, FW_TAKE_CONSTITUENTS, FW_TAKE_CHAIN };
+enum { FW_TIE_FIRST, FW_TIE_DRAW, FW_TIE_ASK };
+enum { FW_E_GROUNDS, FW_E_CONTINUITY, FW_E_AGREE, FW_E_COOCCUR, FW_E_WALKS, FW_E_CONFIDENCE, FW_E_SHARED, FW_E_KEYS };
 #define FW_CHAIN 8
 #define FW_ALTS 4
 #define FW_NAMES 32
@@ -42,6 +44,11 @@ typedef struct {
     double fact;                                      /* the trust at which a curated member is returned as one fact; above 1: never */
     int order_witness;                                /* on an open claim, the witness's own order before the standing */
     int shape; double shape_n;
+    int walks, steps, walk_fan; double restart;                 /* walkers from each word, the steps each walks, how often one goes home: the walks' share of the evidence */
+    double sure;                                      /* how many standard errors of the walks separate two counts; within them, the walks cannot tell two apart */
+    double lift;                                      /* how much more often than its base rate a word must be observed beside an occurrence to ground it */
+    int elect[FW_E_KEYS], nelect;                     /* the election order: the evidence keys a proposal is compared by, first to last */
+    int tie, seed_session;                            /* what a real tie gets (first, draw, ask); whether the seed holds the session and turn */
     char refuse_predicate[FW_NAMES][96], refuse_witness[FW_NAMES][96]; int nrefuse_predicate, nrefuse_witness;
     struct { int what, n; } take[FW_TAKES]; int ntake; /* a pull's steps, in order */
     char weigh_name[FW_WEIGHS][96]; double weigh[FW_WEIGHS]; int nweigh;
@@ -71,7 +78,8 @@ void   weighed(lp_text *, const Firmware *, Claim *, int n);
 typedef struct Reader Reader;
 double role_of(PGconn *, Firmware *, const lp_id *word);                                  /* how hard a word pulls, by its role; -1 when nothing says */
 void   take_top(Claim *, int n, int want, const Firmware *, unsigned *seed);              /* the top, or as near a tie as the firmware allows (seed NULL: the top) */
-int    chain_follow(PGconn *, Reader *, Firmware *, const lp_id *word, const lp_id *reading, unsigned *seed, lp_id *answer, Claim *last, int *alt);                             /* each claim's confidence by its weight, and the set in that order */                  /* what the firmware refuses, taken out */
+typedef int (*ChainFork)(void *ctx, const Claim *cl, int n);           /* at a fork of a chain: the branch to take, or -1 for the chain's own order */
+int    chain_follow(PGconn *, Reader *, Firmware *, const lp_id *word, const lp_id *reading, unsigned *seed, ChainFork fork, void *fork_ctx, lp_id *answer, Claim *last, int *alt);                             /* each claim's confidence by its weight, and the set in that order */                  /* what the firmware refuses, taken out */
 
 /* ---- commands */
 int cmd_ingest(int argc, char **argv);
