@@ -257,7 +257,7 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  const STree *tc_tree; uint32_t tc_n, tc_cap; Ref *tc; uint8_t *ts;
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
-                 Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int16_t *dm; uint32_t dm_cap;
+                 Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int32_t wide_of; int16_t *dm; uint32_t dm_cap;
                  struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; } Sink;          /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
@@ -680,7 +680,7 @@ static uint32_t wide(Sink *k, const STree *t, int32_t g, int speaks){
     if (k->ix_tree != t || k->ix_count != t->count) index_keys(k, t);      /* built once, read by every thread */
     uint32_t *a, *b; size_t n = runs_of(t, g, &a, &b); Sink *w = calloc(n, sizeof(Sink));
     #pragma omp taskloop grainsize(1)
-    for (size_t i = 0; i < n; i++) { Tls was = tls_save(t, k->dm); worker_of(&w[i], k); Pend pd[64]; int np = 0;
+    for (size_t i = 0; i < n; i++) { Tls was = tls_save(t, k->dm); worker_of(&w[i], k); w[i].wide_of = g; Pend pd[64]; int np = 0;
         unit_range(&w[i], t, a[i], b[i], speaks, pd, &np); while (np) { np--; together(&w[i], pd[np].e0, pd[np].has ? &pd[np].about : NULL); }
         tls_back(&was); }
     for (size_t i = 0; i < n; i++) sink_merge(k, &w[i]);
@@ -705,6 +705,9 @@ static uint32_t entities_wide(Sink *k, const STree *t, int32_t g, Ref *kid){
 static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int speaks, Pend *pend, int *npp){
     const Say *s = k->s; int np_ = *npp;
     for (uint32_t g = g0; g < g1; g++) { const SNode *x = &t->n[g];
+        /* a part of a wide part is a part of its own: what it says is said once in it (said_already), never once in the run
+         * of parts a worker happens to read, whose bounds are the number of threads (runs_of): the same claims on any machine */
+        if (k->worker && x->parent == k->wide_of) { k->cs_epoch++; k->cs_n = 0; }
         while (np_ && pend[np_ - 1].end < (int32_t)g) { np_--; together(k, pend[np_].e0, pend[np_].has ? &pend[np_].about : NULL); }
         if (x->kind == S_NOTE || x->kind == S_VALUE) { const Dis *d = dis_of(s, x);
             if (d && d->what == D_METADATA && !left_empty(s, x)) { Ref p[2] = { string_ref(x->name, x->nlen), text_of(x->val, x->vlen) }; Ref m = said_tuple(compose(p, 2, ref_above(p, 2))); push(&k->meta, &m); }
