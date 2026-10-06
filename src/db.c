@@ -637,13 +637,18 @@ static int merge_leaf(PGconn *w, PGconn *rd, const MLeaf *L, uint64_t *rows){
      * not row by row: with the referential triggers out of the writers' transaction, this is what keeps the ordering
      * honest. A path is partitioned by its entity, so the entity is in the entity leaf of the same range, written by
      * this writer before any of its paths (entities first) and visible to it. A path without an entity fails the
-     * merge, which rolls back whole. */
+     * merge, which rolls back whole. The trigger also held each entity against a delete until the commit; the set
+     * check reads a snapshot, so the entity leaf is held as a whole instead (forget deletes entities by leaf): the
+     * writer that holds the range takes nothing from itself, and a delete waits for the merge. */
     if (!bad && L->table == M_PHYS) {
-        snprintf(sql, sl, "SELECT count(*) FROM stage.%s s WHERE NOT EXISTS (SELECT 1 FROM public.entity_%s e WHERE e.id = s.entity)", L->name, strrchr(L->name, '_') + 1);
-        PGresult *q = PQexec(w, sql);
-        if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "merge %s, paths and their entities: %s", L->name, PQerrorMessage(w)); bad = 1; }
-        else if (strcmp(PQgetvalue(q, 0, 0), "0")) { fprintf(stderr, "merge %s: %s paths name an entity that is not recorded: the system is wrong\n", L->name, PQgetvalue(q, 0, 0)); bad = 1; }
-        PQclear(q); }
+        const char *range = strrchr(L->name, '_') + 1;
+        snprintf(sql, sl, "LOCK TABLE public.entity_%s IN SHARE ROW EXCLUSIVE MODE", range); bad = !must(w, sql);
+        if (!bad) {
+            snprintf(sql, sl, "SELECT count(*) FROM stage.%s s WHERE NOT EXISTS (SELECT 1 FROM public.entity_%s e WHERE e.id = s.entity)", L->name, range);
+            PGresult *q = PQexec(w, sql);
+            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "merge %s, paths and their entities: %s", L->name, PQerrorMessage(w)); bad = 1; }
+            else if (strcmp(PQgetvalue(q, 0, 0), "0")) { fprintf(stderr, "merge %s: %s paths name an entity that is not recorded: the system is wrong\n", L->name, PQgetvalue(q, 0, 0)); bad = 1; }
+            PQclear(q); } }
     if (!bad) { snprintf(sql, sl, "TRUNCATE stage.%s", L->name); bad = !must(w, sql); }
     free(sql); free(cols); return bad;
 }
