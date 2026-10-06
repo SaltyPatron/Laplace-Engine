@@ -86,6 +86,15 @@ set_target_properties(laplace_engine PROPERTIES BUILD_RPATH "${LAPLACE_ICU_DIR}/
 if(NOT WIN32)
   target_link_options(laplace_engine PRIVATE -rdynamic)
 endif()
+if(WIN32)
+  # The process a source is ingested in (os_run_logged): how it is started, what it inherits, how its end is read.
+  enable_testing()
+  add_executable(os_run tests/os_run.c src/os.c)
+  target_include_directories(os_run BEFORE PRIVATE src/win src ${LAPLACE_NATIVE}/src)
+  target_compile_options(os_run PRIVATE ${LP_C_FLAGS})
+  target_link_libraries(os_run PRIVATE shlwapi)
+  add_test(NAME os_run COMMAND os_run)
+endif()
 # oneTBB's scalable allocator in place of malloc for the whole program (Research/Performance.md: tree-sitter allocates
 # every node of every parse; with glibc's arenas twelve threads parsing at once waited on malloc). Unicode's parse:
 # 21.8 s -> 13.4 s.
