@@ -121,16 +121,40 @@ So:
   (`n`, `.n`, `NOUN`) is recorded as written and sets the same slot; nothing is blanketed across tiers it was not
   asserted at, and a mask miss is never absence.
 - **A repeat is games, not rows.** If WordNet says a dog is a noun 30 times, that is one attestation with 30 games:
-  a witness that asserts one claim n times gives one attestation of n games with a score, Glicko-2 plays that series
-  as the witness's rating period, and the client folds the source's repeats so the database takes one update per
-  claim per witness. Run length is content structure only, identical consecutive children in a path; it attests
+  a witness that asserts one claim n times gives one attestation of n games with a score, and the client folds the
+  source's repeats and solves that series as one update, so the database takes one update per claim per witness: the
+  rating where the claim's prior standing and the series' score agree (the log posterior is concave, so bisection on
+  its slope converges), with the deviation from the series' games. It is not Glicko-2's single period step, one
+  linearized move that is fine for small moves and wrong for a long series: a 450 player against a 3400 player, 1000
+  games, 100 wins and 100 draws, score 0.15, played game by game converges to 3100 with deviation 15; solved as one
+  update, 3092 with deviation 16; one period step from 450 gives 105,823. Run length is content structure only, identical consecutive children in a path; it attests
   nothing. A number the source states (a usage count, a sense's order) is content, an observation, never games.
   Packaging is not the source asserting again: a cross-product layout or an automatic tagger's per-token output
   repeating one fact is not the source saying it again (UD EWT's README says its UPOS and features were mainly
   assigned automatically). As built (`db.c`), a claim plays one Glicko-2 matchup at the witness's trust the first
   time a witness lineage attests it, at that attestation's score; every later attestation of it by that lineage, in
   the same file, a later batch or a later ingestion, plays no matchup and adds a game to the attestation row, whose
-  score is the mean over its games.
+  score is the mean over its games: an attestation's games are counted and never played.
+- **Trust bounds a vote; count is never independence.** Each game's outcome is pulled toward a draw by the witness's
+  trust, `s_eff = 0.5 + t(s - 0.5)`, so no repetition takes a source past its trust's ceiling, symmetrically for
+  affirmation and refutation, and one witness alone gives a claim only bounded certainty. Witnesses sharing a
+  dependence root or a trust class count as one root, capped; a prompt is an observation and attests nothing by being
+  said. A witness's trust is its own rating, from its class's default, earned only through independent agreement and
+  verified outcomes, never by repeating itself. As built, `lp_attest` plays every witness as a fixed 1500 opponent
+  whose trust sets only its deviation, and a claim enters at that deviation, so an affirming series leaves a claim
+  higher the lower the trust (1000 games: trust 0.2 ends at 3235, trust 0.9 at 1884). A recipe says nothing of trust
+  beyond its source's class.
+- **A relation is meaning, never a field name.** A field, column, attribute or layer name never becomes a relation:
+  what a claim relates is what the source means, resolved through the road classes. A tagset value is a value of its
+  tagset with its attested equivalence to the shared vocabulary (FrameNet's BNC layer `NN1` is a CLAWS C5 singular
+  common noun, its PENN layer `nns` a Penn Treebank plural common noun, each reaching `NOUN` through that
+  equivalence). A per-span label (a frame element, grammatical function or phrase type in one sentence's annotation)
+  goes in the sentence's layer, never on the word. A pointer's attribute name (`feID`, `ID`) never appears in a claim.
+  As built, `attest` and `relate` record `[cell, column header, value]`: `framenet.recipe`'s `relate label ^/name to
+  name by cBy` gives `[dog, BNC, NN1]` and `[dog, GF, Head]`, `attest label itype feID` gives `[dog, feID, Animals,
+  Animal]`, `attest lexUnit POS` gives `[dog.n, POS, N]`, and `matrix.recipe`'s `attest row *` gives `[pred, role,
+  10_VN_ROLE, vn:Theme]`. Where the source documents what a field means, report it; where it does not, report the
+  field as unresolved rather than guess.
 
 These are stated design for recipe authors. The engine does not do all of them yet: read a file this way, and
 report where a recipe cannot say it.
@@ -248,7 +272,8 @@ Your final report, in plain text, per set:
 6. Engine features that are missing, each with three raw lines of data that need it.
 
 Do not summarize what the data "means". Do not propose schema changes. As built there are five database tables
-(entity, physicality, witness, attestation, consensus). The target is provenance by containment under the source's
+(entity, physicality, witness, attestation, consensus); a physicality is the entity's row, keyed by its ID, with no
+identity of its own, and attestations are of entities only. The target is provenance by containment under the source's
 trunk, with standing stored in one table keyed by the claim (Laplace-Engine#22); the per-claim, per-witness attestation
 rows stay until a working prototype on real data shows containment answers everything they answer with nothing lost. A
 recipe is written the same for both.
