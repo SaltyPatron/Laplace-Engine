@@ -70,6 +70,13 @@ const char *refuse_param(int *len){
     *len = refuse_len; return (const char *)refuse_ab;
 }
 void arg_refused(Args *a){ int l; const char *p = refuse_param(&l); arg_raw(a, p, (size_t)l); }
+/* Whether a claim holds a refused predicate between its first part and its last: the check the reads make in SQL. */
+static int middle_refused(const lp_id *part, int np){
+    static lp_id id[FW_NAMES]; static int ready = -1;
+    if (ready != nrefuse_names) { lp_text *c = lp_text_new(T0); for (int i = 0; i < nrefuse_names; i++) id[i] = entity_named(c, refuse_names[i], NULL, 0, NULL).id; lp_text_free(c); ready = nrefuse_names; }
+    for (int p = 1; p + 1 < np; p++) for (int i = 0; i < nrefuse_names; i++) if (!memcmp(&part[p], &id[i], 16)) return 1;
+    return 0;
+}
 
 /* The claims that hold the given parts in their places (a part not given is open): at most fan of them; *capped says
  * there were more. k: how many deviations below its rating a claim is read at. */
@@ -224,7 +231,7 @@ int cmd_hop(int argc, char **argv){
     if (a >= argc || (argc - a != 1 && argc - a != 3)) {
         fprintf(stderr, "usage: laplace hop [-d conninfo] [-n N] [--firmware FILE] text\n"
                         "       laplace hop [...] first middle last             with ? for a part left open: laplace hop was UPOS ?\n"); return 2; }
-    double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_connect(conninfo);
+    double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_read(conninfo);
     int n, capped, whole = argc - a == 1; Claim *cl; lp_ref e; double t;
     if (whole) { e = entity_named(c, argv[a], NULL, 0, NULL); show_ref("entity", &e); t = now(); cl = claims_of(pg, &e.id, fan, k, &n, &capped); }
     else {
@@ -340,7 +347,7 @@ int cmd_translate(int argc, char **argv){
     Firmware fw = firmware_for(fwp, FW_TRANSLATE); int fan = fw.fan; read_k = fw.k;
     if (argc - a < 3) { fprintf(stderr, "usage: laplace translate [-d conninfo] [-n concepts] word from to...\n       languages as the resources write them: en de fr ja\n"); return 2; }
     if (fw.nup < 2 || !fw.language[0][0]) { fprintf(stderr, "%s: for translate, the firmware names no way up to a concept and back down (up RELATION..., language HELD SAYS)\n", fw.path); return 2; }
-    double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_connect(conninfo); Reader *rd = reader_new(pg);
+    double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_read(conninfo); Reader *rd = reader_new(pg);
     const lp_id word = entity_named(c, argv[a], NULL, 0, NULL).id; const char *from = argv[a + 1]; int last = fw.nup - 1, steps = 0;
     lp_id up[FW_CHAIN], held = entity_named(c, fw.language[0], NULL, 0, NULL).id, says = entity_named(c, fw.language[1], NULL, 0, NULL).id, gloss = { { 0 } };
     for (int s = 0; s <= last; s++) up[s] = entity_named(c, fw.up[s], NULL, 0, NULL).id; if (fw.gloss[0]) gloss = entity_named(c, fw.gloss, NULL, 0, NULL).id;
@@ -438,7 +445,7 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
     for (int j = 0; j < rows; j++) { uint64_t o; memcpy(&o, PQgetvalue(q, j, 0), 8); held[__builtin_bswap64(o) - 1]++; }
     for (int j = 0; j < rows; j++) {
         uint64_t o; memcpy(&o, PQgetvalue(q, j, 0), 8); int e = (int)(__builtin_bswap64(o) - 1); const lp_reached *at = &closed[who[e]];
-        if (held[e] > fan && memcmp(&at->id, &sd->origin, 16)) continue;                  /* a hub: reached, not crossed */
+        if (held[e] > fan) continue;                                                       /* a hub: reached, not crossed (the origin is read below) */
         lp_id part[3], claim; if (decode_claim(PQgetvalue(q, j, 2), PQgetlength(q, j, 2), part) != 3) continue;
         const lp_id *other;                                                                /* a claim ties its subject to its object */
         if (!memcmp(&part[0], &at->id, 16)) other = &part[2];
@@ -451,6 +458,21 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
         lp_frontier_reach(sd->f, other, &at->id, &claim, at->cost + lp_cost(&r, k, per_hop) - log(sw), 0, at->hops + 1);
     }
     for (int e = 0; e < m; e++) if (held[e] > fan && memcmp(&ids[e], &sd->origin, 16)) { w->hubs++; hub[who[e]] = 1; }
+    /* The origin is crossed even when it is a hub: a search from a part of speech has to leave it. What the index gave
+     * past the fan is whatever its scan met first, so the origin is read whole and the fan keeps its hardest pulling,
+     * the same set on every install of the same content (claims_of: in content order, by confidence). */
+    for (int e = 0; e < m; e++) if (held[e] > fan && !memcmp(&ids[e], &sd->origin, 16)) {
+        const lp_reached *at = &closed[who[e]]; int nc, capped; Claim *cl = claims_of(pg, &ids[e], fan, k, &nc, &capped);
+        for (int j = 0; j < nc; j++) {
+            if (cl[j].np != 3 || middle_refused(cl[j].part, cl[j].np)) continue;
+            const lp_id *part = cl[j].part, *other;
+            if (!memcmp(&part[0], &at->id, 16)) other = &part[2]; else if (!memcmp(&part[2], &at->id, 16)) other = &part[0]; else continue;
+            if (!memcmp(other, &at->id, 16)) continue;
+            w->claims++; double sw = strand_weight(way, wids, part, 3); if (sw <= 0) continue;
+            lp_frontier_reach(sd->f, other, &at->id, &cl[j].id, at->cost + lp_cost(&cl[j].r, k, per_hop) - log(sw), 0, at->hops + 1);
+        }
+        free(cl);
+    }
     PQclear(q); free(ab); free(ids); free(who); free(held);
     return n;
 }
@@ -504,7 +526,7 @@ int cmd_degrees(int argc, char **argv){
     lp_ref from = entity_named(c, argv[a], NULL, 0, NULL), to; int goal = a + 1 < argc;
     lp_id wids[FW_WEIGHS]; weights_named(c, &way, wids);
     show_ref("from", &from); if (goal) { to = entity_named(c, argv[a + 1], NULL, 0, NULL); show_ref("to", &to); }
-    PGconn *pg = db_connect(conninfo); Reader *rd = reader_new(pg); Work w = { 0 };
+    PGconn *pg = db_read(conninfo); Reader *rd = reader_new(pg); Work w = { 0 };
     lp_reached *closed = malloc(sizeof(lp_reached) * (size_t)batch); uint8_t *hub = malloc((size_t)batch);
     Side fw = { lp_frontier_new(), from.id }; lp_frontier_reach(fw.f, &from.id, NULL, NULL, 0, 0, 0);
 

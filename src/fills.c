@@ -42,7 +42,7 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
     size_t cap = strlen(phrase_text) + 1; lp_id *ph = malloc(sizeof(lp_id) * cap); int np = (int)table_parts(&pr.id, ph, cap);
     if (!np) { ph[0] = pr.id; np = 1; }
 
-    PGconn *pg = db_connect(conninfo);
+    PGconn *pg = db_read(conninfo);
     lp_idmap *d = lp_idmap_sized(sizeof(DNode)), *acc = lp_idmap_sized(sizeof(Acc));
     typedef struct { int node; lp_id *f; size_t nf; } Cont; lp_vec(Cont) conts = { 0 };
 

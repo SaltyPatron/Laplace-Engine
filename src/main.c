@@ -50,6 +50,22 @@ PGconn *db_connect(const char *conninfo){
                    if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) id_oid = (uint32_t)strtoul(PQgetvalue(r, 0, 0), NULL, 10); PQclear(r); }
     return pg;
 }
+/* A read sees one world. Ingestion folds standings as it goes, and a read is many statements on many connections (the
+ * pool reads every leaf at once), each of which would otherwise see the database as it was when that statement began:
+ * hop 1 and hop 5 of one pass could read different standings. A read command opens one repeatable-read, read-only
+ * transaction and exports its snapshot; every pooled connection takes the same snapshot (db_snapshot, read.c), so every
+ * statement of the command reads the database as it was at one instant. */
+static char snapshot[64];
+const char *db_snapshot(void){ return snapshot[0] ? snapshot : NULL; }
+PGconn *db_read(const char *conninfo){
+    PGconn *pg = db_connect(conninfo);
+    PGresult *r = PQexec(pg, "BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+    if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "read: %s", PQerrorMessage(pg)); exit(1); } PQclear(r);
+    r = PQexec(pg, "SELECT pg_export_snapshot()");
+    if (PQresultStatus(r) != PGRES_TUPLES_OK || !PQntuples(r)) { fprintf(stderr, "snapshot: %s", PQerrorMessage(pg)); exit(1); }
+    snprintf(snapshot, sizeof snapshot, "%s", PQgetvalue(r, 0, 0)); PQclear(r);
+    return pg;
+}
 /* A query that is asked again and again is planned once for the connection: over the partitions of entity and
  * physicality, planning a lookup takes several times what answering it does. Results come in binary. */
 PGresult *db_ask(PGconn *pg, const char *sql, int n, const char *const *v, const int *l, const int *f){

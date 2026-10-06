@@ -43,7 +43,7 @@ int cmd_pull(int argc, char **argv){
     printf("prompt     %s   tier %d   %d constituent%s", idt, pr.tier, np, np == 1 ? "" : "s");
     { int words = 0; for (int i = 0; i < np; i++) words += table_find(&ph[i]) != NULL; printf(", %d of them compositions\n", words); }
 
-    PGconn *pg = db_connect(conninfo); Reader *rd = reader_new(pg);
+    PGconn *pg = db_read(conninfo); Reader *rd = reader_new(pg);
     /* every segment of the prompt at once (laplace_forward): "The", "The dog", "The dog barked" and every other run of it,
      * the observations that hold each, how many as a run, and what follows the run in them, counted. The whole pass is one
      * set; a segment that is only tier-0 atoms (a space, a letter) is a hub and is not shown. */
