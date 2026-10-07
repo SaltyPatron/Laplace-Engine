@@ -51,7 +51,7 @@ typedef struct {
     int tie, seed_session;                            /* what a real tie gets (first, draw, ask); whether the seed holds the session and turn */
     char refuse_predicate[FW_NAMES][96], refuse_witness[FW_NAMES][96]; int nrefuse_predicate, nrefuse_witness;
     char only_predicate[FW_NAMES][96]; int nonly_predicate;
-    char prevalence[96];                              /* the relation by which a source counts a word's concepts (a tagged corpus): the prior of a fork */   /* when any is named, only strands whose relation is one of these are read: one head, or a few, alone */
+    char prevalence[96]; int prevalence_pair;      /* prevalence_pair: the count is of the pair [word, concept] itself */                              /* the relation by which a source counts a word's concepts (a tagged corpus): the prior of a fork */   /* when any is named, only strands whose relation is one of these are read: one head, or a few, alone */
     struct { int what, n; } take[FW_TAKES]; int ntake; /* a pull's steps, in order */
     char weigh_name[FW_WEIGHS][96]; double weigh[FW_WEIGHS]; int nweigh;
     char role_by[96], role_name[FW_WEIGHS][96]; double role[FW_WEIGHS]; int nrole;      /* how hard a word pulls, by what is attested of it under role_by (its part of speech) */

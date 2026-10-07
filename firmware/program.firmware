@@ -101,9 +101,9 @@ for pull
   # each of these relations (a two-key probe, selective however many strands the word has), and the pass goes on
   # from what that reaches (its senses), which are not hubs
   up Sense
-  # a fork's prior: how often a tagged corpus says the word means each concept (SemCor's gold keys, as its recipe names
-  # the column); the witness's own order only where nothing is counted
-  prevalence gold key
+  # a fork's prior: how often a tagged corpus says the word means each concept, the pair [word, concept] SemCor's gold
+  # keys make (prevalence RELATION where a source says it under a relation); the witness's own order where nothing is counted
+  prevalence pair
   # layers: coupling rounds, each carrying on the entities that responded hardest in the round before
   rounds 2
   breadth 64

@@ -540,7 +540,9 @@ static int fork_choice(void *vc, const Claim *cl, int n){
             for (size_t v = 0; v < np && ncc < n * 4; v++) if (!lp_id_eq(&pp[v], fc->word) && lp_tier0_codepoint(T0, &pp[v]) < 0) { cc[ncc] = pp[v]; cof[ncc++] = k; } }
         int n2 = 0; Hold *h2 = ncc ? holds_both(cc, ncc, fc->word, &n2) : NULL; if (ncc) st->trips++; Ids pv = { 0 };
         for (int r = 0; r < n2; r++) { int s_ = h2[r].src; if (s_ < 0 || s_ >= ncc || !h2[r].claim || !h2[r].stood) continue; path_into(&pv, lp_path_of(h2[r].path, (size_t)h2[r].path_len));
-            if (pv.n != 3 || !lp_id_eq(&pv.v[0], fc->word) || !lp_id_eq(&pv.v[1], &fw->id.prevalence) || !lp_id_eq(&pv.v[2], &cc[s_])) continue;
+            int as_pair = fw->prevalence_pair && pv.n == 2 && lp_id_eq(&pv.v[0], fc->word) && lp_id_eq(&pv.v[1], &cc[s_]);       /* [word, concept]: the statement a tagged corpus makes */
+            int as_rel = !fw->prevalence_pair && pv.n == 3 && lp_id_eq(&pv.v[0], fc->word) && lp_id_eq(&pv.v[1], &fw->id.prevalence) && lp_id_eq(&pv.v[2], &cc[s_]);
+            if (!as_pair && !as_rel) continue;
             prev[cof[s_]] += h2[r].matches; ptotal += h2[r].matches; }
         holds_free(h2, n2); lp_vec_free(&pv); free(cc); free(cof);
         if (ptotal > 0) for (int k = 0; k < n; k++) score[k] = log((1.0 + prev[k]) / (1.0 + ptotal)) + hold[k]; }
