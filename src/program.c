@@ -64,7 +64,8 @@ static void bit_clear(Bits *a, const Bits *b){ for (int i = 0; i < MAXOCC / 64; 
 
 enum { R_CLAIM, R_FOLLOWS, R_DISCOURSE, R_SCAN, R_CONTAIN, R_KINDS };
 static const char *RK[R_KINDS] = { "strand", "follows", "discourse", "reached", "containment" };
-typedef struct { lp_id id; double force, cost; Bits support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, tier; } Cell;     /* shared: how many strands hold it, up to the fan (-1: not read) */
+#define CELL_HEADS 8
+typedef struct { lp_id id; double force, cost; Bits support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, tier; lp_id heads[CELL_HEADS]; int nheads; } Cell;   /* heads: the distinct relations whose strands reach it (up to 8 kept, all counted) */     /* shared: how many strands hold it, up to the fan (-1: not read) */
 typedef struct { Cell *c; int n; size_t cap; lp_idmap *m; } Field;                  /* the cells, in the order they responded; found by ID */
 static Cell *cell(Field *f, const lp_id *id){
     if (!f->m) f->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(f->m, id, &fresh);
@@ -121,6 +122,13 @@ static int *rows_in_order(const PGresult *q, const int *cols, int ncols){
 
 static PGresult *ask_st(State *st, const char *sql, Args *a){ st->trips++; return ask(st->pg, sql, a); }
 
+/* Whether a strand's relation is one the firmware reads: not refused, and, when the firmware names only some heads, one
+ * of them (an ablation: one relation's plane alone). */
+static int head_read(const Firmware *fw, const lp_id *v, size_t n){
+    if (lp_tuple_middle_any(v, n, fw->id.refuse, (size_t)fw->nrefuse_predicate)) return 0;
+    if (fw->nonly_predicate && !lp_tuple_middle_any(v, n, fw->id.only, (size_t)fw->nonly_predicate)) return 0;
+    return 1;
+}
 /* ---- RESOLVE */
 static void resolve_roles(State *st){
     Firmware *fw = (Firmware *)st->fw;
@@ -185,6 +193,14 @@ static int shape_measured(State *st, const lp_id *ids, int n, const Hold *h0, in
     free(h); free(cv); free(cn); free(all); free(b); free(pa); free(xyz); free(has); free(pick); lp_idmap_free(seen); lp_idmap_free(verts);
     (void)extra; return k;
 }
+typedef struct { long strands; double force; Bits support; } HeadStat;
+static lp_idmap *HEADS;                                                     /* every relation whose strands respond, with how many, how hard, from which words */
+static void head_note(Cell *x, const lp_id *rel, double conf, int occ){
+    int have = 0; for (int k = 0; k < x->nheads && k < CELL_HEADS; k++) have |= lp_id_eq(&x->heads[k], rel);
+    if (!have) { if (x->nheads < CELL_HEADS) x->heads[x->nheads] = *rel; x->nheads++; }
+    if (!HEADS) HEADS = lp_idmap_sized(sizeof(HeadStat)); bool f; HeadStat *s = lp_idmap_at(HEADS, lp_idmap_put(HEADS, rel, &f)); if (f) memset(s, 0, sizeof *s);
+    s->strands++; s->force += conf; if (occ >= 0) bit_set(&s->support, occ);
+}
 /* COUPLE through the Engine's leaf reads (holds_capped, every leaf at once on every core): for each entity, the claims
  * that hold it (its strands, the other end answering with the strand's standing) and the observations that hold it
  * (containment), a hub's never read; and the shape, measured here. */
@@ -199,11 +215,11 @@ static int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_
             int occ = occ_of ? occ_of[o] : -1; double pull = occ >= 0 && occ < st->nocc ? st->role[occ] : kind == R_CLAIM ? 1.0 : 0.5;
             if (lp_id_eq(&h[i].entity, &st->prompt)) continue;
             if (h[i].claim) { if (!h[i].stood) continue; path_into(&rn, lp_path_of(h[i].path, (size_t)h[i].path_len)); if (rn.n < 2) continue;
-                if (lp_tuple_middle_any(rn.v, rn.n, fw->id.refuse, (size_t)fw->nrefuse_predicate)) continue;
+                if (!head_read(fw, rn.v, rn.n)) continue;
                 int other = lp_tuple_other(rn.v, rn.n, &ids[o]); if (other < 0 || lp_id_eq(&rn.v[other], &st->prompt)) continue;
                 lp_id p3[3] = { ids[o], rn.n >= 3 ? rn.v[1] : ids[o], rn.v[other] };
                 double conf = lp_confidence(&h[i].r, fw->k) * strand_weight(fw, fw->id.weigh, p3, 3);
-                Cell *x = cell(fd, &rn.v[other]); x->force += conf * pull; x->routes[kind]++; if (occ >= 0) bit_set(&x->support, occ);
+                Cell *x = cell(fd, &rn.v[other]); x->force += conf * pull; x->routes[kind]++; if (occ >= 0) bit_set(&x->support, occ); if (pull > 0) head_note(x, &p3[1], conf * pull, occ);      /* a head is what pulls through it: a space or a mark pulls nothing */
                 if (!x->has_r || conf > lp_confidence(&x->r, fw->k)) { x->r = h[i].r; x->has_r = 1; x->via = p3[0]; x->rel = p3[1]; } }
             else { Cell *x = cell(fd, &h[i].entity); x->segment = 1; x->tier = h[i].tier; x->force += pull; x->routes[R_CONTAIN]++; if (occ >= 0) bit_set(&x->support, occ); } }
         lp_vec_free(&rn);
@@ -299,7 +315,7 @@ static void walk(State *st, int from, int to){                                 /
             int *held = calloc((size_t)nn, sizeof(int)); for (int e = 0; e < nn; e++) held[e] = hub[2 * e] ? fw->walk_fan + 1 : 0;
             for (int r = 0; r < nh; r++) { int e = hh[r].src; if (e < 0 || e >= nn || held[e] > fw->walk_fan || !hh[r].claim || !hh[r].stood) continue;
                 path_into(&rn, lp_path_of(hh[r].path, (size_t)hh[r].path_len));
-                if (lp_tuple_middle_any(rn.v, rn.n, fw->id.refuse, (size_t)fw->nrefuse_predicate)) continue;
+                if (!head_read(fw, rn.v, rn.n)) continue;
                 int other = lp_tuple_other(rn.v, rn.n, &need[e]); if (other < 0 || lp_id_eq(&rn.v[other], &need[e])) continue;
                 lp_rating rt = hh[r].r; double w = lp_confidence(&rt, fw->k) * strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n); if (!(w > 0)) continue;
                 Adj *x = &adj[lp_idmap_find(am, &need[e])]; lp_reserve((void **)&x->h, &x->cap, (size_t)x->n + 1, sizeof(Hop_)); x->h[x->n++] = (Hop_){ rn.v[other], w }; }
@@ -487,7 +503,7 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
         int hub[128], nh = 0; Hold *hh = holds_capped(ids, m, fw->fan, 1, 1, hub, &nh); st->trips++;      /* every leaf at once, in content order, a hub's never read */
         for (int r = 0; r < nh; r++) { int e = hh[r].src; if (e < 0 || e >= m || hub[2 * e] || !hh[r].claim || !hh[r].stood) continue;
             const lp_reached *at = &batch[who[e]]; path_into(&rn, lp_path_of(hh[r].path, (size_t)hh[r].path_len));
-            if (lp_tuple_middle_any(rn.v, rn.n, fw->id.refuse, (size_t)fw->nrefuse_predicate)) continue;
+            if (!head_read(fw, rn.v, rn.n)) continue;
             int other = lp_tuple_other(rn.v, rn.n, &at->id); if (other < 0) continue;
             lp_rating rt = hh[r].r;
             double sw = strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n); if (sw <= 0) continue;
@@ -502,14 +518,14 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
 
 /* ---- the proposals of a step, and their election */
 enum { P_FOLLOW, P_CHAIN, P_SHAPE };
-typedef struct { lp_id id; int kind, grounds, cont; double conf, hub; long times; int occ; int agree; long cooc, walk; Bits by[3]; double shape; } Prop;     /* shape: the distance of the nearest analogous curve that proposes it (INFINITY: none) */     /* occ: the occurrence a chain answers, or -1; by: which obligations each channel grounds */
+typedef struct { lp_id id; int kind, grounds, cont; double conf, hub; long times; int occ; int agree; long cooc, walk; Bits by[3]; double shape; int heads; } Prop;     /* shape: the distance of the nearest analogous curve that proposes it (INFINITY: none) */     /* occ: the occurrence a chain answers, or -1; by: which obligations each channel grounds */
 enum { CH_STRAND, CH_WALK, CH_BESIDE };
 /* A proposal against every word still owed, through every channel (the attention of a transformer, read from the
  * records): a strand of the word reaches it (the field's support), the word's walkers stand on it, it is observed beside
  * the word more than its base rate. grounds: what the union owes, weighed by role; agree: how many channels ground
  * anything; cooc, walk: how often, over the words owed. */
 static void weigh_prop(const State *st, const Field *fd, Prop *p){
-    const Cell *x = cell_find(fd, &p->id); memset(p->by, 0, sizeof p->by); p->cooc = p->walk = 0;
+    const Cell *x = cell_find(fd, &p->id); memset(p->by, 0, sizeof p->by); p->cooc = p->walk = 0; p->heads = x ? x->nheads : 0;      /* independent relation heads converging on it */
     int atom = lp_tier0_codepoint(T0, &p->id) >= 0;                          /* a letter, a space, a mark: it may continue a run, it grounds nothing */
     for (int j = 0; j < st->npos; j++) { if (lp_id_eq(&st->occ[j], &p->id)) continue;
         int v = visits(st, &p->id, j), b = beside(st, j, &p->id); p->walk += v; p->cooc += b;      /* how the whole trajectory so far, prompt and emitted, attends to it */
@@ -531,6 +547,7 @@ static int key_cmp(const Prop *x, const Prop *y, int k){                      /*
     case FW_E_COOCCUR:    return x->cooc != y->cooc ? (x->cooc > y->cooc ? -1 : 1) : 0;
     case FW_E_WALKS:      return x->walk != y->walk ? (x->walk > y->walk ? -1 : 1) : 0;
     case FW_E_SHAPE:      return x->shape != y->shape ? (x->shape < y->shape ? -1 : 1) : 0;
+    case FW_E_HEADS:      return x->heads != y->heads ? (x->heads > y->heads ? -1 : 1) : 0;
     case FW_E_CONFIDENCE: return x->conf != y->conf ? (x->conf > y->conf ? -1 : 1) : 0;
     case FW_E_SHARED:     return x->hub != y->hub ? (x->hub < y->hub ? -1 : 1) : 0;
     } return 0;
@@ -700,6 +717,13 @@ int cmd_turn(int argc, char **argv){
       for (int i = 0; i < st->nocc; i++) { Cell *x = cell_find(&fd, &st->occ[i]); if (x) x->force = 0; }      /* the prompt's own words are not what it is about */
       int routes[R_KINDS] = { 0 }; for (int z = 0; z < fd.n; z++) for (int k = 0; k < R_KINDS; k++) routes[k] += fd.c[z].routes[k];
       printf("COUPLE     %d entities respond:", fd.n); for (int k = 0; k < R_KINDS; k++) if (routes[k]) printf(" %d by %s", routes[k], RK[k]); printf("   (%.1f ms)\n", (now() - t) * 1000);
+      if (HEADS) { size_t nhd = lp_idmap_count(HEADS); int *ord = malloc(sizeof(int) * (nhd ? nhd : 1)); for (size_t i = 0; i < nhd; i++) ord[i] = (int)i;
+          for (size_t i = 1; i < nhd; i++) { int v = ord[i]; size_t j = i; const HeadStat *a = lp_idmap_at(HEADS, (size_t)v);
+              while (j > 0) { const HeadStat *b = lp_idmap_at(HEADS, (size_t)ord[j - 1]); if (b->force > a->force || (b->force == a->force && memcmp(lp_idmap_key(HEADS, (size_t)ord[j - 1]), lp_idmap_key(HEADS, (size_t)v), 16) < 0)) break; ord[j] = ord[j - 1]; j--; } ord[j] = v; }
+          printf("           heads: %zu relations respond; the strongest:", nhd);
+          for (size_t i = 0; i < nhd && i < 8; i++) { const HeadStat *a = lp_idmap_at(HEADS, (size_t)ord[i]); reader_want(st->rd, lp_idmap_key(HEADS, (size_t)ord[i])); char *tn = reader_text(st->rd, lp_idmap_key(HEADS, (size_t)ord[i]), 24);
+              printf(" %s(%ld strands, %d words, %.1f)", tn, a->strands, bit_count_and(&a->support, &a->support), a->force); free(tn); }
+          printf("\n"); free(ord); }
       st->npos = st->nocc; t = now(); walk(st, 0, st->nocc); char sd[17]; for (int k = 0; k < 8; k++) snprintf(sd + 2 * k, 3, "%02x", st->seed[k]);
       printf("           walks: %d from each word, %d steps, seed %s: %llu steps taken, %llu home, %zu entities stood on, %d read   (%.1f ms)\n", fw.walks, fw.steps, sd,
              (unsigned long long)st->walk_steps, (unsigned long long)st->walk_homes, st->walk_at ? lp_idmap_count(st->walk_at) : (size_t)0, st->walk_read, (now() - t) * 1000);
