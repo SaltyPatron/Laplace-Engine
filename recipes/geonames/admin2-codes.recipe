@@ -2,6 +2,9 @@ name geonames-admin2-codes
 # readme.txt:
 #   "admin2Codes.txt          : names for administrative subdivision 'admin2 code' (UTF8), Format : concatenated codes <tab>name <tab> asciiname <tab> geonameId"
 # The geonameId is read as the place; the concatenated codes are GeoNames's key to the division.
+# The name is what the readme says the file holds, "names for administrative subdivision". The readme gives asciiname
+# no wording of its own here; it is the geoname table's asciiname of the same place, which the readme words
+# "asciiname : name of geographical point in plain ascii characters".
 match admin2Codes.txt
 
 tier row by \n
@@ -12,4 +15,6 @@ thing row geonameId
 key row "concatenated codes"
 refer geonameId geonames-geoname
 content name asciiname
+relation "names for administrative subdivision" name
+relation "name of geographical point in plain ascii characters" asciiname
 attest row name asciiname

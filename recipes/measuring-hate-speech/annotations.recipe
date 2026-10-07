@@ -28,6 +28,52 @@ key row comment_id
 own annotator_id
 content text platform hate_speech_score infitms outfitms std_err hypothesis sentiment respect insult humiliate status dehumanize violence genocide attack_defend hatespeech target_* annotator_*
 
+# The card: "hate_speech_score - continuous hate speech measure"
+relation "continuous hate speech measure" hate_speech_score
+# Kennedy et al. (2020), the card's paper: "Social media comments were collected from three popular platforms:
+# YouTube, Reddit, and Twitter."
+relation "Social media comments were collected from" platform
+# Kennedy et al. (2020): "We used the identity relevance and hate speech hypothesis scores to create five
+# stratification bins"
+relation "hate speech hypothesis scores" hypothesis
+# Sachdeva et al. (2022), the card's other paper: "an infit mean-squared statistic, a rater fit diagnostic"
+relation "infit mean-squared statistic" infitms annotator_infitms
+# The card: "annotator_severity - annotator's estimated survey interpretation bias"
+relation "annotator's estimated survey interpretation bias" annotator_severity
+# The ten survey items, in the prompts Sachdeva et al. (2022) give them ("Table 1: Survey items and ordinal responses
+# given to annotators for each comment"):
+#   Sentiment "How would you describe the sentiment of this comment?"
+#   Respect "Is this comment respectful towards the group(s) you previously identified?"
+#   Insult "Do you agree or disagree with the following statement: This comment is insulting towards the group(s) you
+#   previously identified."
+#   Humiliate "... This comment is humiliating towards the group(s) you previously identified."
+#   Status "This comment states that the group(s) you previously identified is:"
+#   Dehumanize "... This comment dehumanizes the group(s) you previously identified (e.g., by comparing them to an
+#   animal)."
+#   Violence "... This comment calls for using violence against the group(s) you previously identified."
+#   Genocide "... This comment calls for the deliberate killing of a large group of people from the group(s) you
+#   previously identified."
+#   Attack-Defend "Is the comment attacking or defending the group(s) you previously identified?"
+#   Hate speech "Does this comment contain hate speech, defined as ..."
+# (the engine keeps a relation's words to 63 bytes, so each is the prompt's statement up to the group)
+relation "How would you describe the sentiment of this comment?" sentiment
+relation "Is this comment respectful towards the group(s)" respect
+relation "This comment is insulting towards the group(s)" insult
+relation "This comment is humiliating towards the group(s)" humiliate
+relation "This comment states that the group(s)" status
+relation "This comment dehumanizes the group(s)" dehumanize
+relation "This comment calls for using violence against the group(s)" violence
+relation "calls for the deliberate killing of a large group of people" genocide
+relation "Is the comment attacking or defending the group(s)" attack_defend
+relation "Does this comment contain hate speech" hatespeech
+# Obligations:
+#   outfitms, annotator_outfitms, std_err: neither the card nor its two papers word them (Laplace-Engine#32).
+#   target_* (target_race_asian, ..., target_race, ...): each column is one identity group or subgroup of the
+#   checklist the annotator ticked, true where ticked; the answer is the group the column stands for, which the
+#   recipe cannot yet read as the value (Laplace-Engine#32).
+#   annotator_* (gender, trans, educ, income, ideology, age, and their ticked subgroups): what the corpus reports of
+#   the annotator, worded nowhere; with the people the corpus names (Laplace-Engine#29).
 attest row platform hate_speech_score infitms outfitms std_err hypothesis
 attest row sentiment respect insult humiliate status dehumanize violence genocide attack_defend hatespeech target_* by annotator_id
-attest row annotator_* of annotator_id
+# The annotator columns are named one by one: annotator_id, the annotator itself, is not said of itself.
+attest row annotator_severity annotator_infitms annotator_outfitms annotator_gender annotator_trans annotator_educ annotator_income annotator_ideology annotator_age annotator_gender_* annotator_transgender* annotator_cisgender annotator_education_* annotator_income_* annotator_ideology_* annotator_race_* annotator_religion_* annotator_sexuality_* of annotator_id

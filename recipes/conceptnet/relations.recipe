@@ -2,11 +2,16 @@ name conceptnet-relations
 # ConceptNet's page "Relations in ConceptNet 5": a table, a row for each relation, under the headings the page gives:
 #   | Relation URI | Description | Examples
 #   | /r/IsA | A is a subtype or a specific instance of B; every A is a B. ... | car → vehicle; Chicago → city
-# What a row says of a relation is said under the heading of its column. A relation's URI, /r/IsA, is ConceptNet's
-# address for the relation IsA: the relation is its name.
+# A relation's URI, /r/IsA, is ConceptNet's address for the relation IsA: the relation is its name. The page is read
+# as the text it is.
 match Relations.md
 
 tier line by \n
 
+# Both lines are unresolved obligations (Laplace-Engine#32): "Description" and "Examples" are the table's column
+# headings, never a relation. The description is the relation's gloss, [IsA, its description as the page words it],
+# which needs a line that gives a relation in the documentation's words ("line PATTERN :: relation TEXT"); the engine
+# has none, and a bare pair [IsA, the description] would say it under no meaning at all. The examples (car → vehicle)
+# are edges the relation joins, content records of the relation, not something said of it under a heading.
 line ^\| */r/([^ |]+) *\| *([^|]*[^| ]) *\| :: predicate Description
 line ^\| */r/([^ |]+) *\|[^|]*\| *([^|]*[^| ]) *$ :: predicate Examples

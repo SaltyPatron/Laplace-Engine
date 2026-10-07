@@ -1,5 +1,6 @@
 name iso-639-3-retirements
 # ISO 639-3's retirements: what a retired identifier was called, why it was retired, what it changed to, and when.
+# SIL's iso639-3_retirements_table_definition.txt words each column.
 match iso-639-3_Retirements.tab
 witness SIL Global
 
@@ -10,4 +11,13 @@ tier field by \t
 thing row Id
 content Id Ref_Name Ret_Reason Change_To Ret_Remedy
 omit Effective
+#   "Ref_Name    varchar(150) NOT NULL,     -- reference name of language"
+relation "reference name of language" Ref_Name
+#   "Ret_Reason  char(1)      NOT NULL,     -- code for retirement: C (change), D (duplicate), N (non-existent), S (split), M (merge)"
+# a value of the retirement codes' own list
+value - Ret_Reason
+#   "Change_To   char(3)      NULL,         -- in the cases of C, D, and M, the identifier to which all instances of this Id should be changed"
+relation "the identifier to which all instances of this Id should be changed" Change_To
+#   "Ret_Remedy  varchar(300) NULL,         -- The instructions for updating an instance of the retired (split) identifier"
+relation "The instructions for updating an instance of the retired (split) identifier" Ret_Remedy
 attest row Ref_Name Ret_Reason Change_To Ret_Remedy

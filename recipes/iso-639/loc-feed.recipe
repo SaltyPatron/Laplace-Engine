@@ -1,8 +1,10 @@
 name loc-feed
-# The Library of Congress's Atom feed of changes to ISO 639-5. The feed and each entry are the thing their id names.
-# Each element inside one says of it, under its own name, its text; a link says of it the resource it points at,
-# under the link's rel; the author's name and email, the category's term, and the change described in the entry's
-# content are said of it. The dates are when the Library of Congress published the change.
+# The Library of Congress's Atom feed of changes to ISO 639-5. The feed is a page about the list, not the list: its
+# entries (title, id, updated, published, author, category, link, and the change described in each entry's content)
+# say when and where the Library of Congress published a change, and attest nothing of a language. The feed is read
+# as content of the file, in its tree, and makes no claim (Laplace-Engine#32: "the feed is the file's metadata or a
+# page: it attests nothing about languages; read it as content of the file"). The changes themselves are the list's,
+# which loc.recipe reads from iso639-5.rdf.
 match iso639-5.atom10.xml
 witness Library of Congress
 format xml
@@ -11,11 +13,3 @@ thing feed id
 thing entry id
 omit xmlns xmlns:* xml:lang length
 content *
-attest feed */
-attest entry */
-relate link rel to href
-attest link title type
-attest author */
-attest category term
-attest div class
-attest p .

@@ -1,8 +1,9 @@
 name cldr-supplemental-data
 # CLDR's supplemental data. The elements that name one thing by one attribute are read: each says of that thing what
-# its other attributes hold, under the attribute's own name, and what the elements inside it say (a territory's
-# languagePopulation, a region's currency, a calendar's calendarSystem and era) is said of it, each such element
-# together as one record.
+# its other attributes mean, as the LDML specification (UTS #35) words them, and what the elements inside it say (a
+# region's currency, a calendar's calendarSystem) is said of it, each such element together as one record. A
+# territory's languagePopulation is the language within the territory, and a calendar's era the era within the
+# calendar: each is the path of the two, and what its attributes say is said of it.
 # "Copyright © 1991-2026 Unicode, Inc." and "CLDR data files are interpreted according to the LDML specification"
 match supplementalData.xml
 witness CLDR
@@ -10,18 +11,119 @@ format xml
 
 thing language type
 thing territory type
+thing languagePopulation type within
 thing group type
 thing region iso3166
 thing info iso4217
 thing territoryCodes type
 thing currencyCodes type
 thing calendar type
+thing era type within
 thing scriptVariant id
 thing parentLocale parent
 thing reference type
 omit xmlns xmlns:*
 omit uri version
 content *
+
+# Part 6, "Supplemental Language Data": "It provides a list of which languages are used with which scripts." and "If
+# the language is not a modern language, or the script is not a modern script, then the alt attribute is set to
+# secondary." The alt says which: the two are one record.
+relation "used with" language.scripts
+value - language.alt
+together language
+
+# Part 6, "Supplemental Territory Information": "The GDP figures are “PPP (constant 2000 international $)”." and
+# "literacy percent for the territory — an estimate of the percentage of the country’s population that is functionally
+# literate."
+relation "GDP figures" territory.gdp
+relation "literacy percent for the territory" territory.literacyPercent
+# The specification gives the territory's population attribute no wording (the DTD only: "<!ATTLIST territory
+# population NMTOKEN #REQUIRED >"): an obligation until a documented wording is found (Laplace-Engine#32).
+# Of the language within the territory:
+#   "language population percent — an estimate of the number of people who are functional in that language in that
+#   country, including both first and second language speakers."
+#   "literacy percent for language population — Within the set of people who are functional in the corresponding
+#   language (as specified by language population percent), this is an estimate of the percentage of those people who
+#   are functionally literate in that language"
+#   "writing percent — Within the set of people who are functional in the corresponding language (as specified by
+#   language population percent), this is an estimate of the percentage of those people who regularly read or write a
+#   significant amount in that language."
+#   "<!ATTLIST languagePopulation officialStatus (de_facto_official | official | official_regional |
+#   official_minority) #IMPLIED >": a value of the specification's own list
+relation "language population percent" languagePopulation.populationPercent
+relation "literacy percent for language population" languagePopulation.literacyPercent
+relation "writing percent" languagePopulation.writingPercent
+value - languagePopulation.officialStatus
+# A languagePopulation's references attribute (references="R1010") is CLDR's pointer to a reference element of this
+# file, and the reference is named by that number: resolving the pointer to what it points at is Laplace-Engine#20;
+# until then it is an obligation.
+
+# Part 6, "Territory Containment": "The territory containment forms a tree"; "There are groupings that don't follow
+# this regular structure ... These are marked with the attribute grouping="true"."; status "(deprecated, grouping)", a
+# value of the specification's own list ("When groupings have been deprecated ... they are marked with the attribute
+# status="deprecated"", "When the containment relationship itself is a grouping, it is marked with the attribute
+# status="grouping"").
+relation "territory containment" group.contains
+relation "groupings that don't follow this regular structure" group.grouping
+value - group.status
+
+# Part 3, "Supplemental Currency Data", of an info (fractions):
+#   "digits: the minimum and maximum number of decimal digits normally formatted."
+#   "rounding: the rounding increment, in units of 10-digits."
+#   "cashDigits: the number of decimal digits to be used when formatting quantities used in cash transactions"
+#   "cashRounding: the cash rounding increment, in units of 10-cashDigits."
+relation "the minimum and maximum number of decimal digits normally formatted" info.digits
+relation "the rounding increment" info.rounding
+relation "the number of decimal digits to be used when formatting quantities used in cash transactions" info.cashDigits
+relation "the cash rounding increment" info.cashRounding
+# Of a region's currency, said together of the region:
+#   "iso4217: the ISO 4217 code for the currency in question."
+#   "from: the currency was valid from the datetime indicated by the value."
+#   "to: the currency was valid up to the datetime indicated by the value."
+#   "tz: the timezone associated with the from transition datetime."
+#   "to-tz: the timezone associated with the to transition datetime."
+#   "tender: indicates whether the ISO currency code represents a currency that was or is legal tender in some country."
+relation "the ISO 4217 code for the currency in question" currency.iso4217
+relation "the currency was valid from" currency.from
+relation "the currency was valid up to" currency.to
+relation "the timezone associated with the from transition datetime" currency.tz
+relation "the timezone associated with the to transition datetime" currency.to-tz
+relation "a currency that was or is legal tender in some country" currency.tender
+
+# Part 6, "Supplemental Code Mapping": "The territory codes provide mappings to numeric (UN M.49 [UNM49] codes,
+# equivalent to ISO numeric codes), ISO three-letter codes, FIPS 10 codes" and "The currencyCodes are mappings from
+# three letter currency codes to numeric values (ISO 4217, see Current currency & funds code list)."
+relation "numeric (UN M.49 codes, equivalent to ISO numeric codes)" territoryCodes.numeric
+relation "ISO three-letter codes" territoryCodes.alpha3
+relation "FIPS 10 codes" territoryCodes.fips10
+relation "numeric values (ISO 4217)" currencyCodes.numeric
+
+# Part 4, "Calendar Data": "which for each calendar can specify the astronomical basis of the calendar (solar, lunar,
+# etc.)": "<!ATTLIST calendarSystem type (solar | lunar | lunisolar | other) #REQUIRED>", a value of its own list.
+value - calendarSystem.type
+# Of an era: "Each era element has a code attribute and optional aliases attributes that define invariant strings for
+# identifying the eras." "The code is unique within the calendar, and the aliases are space-separated identifiers,
+# each also unique within the calendar. The start date is specified in terms of the equivalent proleptic Gregorian
+# date".
+relation "invariant strings for identifying the eras" era.code
+relation "space-separated identifiers, each also unique within the calendar" era.aliases
+relation "The start date" era.start
+# The specification gives an era's end attribute no wording (the DTD only: "<!ATTLIST era end CDATA #IMPLIED>"): an
+# obligation until a documented wording is found (Laplace-Engine#32).
+
+# Part 1, "Parent Locales": "The parentLocale element is used to override the normal inheritance when accessing CLDR
+# data." and "For case 2, the children and parent share the same primary language", the parent naming its children
+# in locales; "there is a special attribute and value, localeRules="nonlikelyScript"", a value of its own list.
+relation "children" parentLocale.locales
+value - parentLocale.localeRules
+
+# Part 2, "Reference Element": "The references section supplies a central location for specifying references and
+# standards." A reference's text is the reference or standard it names.
+relation "references and standards" reference
+
+# scriptVariant (type="compound", base="Hani Bopo") is in no part of the specification: its type and base have no
+# wording, and stay obligations until one is found (Laplace-Engine#32).
 
 attest language *
 attest territory *
@@ -35,9 +137,7 @@ attest scriptVariant *
 attest parentLocale *
 attest reference * .
 attest languagePopulation *
-together languagePopulation
 attest currency *
 together currency
 attest calendarSystem *
 attest era *
-together era

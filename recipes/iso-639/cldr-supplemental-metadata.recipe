@@ -1,6 +1,9 @@
 name cldr-supplemental-metadata
-# CLDR's supplemental metadata: the aliases. Each alias element says of what its type attribute names what its other
-# attributes hold (replacement, reason), under the attribute's own name.
+# CLDR's supplemental metadata: the aliases. Each alias element is the code its type attribute names ("type: The code
+# to be replaced"), and says of it its replacement and the reason, as UTS #35, Part 6, "Supplemental Alias
+# Information", Table: Alias Attribute Values, words them:
+#   "replacement  NMTOKEN  The code(s) to replace it, space-delimited."
+#   "reason  deprecated | overlong | macrolanguage | legacy | bibliographic": a value of the table's own list
 # "Copyright © 1991-2026 Unicode, Inc." and "CLDR data files are interpreted according to the LDML specification"
 match supplementalMetadata.xml
 witness CLDR
@@ -14,6 +17,8 @@ thing variantAlias type
 thing zoneAlias type
 omit xmlns xmlns:*
 content *
+relation "The code(s) to replace it" replacement
+value - reason
 
 attest languageAlias *
 attest scriptAlias *

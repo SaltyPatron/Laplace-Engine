@@ -11,10 +11,17 @@ tier row by \n
 comment hash
 remark hash
 padded
-names "Unicode code point or sequence" "DoCoMo Shift-JIS code" "KDDI Shift-JIS code" "SoftBank Shift-JIS code"
+# The columns are numbered as the header numbers them, only to say where a part is; what each says is its header line.
+names 0 1 2 3
 tier field by ;
 
-thing row "Unicode code point or sequence"
-codepoints "Unicode code point or sequence"
-content "DoCoMo Shift-JIS code" "KDDI Shift-JIS code" "SoftBank Shift-JIS code"
-attest row "DoCoMo Shift-JIS code" "KDDI Shift-JIS code" "SoftBank Shift-JIS code"
+thing row 0
+codepoints 0
+content 1 2 3
+# "1: DoCoMo Shift-JIS code"
+relation "DoCoMo Shift-JIS code" 1
+# "2: KDDI Shift-JIS code"
+relation "KDDI Shift-JIS code" 2
+# "3: SoftBank Shift-JIS code"
+relation "SoftBank Shift-JIS code" 3
+attest row 1 2 3

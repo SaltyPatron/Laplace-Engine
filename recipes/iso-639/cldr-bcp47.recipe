@@ -1,11 +1,12 @@
 name cldr-bcp47
 # CLDR's BCP 47 extension data (ldmlBCP47): keys and their types. A key is the thing its name attribute names, and so
-# is a type; every other attribute is said of it under the attribute's own name, and a key says of itself each type
-# written inside it: [key, type, type's name].
+# is a type; every other attribute is said of it as the LDML specification (UTS #35, Part 1, "U Extension Data
+# Files") words what the attribute means.
 # Every file: "Copyright © 1991-YEAR Unicode, Inc." (YEAR 2013 to 2020) and "CLDR data files are interpreted according
 # to the LDML specification"
 # A type's name stands only within its key: "true" is a type of several keys, and each is a different thing. The
-# thing a type is, then, is the path of its key and its name.
+# thing a type is, then, is the path of its key and its name, and that path is the key's holding it: no claim says it
+# again (Laplace-Engine#32: containment is the tree, not a claim).
 match calendar.xml collation.xml currency.xml measure.xml number.xml segmentation.xml timezone.xml variant.xml transform*.xml bcp47-transform.xml
 witness CLDR
 format xml
@@ -15,6 +16,24 @@ thing type name within
 omit xmlns xmlns:*
 omit since
 content *
-holds key type
+# UTS #35, "the common attributes for the <key>, <type> and <attribute> elements are as follows":
+#   "description: The description of the key, type or attribute element."
+relation "The description of the key, type or attribute element" description
+#   "The alias is a key or type name used by Unicode locale extensions with the old "@key=type" syntax."
+relation "a key or type name used by Unicode locale extensions with the old syntax" alias
+#   "deprecated: The deprecation status of the key, type or attribute element."
+relation "The deprecation status of the key, type or attribute element" deprecated
+#   "preferred: The preferred value of the deprecated key, type or attribute element."
+relation "The preferred value of the deprecated key, type or attribute element" preferred
+#   "The valueType attribute indicates how many subtags are valid for a given key": single, incremental, multiple,
+#   any, a value of the specification's own list
+value - valueType
+#   "The extension attribute in <key> element specifies the BCP 47 language tag extension type."
+relation "the BCP 47 language tag extension type" extension
+#   "This attribute is used by tz types for specifying preferred zone ID in the IANA time zone database."
+relation "preferred zone ID in the IANA time zone database" iana
+#   "The first two letters of a length 5 short identifier double as the time zone's associated region, unless the time
+#   zone has an explicit region attribute that overrides this."
+relation "the time zone's associated region" region
 attest key *
 attest type *

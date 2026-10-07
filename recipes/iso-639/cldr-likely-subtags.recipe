@@ -1,6 +1,9 @@
 name cldr-likely-subtags
-# CLDR's likely subtags: each likelySubtag element says of what its from attribute names what its other attributes
-# hold, under the attribute's own name.
+# CLDR's likely subtags: each likelySubtag element says of the locale its from attribute names the locale it
+# maximizes to. UTS #35, Part 1, "Likely Subtags": "To look up data in the table, see if a locale matches one of the
+# from attribute values. If so, fetch the corresponding to attribute value." and "Add Likely Subtags: Given a source
+# locale X, to return a locale Y where the empty subtags have been filled in by the most likely subtags. This is
+# written as X ⇒ Y ("X maximizes to Y")."
 # "Copyright © 1991-2026 Unicode, Inc." and "CLDR data files are interpreted according to the LDML specification"
 match likelySubtags.xml
 witness CLDR
@@ -10,4 +13,5 @@ thing likelySubtag from
 omit xmlns xmlns:*
 omit origin
 content *
+relation "maximizes to" to
 attest likelySubtag *

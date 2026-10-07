@@ -15,4 +15,6 @@ tier field by ;
 thing row "code points"
 codepoints "code points"
 content status
+# The header: "Status component ... fully-qualified ... minimally-qualified ... unqualified": a value of that list
+value - status
 attest row status

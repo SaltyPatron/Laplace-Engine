@@ -2,6 +2,9 @@ name geonames-admin1-codes
 # readme.txt:
 #   "admin1CodesASCII.txt     : names in English for admin divisions. Columns: code, name, name ascii, geonameid"
 # The geonameid is read as the place; the code (US.CA) is GeoNames's key to the division.
+# The name is what the readme says the file holds, "names in English for admin divisions". The readme gives "name
+# ascii" no wording of its own here; it is the geoname table's asciiname of the same place, which the readme words
+# "asciiname : name of geographical point in plain ascii characters".
 match admin1CodesASCII.txt
 
 tier row by \n
@@ -12,4 +15,6 @@ thing row geonameid
 key row code
 refer geonameid geonames-geoname
 content name "name ascii"
+relation "names in English for admin divisions" name
+relation "name of geographical point in plain ascii characters" "name ascii"
 attest row name "name ascii"

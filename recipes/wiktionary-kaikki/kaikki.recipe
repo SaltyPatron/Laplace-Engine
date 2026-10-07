@@ -7,8 +7,9 @@ name wiktextract-kaikki
 #   An entry is the thing its lang_code, word and pos name together: [en, free, noun]. A sense is the thing its
 #   glosses name; a form, the thing its form names; an example, the thing its text names; a translation, or a word
 #   linked from the entry (a synonym, a hypernym), the thing its lang_code and word, or its word, name.
-#   What an entry or a sense holds of these it holds under the member's name (senses, forms, synonyms, ...); every
-#   other member is said of it under its own name, a list of values each, a list of pairs each as the pair.
+#   What an entry or a sense holds of these it holds as the member holding it means it (senses: a word sense; synonyms:
+#   a synonym); every other member is said of it as the member means it, a list of values each, a list of pairs each
+#   as the pair. What each member means is given below, in the README's words (Laplace-Engine#32).
 match kaikki.org-dictionary-*.jsonl
 format json
 tier record by \n
@@ -28,8 +29,106 @@ omit etymology_number id senseid wikidata
 # weights, where bold text sat in an example
 omit head_templates etymology_templates inflection_templates categories _dis _dis1 topics source bold_text_offsets italic_text_offsets
 omit audio ogg_url mp3_url ref
+# where a sound file lives, as the ogg_url and mp3_url the README names: packaging, read by nothing
+omit wav_url oga_url opus_url
+# template machinery, as head_templates and etymology_templates: info_templates
+omit info_templates
+# where bold text sat in an example, as bold_text_offsets
+omit bold_roman_offsets bold_translation_offsets bold_literal_offsets
+# "code - Wiktionary's 2 or 3-letter language code for the language the translation is for": the translation's
+# lang_code, which is part of the translation's thing, written again under another key: packaging
+omit code
 content *
 
+# What each member a claim is made of means (Laplace-Engine#32): never the member's JSON key. The words are Wiktextract's
+# README's ("Format of the extracted word entries", "Word senses", "Pronunciation", "Translations", "Etymologies",
+# "Linkages to other words"), quoted above each line.
+#
+# What an entry or a sense holds (holds ... via: the member between them):
+#   "senses - list of word senses (dictionaries) for this word/part-of-speech"
+relation "word sense" senses
+#   "forms - list of inflected or alternative forms specified for the word"
+relation "inflected or alternative form" forms
+#   "translations - non-disambiguated translation entries"; "word - the translation in the specified language"
+relation "translation" translations
+#   "synonyms - non-disambiguated synonym linkages for the word", and so on for each linkage
+relation "synonym" synonyms
+relation "antonym" antonyms
+relation "hypernym" hypernyms
+#   "holonyms - non-disambiguated linkages indicating being part of something"
+relation "being part of something" holonyms
+#   "meronyms - non-disambiguated linkages indicating having a part"
+relation "having a part" meronyms
+#   "derived - non-disambiguated derived word linkages for the word"
+relation "derived word" derived
+#   "related - non-disambiguated related word linkages for the word"
+relation "related word" related
+#   "coordinate_terms - non-disambiguated coordinate term linkages for the word"
+relation "coordinate term" coordinate_terms
+#   "descendants - descendants of the word"
+relation "descendant" descendants
+#   "examples - list of usage examples"
+relation "usage example" examples
+#   "alt_of - list of words that his sense is an alternative form of"
+relation "alternative form of" alt_of
+#   "form_of - list of words that this sense is an inflected form of"
+relation "inflected form of" form_of
+#
+# What is said of an entry, a sense, a form, an example, a translation or a linked word (attest * *):
+#   tags: "list of qualifiers and tags for the gloss ... may include words such as "archaic", "colloquial", "present",
+#   "participle", "plural", "feminine""; of a form, "The tags identify what type of form it is"; of a translation,
+#   "optional list of qualifiers for the translations, e.g., gender"; of a linkage, "qualifiers specified for the sense
+#   (e.g., field of study, region, dialect, style)": a value of Wiktextract's tags ([dico, masculine])
+value - tags
+#   "type field containing example type (currently example or quotation if present)"
+value - type
+#   "lang - name of the language this word belongs to (e.g., English)"; of a translation, "the language name that the
+#   translation is for"
+relation "name of the language" lang
+#   "etymology_text - etymology section as cleaned text"
+relation "etymology section" etymology_text
+#   "raw_glosses - list of gloss strings for the word sense, with less cleaning than glosses"
+relation "gloss string with less cleaning" raw_glosses
+#   "roman - optional romanization of the translation (when in non-Latin characters)"; of a linkage, "optional
+#   romanization of a linked word in a non-Latin script"; of an example, "romanization"
+relation "romanization" roman
+#   "english - English text, generally clarifying the target sense of the translation"; of a linkage, "optional English
+#   text associated with the sense"; of an example, "English translation". Wiktextract now writes the same text under
+#   "translation" too (57,962 of the 57,963 objects holding either, in the first 100,000 entries of the 2026-08-28
+#   edition, hold the same text under both), which the README does not list: the same statement, so the same claim.
+relation "English text" english translation
+#   "alt - optional alternative form of the translation (e.g., in a different script)"; of a linkage, "optional
+#   alternative form of the target (e.g., in a different script)"
+relation "alternative form" alt
+#   "sense - optional sense indicating the meaning for which this is a translation"; of a linkage, "text identifying
+#   the word sense or context (e.g., "to rain very heavily")"
+relation "sense indicating the meaning" sense
+#   "note - optional text describing or commenting on the translation"; of an example, "English-language parenthesized
+#   note from the beginning of a non-english example"
+relation "text describing or commenting" note
+#   "taxonomic - optional taxonomic name of an organism mentioned in the translation"
+relation "taxonomic name" taxonomic
+#   "extra containing additional text" (of alt_of and form_of)
+relation "additional text" extra
+#   "wikipedia - list of Wikipedia page titles (with optional language code prefix)"; "wiktionary - non-disambiguated
+#   page title in Wikipedia"
+relation "Wikipedia page title" wikipedia wiktionary
+#   a redirect: "the dictionary will have a redirect key, which will contain the page title that the entry redirects to"
+relation "redirects to" redirect
+#   Pronunciation (said where a sound is said of a thing; as built a sound is no thing and says nothing):
+#   "ipa - pronunciation specifications as an IPA string", "enpr - pronunciation in English pronunciation respelling",
+#   "audio-ipa - IPA string associated with the audio file", "text - text associated with an audio file"
+relation "IPA string" ipa
+relation "English pronunciation respelling" enpr
+relation "IPA string associated with the audio file" audio-ipa
+relation "text associated with an audio file" sounds.text
+#
+# Members that stay unresolved obligations, because Wiktextract's README gives them no wording (Laplace-Engine#32):
+# hyponyms, instances, troponyms, proverbs, abbreviations, anagrams, compound_of (linkages and lists the README's list
+# of linkages does not name); raw_tags, qualifier, head_nr, ruby, urls, links, literal_meaning, attestations
+# (date, references, refn), etymology_examples, original_title, redirects, hyphenations (parts), and of a sound
+# rhymes, zh_pron, hangeul, other, form. hyphenation ("hyphenation - list of hyphenations") and homophone
+# ("homophones - list of homophones for the word") are worded only by their own names, which is no relation.
 holds record * via
 holds senses * via
 attest * *

@@ -4,9 +4,8 @@ name predicate-matrix
 # the unique index formed by the first four columns." A tab parts the fields; the first row names them. Every value is
 # written after the resource it is of (vn:51.3.1, fn:Body_movement, pb:drop.01, mcr:ili-30-01976841-v, wn:drop%2:38:00),
 # and NULL is what the matrix writes where a resource has nothing for the row.
-# A row is the role it maps: its predicate and its role ([id:abaixar.1.default, id:arg0]); a VerbNet class, a FrameNet
-# frame, a PropBank roleset or a WordNet synset is read as the type the matrix's key names. The highway maps the
-# concepts, classes, frames and rolesets a row aligns.
+# A VerbNet class, a FrameNet frame, a PropBank roleset or a WordNet synset is read as the type the matrix's key
+# names. The highway maps the concepts, classes, frames and rolesets a row aligns.
 match PredicateMatrix.v*.txt
 
 tier row by \n
@@ -14,7 +13,6 @@ header
 tier field by \t
 empty id:NULL vn:NULL wn:NULL mcr:NULL fn:NULL pb:NULL eso:NULL
 
-thing row 3_ID_PRED 4_ID_ROLE
 type 5_VN_CLASS vnclass matching ^vn:(.*)$
 type 7_VN_SUBCLASS vnclass matching ^vn:(.*)$
 type 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$
@@ -23,10 +21,16 @@ type 13_FN_FRAME fnframe matching ^fn:(.*)$
 type 16_PB_ROLESET pbroleset matching ^pb:(.*)$
 omit 6_VN_CLASS_NUMBER 8_VN_SUBCLASS_NUMBER 24_WN_SENSEFREC 25_WN_SYNSET_REL_NUM
 content *
-# A column's header (10_VN_ROLE, 13_FN_FRAME, ...) is never a relation (Laplace-Engine#32): no column is given a meaning,
-# so each is an unresolved obligation and makes no claim. What a row means is one interchange strand over the resolved
-# highway nodes it aligns, never a claim per column (Laplace-Engine#23).
-attest row *
+# A row is the one correspondence it states (Laplace-Engine#23): README: "Each row of this Predicate Matrix represents
+# the mapping of a role over the different resources and includes all the aligned knowledge about its corresponding
+# verb sense." The row is itself what is attested: the path of its fields in the matrix's order, each as the type its
+# key names (a VerbNet class, an ILI concept, a FrameNet frame, a PropBank roleset) or as the matrix writes it
+# (vn:Agent, fn:drop.v, pb:0, mcr:Motion, eso:Motion), every value after the resource it is of; what the matrix leaves
+# NULL is in no row. A column's header (10_VN_ROLE, 13_FN_FRAME, ...) is in no claim (Laplace-Engine#32): no claim is
+# made of a column, and the row is never split into a claim per column. Each row is "indetified by the unique index
+# formed by the first four columns", which are its first four parts.
+thing row .
+itself row
 
 maps row 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$ to 5_VN_CLASS vnclass matching ^vn:(.*)$
 maps row 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$ to 13_FN_FRAME fnframe matching ^fn:(.*)$

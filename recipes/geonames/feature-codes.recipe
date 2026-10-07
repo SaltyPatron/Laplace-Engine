@@ -11,4 +11,6 @@ tier field by \t
 
 thing row "feature classes and feature codes"
 content "feature classes and feature codes" name description
+relation "name for feature classes and feature codes" name
+relation "description for feature classes and feature codes" description
 attest row name description

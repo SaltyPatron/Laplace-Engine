@@ -20,4 +20,5 @@ omit "Date added" "Date last modified"
 voice row Username
 itself row
 score row Review from -1 to 1
-attest row Review
+# The review is the outcome of the member's game on the sentence ("-1 (sentence not OK), 0 (undecided or unsure), or
+# 1 (sentence OK)"), played by itself and score above; it is not said again as a claim of its own.

@@ -3,6 +3,11 @@ name social-bias-frames-aggregated
 # sexYN and offensiveYN over its annotations, the set of what was written as targetMinority, targetCategory and
 # targetStereotype, each written as a JSON list ("To load the list of implications, use json.loads"), and
 # hasBiasedImplication. A post has no HITId here: it is the text it is. What a row says of it, it says together.
+# Each field states the relation the README words for it (see annotations.recipe), here over all the post's
+# annotations: the mean of the answers, the set of the texts.
+# hasBiasedImplication is computed by the README's own code from targetStereotype,
+#   gDf["hasBiasedImplication"] = (gDf["targetStereotype"].apply(len) == 0).astype(int)
+# (1 where the list is empty): the list is recorded, so the flag says nothing more and is read by nothing.
 match SBIC.v2.agg.*.csv
 
 tier row by \n
@@ -14,6 +19,19 @@ part targetCategory by json
 part targetStereotype by json
 
 thing row post
-content post targetMinority targetCategory targetStereotype whoTarget intentYN sexYN offensiveYN hasBiasedImplication dataSource
+content post targetMinority targetCategory targetStereotype whoTarget intentYN sexYN offensiveYN dataSource
+omit hasBiasedImplication
 together row
-attest row targetMinority targetCategory targetStereotype whoTarget intentYN sexYN offensiveYN hasBiasedImplication dataSource
+# whoTarget: group vs. individual target;  intentYN: was the intent behind the statement to offend;
+# sexYN: is the post a sexual or lewd reference;  offensiveYN: could the post be offensive to anyone;
+# targetMinority: demographic group targeted;  targetCategory: high-level category of the demographic group(s)
+# targeted;  targetStereotype: implied statement;  dataSource: source of the post
+relation "group vs. individual target" whoTarget
+relation "was the intent behind the statement to offend" intentYN
+relation "is the post a sexual or lewd reference" sexYN
+relation "could the post be offensive to anyone" offensiveYN
+relation "demographic group targeted" targetMinority
+relation "high-level category of the demographic group(s) targeted" targetCategory
+relation "implied statement" targetStereotype
+relation "source of the post" dataSource
+attest row targetMinority targetCategory targetStereotype whoTarget intentYN sexYN offensiveYN dataSource

@@ -17,4 +17,8 @@ part Identifier_Type by space
 thing row "code point"
 range "code point"
 content Identifier_Type
+# The header: "the property Identifier_Type is defined as mapping each code point to a set of enumerated values. ... The
+# possible values are: Not_Character, Deprecated, Default_Ignorable, Not_NFKC, Not_XID, Exclusion, Obsolete, Technical,
+# Uncommon_Use, Limited_Use, Inclusion, Recommended"
+value - Identifier_Type
 attest row Identifier_Type

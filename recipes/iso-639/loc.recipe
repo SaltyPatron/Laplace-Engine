@@ -1,7 +1,7 @@
 name loc-iso639
 # The Library of Congress's ISO 639 lists as RDF/XML (MADS/RDF). An element that names a resource (rdf:about) is the
-# thing its URI names. Each element inside it says of it, under the element's own name, its text, or the resource
-# it points at (rdf:resource), or the thing written inside it. An element's attributes other than rdf:about are said
+# thing its URI names. Each element inside it is an RDF property: it says of the thing its text, or the resource it
+# points at (rdf:resource), or the thing written inside it. An element's attributes other than rdf:about are said
 # of the thing the element is.
 # rdf:parseType="Literal" elements hold XHTML, a page and not a value: they are in the file's tree and attest nothing.
 match iso639-?.rdf
@@ -11,5 +11,32 @@ format xml
 thing * rdf:about
 omit xmlns xmlns:* rdf:datatype lclang xml:lang rdf:parseType
 content *
+# A property element is the RDF property its QName names. RDF 1.1 XML Syntax, 2.1: "RDF/XML uses XML QNames as defined in
+# Namespaces in XML to represent IRIs." "The IRI represented by a QName is determined by appending the local name part
+# of the QName after the namespace name (IRI) part of the QName." The namespace names are the file's own declarations:
+#   <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+#    ... xmlns:skos="http://www.w3.org/2004/02/skos/core#" ...>
+#   <madsrdf:MADSScheme ... xmlns:madsrdf="http://www.loc.gov/mads/rdf/v1#">
+#   xmlns:cs="http://purl.org/vocab/changeset/schema#", xmlns:ri="http://id.loc.gov/ontologies/RecordInfo#" (iso639-2.rdf)
+# Each property is the relation its vocabulary defines, given as its IRI; that the file writes it under a prefix is
+# the notation Laplace-Engine#20 resolves.
+relation "http://www.w3.org/1999/02/22-rdf-syntax-ns#type" rdf:type
+relation "http://www.w3.org/2000/01/rdf-schema#label" rdfs:label
+relation "http://www.w3.org/2000/01/rdf-schema#comment" rdfs:comment
+relation "http://www.loc.gov/mads/rdf/v1#authoritativeLabel" madsrdf:authoritativeLabel
+relation "http://www.loc.gov/mads/rdf/v1#code" madsrdf:code
+relation "http://www.loc.gov/mads/rdf/v1#hasTopMemberOfMADSScheme" madsrdf:hasTopMemberOfMADSScheme
+relation "http://www.loc.gov/mads/rdf/v1#adminMetadata" madsrdf:adminMetadata
+relation "http://www.w3.org/2004/02/skos/core#prefLabel" skos:prefLabel
+relation "http://www.w3.org/2004/02/skos/core#notation" skos:notation
+relation "http://www.w3.org/2004/02/skos/core#hasTopConcept" skos:hasTopConcept
+relation "http://www.w3.org/2004/02/skos/core#changeNote" skos:changeNote
+relation "http://purl.org/vocab/changeset/schema#changeReason" cs:changeReason
+relation "http://purl.org/vocab/changeset/schema#createdDate" cs:createdDate
+relation "http://purl.org/vocab/changeset/schema#creatorName" cs:creatorName
+relation "http://purl.org/vocab/changeset/schema#subjectOfChange" cs:subjectOfChange
+relation "http://id.loc.gov/ontologies/RecordInfo#recordChangeDate" ri:recordChangeDate
+relation "http://id.loc.gov/ontologies/RecordInfo#recordContentSource" ri:recordContentSource
+relation "http://id.loc.gov/ontologies/RecordInfo#recordStatus" ri:recordStatus
 attest * */
 holds * * via

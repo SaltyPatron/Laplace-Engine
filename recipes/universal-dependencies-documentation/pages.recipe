@@ -1,12 +1,19 @@
 name ud-documentation
 # A page of the Universal Dependencies documentation. Its front matter names what the page is about (title: 'NOUN')
-# and gives a short definition of it (shortdef: 'noun'), said of it under the field's own name. A heading that names a
-# value (### <a name="Sing">`Sing`</a>: singular number) says, of what the page is about, the value and what it is
-# called: [Number, Sing, singular number].
+# and gives a short definition of it (shortdef: 'noun'). A heading that names a value (### <a name="Sing">`Sing`</a>:
+# singular number) says, of what the page is about, the value and what it is called: [Number, Sing] is called
+# "singular number".
 match *.md
 
 tier line by \n
 
 about ^title *: *'(.*)'$
+# Both lines below are unresolved obligations (Laplace-Engine#32). A line's first part, or a word the recipe writes
+# after "::", is a field's or a heading's name and is never a relation; and a line can say only the parts its own
+# text holds (:: pair, :: claim), not what the page is about together with a relation in the documentation's words.
+# The short definition is [NOUN, a short definition, noun] and a heading [[Number, Sing], singular number]; writing
+# either needs a line that says [what the page is about, TEXT, part] ("line PATTERN :: relation TEXT"), which the
+# engine does not have. A pair of the line's own parts would lose what the page is about: [Yes, it is possessive] is
+# Poss=Yes on one page and Abbr=Yes, Foreign=Yes, Typo=Yes ... on others.
 line ^(shortdef) *: *'(.*)'$
 line ^### <a name="[^"]*">`([^`]+)`</a>: (.*)$

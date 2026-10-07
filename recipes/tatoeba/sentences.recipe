@@ -14,4 +14,7 @@ empty \\N
 thing row Text
 content Text Lang
 key row "Sentence id"
+# "Each sentence is associated with a unique id and an ISO 639-3 language code." (sentences.csv; the other files
+# name the same field Lang): the sentence's language code
+relation "ISO 639-3 language code" Lang
 attest row Lang

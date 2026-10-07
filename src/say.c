@@ -63,7 +63,7 @@ enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, 
  * writes it otherwise than those it points at write it (vn:51.2 for 51.2): the highway's lines, and a type's key. */
 typedef struct { char list[32], path[160], as[64]; regex_t re; int has_re; } KSpec;
 typedef struct { char name[64]; int what; char arg[64]; KSpec k;
-                 struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; } Dis;   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse) */
+                 struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; const char *text; } Dis;   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse); text: what a relation line words it as */
 typedef struct { char tier[32], name[64]; } Pair;
 typedef struct { char tier[32]; char name[64][64]; int n; uint32_t when; char by[64], of[64]; int file; } Att;      /* when: the conditions it is said under, by their places in where[]; by: the part that names who says it; of: the part it is said of; file: a witness stands within the file */
 typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char by[64]; int alone; } Rel;     /* alone: where what it is to names nothing, the relation alone */
@@ -219,9 +219,9 @@ int say_says(Recipe *r, const char *path, char *tok){
     if ((!strcmp(tok, "about") || !strcmp(tok, "line")) && LAID) {           /* PATTERN: the rest of the line; its parentheses are the parts it says */
         char *rest = strtok(NULL, "\r\n"); if (!rest) { fprintf(stderr, "%s: %s PATTERN\n", path, tok); return -1; } while (*rest == ' ' || *rest == '\t') rest++;
         char pat[1024]; snprintf(pat, sizeof pat, "%s", rest); int mode = 0; char pred[64] = "";
-        if (tok[0] == 'l') { char *m = strstr(pat, " :: "); if (m) { *m = 0; char *w = m + 4; while (*w == ' ') w++;     /* PATTERN :: pair | claim | predicate NAME */
+        if (tok[0] == 'l') { char *m = strstr(pat, " :: "); if (m) { *m = 0; char *w = m + 4; while (*w == ' ') w++;     /* PATTERN :: pair | claim | predicate NAME (an obligation) */
                 if (!strncmp(w, "pair", 4)) mode = 2; else if (!strncmp(w, "claim", 5)) mode = 1; else if (!strncmp(w, "predicate ", 10)) { mode = 3; snprintf(pred, sizeof pred, "%s", w + 10); size_t pl = strlen(pred); while (pl && (pred[pl - 1] == ' ' || pred[pl - 1] == '\r')) pred[--pl] = 0; }
-                else { fprintf(stderr, "%s: line PATTERN :: pair | claim | predicate NAME\n", path); return -1; } } }
+                else { fprintf(stderr, "%s: line PATTERN :: pair | claim | relation \"TEXT\" [within]\n", path); return -1; } } }
         regex_t *re = tok[0] == 'a' ? &s->about_re : (s->nline < 8 ? &s->line[s->nline].re : NULL);
         if (!re || regcomp(re, pat, REG_EXTENDED)) { fprintf(stderr, "%s: the pattern does not compile (or there are more than 8): %s\n", path, pat); return -1; }
         if (tok[0] == 'a') s->has_about = 1; else { s->line[s->nline].mode = mode; snprintf(s->line[s->nline].pred, 64, "%s", pred); s->nline++; }
@@ -240,13 +240,13 @@ int say_says(Recipe *r, const char *path, char *tok){
             Dis *d = &s->val[s->nval++]; memset(d, 0, sizeof *d); snprintf(d->name, sizeof d->name, "%s", nm); dis_parse(d); snprintf(d->arg, sizeof d->arg, "%s", strcmp(a2, "-") ? a2 : ""); any = 1; }
         if (!any) { fprintf(stderr, "%s: value LIST NAME...\n", path); return -1; } return 1; }
     if (!strcmp(tok, "relation")) { at = strtok(NULL, "\r\n"); int any = 0;     /* relation "TEXT" NAME...: each part states that relation, in the words the source's documentation gives it */
-        if (!name_next(&at, a2, sizeof a2) || !a2[0]) { fprintf(stderr, "%s: relation \"TEXT\" NAME... (TEXT: the relation as the source's documentation words it)\n", path); return -1; }
+        char tx[512]; if (!name_next(&at, tx, sizeof tx) || !tx[0] || strlen(tx) >= sizeof tx - 1) { fprintf(stderr, "%s: relation \"TEXT\" NAME... (TEXT: the relation as the source's documentation words it)\n", path); return -1; }
         while (name_next(&at, nm, sizeof nm)) {
             const char *dot = strrchr(nm, '.'); const char *bare = dot ? dot + 1 : nm;
             if (!strcmp(nm, "{file}")) { fprintf(stderr, "%s: relation: a file's name is never what a claim means (Laplace-Engine#32)\n", path); return -1; }
-            if (!strcmp(a2, nm) || !strcmp(a2, bare)) { fprintf(stderr, "%s: relation \"%s\" %s: a field's own name is never its relation (Laplace-Engine#32); write what the documentation says it states\n", path, a2, nm); return -1; }
+            if (!strcmp(tx, nm) || !strcmp(tx, bare)) { fprintf(stderr, "%s: relation \"%s\" %s: a field's own name is never its relation (Laplace-Engine#32); write what the documentation says it states\n", path, tx, nm); return -1; }
             if (s->nval == 256) { fprintf(stderr, "%s: more parts than value and relation name (256)\n", path); return -1; }
-            Dis *d = &s->val[s->nval++]; memset(d, 0, sizeof *d); snprintf(d->name, sizeof d->name, "%s", nm); dis_parse(d); snprintf(d->arg, sizeof d->arg, "%s", a2); d->what = 1; any = 1; }
+            Dis *d = &s->val[s->nval++]; memset(d, 0, sizeof *d); snprintf(d->name, sizeof d->name, "%s", nm); dis_parse(d); d->text = strdup(tx); d->what = 1; any = 1; }      /* kept for the recipe's life */
         if (!any) { fprintf(stderr, "%s: relation \"TEXT\" NAME...\n", path); return -1; } return 1; }
     if (!strcmp(tok, "own") && LAID) { at = strtok(NULL, "\r\n"); int any = 0;      /* a name that stands only within the source: [the source's witness, NAME, the name] */
         while (name_next(&at, nm, sizeof nm)) { if (dis_add(s, path, nm, D_OWN, NULL) < 0) return -1; any = 1; }
@@ -310,7 +310,7 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
                  Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int32_t wide_of; KeyRank kr; int16_t *dm; uint32_t dm_cap;
                  struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; int32_t rec;
-                 struct Obl { char name[160]; uint64_t n; char what; } obl[128]; int nobl; uint64_t obl_more; } Sink;   /* obl: the obligations the reading left (no meaning: no claim), and values outside the road class named, by name */        /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
+                 struct Obl { char name[160]; uint64_t n; char what; } obl[256]; int nobl; uint64_t obl_more; } Sink;   /* obl: the obligations the reading left (no meaning: no claim), and values outside the road class named, by name */        /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
     if (k->nhr == k->chr) { k->chr = k->chr ? k->chr * 2 : 1024; k->hr = xrealloc(k->hr, sizeof(HwRec) * k->chr); }
@@ -329,7 +329,7 @@ static void owed(Sink *k, char what, const char *how, const uint8_t *a, size_t a
     char key[160]; int l = snprintf(key, sizeof key, "%s %.*s", how, (int)(al < 48 ? al : 48), (const char *)a);
     if (b && l > 0 && (size_t)l < sizeof key) snprintf(key + l, sizeof key - (size_t)l, ".%.*s", (int)(bl < 40 ? bl : 40), (const char *)b);
     for (int i = 0; i < k->nobl; i++) if (k->obl[i].what == what && !strcmp(k->obl[i].name, key)) { k->obl[i].n++; return; }
-    if (k->nobl == 128) { k->obl_more++; return; }
+    if (k->nobl == 256) { k->obl_more++; return; }
     struct Obl *o = &k->obl[k->nobl++]; snprintf(o->name, sizeof o->name, "%s", key); o->n = 1; o->what = what;
 }
 static void owed_node(Sink *k, const char *how, const SNode *x){ owed(k, 'o', how, x->name, x->nlen, NULL, 0); }
@@ -345,10 +345,10 @@ static void claim(Sink *k, Ref *part, int n);
  * [thing, value]. The part's name is in no claim. */
 /* A claim made of a part under the meaning the recipe gave it, counted by that meaning (say_obligations says them). */
 static void said_count(Sink *k, const Dis *m){
-    char how[96]; if (m->what == 1) snprintf(how, sizeof how, "relation \"%s\"", m->arg); else snprintf(how, sizeof how, "value %s", m->arg[0] ? m->arg : "-");
+    char how[96]; if (m->what == 1) snprintf(how, sizeof how, "relation \"%.60s\"", m->text); else snprintf(how, sizeof how, "value %s", m->arg[0] ? m->arg : "-");
     owed(k, 's', how, (const uint8_t *)m->name, strlen(m->name), NULL, 0); }
-static void said_as(Sink *k, const Dis *m, Ref S, Ref v){ if (!memcmp(&v.id, &S.id, 16)) return; said_count(k, m);
-    if (m->what == 1) { Ref p[3] = { S, string_ref((const uint8_t *)m->arg, strlen(m->arg)), v }; claim(k, p, 3); return; }     /* relation "TEXT": [thing, TEXT, value] */
+static void said_as(Sink *k, const Dis *m, Ref S, Ref v){ if (m->what != 1 && !memcmp(&v.id, &S.id, 16)) { owed(k, 'o', "value equal to its thing:", (const uint8_t *)m->name, strlen(m->name), NULL, 0); return; } said_count(k, m);     /* a relation to itself is a statement (fra's 639-2/T code is fra); a value that is the thing itself, [x, x], is a run, no claim: counted */
+    if (m->what == 1) { Ref p[3] = { S, string_ref((const uint8_t *)m->text, strlen(m->text)), v }; claim(k, p, 3); return; }     /* relation "TEXT": [thing, TEXT, value] */
     of_class(k, m, &v); Ref p[2] = { S, v }; claim(k, p, 2); }     /* a value that is the thing itself (a lemma its own form) says nothing of it */
 /* The obligations of every file read, by recipe: kept until said. */
 static struct { char recipe[64], name[160]; uint64_t n; char what; } *OBL; static size_t NOBL, COBL; static uint64_t OBL_MORE;
@@ -363,14 +363,14 @@ static void owed_keep(const char *recipe, const Sink *k){
 }
 static int obl_cmp(const void *x, const void *y){ const char *a = (const char *)x, *b = (const char *)y; int c = strcmp(a, b); return c ? c : strcmp(a + 64, b + 64); }
 void say_obligations(FILE *o){
-    uint64_t n = 0, m = 0, sd = 0; for (size_t i = 0; i < NOBL; i++) { if (OBL[i].what == 'o') n += OBL[i].n; else if (OBL[i].what == 'm') m += OBL[i].n; else sd += OBL[i].n; }
+    uint64_t n = OBL_MORE, m = 0, sd = 0; for (size_t i = 0; i < NOBL; i++) { if (OBL[i].what == 'o') n += OBL[i].n; else if (OBL[i].what == 'm') m += OBL[i].n; else sd += OBL[i].n; }
     if (!NOBL && !OBL_MORE) return;
     qsort(OBL, NOBL, sizeof *OBL, obl_cmp);
     if (sd) { fprintf(o, "\n== statements, by the meaning the recipe gives each part (value LIST NAME, relation \"TEXT\" NAME): %'llu\n", (unsigned long long)sd);
         for (size_t i = 0; i < NOBL; i++) if (OBL[i].what == 's') fprintf(o, "   %-22s %-80s %'14llu\n", OBL[i].recipe, OBL[i].name, (unsigned long long)OBL[i].n); }
     fprintf(o, "\n== unresolved obligations: %'llu parts a claim would name have no meaning the recipe gives, so no claim is made of them (Laplace-Engine#32)\n", (unsigned long long)n);
     for (size_t i = 0; i < NOBL; i++) if (OBL[i].what == 'o') fprintf(o, "   %-22s %-80s %'14llu\n", OBL[i].recipe, OBL[i].name, (unsigned long long)OBL[i].n);
-    if (OBL_MORE) fprintf(o, "   and %'llu more, under names past the 128 a part keeps\n", (unsigned long long)OBL_MORE);
+    if (OBL_MORE) fprintf(o, "   of them %'llu under names past the 256 a part keeps\n", (unsigned long long)OBL_MORE);
     if (m) { fprintf(o, "   values said as a road class's that the highway's list does not hold (claimed as written; no slot): %'llu\n", (unsigned long long)m);
         for (size_t i = 0; i < NOBL; i++) if (OBL[i].what == 'm') fprintf(o, "   %-22s %-80s %'14llu\n", OBL[i].recipe, OBL[i].name, (unsigned long long)OBL[i].n); }
     free(OBL); OBL = NULL; NOBL = COBL = 0; OBL_MORE = 0;
@@ -777,7 +777,7 @@ static void sink_merge(Sink *k, Sink *w){
     for (int i = 0; i < w->nopen; i++) { int dup = 0; for (int j = 0; j < k->nopen && !dup; j++) dup = !strcmp(k->opennm[j], w->opennm[i]); if (!dup && k->nopen < 16) strcpy(k->opennm[k->nopen++], w->opennm[i]); }
     k->unknown += w->unknown; for (int i = 0; i < w->nunk && k->nunk < 8; i++) strcpy(k->unknm[k->nunk++], w->unknm[i]);
     k->obl_more += w->obl_more; for (int i = 0; i < w->nobl; i++) { int j = 0; for (; j < k->nobl; j++) if (k->obl[j].what == w->obl[i].what && !strcmp(k->obl[j].name, w->obl[i].name)) break;
-        if (j < k->nobl) k->obl[j].n += w->obl[i].n; else if (k->nobl < 128) k->obl[k->nobl++] = w->obl[i]; else k->obl_more += w->obl[i].n; }
+        if (j < k->nobl) k->obl[j].n += w->obl[i].n; else if (k->nobl < 256) k->obl[k->nobl++] = w->obl[i]; else k->obl_more += w->obl[i].n; }
     free(w->ev.e); free(w->meta.c); free(w->things.c); free(w->grp.c); free(w->cs); lp_buf_free(&w->ix_key);
 }
 /* A thread may take up a part while it waits inside its own reading: what it was in the middle of is put back after. */
@@ -892,7 +892,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
                             if (mw) { said_as(k, mw, S, vw); continue; }
                             if (!my) { if (!wi) owed(k, 'o', "attest", y->name, y->nlen, w->name, w->nlen); continue; }
                             Ref kv[2] = { string_ref(w->name, w->nlen), vw }; kv[0].said = 0; if (kv[1].said != LP_SAID_TUPLE) kv[1].said = 0;   /* the pair the record holds: the same entity */
-                            Ref pv = said_tuple(compose(kv, 2, ref_above(kv, 2))); of_class(k, my, &pv); Ref p[2] = { S, pv }; claim(k, p, 2); continue; }
+                            Ref pv = said_tuple(compose(kv, 2, ref_above(kv, 2))); of_class(k, my, &pv); said_count(k, my); Ref p[2] = { S, pv }; claim(k, p, 2); continue; }
                         if (!value_of(k, t, q, &v, 0)) continue;
                         if (!my) { if (!wi) owed_node(k, "attest", y); continue; }
                         said_as(k, my, S, v); } }

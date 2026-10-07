@@ -18,4 +18,15 @@ part neighbours by ,
 thing row "#ISO"
 refer geonameid geonames-geoname
 content "#ISO" ISO3 ISO-Numeric fips Country Capital "Area(in sq km)" Population Continent tld CurrencyCode CurrencyName Phone "Postal Code Format" "Postal Code Regex" Languages neighbours EquivalentFipsCode
+# What the readme words: "iso codes, fips codes, languages"; and, in the file, "the languages spoken in a country".
+relation "iso codes" ISO3 ISO-Numeric
+relation "fips codes" fips EquivalentFipsCode
+relation "languages spoken in a country" Languages
+# The continent is a value of the readme's list: "Continent codes : AF : Africa ... AN : Antarctica".
+value - Continent
+# The readme words no other column: "capital" is the header's own word, and Country, "Area(in sq km)", Population, tld,
+# CurrencyCode, CurrencyName, Phone, "Postal Code Format", "Postal Code Regex" and neighbours have none (its "..."). Each
+# stays an obligation until a documented wording is found (Laplace-Engine#32).
+# geonameid is GeoNames's pointer to the country's place in the geoname table: that the country is that place is a
+# resolution of the pointer, never a claim under its column's name (Laplace-Engine#20).
 attest row ISO3 ISO-Numeric fips Country Capital "Area(in sq km)" Population Continent tld CurrencyCode CurrencyName Phone "Postal Code Format" "Postal Code Regex" Languages geonameid neighbours EquivalentFipsCode

@@ -19,4 +19,6 @@ where charList matches ^[^@]
 thing row charList
 range charList
 content collElement
+# UTS #10 (revision 53, Unicode 17.0.0), 12.1: "Each <entry> is a mapping from character(s) to collation element(s)"
+relation "collation element(s)" collElement
 attest row collElement

@@ -9,5 +9,11 @@ format turtle
 thing triple subject
 thing rdf_literal value
 content *
+# A statement's predicate is an RDF property: a relation of the RDF vocabulary the file writes, as written (RDF 1.1
+# Concepts: "Each triple consists of a subject, a predicate and an object ... the predicate, which is an IRI"; RDF 1.1
+# Turtle: "The token 'a' in the predicate position of a Turtle triple represents the IRI
+# http://www.w3.org/1999/02/22-rdf-syntax-ns#type"). A prefixed name, and the a written for rdf:type, are recorded as
+# written: their resolution to the IRI they abbreviate is Laplace-Engine#20 (Laplace-Engine#32).
+value - predicate
 relate property predicate to object_list
 pair rdf_literal lang_tag datatype

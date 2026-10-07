@@ -29,12 +29,23 @@ part json by object
 # ExternalURL is no relation between terms: its end is a URL of the term on another site, which split at its slashes
 # made wiki and en.wiktionary.org things of their own (about 49M attestations). Those edges are not read.
 where rel is-not /r/ExternalURL
-omit uri dataset license process activity
-content rel start end weight surfaceText surfaceStart surfaceEnd
+# surfaceStart and surfaceEnd are the two ends as surfaceText writes them: "The locations of the start and end concepts
+# will be marked by surrounding them with double brackets" ([[sucker]] is related to [[ball]]; in every edge sampled
+# both stand in surfaceText so). The page gives them no wording of their own, and they say nothing surfaceText does
+# not: they are not read.
+omit uri dataset license process activity surfaceStart surfaceEnd
+content rel start end weight surfaceText
 own contributor
 
 thing edge start/3 rel/2 end/3
 itself edge by json/sources/contributor
+# What the JSON says of the edge, in the words of ConceptNet's page "Edges" (Laplace-Engine#32): never the member's name.
+#   "weight: the strength with which this edge expresses this assertion. A typical weight is 1, but weights can be
+#   higher or lower. All weights are positive."
+relation "the strength with which this edge expresses this assertion" json.weight
+#   "surfaceText: the original natural language text that expressed this statement. May be null, because not every
+#   statement was derived from natural language input."
+relation "the original natural language text" json.surfaceText
 attest edge json
 pair edge start/2 start/4 of start/3
 pair edge end/2 end/4 of end/3

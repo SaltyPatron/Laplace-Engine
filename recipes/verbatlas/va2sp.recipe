@@ -19,6 +19,9 @@ refer sp* verbatlas-preference-info
 content type role*
 
 together row
+# README: "Some frames support two types of selectional preferences: Concrete (C) and Abstract (A).": a value of that
+# list, [OBTAIN, A] (Laplace-Engine#32)
+value - type
 attest row type
 # roleN is a value of VerbAtlas's role inventory, the relation of the frame to its selectional preferences
 value - role*

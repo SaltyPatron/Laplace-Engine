@@ -1,8 +1,8 @@
 name iana-language-subtag-registry
 # The IANA language subtag registry (RFC 5646, 3.1): records of fields, parted by a line "%%"; each field written
 # "Field-Name: value", a line that begins with white space continuing the one before. A record is about its Subtag, or
-# its Tag (a grandfathered or redundant tag has a Tag and no Subtag); every other field is said of it, under the
-# field's own name. The first record holds only the File-Date: it is said of the file, in its metadata.
+# its Tag (a grandfathered or redundant tag has a Tag and no Subtag); every other field is said of it as RFC 5646
+# words what the field means. The first record holds only the File-Date: it is said of the file, in its metadata.
 # The file does not name who publishes it; the directory it is kept in is named iana.
 match language-subtag-registry.txt
 witness {dir}
@@ -17,4 +17,23 @@ thing record Tag
 metadata File-Date
 omit Added Deprecated
 content *
+# Type and Scope are values of the registry's own lists. RFC 5646:
+#   3.1.3: "The field 'Type' contains the string identifying the record type in which it appears." ("language",
+#          "extlang", "script", "region", "variant", "grandfathered", "redundant")
+#   3.1.11: "The field 'Scope' contains classification information about a primary or extended language subtag
+#          derived from ISO 639." ("macrolanguage", "collection", "special", "private-use")
+value - Type Scope
+#   3.1.5: "The field 'Description' contains a description of the tag or subtag in the record."
+relation "a description of the tag or subtag in the record" Description
+#   3.1.7: "The field 'Preferred-Value' contains a mapping between the record in which it appears and another tag or subtag."
+relation "a mapping between the record in which it appears and another tag or subtag" Preferred-Value
+#   3.1.8: "The field 'Prefix' contains a valid language tag that is RECOMMENDED as one possible prefix to this
+#          record's subtag, perhaps with other subtags."
+relation "one possible prefix to this record's subtag" Prefix
+#   3.1.9: "This field indicates a script used to write the overwhelming majority of documents for the given language"
+relation "a script used to write the overwhelming majority of documents for the given language" Suppress-Script
+#   3.1.10: "This field indicates a language that encompasses this subtag's language according to assignments made by ISO 639-3."
+relation "a language that encompasses this subtag's language" Macrolanguage
+#   3.1.12: "The field 'Comments' contains additional information about the record"
+relation "additional information about the record" Comments
 attest record *
