@@ -362,14 +362,23 @@ int os_run_logged(const char *exe, char *const argv[], const char *log, const ch
     wchar_t *wl = wide(log), *we = wide(exe); if (!wl || !we) { free(wl); free(we); errno = ENOMEM; return -1; }
     HANDLE h = CreateFileW(wl, GENERIC_WRITE, FILE_SHARE_READ, &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL); free(wl);
     if (h == INVALID_HANDLE_VALUE) { free(we); errno = EACCES; return -1; }
+    /* The child reads nothing: its input is NUL, not this process's input handle (a pipe to a process that may be
+     * gone, or no console at all under a service). */
+    HANDLE in = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
     STARTUPINFOW si = { sizeof si }; si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE); si.hStdOutput = h; si.hStdError = h;
+    si.hStdInput = in; si.hStdOutput = h; si.hStdError = h;
     char *was = getenv(var) ? _strdup(getenv(var)) : NULL; _putenv_s(var, value);   /* the child inherits it */
     PROCESS_INFORMATION pi; BOOL ok = CreateProcessW(we, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
-    _putenv_s(var, was ? was : ""); free(was); free(we); CloseHandle(h);
-    if (!ok) { errno = ENOEXEC; return -1; }
+    DWORD err = ok ? 0 : GetLastError();
+    _putenv_s(var, was ? was : ""); free(was); free(we); CloseHandle(h); if (in != INVALID_HANDLE_VALUE) CloseHandle(in);
+    if (!ok) { fprintf(stderr, "%s: the process was not started (Windows error %lu)\n", exe, (unsigned long)err);
+               errno = err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND ? ENOENT : ENOEXEC; return -1; }
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD code = 1; GetExitCodeProcess(pi.hProcess, &code); CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+    /* A process that died (an exception, a library that failed to load, the system out of memory) ends with an NT
+     * status, 0xC0000000 and up: negative as an int, which read as a start that failed and was reported through
+     * errno, as "No such file or directory". It is said as what it is, and counts as a signal does on POSIX. */
+    if ((code & 0xC0000000u) == 0xC0000000u) { fprintf(stderr, "%s: ended with status 0x%08lX\n", exe, (unsigned long)code); return 128; }
     return (int)code;
 }
 pid_t waitpid(pid_t pid, int *status, int options){ (void)pid; (void)status; (void)options; errno = ECHILD; return -1; }

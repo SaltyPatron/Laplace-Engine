@@ -317,7 +317,11 @@ size_t xml_unescape(const uint8_t *s, size_t n, uint8_t *o){
     return k;
 }
 void ev_push(Events *e, const Event *x){                         /* by address: a copy per call, in a loop, is stack that is never given back */
-    if (e->n == e->cap) { e->cap = e->cap ? e->cap * 2 : 65536; e->e = xrealloc(e->e, e->cap * sizeof(Event)); }
+    /* From 64, doubling. Every file keeps its list until its batch is written, and a list begun at 65,536 events was
+     * 4.7 MB a file however few it held: untouched pages cost nothing on Linux, but Windows charges them to the
+     * commit limit, and PropBank's 7,568 files held 32 GB of it (FrameNet's 14,930 ran out: realloc: Not enough
+     * space, 2026-10-06). */
+    if (e->n == e->cap) { e->cap = e->cap ? e->cap * 2 : 64; e->e = xrealloc(e->e, e->cap * sizeof(Event)); }
     e->e[e->n++] = *x;
 }
 
