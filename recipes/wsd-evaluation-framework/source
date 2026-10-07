@@ -12,6 +12,10 @@ root $LAPLACE_DATA/WSD
 # Data_Validation/sample-dataset holds semeval2015.data.xml and semeval2015.gold.key.txt, byte for byte the files of
 # Evaluation_Datasets/semeval2015: they are read there, under that directory's name.
 except */sample-dataset/*
+# Evaluation_Datasets/ALL is the five evaluation datasets concatenated (the README: "ALL: The concatentation of the previous
+# five evaluation datasets"): read again, as its own witness, it would count every gold key of the five a second time. Packaging is not
+# a source saying it again, and count is never independence.
+except */Evaluation_Datasets/ALL/*
 # Training_Corpora/SemCor+OMSTI/semcor+omsti.data.xml is 1,300,362,941 bytes. The XML reader parses a file whole:
 # SemCor's 39 MB took 3.3 GB of memory, and at that rate this file takes more than this machine has. It is not read.
 # Its gold file is.
