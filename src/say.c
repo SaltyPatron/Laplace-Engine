@@ -296,7 +296,7 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
                  Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int32_t wide_of; KeyRank kr; int16_t *dm; uint32_t dm_cap;
                  struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; int32_t rec;
-                 struct Obl { char name[96]; uint64_t n; char what; } obl[32]; int nobl; uint64_t obl_more; } Sink;   /* obl: the obligations the reading left (no meaning: no claim), and values outside the road class named, by name */        /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
+                 struct Obl { char name[96]; uint64_t n; char what; } obl[128]; int nobl; uint64_t obl_more; } Sink;   /* obl: the obligations the reading left (no meaning: no claim), and values outside the road class named, by name */        /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
     if (k->nhr == k->chr) { k->chr = k->chr ? k->chr * 2 : 1024; k->hr = xrealloc(k->hr, sizeof(HwRec) * k->chr); }
@@ -315,7 +315,7 @@ static void owed(Sink *k, char what, const char *how, const uint8_t *a, size_t a
     char key[96]; int l = snprintf(key, sizeof key, "%s %.*s", how, (int)(al < 40 ? al : 40), (const char *)a);
     if (b && l > 0 && (size_t)l < sizeof key) snprintf(key + l, sizeof key - (size_t)l, ".%.*s", (int)(bl < 40 ? bl : 40), (const char *)b);
     for (int i = 0; i < k->nobl; i++) if (k->obl[i].what == what && !strcmp(k->obl[i].name, key)) { k->obl[i].n++; return; }
-    if (k->nobl == 32) { k->obl_more++; return; }
+    if (k->nobl == 128) { k->obl_more++; return; }
     struct Obl *o = &k->obl[k->nobl++]; snprintf(o->name, sizeof o->name, "%s", key); o->n = 1; o->what = what;
 }
 static void owed_node(Sink *k, const char *how, const SNode *x){ owed(k, 'o', how, x->name, x->nlen, NULL, 0); }
@@ -348,7 +348,7 @@ void say_obligations(FILE *o){
     qsort(OBL, NOBL, sizeof *OBL, obl_cmp);
     fprintf(o, "\n== unresolved obligations: %'llu parts a claim would name have no meaning the recipe gives (value LIST NAME), so no claim is made of them (Laplace-Engine#32)\n", (unsigned long long)n);
     for (size_t i = 0; i < NOBL; i++) if (OBL[i].what == 'o') fprintf(o, "   %-22s %-60s %'14llu\n", OBL[i].recipe, OBL[i].name, (unsigned long long)OBL[i].n);
-    if (OBL_MORE) fprintf(o, "   and %'llu more, under names past the 32 a part keeps\n", (unsigned long long)OBL_MORE);
+    if (OBL_MORE) fprintf(o, "   and %'llu more, under names past the 128 a part keeps\n", (unsigned long long)OBL_MORE);
     if (m) { fprintf(o, "   values said as a road class's that the highway's list does not hold (claimed as written; no slot): %'llu\n", (unsigned long long)m);
         for (size_t i = 0; i < NOBL; i++) if (OBL[i].what == 'm') fprintf(o, "   %-22s %-60s %'14llu\n", OBL[i].recipe, OBL[i].name, (unsigned long long)OBL[i].n); }
     free(OBL); OBL = NULL; NOBL = COBL = 0; OBL_MORE = 0;
@@ -755,7 +755,7 @@ static void sink_merge(Sink *k, Sink *w){
     for (int i = 0; i < w->nopen; i++) { int dup = 0; for (int j = 0; j < k->nopen && !dup; j++) dup = !strcmp(k->opennm[j], w->opennm[i]); if (!dup && k->nopen < 16) strcpy(k->opennm[k->nopen++], w->opennm[i]); }
     k->unknown += w->unknown; for (int i = 0; i < w->nunk && k->nunk < 8; i++) strcpy(k->unknm[k->nunk++], w->unknm[i]);
     k->obl_more += w->obl_more; for (int i = 0; i < w->nobl; i++) { int j = 0; for (; j < k->nobl; j++) if (k->obl[j].what == w->obl[i].what && !strcmp(k->obl[j].name, w->obl[i].name)) break;
-        if (j < k->nobl) k->obl[j].n += w->obl[i].n; else if (k->nobl < 32) k->obl[k->nobl++] = w->obl[i]; else k->obl_more += w->obl[i].n; }
+        if (j < k->nobl) k->obl[j].n += w->obl[i].n; else if (k->nobl < 128) k->obl[k->nobl++] = w->obl[i]; else k->obl_more += w->obl[i].n; }
     free(w->ev.e); free(w->meta.c); free(w->things.c); free(w->grp.c); free(w->cs); lp_buf_free(&w->ix_key);
 }
 /* A thread may take up a part while it waits inside its own reading: what it was in the middle of is put back after. */
