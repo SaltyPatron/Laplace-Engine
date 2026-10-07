@@ -51,6 +51,9 @@ static const Param
     FROM     = { "from", NULL, ARG_TEXT, NULL, "from" },
     TO       = { "to", NULL, ARG_TEXT, NULL, "to" },
     LAYOUT   = { "layout", NULL, ARG_PATH, NULL, "LAYOUT" },
+    OUT_PGN  = { "output", "-o", ARG_PATH, "standard output", "file.pgn" },
+    VERIFY   = { "verify", "--verify", ARG_FLAG, NULL, "every ID under them recomputed from its constituents with BLAKE3 alone, every leaf a codepoint" },
+    ROOT     = { "id", NULL, ARG_TEXT, NULL, "a file's, a record's or a line's ID" },
     MODEL    = { "model_dir", NULL, ARG_PATH, NULL, "model_dir" };
 
 /* ---- the operations */
@@ -78,6 +81,7 @@ static const Arg A_DEGREES[] = { O(CONNINFO), O(FIRMWARE), { &LIMIT, 0, NULL, "2
                                  { &FROM, ARG_REQUIRED, NULL, NULL }, { &TO, 0, NULL, NULL }, END };
 static const Arg A_FILLS[] = { O(CONNINFO), { &LIMIT, 0, NULL, "12" }, O(TIER0), { &PHRASE, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_MODEL[] = { { &MODEL, ARG_REQUIRED, NULL, NULL }, O(LAYERS), O(ZMIN), O(CAP), { &SAMPLE, ARG_MANY, NULL, NULL }, END };
+static const Arg A_PGN[] = { O(CONNINFO), O(TIER0), O(OUT_PGN), O(VERIFY), { &ROOT, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
 
 #define R_DB EFFECT_READS_DB
 #define W_DB (EFFECT_READS_DB | EFFECT_WRITES_DB)
@@ -106,6 +110,7 @@ const Op OPS[] = {
     { "status",    cmd_status,    "what a database holds", A_NONE, R_DB, "text" },
     { "bench",     cmd_bench,     "every native operation, measured", A_NONE, R_F, "text" },
     { "model",     cmd_model,     "a transformer checkpoint read as testimony", A_MODEL, R_F, "text" },
+    { "pgn",       cmd_pgn,       "a PGN file's games written again from the database alone: the read edge of chess", A_PGN, R_DB | R_F, "PGN" },
 };
 const size_t NOPS = sizeof OPS / sizeof *OPS;
 
