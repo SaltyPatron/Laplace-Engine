@@ -44,7 +44,7 @@ typedef struct {
     double fact;                                      /* the trust at which a curated member is returned as one fact; above 1: never */
     int order_witness;                                /* on an open claim, the witness's own order before the standing */
     int shape; double shape_n;
-    int walks, steps, walk_fan, nearest; double restart;                 /* walkers from each word, the steps each walks, how often one goes home: the walks' share of the evidence */
+    int walks, steps, walk_fan, nearest, rounds, breadth; double restart;   /* rounds: coupling rounds (layers); breadth: how many responding entities a round carries on */                 /* walkers from each word, the steps each walks, how often one goes home: the walks' share of the evidence */
     double sure;                                      /* how many standard errors of the walks separate two counts; within them, the walks cannot tell two apart */
     double lift;                                      /* how much more often than its base rate a word must be observed beside an occurrence to ground it */
     int elect[FW_E_KEYS], nelect;                     /* the election order: the evidence keys a proposal is compared by, first to last */

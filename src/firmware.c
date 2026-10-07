@@ -24,7 +24,7 @@ static void names(Firmware *fw, char (*into)[96], int *n, int cap, const char *p
 Firmware firmware_for(const char *path, int op){
     Firmware fw; memset(&fw, 0, sizeof fw);
     fw.k = 2.0; fw.lambda = 0.05; fw.fan = op == FW_SEARCH ? 512 : 4096; fw.hops = 8; fw.emit = 32; fw.top_within = 0; fw.fact = 2.0; fw.order_witness = 1; fw.shape = FW_FRECHET;
-    fw.walks = 64; fw.steps = 4; fw.walk_fan = 512; fw.nearest = 512; fw.restart = 0.25; fw.sure = 2.0; fw.lift = 2.0; fw.tie = FW_TIE_FIRST;
+    fw.walks = 64; fw.steps = 4; fw.walk_fan = 512; fw.nearest = 512; fw.rounds = 2; fw.breadth = 64; fw.restart = 0.25; fw.sure = 2.0; fw.lift = 2.0; fw.tie = FW_TIE_FIRST;
     { static const int E[] = { FW_E_GROUNDS, FW_E_CONTINUITY, FW_E_AGREE, FW_E_HEADS, FW_E_COOCCUR, FW_E_WALKS, FW_E_SHAPE, FW_E_CONFIDENCE, FW_E_SHARED }; memcpy(fw.elect, E, sizeof E); fw.nelect = FW_E_KEYS; }
     snprintf(fw.path, sizeof fw.path, "%s", path && *path ? path : firmware_path());
     FILE *f = fopen(fw.path, "r"); if (!f) { perror(fw.path); fprintf(stderr, "LAPLACE_FIRMWARE names the firmware a pull runs under\n"); exit(1); }
@@ -71,6 +71,8 @@ Firmware firmware_for(const char *path, int op){
                 while ((nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') { if (fw.nrole >= FW_WEIGHS) { fprintf(stderr, "%s:%d: more roles than a firmware holds\n", fw.path, line); exit(2); }
                     snprintf(fw.role_name[fw.nrole], 96, "%s", nm); fw.role[fw.nrole++] = w; } } }
         else if (!strcmp(tok, "walks")) { fw.walks = (int)NUMBER(); if (fw.walks < 0) { fprintf(stderr, "%s:%d: walks N (0: none)\n", fw.path, line); exit(2); } }
+        else if (!strcmp(tok, "rounds")) { fw.rounds = (int)NUMBER(); if (fw.rounds < 1) { fprintf(stderr, "%s:%d: rounds N (at least 1)\n", fw.path, line); exit(2); } }
+        else if (!strcmp(tok, "breadth")) { fw.breadth = (int)NUMBER(); if (fw.breadth < 1) { fprintf(stderr, "%s:%d: breadth N\n", fw.path, line); exit(2); } }
         else if (!strcmp(tok, "nearest")) { fw.nearest = (int)NUMBER(); if (fw.nearest < 0) { fprintf(stderr, "%s:%d: nearest N\n", fw.path, line); exit(2); } }
         else if (!strcmp(tok, "walkfan")) { fw.walk_fan = (int)NUMBER(); if (fw.walk_fan < 1) { fprintf(stderr, "%s:%d: walkfan N\n", fw.path, line); exit(2); } }
         else if (!strcmp(tok, "steps")) { fw.steps = (int)NUMBER(); if (fw.steps < 0) { fprintf(stderr, "%s:%d: steps N\n", fw.path, line); exit(2); } }
@@ -137,7 +139,7 @@ void firmware_say(const Firmware *fw, int op){
     if (fw->fact <= 1.0) printf(", a fact at trust %g", fw->fact);
     if (fw->nrefuse_predicate) { printf(", refuses"); for (int i = 0; i < fw->nrefuse_predicate; i++) printf(" %s", fw->refuse_predicate[i]); }
     if (fw->nweigh) printf(", weighs %d kinds of strand", fw->nweigh);
-    if (op == FW_PULL) { static const char *T[] = { "first", "draw", "ask" }; printf(", walks %d of %d steps (fan %d), restart %g, sure %g, lift %g, a tie: %s, seed: %s", fw->walks, fw->steps, fw->walk_fan, fw->restart, fw->sure, fw->lift, T[fw->tie], fw->seed_session ? "session" : "observation"); }
+    if (op == FW_PULL) { static const char *T[] = { "first", "draw", "ask" }; printf(", rounds %d of breadth %d, walks %d of %d steps (fan %d), restart %g, sure %g, lift %g, a tie: %s, seed: %s", fw->rounds, fw->breadth, fw->walks, fw->steps, fw->walk_fan, fw->restart, fw->sure, fw->lift, T[fw->tie], fw->seed_session ? "session" : "observation"); }
     if (fw->nonly_predicate) { printf(", only the heads"); for (int i = 0; i < fw->nonly_predicate; i++) printf(" %s", fw->only_predicate[i]); }
     if (fw->nrefuse_witness) { printf(", refuses what is witnessed by"); for (int i = 0; i < fw->nrefuse_witness; i++) printf(" %s", fw->refuse_witness[i]); }
     printf("\n");

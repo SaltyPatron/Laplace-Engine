@@ -62,10 +62,10 @@ static const double *ROLE;
 static int owed(const Bits *support, const Bits *open){ double s = 0; for (int w = 0; w < MAXOCC / 64; w++) { uint64_t m = support->w[w] & open->w[w]; while (m) { int b = __builtin_ctzll(m); s += ROLE ? ROLE[w * 64 + b] : 1; m &= m - 1; } } return (int)(s * 1000 + 0.5); }
 static void bit_clear(Bits *a, const Bits *b){ for (int i = 0; i < MAXOCC / 64; i++) a->w[i] &= ~b->w[i]; }
 
-enum { R_CLAIM, R_FOLLOWS, R_DISCOURSE, R_SCAN, R_CONTAIN, R_KINDS };
-static const char *RK[R_KINDS] = { "strand", "follows", "discourse", "reached", "containment" };
+enum { R_CLAIM, R_FOLLOWS, R_DISCOURSE, R_SCAN, R_CONTAIN, R_LAYER, R_KINDS };
+static const char *RK[R_KINDS] = { "strand", "follows", "discourse", "reached", "containment", "a later layer" };
 #define CELL_HEADS 8
-typedef struct { lp_id id; double force, cost; Bits support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, tier; lp_id heads[CELL_HEADS]; int nheads; } Cell;   /* heads: the distinct relations whose strands reach it (up to 8 kept, all counted) */     /* shared: how many strands hold it, up to the fan (-1: not read) */
+typedef struct { lp_id id; double force, cost; Bits support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, tier; lp_id heads[CELL_HEADS]; int nheads, layer; } Cell;   /* heads: the distinct relations whose strands reach it (up to 8 kept, all counted) */     /* shared: how many strands hold it, up to the fan (-1: not read) */
 typedef struct { Cell *c; int n; size_t cap; lp_idmap *m; } Field;                  /* the cells, in the order they responded; found by ID */
 static Cell *cell(Field *f, const lp_id *id){
     if (!f->m) f->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(f->m, id, &fresh);
@@ -200,6 +200,47 @@ static void head_note(Cell *x, const lp_id *rel, double conf, int occ){
     if (!have) { if (x->nheads < CELL_HEADS) x->heads[x->nheads] = *rel; x->nheads++; }
     if (!HEADS) HEADS = lp_idmap_sized(sizeof(HeadStat)); bool f; HeadStat *s = lp_idmap_at(HEADS, lp_idmap_put(HEADS, rel, &f)); if (f) memset(s, 0, sizeof *s);
     s->strands++; s->force += conf; if (occ >= 0) bit_set(&s->support, occ);
+}
+/* ---- a layer (Forward 20.2 and the correspondence: "one routed processing and fold round over the enabled planes"):
+ * the entities that responded hardest in the round before, not the prompt's own words, not a hub, are coupled in turn,
+ * their strands every leaf at once; what each reaches inherits the words it was reached from (its support) and is
+ * pulled as hard as the strand's confidence times the force that reached its source, shared out. So a deeper entity
+ * grounds an obligation through composition, as a later layer's attention reads an earlier layer's output. */
+static int by_force_layer(const void *a, const void *b){ const Cell *x = *(const Cell *const *)a, *y = *(const Cell *const *)b; if (x->force != y->force) return x->force > y->force ? -1 : 1; return memcmp(&x->id, &y->id, 16); }
+static int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
+    const Firmware *fw = st->fw; Cell **c = malloc(sizeof(Cell *) * (size_t)(fd->n ? fd->n : 1)); int m = 0;
+    for (int z = 0; z < fd->n; z++) { Cell *x = &fd->c[z]; if (x->layer != round - 1 || x->hub || !(x->force > 0) || x->segment) continue;
+        int own = 0; for (int i = 0; i < st->nocc && !own; i++) own = lp_id_eq(&st->occ[i], &x->id); if (own || lp_tier0_codepoint(T0, &x->id) >= 0) continue; c[m++] = x; }
+    if (!m) { free(c); return 0; }
+    qsort(c, (size_t)m, sizeof(Cell *), by_force_layer); if (m > fw->breadth) m = fw->breadth;
+    lp_id *keys = malloc(sizeof(lp_id) * (size_t)m); Bits *sup = malloc(sizeof(Bits) * (size_t)m); double *fo = malloc(sizeof(double) * (size_t)m);
+    for (int i = 0; i < m; i++) { keys[i] = c[i]->id; sup[i] = c[i]->support; fo[i] = c[i]->force; }
+    free(c);
+    int *hub = malloc(sizeof(int) * 2 * (size_t)m), nh = 0; Hold *h = holds_capped(keys, m, fw->fan, 1, 1, hub, &nh); st->trips++;
+    int *outdeg = calloc((size_t)m, sizeof(int)); Ids rn = { 0 };
+    for (int r = 0; r < nh; r++) { int s = h[r].src; if (s >= 0 && s < m && h[r].claim && h[r].stood) outdeg[s]++; }
+    int fresh_n = 0;
+    for (int r = 0; r < nh; r++) { int s = h[r].src; if (s < 0 || s >= m || hub[2 * s] || !h[r].claim || !h[r].stood) continue;
+        path_into(&rn, lp_path_of(h[r].path, (size_t)h[r].path_len)); if (rn.n < 2 || !head_read(fw, rn.v, rn.n)) continue;
+        int other = lp_tuple_other(rn.v, rn.n, &keys[s]); if (other < 0 || lp_id_eq(&rn.v[other], &keys[s]) || lp_id_eq(&rn.v[other], &st->prompt)) continue;
+        lp_id rel = rn.n >= 3 ? rn.v[1] : keys[s];
+        double conf = lp_confidence(&h[r].r, fw->k) * strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n) * fo[s] / (outdeg[s] ? outdeg[s] : 1);
+        int before = fd->n; Cell *x = cell(fd, &rn.v[other]); if (fd->n > before) { x->layer = round; fresh_n++; }
+        x->force += conf; x->routes[R_LAYER]++; for (int w = 0; w < MAXOCC / 64; w++) x->support.w[w] |= sup[s].w[w];
+        { int have = 0; for (int k = 0; k < x->nheads && k < CELL_HEADS; k++) have |= lp_id_eq(&x->heads[k], &rel); if (!have) { if (x->nheads < CELL_HEADS) x->heads[x->nheads] = rel; x->nheads++; } }
+        if (heads_out) { bool f; HeadStat *hs = lp_idmap_at(heads_out, lp_idmap_put(heads_out, &rel, &f)); if (f) memset(hs, 0, sizeof *hs); hs->strands++; hs->force += conf; for (int w = 0; w < MAXOCC / 64; w++) hs->support.w[w] |= sup[s].w[w]; }
+        if (!x->has_r) { x->r = h[r].r; x->has_r = 1; x->via = keys[s]; x->rel = rel; } }
+    holds_free(h, nh); free(hub); free(outdeg); free(keys); free(sup); free(fo); lp_vec_free(&rn);
+    return fresh_n;
+}
+static void heads_say(State *st, lp_idmap *hm, const char *label){
+    size_t nhd = lp_idmap_count(hm); int *ord = malloc(sizeof(int) * (nhd ? nhd : 1)); for (size_t i = 0; i < nhd; i++) ord[i] = (int)i;
+    for (size_t i = 1; i < nhd; i++) { int v = ord[i]; size_t j = i; const HeadStat *a = lp_idmap_at(hm, (size_t)v);
+        while (j > 0) { const HeadStat *b = lp_idmap_at(hm, (size_t)ord[j - 1]); if (b->force > a->force || (b->force == a->force && memcmp(lp_idmap_key(hm, (size_t)ord[j - 1]), lp_idmap_key(hm, (size_t)v), 16) < 0)) break; ord[j] = ord[j - 1]; j--; } ord[j] = v; }
+    printf("           %s: %zu relations respond; the strongest:", label, nhd);
+    for (size_t i = 0; i < nhd && i < 8; i++) { const HeadStat *a = lp_idmap_at(hm, (size_t)ord[i]); reader_want(st->rd, lp_idmap_key(hm, (size_t)ord[i])); char *tn = reader_text(st->rd, lp_idmap_key(hm, (size_t)ord[i]), 24);
+        printf(" %s(%ld strands, %d words, %.2f)", tn, a->strands, bit_count_and(&a->support, &a->support), a->force); free(tn); }
+    printf("\n"); free(ord);
 }
 /* COUPLE through the Engine's leaf reads (holds_capped, every leaf at once on every core): for each entity, the claims
  * that hold it (its strands, the other end answering with the strand's standing) and the observations that hold it
@@ -724,6 +765,9 @@ int cmd_turn(int argc, char **argv){
           for (size_t i = 0; i < nhd && i < 8; i++) { const HeadStat *a = lp_idmap_at(HEADS, (size_t)ord[i]); reader_want(st->rd, lp_idmap_key(HEADS, (size_t)ord[i])); char *tn = reader_text(st->rd, lp_idmap_key(HEADS, (size_t)ord[i]), 24);
               printf(" %s(%ld strands, %d words, %.1f)", tn, a->strands, bit_count_and(&a->support, &a->support), a->force); free(tn); }
           printf("\n"); free(ord); }
+      for (int round = 1; round < fw.rounds; round++) { double tl = now(); lp_idmap *hm = lp_idmap_sized(sizeof(HeadStat)); int fresh_n = layer_round(st, &fd, round, hm);
+          printf("LAYER %-3d  %d entities new, coupled from the hardest of the round before   (%.1f ms)\n", round + 1, fresh_n, (now() - tl) * 1000);
+          char lab[16]; snprintf(lab, sizeof lab, "heads"); heads_say(st, hm, lab); lp_idmap_free(hm); if (!fresh_n) break; }
       st->npos = st->nocc; t = now(); walk(st, 0, st->nocc); char sd[17]; for (int k = 0; k < 8; k++) snprintf(sd + 2 * k, 3, "%02x", st->seed[k]);
       printf("           walks: %d from each word, %d steps, seed %s: %llu steps taken, %llu home, %zu entities stood on, %d read   (%.1f ms)\n", fw.walks, fw.steps, sd,
              (unsigned long long)st->walk_steps, (unsigned long long)st->walk_homes, st->walk_at ? lp_idmap_count(st->walk_at) : (size_t)0, st->walk_read, (now() - t) * 1000);

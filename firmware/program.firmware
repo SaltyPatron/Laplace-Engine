@@ -25,6 +25,8 @@
 #   role N VALUE...            a word of that VALUE pulls N as hard (0 to 1)
 #   shape frechet | outliers N | dtw | edr N
 #                              which shape of the tree to favor, and how many variable vertices a match may skip
+#   rounds N                   coupling rounds a pass spends: layers, each a routed processing and fold round (Forward 20.2)
+#   breadth N                  how many of a round's hardest-responding entities the next round couples from
 #   nearest N                  how many entities nearest a curve's centroid the GiST nominates for its shape
 #   walks N                    a turn's walkers from each position (0: none); every draw is BLAKE3 of the seed and its place
 #   walkfan N                  a place holding more strands than this is reached by a walker, not crossed: it goes home
@@ -95,6 +97,9 @@ for pull
   # that says under the second (the lexicon's language); a rendering in the prompt's language is taken first (Forward:
   # REALIZE, text in the query's language)
   language LexicalEntry language
+  # layers: coupling rounds, each carrying on the entities that responded hardest in the round before
+  rounds 2
+  breadth 64
   nearest 512
   walks 64
   walkfan 512
