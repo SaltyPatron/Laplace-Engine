@@ -41,11 +41,13 @@ metadata note:newdoc* note:newpar* note:doc_* note:doc* note:meta::* note:meta_*
 content note:*
 # What each column a claim is made of means (Laplace-Engine#32; the format page, universaldependencies.org/format.html),
 # never the column's name: UPOS a value of the UPOS road class ("Universal part-of-speech tag"): [forces, NOUN];
-# XPOS a value of the treebank's own tagset ("Language-specific part-of-speech tag"); LEMMA the word's lemma ("Lemma or
-# stem of word form"): [forces, force]; FEATS each Name=Value of the feature inventory, the pair itself:
+# XPOS and LEMMA (below) the relations the format page words them as; FEATS each Name=Value of the feature inventory, the pair itself:
 # [forces, [Number, Plur]]; DEPREL a value of the dependency relations the highway lists, the relation to the HEAD.
 value upos UPOS
-value - XPOS FEATS
+value - FEATS
+# XPOS: the format page, "XPOS: Language-specific part-of-speech tag; underscore if not available." Said as that relation:
+# a treebank's tag can be the token itself (EWT's XPOS of "." is "."), and a value equal to its thing is no claim
+relation "Language-specific part-of-speech tag" XPOS
 # LEMMA: the format page, "LEMMA: Lemma or stem of word form". Said as that relation, so a word that is its own lemma
 # (the, the) is still said: [the, Lemma or stem of word form, the]
 relation "Lemma or stem of word form" LEMMA
