@@ -80,7 +80,11 @@ static int stage_open(PGconn *pg){
         "  FOR r IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
         "           WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relispartition"
         "             AND c.relname ~ '^(entity|physicality|attestation|consensus)_' LOOP"
-        "    EXECUTE format('CREATE UNLOGGED TABLE IF NOT EXISTS stage.%I (LIKE public.%I INCLUDING DEFAULTS)', r.relname, r.relname);"
+        "    EXECUTE format('CREATE UNLOGGED TABLE IF NOT EXISTS stage.%I (LIKE public.%I INCLUDING DEFAULTS) WITH (autovacuum_enabled = false)', r.relname, r.relname);"
+        /* a stage table is scratch the merge empties: autovacuum vacuumed and analyzed each one 56 to 71 times while one
+         * source staged (raw Wiktionary, 2026-10-07, 16 GB in), every pass reading the whole of a growing table, and the
+         * lineage reads every stretch makes waited on that I/O; tables already made are switched off too */
+        "    EXECUTE format('ALTER TABLE stage.%I SET (autovacuum_enabled = false)', r.relname);"
         "    IF r.relname LIKE 'attestation%' THEN EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON stage.%I (claim, witness)', r.relname || '_cw', r.relname);"
         "    ELSIF r.relname LIKE 'consensus%' THEN EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS %I ON stage.%I (claim)', r.relname || '_claim', r.relname);"
         "    END IF;"
@@ -204,6 +208,15 @@ static int ldg_has(const lp_id *w, const lp_id *by){
     while (ldg_used[k]) { if (!memcmp(&ldg[k].w, w, 16) && !memcmp(&ldg[k].by, by, 16)) return 1; k = (k + 1) & (ldg_cap - 1); }
     return 0;
 }
+/* Rows go to the stage in key order: its indexes are B-trees on random BLAKE3 keys, and rows in reading order land on
+ * random pages, each almost always out of cache once the stage is larger than memory (raw Wiktionary: 173k rows a
+ * partition a stretch, 33 s a COPY, with shared_buffers 1 GB against 17 GB of staged attestation index). In key order a
+ * stretch walks each index once. The order of play is the standings', computed before this; the order rows lie in is
+ * not part of what anything means. */
+typedef struct { lp_id w, by; uint32_t games, position; double sum; } Series;
+static int series_key(const void *a, const void *b){ const Series *x = a, *y = b; int c = memcmp(&x->w, &y->w, 16); return c ? c : memcmp(&x->by, &y->by, 16); }
+static const Standing *STAND_KEY;
+static int stand_key(const void *a, const void *b){ return memcmp(&STAND_KEY[*(const uint64_t *)a].id, &STAND_KEY[*(const uint64_t *)b].id, 16); }
 /* One partition of the semantics, on one connection: the attestations whose witnessed thing's ID begins with h, in
  * reading order (its order is the order of play), the new standings and the recorded ones updated. Each partition is
  * written by one connection, inside that connection's part of the batch's transaction (load: prepared, then committed
@@ -212,7 +225,6 @@ static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led,
     /* Each (witnessed, witness) is one attestation: its games the times this witness attested it, its score the series'
      * score, the mean over its games (a claim is a game series: games plus a score). A pair already recorded gains this
      * batch's games in one statement; a new pair is copied. */
-    typedef struct { lp_id w, by; uint32_t games, position; double sum; } Series;
     Series *ser = NULL; uint64_t ns = 0, cs = 0; lp_idmap *mine = lp_idmap_new(); char sql[1024];
     for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i];
         if (e->kind == EV_MEMBER || (e->witnessed.b[0] >> 4) != h) continue;                /* witnessed within its record: the record's row */
@@ -222,6 +234,7 @@ static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led,
         if (fresh) { if (ns == cs) { cs = cs ? cs * 2 : 4096; ser = xrealloc(ser, sizeof(Series) * cs); } ser[ns++] = (Series){ e->witnessed, *by, 0, e->position, 0 }; }
         ser[at].games++; ser[at].sum += e->score; }
     lp_idmap_free(mine);
+    if (ns > 1) qsort(ser, ns, sizeof(Series), series_key);                    /* in key order: the stage's index walked once */
     Copy lc = { 0 }; snprintf(sql, sizeof sql, "COPY stage.attestation_%x (claim, witness, score, position, games) FROM STDIN (FORMAT binary)", h);
     copy_begin(&lc, pg, sql); uint64_t nold = 0;
     for (uint64_t j = 0; j < ns; j++) { const Series *x = &ser[j];
@@ -261,6 +274,7 @@ static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led,
     uint64_t *idx = malloc(sizeof(uint64_t) * (sn + 1)), n = 0, nmoved = 0;
     for (uint64_t i = 0; i < sn; i++) { const Standing *s = &stand[i]; if ((s->id.b[0] >> 4) != h) continue;
         if (!s->had) idx[n++] = i; else if (s->matches != s->m0) { idx[n++] = i; nmoved++; } }
+    STAND_KEY = stand; if (n > 1) qsort(idx, n, sizeof(uint64_t), stand_key);   /* in key order, as the attestations */
     for (uint64_t j0 = 0; j0 < n; j0 += 100000) {                             /* out of the stage: one statement a chunk */
         uint32_t k = (uint32_t)(n - j0 < 100000 ? n - j0 : 100000); lp_id *ids = malloc(sizeof(lp_id) * k);
         for (uint32_t j = 0; j < k; j++) ids[j] = stand[idx[j0 + j]].id;
