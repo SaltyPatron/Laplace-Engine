@@ -329,24 +329,27 @@ void ev_push(Events *e, const Event *x){                         /* by address: 
  * source's other files that point at it (refer COLUMN RECIPE). Process-wide, in stripes: a source is read in one process,
  * and the files that refer are read after the files referred to (ingest orders them). The first row to define a key keeps it:
  * first in the order of the files and of the rows in them (KeyRank), not in the order the threads reach them. */
-/* A stripe is a string map, its key the recipe's name, a NUL, and the key's bytes; the stripe is the key's hash's top bits. */
+/* A stripe is a string map, its key the recipe's name, a NUL, the scope's 16 bytes when the key has one, and the key's
+ * bytes; the stripe is the key's hash's top bits. A source whose witness is named file by file ({dir}: each directory a
+ * dataset of its own) numbers its records again in every dataset (the WSD framework's d000.s000.t000 begins again in
+ * SemCor, in senseval2, ...): its keys are scoped to the file's witness, so a file refers within its own dataset. */
 typedef struct { pthread_mutex_t mu; lp_strmap *m; } KStripe;
 static KStripe kstripe[64] = { [0 ... 63] = { PTHREAD_MUTEX_INITIALIZER, NULL } };
-static KStripe *key_at(const char *recipe, const uint8_t *k, size_t n, uint8_t **key, size_t *len, uint8_t *stack, size_t cap){
-    size_t rl = strlen(recipe); *len = rl + 1 + n; *key = *len <= cap ? stack : malloc(*len);
-    memcpy(*key, recipe, rl + 1); memcpy(*key + rl + 1, k, n);
+static KStripe *key_at(const char *recipe, const lp_id *scope, const uint8_t *k, size_t n, uint8_t **key, size_t *len, uint8_t *stack, size_t cap){
+    size_t rl = strlen(recipe), sl = scope ? 16 : 0; *len = rl + 1 + sl + n; *key = *len <= cap ? stack : malloc(*len);
+    memcpy(*key, recipe, rl + 1); if (scope) memcpy(*key + rl + 1, scope->b, 16); memcpy(*key + rl + 1 + sl, k, n);
     return &kstripe[(lp_hash_bytes(*key, *len) >> 58) & 63];
 }
 typedef struct { Ref x; KeyRank r; } KeyHeld;
 static int rank_before(const KeyRank *a, const KeyRank *b){ return a->file != b->file ? a->file < b->file : a->at != b->at ? a->at < b->at : a->unit < b->unit; }
-void keys_put(const char *recipe, const uint8_t *k, size_t n, Ref x, const KeyRank *rank){
-    uint8_t stack[512], *key; size_t len; KStripe *s = key_at(recipe, k, n, &key, &len, stack, sizeof stack);
+void keys_put(const char *recipe, const lp_id *scope, const uint8_t *k, size_t n, Ref x, const KeyRank *rank){
+    uint8_t stack[512], *key; size_t len; KStripe *s = key_at(recipe, scope, k, n, &key, &len, stack, sizeof stack);
     pthread_mutex_lock(&s->mu); if (!s->m) s->m = lp_strmap_sized(sizeof(KeyHeld));
     bool fresh; KeyHeld *h = lp_strmap_get(s->m, key, len, &fresh); if (fresh || rank_before(rank, &h->r)) { h->x = x; h->r = *rank; }     /* the first row to define a key keeps it */
     pthread_mutex_unlock(&s->mu); if (key != stack) free(key);
 }
-int keys_get(const char *recipe, const uint8_t *k, size_t n, Ref *out){
-    uint8_t stack[512], *key; size_t len; KStripe *s = key_at(recipe, k, n, &key, &len, stack, sizeof stack);
+int keys_get(const char *recipe, const lp_id *scope, const uint8_t *k, size_t n, Ref *out){
+    uint8_t stack[512], *key; size_t len; KStripe *s = key_at(recipe, scope, k, n, &key, &len, stack, sizeof stack);
     pthread_mutex_lock(&s->mu); const KeyHeld *r = s->m ? lp_strmap_lookup(s->m, key, len) : NULL; if (r) *out = r->x;
     pthread_mutex_unlock(&s->mu); if (key != stack) free(key); return r != NULL;
 }

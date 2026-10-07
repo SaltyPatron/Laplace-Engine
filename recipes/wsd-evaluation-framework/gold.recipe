@@ -13,4 +13,6 @@ tier field by space
 thing row "instance id"
 refer "instance id" wsd-data
 type "gold key" ili
-attest row "gold key"
+# a gold key is the statement that this occurrence means this concept: [the occurrence, the concept], a pair, the
+# column's name no part of it (Identity: a field is a statement; a relation is never a markup field name)
+pair row "gold key"

@@ -259,7 +259,8 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
                  Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int32_t wide_of; KeyRank kr; int16_t *dm; uint32_t dm_cap;
                  struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; } Sink;          /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
-typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
+typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;
+static const lp_id *key_scope(const Sink *k);                   /* the dataset a key belongs to (below) */     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
     if (k->nhr == k->chr) { k->chr = k->chr ? k->chr * 2 : 1024; k->hr = xrealloc(k->hr, sizeof(HwRec) * k->chr); }
     HwRec *x = &k->hr[k->nhr++]; x->what = what; x->line = line; if (thing) x->thing = *thing; else memset(&x->thing, 0, sizeof x->thing);
@@ -423,7 +424,7 @@ static int value_of(Sink *k, const STree *t, int32_t c, Ref *out, int depth){
     if (d->what == D_REFER && depth < 16) {                                  /* the first of its targets that holds the key */
         char targets[64], *save = NULL; snprintf(targets, sizeof targets, "%s", d->arg);
         for (char *tg = strtok_r(targets, " ", &save); tg; tg = strtok_r(NULL, " ", &save)) { int within = *tg == '^'; if (within) tg++;
-            if (!is_local(s, tg)) { if (keys_get(tg, x->val, x->vlen, out)) return 1; continue; }      /* a key of another of the source's files: the thing its row is */
+            if (!is_local(s, tg)) { if (keys_get(tg, key_scope(k), x->val, x->vlen, out)) return 1; continue; }      /* a key of another of the source's files: the thing its row is */
             int32_t g = keyed(k, t, tg, x->val, x->vlen); if (g < 0) continue;                            /* in the same tree: by the index */
             if (within) { for (int32_t up = t->n[g].parent; up >= 0; up = t->n[up].parent) if (thing_of(k, t, up, out, depth + 1)) return 1; continue; }   /* the thing what holds the key is inside */
             if (thing_of(k, t, g, out, depth + 1)) return 1; }
@@ -627,8 +628,11 @@ static void keep_keys(Sink *k, const STree *t, int32_t root){
     const Say *s = k->s; if (!s->nkey) return; int32_t end = subtree_end(t, root);
     for (int32_t g = root; g <= end; g++) { const SNode *x = &t->n[g]; if (x->kind != S_GROUP || !x->nlen) continue;
         for (int i = 0; i < s->nkey; i++) if (s_named(x, s->key[i].tier, strlen(s->key[i].tier))) { int32_t kc = s_child(t, g, s->key[i].name, -1); Ref S;
-            if (kc >= 0 && t->n[kc].vlen && thing_of(k, t, g, &S, 0)) keys_put(k->r->name, t->n[kc].val, t->n[kc].vlen, S, &k->kr); } }
+            if (kc >= 0 && t->n[kc].vlen && thing_of(k, t, g, &S, 0)) keys_put(k->r->name, key_scope(k), t->n[kc].val, t->n[kc].vlen, S, &k->kr); } }
 }
+/* The dataset a key belongs to: the file's witness, where the recipe names its witness file by file ({dir}, {name},
+ * {first ...}); NULL where one witness is the whole source. */
+static const lp_id *key_scope(const Sink *k){ return strchr(k->r->witness, '{') ? &k->fw.id : NULL; }
 /* A part read for the highway: the types it is, their keys, and the keys it maps to one another. */
 static void unit_highway(Sink *k, const STree *t, int32_t root){
     const Say *s = k->s; if (!spoken_of(s, t, root, s->whole)) return;
