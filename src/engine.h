@@ -44,7 +44,7 @@ typedef struct {
     double fact;                                      /* the trust at which a curated member is returned as one fact; above 1: never */
     int order_witness;                                /* on an open claim, the witness's own order before the standing */
     int shape; double shape_n;
-    int walks, steps, walk_fan; double restart;                 /* walkers from each word, the steps each walks, how often one goes home: the walks' share of the evidence */
+    int walks, steps, walk_fan, nearest; double restart;                 /* walkers from each word, the steps each walks, how often one goes home: the walks' share of the evidence */
     double sure;                                      /* how many standard errors of the walks separate two counts; within them, the walks cannot tell two apart */
     double lift;                                      /* how much more often than its base rate a word must be observed beside an occurrence to ground it */
     int elect[FW_E_KEYS], nelect;                     /* the election order: the evidence keys a proposal is compared by, first to last */
@@ -256,6 +256,9 @@ Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standin
 Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout);   /* every tier, one probe a leaf: each path that holds any key and with as well; src -1, the caller reads which key from the path */
 Hold *holds_any(const lp_id *keys, int nkeys, int *nout);                                     /* every tier, one probe a leaf: each path that holds any key; src -1 */
 void holds_free(Hold *h, int n);
+Hold *holds_capped(const lp_id *keys, int nkeys, int cap, int standing, int kinds, int *hub, int *nout);   /* kinds: 1 claims, 2 observations, 3 both */   /* each key's holders, its claims and observations a hub's when more than cap: hub[2k], hub[2k + 1] */
+void coords_of(const lp_id *ids, int n, double *out, uint8_t *has);
+Hold *paths_of(const lp_id *ids, int n, int *nout);                                            /* each one's path, from the partition its ID names */                            /* each one's coordinate, 4 doubles; has[i]: found */
 int  tier_max(const lp_id *ids, int n);                                 /* the highest tier these IDs are recorded at; -1 when none are */
 #define ARGS_MAX 8
 typedef struct { lp_buf b; int binary; } SqlArg;

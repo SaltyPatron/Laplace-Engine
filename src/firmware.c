@@ -24,7 +24,7 @@ static void names(Firmware *fw, char (*into)[96], int *n, int cap, const char *p
 Firmware firmware_for(const char *path, int op){
     Firmware fw; memset(&fw, 0, sizeof fw);
     fw.k = 2.0; fw.lambda = 0.05; fw.fan = op == FW_SEARCH ? 512 : 4096; fw.hops = 8; fw.emit = 32; fw.top_within = 0; fw.fact = 2.0; fw.order_witness = 1; fw.shape = FW_FRECHET;
-    fw.walks = 64; fw.steps = 4; fw.walk_fan = 512; fw.restart = 0.25; fw.sure = 2.0; fw.lift = 2.0; fw.tie = FW_TIE_FIRST;
+    fw.walks = 64; fw.steps = 4; fw.walk_fan = 512; fw.nearest = 512; fw.restart = 0.25; fw.sure = 2.0; fw.lift = 2.0; fw.tie = FW_TIE_FIRST;
     { static const int E[] = { FW_E_GROUNDS, FW_E_CONTINUITY, FW_E_AGREE, FW_E_COOCCUR, FW_E_WALKS, FW_E_SHAPE, FW_E_CONFIDENCE, FW_E_SHARED }; memcpy(fw.elect, E, sizeof E); fw.nelect = FW_E_KEYS; }
     snprintf(fw.path, sizeof fw.path, "%s", path && *path ? path : firmware_path());
     FILE *f = fopen(fw.path, "r"); if (!f) { perror(fw.path); fprintf(stderr, "LAPLACE_FIRMWARE names the firmware a pull runs under\n"); exit(1); }
@@ -68,6 +68,7 @@ Firmware firmware_for(const char *path, int op){
                 while ((nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') { if (fw.nrole >= FW_WEIGHS) { fprintf(stderr, "%s:%d: more roles than a firmware holds\n", fw.path, line); exit(2); }
                     snprintf(fw.role_name[fw.nrole], 96, "%s", nm); fw.role[fw.nrole++] = w; } } }
         else if (!strcmp(tok, "walks")) { fw.walks = (int)NUMBER(); if (fw.walks < 0) { fprintf(stderr, "%s:%d: walks N (0: none)\n", fw.path, line); exit(2); } }
+        else if (!strcmp(tok, "nearest")) { fw.nearest = (int)NUMBER(); if (fw.nearest < 0) { fprintf(stderr, "%s:%d: nearest N\n", fw.path, line); exit(2); } }
         else if (!strcmp(tok, "walkfan")) { fw.walk_fan = (int)NUMBER(); if (fw.walk_fan < 1) { fprintf(stderr, "%s:%d: walkfan N\n", fw.path, line); exit(2); } }
         else if (!strcmp(tok, "steps")) { fw.steps = (int)NUMBER(); if (fw.steps < 0) { fprintf(stderr, "%s:%d: steps N\n", fw.path, line); exit(2); } }
         else if (!strcmp(tok, "restart")) { fw.restart = NUMBER(); if (fw.restart < 0 || fw.restart > 1) { fprintf(stderr, "%s:%d: restart is between 0 and 1\n", fw.path, line); exit(2); } }

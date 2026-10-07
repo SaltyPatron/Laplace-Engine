@@ -106,12 +106,19 @@ Run run_of(const uint8_t *ewkb, size_t len){
  * own partition. */
 static PGconn **pool;
 static int npool;
+static int times_on(void){ static int on = -1; if (on < 0) { const char *e = getenv("LAPLACE_TIMES"); on = e && *e; } return on; }
 static void pool_open(void){
-    if (pool) return;
+    if (pool) return; double t0 = now();
     const char *ci = db_noted(); if (!ci || !*ci) ci = laplace_db();
     npool = omp_get_num_procs(); if (npool < 1) npool = 1;
     pool = calloc((size_t)npool, sizeof *pool);
-    for (int i = 0; i < npool; i++) pool[i] = db_connect(ci);
+    /* every connection at once: a backend starts in about 100 ms on Windows (a process each), so 32 opened in turn
+     * cost three seconds before the first read; opened together they cost one */
+    #pragma omp parallel for num_threads(npool) schedule(static, 1)
+    for (int i = 0; i < npool; i++) { PGconn *c = PQconnectdb(ci);
+        if (PQstatus(c) != CONNECTION_OK) { fprintf(stderr, "%s", PQerrorMessage(c)); exit(1); }
+        PQclear(PQexec(c, "SET client_min_messages = warning")); PQclear(PQexec(c, "SET enable_parallel_append = on")); pool[i] = c; }
+    if (times_on()) fprintf(stderr, "times: %d connections opened in %.1f ms\n", npool, (now() - t0) * 1000);
     const char *snap = db_snapshot();                                    /* a read: every leaf read at the instant the command's first statement saw */
     if (snap) for (int i = 0; i < npool; i++) {
         char q[160]; snprintf(q, sizeof q, "BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY; SET TRANSACTION SNAPSHOT '%s'", snap);
@@ -166,7 +173,13 @@ static void bag_put(Bag *b, Hold x){
     if (b->n == b->cap) { b->cap = b->cap ? b->cap * 2 : 32; b->h = xrealloc(b->h, (size_t)b->cap * sizeof(Hold)); }
     b->h[b->n++] = x;
 }
+static Hold *holds_core_(const lp_id *keys, int nkeys, int floor, int each, int standing, const lp_id *with, int kind, int *nout);
 static Hold *holds_core(const lp_id *keys, int nkeys, int floor, int each, int standing, const lp_id *with, int *nout){
+    double t0 = now(); Hold *h = holds_core_(keys, nkeys, floor, each, standing, with, -1, nout);
+    if (times_on()) fprintf(stderr, "times: holds of %d key%s over %d leaves: %d rows in %.1f ms\n", nkeys, nkeys == 1 ? "" : "s", nphy, *nout, (now() - t0) * 1000);
+    return h;
+}
+static Hold *holds_core_(const lp_id *keys, int nkeys, int floor, int each, int standing, const lp_id *with, int kind, int *nout){
     *nout = 0; if (!nkeys) return NULL;
     leaves_of("physicality", &phy, &nphy);
     uint8_t *ab = malloc(20 + 20 * (size_t)nkeys); size_t al = ids_param(ab, keys, (uint32_t)nkeys);
@@ -184,8 +197,8 @@ static Hold *holds_core(const lp_id *keys, int nkeys, int floor, int each, int s
     #pragma omp parallel for num_threads(npool) schedule(dynamic)
     for (int j = 0; j < nj; j++) {
         char sql[384];
-        if (each == 2) snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM %s WHERE path && $1::blake3[] AND tier > %d%s",     /* any key: one probe a leaf for the set; with is checked on the rows, never probed (a relation is a hub: its posting list is every claim of it) */
-                                phy[job[j]].name, floor, with ? " AND (path @> $2::blake3[]) IS TRUE" : "");
+        if (each == 2) snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM %s WHERE path && $1::blake3[] AND tier > %d%s%s",     /* any key: one probe a leaf for the set; with is checked on the rows, never probed (a relation is a hub: its posting list is every claim of it) */
+                                phy[job[j]].name, floor, with ? " AND (path @> $2::blake3[]) IS TRUE" : "", kind == 1 ? " AND mask ? 0::smallint" : kind == 0 ? " AND NOT (mask ? 0::smallint)" : "");
         else if (each) snprintf(sql, sizeof sql, "SELECT u.i, p.entity, p.path, p.tier, p.mask FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN %s p ON p.path @> %s WHERE p.tier > %d",
                            phy[job[j]].name, with ? "(ARRAY[u.id] || $2::blake3[])" : "ARRAY[u.id]", floor);
         else snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM %s WHERE path @> $1::blake3[] AND tier > %d", phy[job[j]].name, floor);
@@ -257,6 +270,110 @@ static Hold *holds_core(const lp_id *keys, int nkeys, int floor, int each, int s
     *nout = n; return h;
 }
 Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standing, int *nout){ return holds_core(keys, nkeys, floor, each, standing, NULL, nout); }
+/* What holds each key, a hub's holders never read: first, every leaf at once, how many claims and how many
+ * observations hold each key, counted at most cap a leaf (a count, never which rows, so the same on every install);
+ * then the rows of the keys no more than cap hold, claims and observations apart, one overlap probe a leaf for each
+ * set. hub[2k]: more than cap claims hold key k; hub[2k + 1]: more than cap observations. src is the key's place. */
+Hold *holds_capped(const lp_id *keys, int nkeys, int cap, int standing, int kinds, int *hub, int *nout){
+    *nout = 0; memset(hub, 0, sizeof(int) * 2 * (size_t)nkeys); if (!nkeys) return NULL; double t0 = now();
+    leaves_of("physicality", &phy, &nphy);
+    uint8_t *ab = malloc(20 + 20 * (size_t)nkeys); size_t al = ids_param(ab, keys, (uint32_t)nkeys);
+    /* An ID is a hash, so what holds a key spreads evenly over the leaves: a first count stops at q + 1 a leaf. A key whose
+     * capped counts already pass cap is a hub; one that saturated no leaf is counted exactly; only a leaf a key saturated
+     * without the sum deciding is counted again, to cap + 1. Exact, and a hub costs at most q + 1 rows a leaf. */
+    long *cnt = calloc((size_t)nphy * (size_t)nkeys * 2, sizeof(long)); int q = cap / nphy * 4 + 16; if (q > cap) q = cap;
+    for (int pass = 0; pass < 2; pass++) {
+    int *redo = NULL; if (pass) { redo = calloc((size_t)nkeys * 2, sizeof(int)); int any = 0;
+        for (int k = 0; k < nkeys; k++) for (int t = 0; t < 2; t++) { long sum = 0; int sat = 0;
+            for (int j = 0; j < nphy; j++) { long c = cnt[((size_t)j * (size_t)nkeys + (size_t)k) * 2 + (size_t)t]; sum += c; sat |= c > q; }
+            if (sat && sum <= cap) { redo[2 * k + t] = 1; any = 1; } }
+        if (!any) { free(redo); break; } }
+    int lim = pass ? cap + 1 : q + 1;
+    #pragma omp parallel for num_threads(npool) schedule(dynamic)
+    for (int j = 0; j < nphy; j++) {
+        if (pass) { int any = 0; for (int k = 0; k < nkeys && !any; k++) for (int t = 0; t < 2; t++) any |= redo[2 * k + t] && cnt[((size_t)j * (size_t)nkeys + (size_t)k) * 2 + (size_t)t] > q; if (!any) continue; }
+        char sql[768]; snprintf(sql, sizeof sql, "SELECT u.i, (SELECT count(*) FROM (SELECT 1 FROM %s p WHERE p.path @> ARRAY[u.id] AND p.mask ? 0::smallint LIMIT %d) x), "
+                                "(SELECT count(*) FROM (SELECT 1 FROM %s p WHERE p.path @> ARRAY[u.id] AND NOT (p.mask ? 0::smallint) LIMIT %d) y) FROM unnest($1::blake3[]) WITH ORDINALITY u(id, i)",
+                                phy[j].name, lim, phy[j].name, lim);
+        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+        PGconn *c = pool[omp_get_thread_num()]; PGresult *r = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
+        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "count %s: %s", phy[j].name, PQerrorMessage(c)); exit(1); }
+        for (int row = 0; row < PQntuples(r); row++) { uint64_t o, a, b; memcpy(&o, PQgetvalue(r, row, 0), 8); memcpy(&a, PQgetvalue(r, row, 1), 8); memcpy(&b, PQgetvalue(r, row, 2), 8);
+            int k = (int)__builtin_bswap64(o) - 1; if (k < 0 || k >= nkeys) continue; size_t at = ((size_t)j * (size_t)nkeys + (size_t)k) * 2;
+            if (!pass || redo[2 * k]) cnt[at] = (long)__builtin_bswap64(a); if (!pass || redo[2 * k + 1]) cnt[at + 1] = (long)__builtin_bswap64(b); }
+        PQclear(r);
+    }
+    free(redo); }
+    for (int k = 0; k < nkeys; k++) { long c = 0, o = 0; for (int j = 0; j < nphy; j++) { c += cnt[((size_t)j * (size_t)nkeys + (size_t)k) * 2]; o += cnt[((size_t)j * (size_t)nkeys + (size_t)k) * 2 + 1]; }
+        hub[2 * k] = c > cap; hub[2 * k + 1] = o > cap; }
+    free(cnt); free(ab);
+    double t1 = now();
+    lp_id *kk = malloc(sizeof(lp_id) * (size_t)nkeys); int *back = malloc(sizeof(int) * (size_t)nkeys); Hold *all = NULL; int na = 0;
+    for (int kind = 1; kind >= 0; kind--) { int m = 0; if (!(kinds & (kind ? 1 : 2))) continue;
+        for (int k = 0; k < nkeys; k++) if (!hub[2 * k + (kind ? 0 : 1)]) { kk[m] = keys[k]; back[m++] = k; }
+        if (!m) continue; int nh = 0; Hold *h = holds_core_(kk, m, -1, 1, kind ? standing : 0, NULL, kind, &nh);
+        for (int i = 0; i < nh; i++) if (h[i].src >= 0 && h[i].src < m) h[i].src = back[h[i].src];
+        all = xrealloc(all, sizeof(Hold) * (size_t)(na + nh + 1)); memcpy(all + na, h, sizeof(Hold) * (size_t)nh); na += nh; free(h); }
+    free(kk); free(back);
+    if (na > 1) qsort(all, (size_t)na, sizeof(Hold), hold_order);
+    if (times_on()) fprintf(stderr, "times: capped holds of %d key%s: counted in %.1f ms, %d rows read in %.1f ms\n", nkeys, nkeys == 1 ? "" : "s", (t1 - t0) * 1000, na, (now() - t1) * 1000);
+    *nout = na; return all;
+}
+/* The paths of a set of entities, each from the one physicality partition its ID names, every partition at once:
+ * claims flagged by their mask, the set's order kept (src: the place in ids). */
+Hold *paths_of(const lp_id *ids, int n, int *nout){
+    *nout = 0; if (!n) return NULL; leaves_of("physicality", &phy, &nphy);
+    int *head = malloc(sizeof(int) * 256), *link = malloc(sizeof(int) * (size_t)n); for (int b = 0; b < 256; b++) head[b] = -1;
+    for (int i = n - 1; i >= 0; i--) { int b = ids[i].b[0]; link[i] = head[b]; head[b] = i; }
+    Bag *bag = calloc(256, sizeof(Bag));
+    #pragma omp parallel for num_threads(npool) schedule(dynamic)
+    for (int b = 0; b < 256; b++) {
+        if (head[b] < 0) continue; char want[64]; snprintf(want, sizeof want, "physicality_%02x", b); int leaf = -1;
+        for (int e = 0; e < nphy; e++) if (!strcmp(phy[e].name, want)) leaf = e;
+        if (leaf < 0) continue;
+        int m = 0; for (int i = head[b]; i >= 0; i = link[i]) m++; lp_id *q = malloc(sizeof(lp_id) * (size_t)m); m = 0; for (int i = head[b]; i >= 0; i = link[i]) q[m++] = ids[i];
+        uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(ab, q, (uint32_t)m);
+        char sql[256]; snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM %s WHERE entity = ANY($1::blake3[])", phy[leaf].name);
+        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+        PGconn *c = pool[omp_get_thread_num()]; PGresult *r = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
+        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "paths: %s", PQerrorMessage(c)); exit(1); }
+        for (int row = 0; row < PQntuples(r); row++) { Hold x; memset(&x, 0, sizeof x); memcpy(x.entity.b, PQgetvalue(r, row, 0), 16);
+            x.path_len = PQgetlength(r, row, 1); x.path = malloc((size_t)(x.path_len ? x.path_len : 1)); memcpy(x.path, PQgetvalue(r, row, 1), (size_t)x.path_len);
+            x.tier = rd_i16(PQgetvalue(r, row, 2)); x.claim = (uint8_t)mask_claim(PQgetvalue(r, row, 3), PQgetlength(r, row, 3)); x.src = -1;
+            for (int i = head[b]; i >= 0; i = link[i]) if (!memcmp(ids[i].b, x.entity.b, 16)) { x.src = i; break; }
+            bag_put(&bag[b], x); }
+        PQclear(r); free(q); free(ab);
+    }
+    int total = 0; for (int b = 0; b < 256; b++) total += bag[b].n;
+    Hold *h = malloc(sizeof(Hold) * (size_t)(total ? total : 1)); int w = 0; for (int b = 0; b < 256; b++) { memcpy(h + w, bag[b].h, sizeof(Hold) * (size_t)bag[b].n); w += bag[b].n; free(bag[b].h); }
+    free(bag); free(head); free(link); if (w > 1) qsort(h, (size_t)w, sizeof(Hold), hold_order); *nout = w; return h;
+}
+/* The coordinate of each entity: an atom's from tier 0, the rest from its entity partition, every partition at once. */
+void coords_of(const lp_id *ids, int n, double *out, uint8_t *has){
+    memset(has, 0, (size_t)n); if (!n) return;
+    leaves_of("entity", &entleaves, &nent);
+    int *bucket = malloc(sizeof(int) * (size_t)n), *head = malloc(sizeof(int) * 256), *link = malloc(sizeof(int) * (size_t)n); for (int b = 0; b < 256; b++) head[b] = -1;
+    for (int i = n - 1; i >= 0; i--) { int64_t cp = lp_tier0_codepoint(T0, &ids[i]);
+        if (cp >= 0) { lp_ref a = lp_ref_atom(T0, (uint32_t)cp); lp_coord_xyzm(&a.c, out + 4 * (size_t)i); has[i] = 1; continue; }
+        int b = ids[i].b[0]; bucket[i] = b; link[i] = head[b]; head[b] = i; }
+    #pragma omp parallel for num_threads(npool) schedule(dynamic)
+    for (int b = 0; b < 256; b++) {
+        if (head[b] < 0) continue; int leaf = -1; char want[64]; snprintf(want, sizeof want, "entity_%02x", b);
+        for (int e = 0; e < nent; e++) if (!strcmp(entleaves[e].name, want)) leaf = e;
+        if (leaf < 0) continue;
+        int m = 0; for (int i = head[b]; i >= 0; i = link[i]) m++;
+        lp_id *q = malloc(sizeof(lp_id) * (size_t)m); m = 0; for (int i = head[b]; i >= 0; i = link[i]) q[m++] = ids[i];
+        uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(ab, q, (uint32_t)m);
+        char sql[256]; snprintf(sql, sizeof sql, "SELECT id, ST_X(coord), ST_Y(coord), ST_Z(coord), ST_M(coord) FROM %s WHERE id = ANY($1::blake3[])", entleaves[leaf].name);
+        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+        PGconn *c = pool[omp_get_thread_num()]; PGresult *r = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
+        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "coords: %s", PQerrorMessage(c)); exit(1); }
+        for (int row = 0; row < PQntuples(r); row++) { const char *id = PQgetvalue(r, row, 0); double x[4]; for (int d = 0; d < 4; d++) x[d] = lp_be_f64(PQgetvalue(r, row, 1 + d));
+            for (int i = head[b]; i >= 0; i = link[i]) if (!memcmp(ids[i].b, id, 16)) { memcpy(out + 4 * (size_t)i, x, 32); has[i] = 1; } }
+        PQclear(r); free(q); free(ab);
+    }
+    free(bucket); free(head); free(link);
+}
 Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout){ return holds_core(keys, nkeys, -1, 2, standing, with, nout); }
 Hold *holds_any(const lp_id *keys, int nkeys, int *nout){ return holds_core(keys, nkeys, -1, 2, 0, NULL, nout); }
 void holds_free(Hold *h, int n){ if (!h) return; for (int i = 0; i < n; i++) free(h[i].path); free(h); }

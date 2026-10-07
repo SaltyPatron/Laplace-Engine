@@ -25,6 +25,7 @@
 #   role N VALUE...            a word of that VALUE pulls N as hard (0 to 1)
 #   shape frechet | outliers N | dtw | edr N
 #                              which shape of the tree to favor, and how many variable vertices a match may skip
+#   nearest N                  how many entities nearest a curve's centroid the GiST nominates for its shape
 #   walks N                    a turn's walkers from each position (0: none); every draw is BLAKE3 of the seed and its place
 #   walkfan N                  a place holding more strands than this is reached by a walker, not crossed: it goes home
 #   steps N                    how many steps each walker takes
@@ -89,6 +90,7 @@ for pull
   fan 4096
   # the evidence a turn weighs: walks from every position, how the trajectory so far attends to a proposal, and the
   # election order over it; a tie is what nothing in the evidence tells apart, and this firmware takes the first by ID
+  nearest 512
   walks 64
   walkfan 512
   steps 4
