@@ -171,7 +171,12 @@ So:
   `attest TIER NAME` gives `[thing, value]` (`[forces, NOUN]`, `[forces, force]`), a `KEY=VALUE` piece of a valued
   field gives `[thing, [KEY, VALUE]]` (`[forces, [Number, Plur]]`), `holds` gives `[thing, other]`, and `relate TIER
   NAME to NAME` takes its relation from a field `value` names (WN-LMF's `relType`, FrameNet's frame-relation type).
-  A field a claim names that no `value` line gives a meaning, `relate {file}` and `line ... :: predicate` make **no
+  A field that states a relation of the thing to its value (a definition, an example, a name, a form, a number the
+  source states of it, a mapping to another resource's node) says it with `relation "TEXT" NAME...`: `[thing, TEXT,
+  value]`, where TEXT is the relation **as the source's own documentation words it** (quote the documentation line in a
+  `#` comment above), content the source writes, never the field's own name (the engine refuses `relation "lexfile"
+  lexfile`). Two sources' wordings of one relation are linked by an attested equivalence, as `n` and `NOUN` are.
+  A field a claim names that neither `value` nor `relation` gives a meaning, `relate {file}` and `line ... :: predicate` make **no
   claim**: each is an unresolved obligation, counted by its name and listed at the end of the ingest
   (`== unresolved obligations`). Give a field a meaning only where the source's own documentation says what its
   values are (quote it in a `#` comment); never to restore the header as a relation. Until a field's meaning is
