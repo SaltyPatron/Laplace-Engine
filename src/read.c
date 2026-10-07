@@ -319,6 +319,21 @@ Hold *holds_capped(const lp_id *keys, int nkeys, int cap, int standing, int kind
     if (times_on()) fprintf(stderr, "times: capped holds of %d key%s: counted in %.1f ms, %d rows read in %.1f ms\n", nkeys, nkeys == 1 ? "" : "s", (t1 - t0) * 1000, na, (now() - t1) * 1000);
     *nout = na; return all;
 }
+/* How many paths hold every one of the keys (kind: 0 observations, 1 claims, -1 both): counted every leaf at once by
+ * the container index, no row read. A hub's rows are never crossed; its count is a number the index gives. */
+long holds_count(const lp_id *keys, int nkeys, int kind){
+    if (!nkeys) return 0; leaves_of("physicality", &phy, &nphy);
+    uint8_t *ab = malloc(20 + 20 * (size_t)nkeys); size_t al = ids_param(ab, keys, (uint32_t)nkeys); long total = 0;
+    #pragma omp parallel for num_threads(npool) schedule(dynamic) reduction(+:total)
+    for (int j = 0; j < nphy; j++) {
+        char sql[320]; snprintf(sql, sizeof sql, "SELECT count(*) FROM %s WHERE path @> $1::blake3[]%s", phy[j].name, kind == 1 ? " AND mask ? 0::smallint" : kind == 0 ? " AND NOT (mask ? 0::smallint)" : "");
+        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+        PGconn *c = pool[omp_get_thread_num()]; PGresult *r = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
+        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "count %s: %s", phy[j].name, PQerrorMessage(c)); exit(1); }
+        uint64_t x; memcpy(&x, PQgetvalue(r, 0, 0), 8); total += (long)__builtin_bswap64(x); PQclear(r);
+    }
+    free(ab); return total;
+}
 /* The paths of a set of entities, each from the one physicality partition its ID names, every partition at once:
  * claims flagged by their mask, the set's order kept (src: the place in ids). */
 Hold *paths_of(const lp_id *ids, int n, int *nout){
@@ -377,7 +392,7 @@ void coords_of(const lp_id *ids, int n, double *out, uint8_t *has){
 /* What holds each key together with one more ID: per key, the paths that hold both, one statement a leaf for the
  * whole set (each key's own two-key probe of the container index), every leaf at once. src is the key's place. A key
  * with many holders is never read through: only what holds both. */
-Hold *holds_both(const lp_id *keys, int nkeys, const lp_id *with, int *nout){ return holds_core(keys, nkeys, -1, 1, 0, with, nout); }
+Hold *holds_both(const lp_id *keys, int nkeys, const lp_id *with, int *nout){ return holds_core(keys, nkeys, -1, 1, 1, with, nout); }     /* standings read with the rows */
 Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout){ return holds_core(keys, nkeys, -1, 2, standing, with, nout); }
 Hold *holds_any(const lp_id *keys, int nkeys, int *nout){ return holds_core(keys, nkeys, -1, 2, 0, NULL, nout); }
 void holds_free(Hold *h, int n){ if (!h) return; for (int i = 0; i < n; i++) free(h[i].path); free(h); }

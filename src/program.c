@@ -263,6 +263,18 @@ static int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_
                 Cell *x = cell(fd, &rn.v[other]); x->force += conf * pull; x->routes[kind]++; if (occ >= 0) bit_set(&x->support, occ); if (pull > 0) head_note(x, &p3[1], conf * pull, occ);      /* a head is what pulls through it: a space or a mark pulls nothing */
                 if (!x->has_r || conf > lp_confidence(&x->r, fw->k)) { x->r = h[i].r; x->has_r = 1; x->via = p3[0]; x->rel = p3[1]; } }
             else { Cell *x = cell(fd, &h[i].entity); x->segment = 1; x->tier = h[i].tier; x->force += pull; x->routes[R_CONTAIN]++; if (occ >= 0) bit_set(&x->support, occ); } }
+        /* a word whose strands are more than the fan is reached, not crossed: its on-ramp is read instead, the word and
+         * each relation the firmware bubbles up by, together (Semantics: a word bubbles up to its highway node) */
+        if (fw->nup) { lp_id hk[MAXOCC]; int hof[MAXOCC], nhk = 0; for (int k = 0; k < nk && nhk < MAXOCC; k++) if (hub[2 * k] && lp_tier0_codepoint(T0, &keys[k]) < 0) { hk[nhk] = keys[k]; hof[nhk++] = of[k]; }
+            for (int u = 0; u < fw->nup && nhk; u++) { int n2 = 0; Hold *h2 = holds_both(hk, nhk, &fw->id.up[u], &n2); st->trips++; int read_ = 0;
+                for (int i = 0; i < n2; i++) { int s = h2[i].src; if (s < 0 || s >= nhk || !h2[i].claim) continue; int o = hof[s]; int occ = occ_of ? occ_of[o] : -1; double pull = occ >= 0 && occ < st->nocc ? st->role[occ] : 1.0;
+                    path_into(&rn, lp_path_of(h2[i].path, (size_t)h2[i].path_len)); if (rn.n < 2 || !head_read(fw, rn.v, rn.n)) continue;
+                    int other = lp_tuple_other(rn.v, rn.n, &hk[s]); if (other < 0) continue;
+                    if (!h2[i].stood) continue; lp_rating rt = h2[i].r;
+                    lp_id p3[3] = { hk[s], rn.n >= 3 ? rn.v[1] : hk[s], rn.v[other] }; double conf = lp_confidence(&rt, fw->k);
+                    Cell *x = cell(fd, &rn.v[other]); x->force += conf * pull; x->routes[kind]++; if (occ >= 0) bit_set(&x->support, occ); if (pull > 0) head_note(x, &p3[1], conf * pull, occ);
+                    if (!x->has_r) { x->r = rt; x->has_r = 1; x->via = p3[0]; x->rel = p3[1]; } read_++; }
+                holds_free(h2, n2); (void)read_; } }
         lp_vec_free(&rn);
         int nn = keep > 0 ? shape_measured(st, ids, n, h, nh, near, keep) : 0;
         holds_free(h, nh); free(hub); free(keys); free(of); return nn;
@@ -360,7 +372,17 @@ static void walk(State *st, int from, int to){                                 /
                 int other = lp_tuple_other(rn.v, rn.n, &need[e]); if (other < 0 || lp_id_eq(&rn.v[other], &need[e])) continue;
                 lp_rating rt = hh[r].r; double w = lp_confidence(&rt, fw->k) * strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n); if (!(w > 0)) continue;
                 Adj *x = &adj[lp_idmap_find(am, &need[e])]; lp_reserve((void **)&x->h, &x->cap, (size_t)x->n + 1, sizeof(Hop_)); x->h[x->n++] = (Hop_){ rn.v[other], w }; }
-            for (int e = 0; e < nn; e++) { Adj *x = &adj[lp_idmap_find(am, &need[e])]; x->hub = held[e] > fw->walk_fan; if (x->n > 1) qsort(x->h, (size_t)x->n, sizeof(Hop_), hop_cmp); }
+            for (int e = 0; e < nn; e++) { Adj *x = &adj[lp_idmap_find(am, &need[e])]; x->hub = held[e] > fw->walk_fan; }
+            /* a hub is walked through its on-ramp: the place and each relation the firmware bubbles up by, together */
+            if (fw->nup) { lp_id *hk = malloc(sizeof(lp_id) * (size_t)nn); int nhk = 0; for (int e = 0; e < nn; e++) if (held[e] > fw->walk_fan) hk[nhk++] = need[e];
+                for (int u = 0; u < fw->nup && nhk; u++) { int n2 = 0; Hold *h2 = holds_both(hk, nhk, &fw->id.up[u], &n2); st->trips++;
+                    for (int r2 = 0; r2 < n2; r2++) { int s_ = h2[r2].src; if (s_ < 0 || s_ >= nhk || !h2[r2].claim || !h2[r2].stood) continue; path_into(&rn, lp_path_of(h2[r2].path, (size_t)h2[r2].path_len));
+                        if (rn.n < 2 || !head_read(fw, rn.v, rn.n)) continue; int other = lp_tuple_other(rn.v, rn.n, &hk[s_]); if (other < 0 || lp_id_eq(&rn.v[other], &hk[s_])) continue;
+                        double w = lp_confidence(&h2[r2].r, fw->k); if (!(w > 0)) continue;
+                        Adj *x = &adj[lp_idmap_find(am, &hk[s_])]; lp_reserve((void **)&x->h, &x->cap, (size_t)x->n + 1, sizeof(Hop_)); x->h[x->n++] = (Hop_){ rn.v[other], w }; x->hub = 0; }
+                    holds_free(h2, n2); }
+                free(hk); }
+            for (int e = 0; e < nn; e++) { Adj *x = &adj[lp_idmap_find(am, &need[e])]; if (x->n > 1) qsort(x->h, (size_t)x->n, sizeof(Hop_), hop_cmp); }
             st->walk_read += nn; free(held); free(hub); holds_free(hh, nh);
         }
         for (int o = 0; o < no; o++) for (int w = 0; w < W; w++) { int i = o * W + w; const Adj *x = &adj[lp_idmap_find(am, &pos[i])];
@@ -788,7 +810,13 @@ int cmd_turn(int argc, char **argv){
               for (int r = 0; r < PQntuples(fq); r++) { int i_ = (int)col_int(fq, r, 0), j_ = (int)col_int(fq, r, 1); if (j_ != p || PQgetisnull(fq, r, 3) || col_int(fq, r, 2) > fw.fan) continue;
                   if (seg < 0 || i_ < seg) { seg = i_; times = -1; total = 0; } if (i_ != seg) continue;
                   long tm = (long)col_int(fq, r, 4); total += tm; if (lp_id_eq(col_id(fq, r, 3), &st->occ[p])) times = tm; }
-              if (seg < 0) printf(" nothing observed before it predicts what follows");
+              /* a longer run before it that more than the fan hold is a hub: its rows are not crossed, but the index
+               * counts it: how many observations hold the run, and how many hold the run and this one too */
+              int hubseg = -1; for (int r = 0; r < PQntuples(fq); r++) { int i_ = (int)col_int(fq, r, 0), j_ = (int)col_int(fq, r, 1); if (j_ == p && col_int(fq, r, 2) > fw.fan && (hubseg < 0 || i_ < hubseg)) hubseg = i_; }
+              if (hubseg > 0 && (seg < 0 || hubseg < seg)) { int len = p - hubseg + 1; long c_run = holds_count(st->occ + hubseg - 1, len, 0), c_with = holds_count(st->occ + hubseg - 1, len + 1, 0); st->trips += 2;
+                  if (c_with > 0) { expected++; printf(" held with the %d before it in %ld of the %ld observations that hold those", len, c_with, c_run); }
+                  else { surprised++; printf(" held with the %d before it in none of the %ld observations that hold those", len, c_run); } }
+              else if (seg < 0) printf(" nothing observed before it predicts what follows");
               else if (times > 0) { expected++; printf(" expected after %d before it: %ld of %ld", p - seg + 1, times, total); }
               else { surprised++; printf(" not what %d before it is observed followed by (%ld continuations)", p - seg + 1, total); } }
           /* its reading, against the readings chosen before it; then the earlier positions it changes */

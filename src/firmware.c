@@ -101,7 +101,7 @@ Firmware firmware_for(const char *path, int op){
             if (what == FW_TAKE_CHAIN) { char *nm; fw.nalt = 1; memset(fw.nchain, 0, sizeof fw.nchain);                 /* RELATION... | RELATION...: the first chain that reaches its end */
                 while ((nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') { if (!strcmp(nm, "|")) { if (fw.nalt < FW_ALTS) fw.nalt++; continue; } int a_ = fw.nalt - 1; if (fw.nchain[a_] < FW_CHAIN) snprintf(fw.chain[a_][fw.nchain[a_]++], 96, "%s", nm); }
                 if (!fw.nchain[0]) { fprintf(stderr, "%s:%d: take chain N RELATION...\n", fw.path, line); exit(2); } } }
-        else if (!strcmp(tok, "up") && in == FW_TRANSLATE) { char *nm; fw.nup = 0;               /* up RELATION...: from a word to its concept, in order */
+        else if (!strcmp(tok, "up") && (in == FW_TRANSLATE || in == FW_PULL)) { char *nm; fw.nup = 0;               /* up RELATION...: from a word to its concept, in order */
             while ((nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') { if (fw.nup >= FW_CHAIN) { fprintf(stderr, "%s:%d: more steps than a chain holds (%d)\n", fw.path, line, FW_CHAIN); exit(2); } snprintf(fw.up[fw.nup++], 96, "%s", nm); }
             if (!fw.nup) { fprintf(stderr, "%s:%d: up RELATION...\n", fw.path, line); exit(2); } }
         else if (!strcmp(tok, "language") && (in == FW_TRANSLATE || in == FW_PULL)) { char *a_ = strtok(NULL, " \t\r\n"), *b_ = strtok(NULL, " \t\r\n");

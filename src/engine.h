@@ -260,7 +260,8 @@ Hold *holds_any(const lp_id *keys, int nkeys, int *nout);                       
 void holds_free(Hold *h, int n);
 Hold *holds_capped(const lp_id *keys, int nkeys, int cap, int standing, int kinds, int *hub, int *nout);   /* kinds: 1 claims, 2 observations, 3 both */   /* each key's holders, its claims and observations a hub's when more than cap: hub[2k], hub[2k + 1] */
 void coords_of(const lp_id *ids, int n, double *out, uint8_t *has);
-Hold *paths_of(const lp_id *ids, int n, int *nout);                                            /* each one's path, from the partition its ID names */                            /* each one's coordinate, 4 doubles; has[i]: found */
+Hold *paths_of(const lp_id *ids, int n, int *nout);
+long holds_count(const lp_id *keys, int nkeys, int kind);                                     /* how many paths hold every key (kind 0 observations, 1 claims, -1 both): the index counts, no row is read */                                            /* each one's path, from the partition its ID names */                            /* each one's coordinate, 4 doubles; has[i]: found */
 int  tier_max(const lp_id *ids, int n);                                 /* the highest tier these IDs are recorded at; -1 when none are */
 #define ARGS_MAX 8
 typedef struct { lp_buf b; int binary; } SqlArg;
