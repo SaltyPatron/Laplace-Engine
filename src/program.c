@@ -94,7 +94,8 @@ typedef struct {
     uint8_t seed[32];                                                         /* every draw of the pass is BLAKE3 of this and the draw's place */
     int npos;                                                                 /* positions: the prompt's occurrences, then each word emitted (attention reads both) */
     lp_id pass[4096]; int npass;
-    lp_id lang[8]; int nlang;                                             /* the prompt's language: what most of its words are lexicalized in */                                              /* the pass's own trajectory: what it read, chose and emitted, in order */
+    lp_id lang[8]; int nlang;
+    long df[MAXOCC], df_max; int df_ready;                                            /* how many observations hold each position: the index's count, no row read */                                             /* the prompt's language: what most of its words are lexicalized in */                                              /* the pass's own trajectory: what it read, chose and emitted, in order */
     lp_idmap *walk_at; int *walk_visits; size_t walk_cap; uint64_t walk_steps, walk_homes; int walk_read;    /* where each position's walkers stood, MAXOCC counts an entity */
     lp_idmap *walk_am; struct Adj_ *walk_adj; size_t walk_acap; int walk_nadj;  /* the strands of every place stood on, read once a pass */
     lp_idmap *ctx[MAXOCC]; int ctx_n[MAXOCC], ctx_hub[MAXOCC]; lp_idmap *ctx_all; int ctx_total;            /* what the observations holding each word hold */
@@ -517,11 +518,16 @@ static int fork_choice(void *vc, const Claim *cl, int n){
      * added to the branch's log prevalence, here the order its witness gives the branches (a sense's frequency order,
      * until its counts are read). Then the walks from the other words over the record set, normalized the same way,
      * within their standard error. */
+    /* how much each context word informs: how many observations hold it, counted by the index (a hub is counted, never
+     * read), against the commonest of the prompt's words */
+    if (!st->df_ready) { st->df_max = 0; for (int j = 0; j < st->npos; j++) { st->df[j] = 0; if (!st->composed[j]) continue; int seen = -1; for (int i = 0; i < j && seen < 0; i++) if (lp_id_eq(&st->occ[i], &st->occ[j])) seen = i;
+            st->df[j] = seen >= 0 ? st->df[seen] : holds_count(&st->occ[j], 1, 0); if (seen < 0) st->trips++; if (st->df[j] > st->df_max) st->df_max = st->df[j]; }
+        st->df_ready = st->npos; }
     double *hold = calloc((size_t)n, sizeof(double)), *walks = calloc((size_t)n, sizeof(double)), *score = calloc((size_t)n, sizeof(double));
     for (int k = 0; k < n; k++) { size_t cnt = lp_idmap_count(rec[k]); double norm = sqrt((double)(cnt ? cnt : 1));
         for (int j = 0; j < st->npos; j++) { if (!st->composed[j] || st->role[j] <= 0 || lp_id_eq(&st->occ[j], fc->word)) continue;
             int seen = 0; for (int i = 0; i < j && !seen; i++) seen = lp_id_eq(&st->occ[i], &st->occ[j]); if (seen) continue;
-            double info = st->ctx_hub[j] ? 0 : log((double)(fw->fan + 1) / (1.0 + st->ctx_n[j]));
+            double info = log((1.0 + st->df_max) / (1.0 + st->df[j]));          /* against the prompt's commonest word: rare informs, common does not */
             if (info > 0 && lp_idmap_find(rec[k], &st->occ[j]) >= 0) hold[k] += st->role[j] * info;
             for (size_t i = 0; i < cnt; i++) walks[k] += st->role[j] * visits(st, lp_idmap_key(rec[k], i), j); }
         hold[k] /= norm; walks[k] /= norm;
