@@ -53,6 +53,8 @@ Firmware firmware_for(const char *path, int op){
         else if (!strcmp(tok, "order")) { v = strtok(NULL, " \t\r\n");
             if (v && !strcmp(v, "witness")) fw.order_witness = 1; else if (v && !strcmp(v, "standing")) fw.order_witness = 0;
             else { fprintf(stderr, "%s:%d: order witness | standing\n", fw.path, line); exit(2); } }
+        else if (!strcmp(tok, "prevalence")) { char *rest = strtok(NULL, "\r\n"); while (rest && (*rest == ' ' || *rest == '\t')) rest++;   /* the rest of the line: a relation's name may hold spaces */
+            if (!rest || !*rest) { fprintf(stderr, "%s:%d: prevalence RELATION\n", fw.path, line); exit(2); } snprintf(fw.prevalence, sizeof fw.prevalence, "%s", rest); size_t L = strlen(fw.prevalence); while (L && (fw.prevalence[L - 1] == ' ' || fw.prevalence[L - 1] == '\t')) fw.prevalence[--L] = 0; }
         else if (!strcmp(tok, "only")) { v = strtok(NULL, " \t\r\n");
             if (v && !strcmp(v, "predicate")) names(&fw, fw.only_predicate, &fw.nonly_predicate, FW_NAMES, fw.path, line);
             else { fprintf(stderr, "%s:%d: only predicate NAME...\n", fw.path, line); exit(2); } }
@@ -129,6 +131,7 @@ const Firmware *firmware_ids(Firmware *fw){
     for (int i = 0; i < fw->nup; i++) fw->id.up[i] = NAMED(fw->up[i]);
     for (int i = 0; i < 2; i++) if (fw->language[i][0]) fw->id.language[i] = NAMED(fw->language[i]);
     if (fw->gloss[0]) fw->id.gloss = NAMED(fw->gloss);
+    if (fw->prevalence[0]) fw->id.prevalence = NAMED(fw->prevalence);
     #undef NAMED
     lp_text_free(c); fw->id.ready = 1;
     return fw;

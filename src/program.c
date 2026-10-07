@@ -532,6 +532,18 @@ static int fork_choice(void *vc, const Claim *cl, int n){
             for (size_t i = 0; i < cnt; i++) walks[k] += st->role[j] * visits(st, lp_idmap_key(rec[k], i), j); }
         hold[k] /= norm; walks[k] /= norm;
         int rank = cl[k].position > 0 ? cl[k].position : k + 1; score[k] = -log((double)rank) + hold[k]; }
+    /* the prior, where a tagged corpus counts the word's concepts: how often [word, prevalence, concept] was played, for
+     * the concept each branch is one step down to (a sense is the word with its synset) */
+    double *prev = calloc((size_t)n, sizeof(double)); double ptotal = 0;
+    if (fw->prevalence[0]) { lp_id *cc = malloc(sizeof(lp_id) * (size_t)n * 4); int *cof = malloc(sizeof(int) * (size_t)n * 4), ncc = 0;
+        for (int k = 0; k < n; k++) { lp_id pp[8]; size_t np = reader_parts(st->rd, &ends[k], pp, 8); if (np > 8) np = 8;
+            for (size_t v = 0; v < np && ncc < n * 4; v++) if (!lp_id_eq(&pp[v], fc->word) && lp_tier0_codepoint(T0, &pp[v]) < 0) { cc[ncc] = pp[v]; cof[ncc++] = k; } }
+        int n2 = 0; Hold *h2 = ncc ? holds_both(cc, ncc, fc->word, &n2) : NULL; if (ncc) st->trips++; Ids pv = { 0 };
+        for (int r = 0; r < n2; r++) { int s_ = h2[r].src; if (s_ < 0 || s_ >= ncc || !h2[r].claim || !h2[r].stood) continue; path_into(&pv, lp_path_of(h2[r].path, (size_t)h2[r].path_len));
+            if (pv.n != 3 || !lp_id_eq(&pv.v[0], fc->word) || !lp_id_eq(&pv.v[1], &fw->id.prevalence) || !lp_id_eq(&pv.v[2], &cc[s_])) continue;
+            prev[cof[s_]] += h2[r].matches; ptotal += h2[r].matches; }
+        holds_free(h2, n2); lp_vec_free(&pv); free(cc); free(cof);
+        if (ptotal > 0) for (int k = 0; k < n; k++) score[k] = log((1.0 + prev[k]) / (1.0 + ptotal)) + hold[k]; }
     /* a rendering in the prompt's language first: the share of a branch's own words lexicalized in it */
     double *inlang = calloc((size_t)n, sizeof(double));
     if (st->nlang) { lp_id (*bw)[64] = calloc((size_t)n, sizeof *bw); int *nbw = calloc((size_t)n, sizeof(int)); lp_id all[4096]; int na = 0;
@@ -547,10 +559,10 @@ static int fork_choice(void *vc, const Claim *cl, int n){
         if (inlang[k] > inlang[best] || (inlang[k] == inlang[best] && (score[k] > score[best] || (score[k] == score[best] && walks[k] > walks[best] + tol)))) best = k; }
     int told = 0; for (int k = 0; k < n; k++) if (k != best && (inlang[best] > inlang[k] || (inlang[best] == inlang[k] && (score[best] > score[k] || walks[best] > walks[k] + fw->sure * sqrt((walks[k] + walks[best]) / 4.0))))) told++;
     int pick = told == n - 1 ? best : -1;
-    if (getenv("LAPLACE_TIMES")) for (int k = 0; k < n; k++) { char *tx = reader_text(st->rd, &ends[k], 50); fprintf(stderr, "fork: %s%-50s in language %.2f, record %zu, holds %.3f, prior %.2f, score %.3f, walks %.2f\n", k == pick ? "* " : "  ", tx, inlang[k], lp_idmap_count(rec[k]), hold[k], -log((double)(cl[k].position > 0 ? cl[k].position : k + 1)), score[k], walks[k]); free(tx); }
+    if (getenv("LAPLACE_TIMES")) for (int k = 0; k < n; k++) { char *tx = reader_text(st->rd, &ends[k], 50); fprintf(stderr, "fork: %s%-50s in language %.2f, record %zu, holds %.3f, counted %.0f, score %.3f, walks %.2f\n", k == pick ? "* " : "  ", tx, inlang[k], lp_idmap_count(rec[k]), hold[k], prev[k], score[k], walks[k]); free(tx); }
     fc->last_hold = (int)(hold[best] * 1000 + 0.5); fc->last_n = n;
     for (int k = 0; k < n; k++) lp_idmap_free(rec[k]);
-    free(rec); free(ends); free(hold); free(walks); free(score); free(inlang);
+    free(rec); free(ends); free(hold); free(walks); free(score); free(inlang); free(prev);
     return pick;
 }
 /* A chain the firmware names, followed from a word (chain_follow), the oriented reading taken where the chain passes

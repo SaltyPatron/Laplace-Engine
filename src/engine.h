@@ -50,13 +50,14 @@ typedef struct {
     int elect[FW_E_KEYS], nelect;                     /* the election order: the evidence keys a proposal is compared by, first to last */
     int tie, seed_session;                            /* what a real tie gets (first, draw, ask); whether the seed holds the session and turn */
     char refuse_predicate[FW_NAMES][96], refuse_witness[FW_NAMES][96]; int nrefuse_predicate, nrefuse_witness;
-    char only_predicate[FW_NAMES][96]; int nonly_predicate;   /* when any is named, only strands whose relation is one of these are read: one head, or a few, alone */
+    char only_predicate[FW_NAMES][96]; int nonly_predicate;
+    char prevalence[96];                              /* the relation by which a source counts a word's concepts (a tagged corpus): the prior of a fork */   /* when any is named, only strands whose relation is one of these are read: one head, or a few, alone */
     struct { int what, n; } take[FW_TAKES]; int ntake; /* a pull's steps, in order */
     char weigh_name[FW_WEIGHS][96]; double weigh[FW_WEIGHS]; int nweigh;
     char role_by[96], role_name[FW_WEIGHS][96]; double role[FW_WEIGHS]; int nrole;      /* how hard a word pulls, by what is attested of it under role_by (its part of speech) */
     char chain[FW_ALTS][FW_CHAIN][96]; int nchain[FW_ALTS], nalt;                                             /* the relations a pull follows from the word that pulls hardest, in order */
     char up[FW_CHAIN][96]; int nup; char language[2][96], gloss[96];                                          /* translation: the relations from a word up to its concept (followed back down in another language); how what stands below the concept says its language (what holds it under the first, and what that says under the second); what is shown of a concept */
-    struct { int ready; lp_id only[FW_NAMES], refuse[FW_NAMES], refuse_witness[FW_NAMES], weigh[FW_WEIGHS], role_by, role[FW_WEIGHS], chain[FW_ALTS][FW_CHAIN], up[FW_CHAIN], language[2], gloss; } id;
+    struct { int ready; lp_id prevalence; lp_id only[FW_NAMES], refuse[FW_NAMES], refuse_witness[FW_NAMES], weigh[FW_WEIGHS], role_by, role[FW_WEIGHS], chain[FW_ALTS][FW_CHAIN], up[FW_CHAIN], language[2], gloss; } id;
 } Firmware;                                           /* id: every name above as the entity it is, computed once a pass (firmware_ids) */
 /* ---- the lookups the forward pass is made of (pull.c) */
 #define MAXPARTS 12
