@@ -30,7 +30,7 @@
  *   format NAME                   the grammar and what each kind of its nodes is, kept once for every recipe of that
  *                                 format (recipes/formats/NAME.format)
  *   tier, names, part, ...        the file laid out in tiers, outermost first (structure.h)
- *   content, key, refer, type, metadata, omit, own, thing, attest, relate, pair, holds, itself, voices, together,
+ *   content, key, refer, type, metadata, omit, own, thing, value, attest, relate, pair, holds, itself, voices, together,
  *   score, where, when, ...       what each named part of the file's tree is, and what the file attests (say.c)
  *   like RECIPE                   it reads as that recipe does, under its own name, witness, lineage and trust
  *   witness NAME...               the source as witness, named as content ({dir}: the directory the file is in;

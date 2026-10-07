@@ -16,5 +16,7 @@ thing row "Sentence id"
 refer "Sentence id" tatoeba-sentences
 own Username
 content Lang "Script name" Transcription
+# the script a transcription is in: the relation of the sentence to its transcription (a value of the scripts)
+value - "Script name"
 relate row "Script name" to Transcription by Username
 attest row Lang

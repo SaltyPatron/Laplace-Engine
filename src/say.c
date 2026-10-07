@@ -22,10 +22,23 @@
  *   omit NAME...               the part is the file's bookkeeping: read by nothing
  *   perfcache                  a part named as a property the perf-cache's flags hold (tier0.flags, its layout) is read
  *                              from there for every codepoint: it is not attested again
- *   attest TIER NAME...        of a TIER's thing, what each part NAME says, under the part's own name: [thing, NAME, value];
- *                              a part that is itself KEY IS VALUE parts says each VALUE under its KEY: [thing, KEY, VALUE]
- *   relate TIER NAME to NAME   of a TIER's thing, its relation (the first part's value) to what the second part is:
- *                              [thing, relation, other]; where the second names nothing, the pair [thing, relation]
+ *   value LIST NAME...         what each part NAME means when a claim is made of it: its value is a value of the road
+ *                              class LIST (the highway's list of that name; - where the highway lists none yet: the
+ *                              source's own vocabulary for the part), a tagset's tag, a lemma, a feature's Name=Value,
+ *                              a relation of the source's own inventory. The value is recorded as the source writes it;
+ *                              where the highway holds LIST, a value it does not list is counted and said. ELEMENT.NAME
+ *                              names the part only within that element (frameRelationType.name, MISC.Translit)
+ *   attest TIER NAME...        of a TIER's thing, what each part NAME says: [thing, value], NAME a part that value names
+ *                              the meaning of; a part that is itself KEY IS VALUE parts says each [KEY, VALUE]: [thing,
+ *                              [KEY, VALUE]] (a feature's Name=Value), or, where KEY itself is valued, [thing, VALUE]
+ *   holds TIER NAME... [via]   of a TIER's thing, the things of those names inside it that value names: [thing, other]
+ *   relate TIER NAME to NAME   of a TIER's thing, its relation (the first part's value, which value names: a relation
+ *                              of the source's own inventory) to what the second part is: [thing, relation, other];
+ *                              where the second names nothing, the pair [thing, relation]
+ * A relation is what the source means, never the name its markup gives a field (Laplace-Engine#32): no part's name, no
+ * element's, no layer's, no file's, is ever a part of a claim. A part a claim names that value does not give a meaning,
+ * a relation taken from the file's name ({file}) and a line's predicate are an unresolved obligation: no claim is made,
+ * and each is counted by its name and said when the ingest ends (say_obligations).
  * A named part the recipe gives no disposition is an obligation left open: it is counted and said, never taken for
  * content and never dropped in silence. */
 #define _GNU_SOURCE
@@ -63,6 +76,7 @@ typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thi
                  char selfmark;                                              /* what the source writes, in a value, for the code point the part is (UCD: #) */
                  regex_t about_re; int has_about;                            /* a page's lines: the first that matches names what the page is about */
                  struct { regex_t re; int mode; char pred[64]; } line[8]; int nline;    /* a line that matches says its parts: 0 of what the page is about, 1 the claim itself, 2 a pair, 3 under a name */
+                 Dis val[64]; int nval;                                      /* value LIST NAME...: what a part means in a claim; arg: its road class's list, "" for none the highway holds */
                  Score score[4]; int nscore; Where where[16]; int nwhere; uint32_t whole, now; Pair voice; } Say;   /* whole: the conditions on the outermost part (where); now: the ones the lines being read are said under (when) */
 
 static char *name_next(char **at, char *out, size_t cap){
@@ -197,6 +211,13 @@ int say_says(Recipe *r, const char *path, char *tok){
         snprintf(b, sizeof b, "%s", !strcmp(c, "hash") ? "#" : c); s->selfmark = b[0]; return 1; }
     if (!strcmp(tok, "stem") && LAID) { char *a = strtok(NULL, " \t\r\n"), *b = strtok(NULL, " \t\r\n"); if (!a) { fprintf(stderr, "%s: stem [FROM] TO\n", path); return -1; }
         if (b) { s->stemfrom = a[0]; s->stem = b[0]; } else s->stem = a[0]; return 1; }      /* {file}: the file's name after its last FROM, up to the TO after it */
+    if (!strcmp(tok, "value")) { at = strtok(NULL, "\r\n"); int any = 0;          /* value LIST NAME...: what the parts mean in a claim, a value of that road class */
+        if (!name_next(&at, a2, sizeof a2) || strlen(a2) >= 32) { fprintf(stderr, "%s: value LIST NAME... (LIST: the highway's list, or -)\n", path); return -1; }
+        while (name_next(&at, nm, sizeof nm)) {
+            if (!strcmp(nm, "{file}")) { fprintf(stderr, "%s: value: a file's name is never what a claim means (Laplace-Engine#32)\n", path); return -1; }
+            if (s->nval == 64) { fprintf(stderr, "%s: more parts than value names (64)\n", path); return -1; }
+            Dis *d = &s->val[s->nval++]; memset(d, 0, sizeof *d); snprintf(d->name, sizeof d->name, "%s", nm); dis_parse(d); snprintf(d->arg, sizeof d->arg, "%s", strcmp(a2, "-") ? a2 : ""); any = 1; }
+        if (!any) { fprintf(stderr, "%s: value LIST NAME...\n", path); return -1; } return 1; }
     if (!strcmp(tok, "own") && LAID) { at = strtok(NULL, "\r\n"); int any = 0;      /* a name that stands only within the source: [the source's witness, NAME, the name] */
         while (name_next(&at, nm, sizeof nm)) { if (dis_add(s, path, nm, D_OWN, NULL) < 0) return -1; any = 1; }
         if (!any) { fprintf(stderr, "%s: own NAME...\n", path); return -1; } return 1; }
@@ -258,7 +279,8 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
                  Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int32_t wide_of; KeyRank kr; int16_t *dm; uint32_t dm_cap;
-                 struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; } Sink;          /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
+                 struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch;
+                 struct Obl { char name[96]; uint64_t n; char what; } obl[32]; int nobl; uint64_t obl_more; } Sink;   /* obl: the obligations the reading left (no meaning: no claim), and values outside the road class named, by name */        /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
     if (k->nhr == k->chr) { k->chr = k->chr ? k->chr * 2 : 1024; k->hr = xrealloc(k->hr, sizeof(HwRec) * k->chr); }
@@ -269,6 +291,51 @@ static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a,
 static void left_open(Sink *k, const SNode *x){
     k->open[0]++; for (int i = 0; i < k->nopen; i++) if (strlen(k->opennm[i]) == x->nlen && !memcmp(k->opennm[i], x->name, x->nlen)) return;
     if (k->nopen < 16) snprintf(k->opennm[k->nopen++], 64, "%.*s", (int)(x->nlen < 63 ? x->nlen : 63), x->name);
+}
+/* An unresolved obligation (what 'o'): a part a claim would name that the recipe gives no meaning (value), so no claim is
+ * made of it; or (what 'm') a value of a road class the highway holds that its list does not, said as written. Counted by
+ * the directive and the part's name, and said when the ingest ends (say_obligations). */
+static void owed(Sink *k, char what, const char *how, const uint8_t *a, size_t al, const uint8_t *b, size_t bl){
+    char key[96]; int l = snprintf(key, sizeof key, "%s %.*s", how, (int)(al < 40 ? al : 40), (const char *)a);
+    if (b && l > 0 && (size_t)l < sizeof key) snprintf(key + l, sizeof key - (size_t)l, ".%.*s", (int)(bl < 40 ? bl : 40), (const char *)b);
+    for (int i = 0; i < k->nobl; i++) if (k->obl[i].what == what && !strcmp(k->obl[i].name, key)) { k->obl[i].n++; return; }
+    if (k->nobl == 32) { k->obl_more++; return; }
+    struct Obl *o = &k->obl[k->nobl++]; snprintf(o->name, sizeof o->name, "%s", key); o->n = 1; o->what = what;
+}
+static void owed_node(Sink *k, const char *how, const SNode *x){ owed(k, 'o', how, x->name, x->nlen, NULL, 0); }
+/* A value said as a value of a road class: where the highway holds the class's list and the list does not hold the value,
+ * it is said (the claim stands: the value is what the source writes; only its slot is missing). */
+static void of_class(Sink *k, const Dis *m, const Ref *v){
+    if (!m->arg[0] || !HW) return; const lp_list *L = lp_highway_list(HW, m->arg);
+    if (!L) { owed(k, 'm', "no list in the highway:", (const uint8_t *)m->arg, strlen(m->arg), NULL, 0); return; }
+    if (lp_highway_slot(HW, L, &v->id) < 0) owed(k, 'm', m->arg, (const uint8_t *)m->name, strlen(m->name), NULL, 0);
+}
+static void claim(Sink *k, Ref *part, int n);
+/* A part's value said of a thing as the recipe says the part means it (value LIST NAME): a value of that road class,
+ * [thing, value]. The part's name is in no claim. */
+static void said_as(Sink *k, const Dis *m, Ref S, Ref v){ if (!memcmp(&v.id, &S.id, 16)) return; of_class(k, m, &v); Ref p[2] = { S, v }; claim(k, p, 2); }     /* a value that is the thing itself (a lemma its own form) says nothing of it */
+/* The obligations of every file read, by recipe: kept until said. */
+static struct { char recipe[64], name[96]; uint64_t n; char what; } *OBL; static size_t NOBL, COBL; static uint64_t OBL_MORE;
+static void owed_keep(const char *recipe, const Sink *k){
+    #pragma omp critical(laplace_obligations)
+    { OBL_MORE += k->obl_more;
+      for (int i = 0; i < k->nobl; i++) { size_t j = 0;
+          for (; j < NOBL; j++) if (OBL[j].what == k->obl[i].what && !strcmp(OBL[j].recipe, recipe) && !strcmp(OBL[j].name, k->obl[i].name)) break;
+          if (j == NOBL) { if (NOBL == COBL) { COBL = COBL ? COBL * 2 : 64; OBL = xrealloc(OBL, sizeof *OBL * COBL); }
+              snprintf(OBL[j].recipe, sizeof OBL[j].recipe, "%s", recipe); snprintf(OBL[j].name, sizeof OBL[j].name, "%s", k->obl[i].name); OBL[j].n = 0; OBL[j].what = k->obl[i].what; NOBL++; }
+          OBL[j].n += k->obl[i].n; } }
+}
+static int obl_cmp(const void *x, const void *y){ const char *a = (const char *)x, *b = (const char *)y; int c = strcmp(a, b); return c ? c : strcmp(a + 64, b + 64); }
+void say_obligations(FILE *o){
+    uint64_t n = 0, m = 0; for (size_t i = 0; i < NOBL; i++) { if (OBL[i].what == 'o') n += OBL[i].n; else m += OBL[i].n; }
+    if (!NOBL && !OBL_MORE) return;
+    qsort(OBL, NOBL, sizeof *OBL, obl_cmp);
+    fprintf(o, "\n== unresolved obligations: %'llu parts a claim would name have no meaning the recipe gives (value LIST NAME), so no claim is made of them (Laplace-Engine#32)\n", (unsigned long long)n);
+    for (size_t i = 0; i < NOBL; i++) if (OBL[i].what == 'o') fprintf(o, "   %-22s %-60s %'14llu\n", OBL[i].recipe, OBL[i].name, (unsigned long long)OBL[i].n);
+    if (OBL_MORE) fprintf(o, "   and %'llu more, under names past the 32 a part keeps\n", (unsigned long long)OBL_MORE);
+    if (m) { fprintf(o, "   values said as a road class's that the highway's list does not hold (claimed as written; no slot): %'llu\n", (unsigned long long)m);
+        for (size_t i = 0; i < NOBL; i++) if (OBL[i].what == 'm') fprintf(o, "   %-22s %-60s %'14llu\n", OBL[i].recipe, OBL[i].name, (unsigned long long)OBL[i].n); }
+    free(OBL); OBL = NULL; NOBL = COBL = 0; OBL_MORE = 0;
 }
 /* A name as the recipe writes it: NAME* is every name that begins with NAME (a header's columns that begin alike). */
 static int named_as(const SNode *x, const char *name){
@@ -283,14 +350,17 @@ static inline int composing(int32_t g){ for (int i = busy_base; i < nbusy; i++) 
 /* named_as, for a name split when the recipe was read */
 static inline int name_is(const SNode *x, const char *n, uint8_t off, uint8_t len, uint8_t wild, uint8_t note){
     if (note && x->kind != S_NOTE) return 0; return wild ? x->nlen >= len && !memcmp(x->name, n + off, len) : s_named(x, n + off, len); }
-static const Dis *dis_scan(const Say *s, const SNode *x){
+static const Dis *dis_in(const Dis *all, int n, const SNode *x){
     if (TT && x->parent >= 0) {                                              /* ELEMENT.NAME first: it says more than NAME */
         const SNode *el = &TT->n[x->parent]; if (el->nlen == x->nlen && !memcmp(el->name, x->name, x->nlen) && el->parent >= 0) el = &TT->n[el->parent];   /* a piece of a part: the part's element */
-        for (int i = 0; i < s->ndis; i++) { const Dis *d = &s->dis[i]; if (!d->el_l) continue;
+        for (int i = 0; i < n; i++) { const Dis *d = &all[i]; if (!d->el_l) continue;
             if (el->nlen == d->el_l && !memcmp(el->name, d->name, d->el_l) && name_is(x, d->name, d->part.off, d->part.len, d->part.wild, d->part.note)) return d; } }
-    for (int i = 0; i < s->ndis; i++) { const Dis *d = &s->dis[i]; if (name_is(x, d->name, d->whole.off, d->whole.len, d->whole.wild, d->whole.note)) return d; }
+    for (int i = 0; i < n; i++) { const Dis *d = &all[i]; if (name_is(x, d->name, d->whole.off, d->whole.len, d->whole.wild, d->whole.note)) return d; }
     return NULL;
 }
+static const Dis *dis_scan(const Say *s, const SNode *x){ return dis_in(s->dis, s->ndis, x); }
+/* What a part means in a claim (value LIST NAME): NULL where the recipe says nothing of it, and no claim is made of it. */
+static const Dis *meaning(const Say *s, const SNode *x){ return s->nval && x->nlen ? dis_in(s->val, s->nval, x) : NULL; }
 /* A part's disposition, found once for each node of the tree being read (DM, shared by the threads reading it). */
 static __thread int16_t *DM;
 static const Dis *dis_of(const Say *s, const SNode *x){
@@ -650,7 +720,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
 static void worker_of(Sink *w, const Sink *k){
     *w = *k; memset(&w->ev, 0, sizeof w->ev); memset(&w->things, 0, sizeof w->things); memset(&w->meta, 0, sizeof w->meta); memset(&w->grp, 0, sizeof w->grp);
     memset(w->open, 0, sizeof w->open); w->nopen = 0; w->unknown = 0; w->nunk = 0; w->hr = NULL; w->nhr = w->chr = 0; w->worker = 1;
-    w->cs = NULL; w->cs_cap = w->cs_n = 0;                                    /* the claims it has made: its own, never the parent's table */
+    w->cs = NULL; w->cs_cap = w->cs_n = 0; w->nobl = 0; w->obl_more = 0;                                   /* the claims it has made: its own, never the parent's table */
     memset(&w->ix_key, 0, sizeof w->ix_key);                                  /* the buffer a key is written into to be looked up (keyed): its own; the
                                                                                * parent's, copied, was written by every worker at once */
 }
@@ -661,6 +731,8 @@ static void sink_merge(Sink *k, Sink *w){
     for (int i = 0; i < 256; i++) k->open[i] += w->open[i];
     for (int i = 0; i < w->nopen; i++) { int dup = 0; for (int j = 0; j < k->nopen && !dup; j++) dup = !strcmp(k->opennm[j], w->opennm[i]); if (!dup && k->nopen < 16) strcpy(k->opennm[k->nopen++], w->opennm[i]); }
     k->unknown += w->unknown; for (int i = 0; i < w->nunk && k->nunk < 8; i++) strcpy(k->unknm[k->nunk++], w->unknm[i]);
+    k->obl_more += w->obl_more; for (int i = 0; i < w->nobl; i++) { int j = 0; for (; j < k->nobl; j++) if (k->obl[j].what == w->obl[i].what && !strcmp(k->obl[j].name, w->obl[i].name)) break;
+        if (j < k->nobl) k->obl[j].n += w->obl[i].n; else if (k->nobl < 32) k->obl[k->nobl++] = w->obl[i]; else k->obl_more += w->obl[i].n; }
     free(w->ev.e); free(w->meta.c); free(w->things.c); free(w->grp.c); free(w->cs); lp_buf_free(&w->ix_key);
 }
 /* A thread may take up a part while it waits inside its own reading: what it was in the middle of is put back after. */
@@ -750,26 +822,39 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
             int32_t who[WHO]; int nw = whos(s, t, (int32_t)g, s->att[a].by, who);
             for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !voice_of(k, t, who[wi])) continue;
             for (int z = 0; z < s->att[a].n; z++) for (int32_t c = x->first; c >= 0; c = t->n[c].next) { const SNode *y = &t->n[c];
-                if (!strcmp(s->att[a].name[z], "*/")) {                      /* each element inside it that is a value: its own text, or its one attribute (rdf:resource), under the element's name */
+                if (!strcmp(s->att[a].name[z], "*/")) {                      /* each element inside it that is a value: its own text, or its one attribute (rdf:resource), as the element's name means it */
                     if (y->kind != S_GROUP || !y->nlen || y->join == S_PIECES) continue; int32_t only = -1, nk = 0;
                     for (int32_t q = y->first; q >= 0; q = t->n[q].next) { const Dis *dq = t->n[q].nlen && t->n[q].kind == S_VALUE ? dis_of(s, &t->n[q]) : NULL; if (dq && dq->what == D_OMIT) continue; nk++; only = q; }   /* what is omitted does not count */
                     if (nk != 1 || (t->n[only].kind != S_TEXT && t->n[only].kind != S_VALUE) || left_empty(s, &t->n[only])) continue;
                     if (!s->att[a].of[0] && names_it(k, t, (int32_t)g, y)) continue;                     /* the element that names the thing is the thing, not said of it */
-                    Ref v; if (!value_of(k, t, only, &v, 0)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); continue; }
-                if (!strcmp(s->att[a].name[z], ".")) {                       /* its own text, under its own name */
+                    Ref v; if (!value_of(k, t, only, &v, 0)) continue;
+                    const Dis *m = meaning(s, y); if (!m) { if (!wi) owed_node(k, "attest", y); continue; }      /* the element's name is markup: what it means, or no claim */
+                    said_as(k, m, S, v); continue; }
+                if (!strcmp(s->att[a].name[z], ".")) {                       /* its own text, as its own name means it */
                     if (y->kind != S_TEXT || left_empty(s, y)) continue; Ref v = text_of(y->val, y->vlen); if (!memcmp(&v.id, &S.id, 16)) continue;    /* the text the thing is named by: the thing, said already */
-                    Ref p[3] = { S, string_ref(x->name, x->nlen), v }; claim(k, p, 3); continue; }
+                    const Dis *m = meaning(s, x); if (!m) { if (!wi) owed_node(k, "attest", x); continue; }
+                    said_as(k, m, S, v); continue; }
                 if (!y->nlen || y->kind == S_TEXT || !named_as(y, s->att[a].name[z])) continue;
                 if (!s->att[a].of[0] && names_it(k, t, (int32_t)g, y)) continue;                         /* a part that names the thing is said already: it is the thing */
                 if (y->kind == S_GROUP && y->join != S_PIECES && strchr(s->att[a].name[z], '*')) continue;      /* a wildcard names the part's values, not the elements inside it, which speak for themselves */
-                if (y->kind == S_GROUP) {                                    /* parts: each VALUE under its KEY, or each piece, read as the part is, under the part's own name */
+                if (y->kind == S_GROUP) {                                    /* parts: each KEY IS VALUE the pair [KEY, VALUE] (a feature's Name=Value), or each piece, read as the part is */
+                    const Dis *my = meaning(s, y);
                     for (int32_t q = y->first; q >= 0; q = t->n[q].next) { const SNode *w = &t->n[q]; if (!w->vlen) continue; Ref v;
                         if (w->kind == S_VALUE && w->nlen && !s_named(w, (const char *)y->name, y->nlen)) { const Dis *dw = dis_of(s, w); if (dw && (dw->what == D_OMIT || dw->what == D_METADATA)) continue;      /* the file's bookkeeping says nothing */
                             if (in_perf(s, (const char *)w->name, w->nlen)) continue;
-                            Ref vw; if (!dw || !value_of(k, t, q, &vw, 0)) vw = text_of(w->val, w->vlen); Ref p[3] = { S, string_ref(w->name, w->nlen), vw }; claim(k, p, 3); continue; }
-                        if (!value_of(k, t, q, &v, 0)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); } }
+                            Ref vw; if (!dw || !value_of(k, t, q, &vw, 0)) vw = text_of(w->val, w->vlen);
+                            const Dis *mw = meaning(s, w);                   /* the KEY valued itself (MISC.Translit): [thing, VALUE] */
+                            if (mw) { said_as(k, mw, S, vw); continue; }
+                            if (!my) { if (!wi) owed(k, 'o', "attest", y->name, y->nlen, w->name, w->nlen); continue; }
+                            Ref kv[2] = { string_ref(w->name, w->nlen), vw }; kv[0].said = 0; if (kv[1].said != LP_SAID_TUPLE) kv[1].said = 0;   /* the pair the record holds: the same entity */
+                            Ref pv = said_tuple(compose(kv, 2, ref_above(kv, 2))); of_class(k, my, &pv); Ref p[2] = { S, pv }; claim(k, p, 2); continue; }
+                        if (!value_of(k, t, q, &v, 0)) continue;
+                        if (!my) { if (!wi) owed_node(k, "attest", y); continue; }
+                        said_as(k, my, S, v); } }
                 else { if (in_perf(s, (const char *)y->name, y->nlen)) continue;
-                    Ref v; if (!value_of(k, t, c, &v, 0)) continue; Ref p[3] = { S, string_ref(y->name, y->nlen), v }; claim(k, p, 3); } }
+                    Ref v; if (!value_of(k, t, c, &v, 0)) continue;
+                    const Dis *m = meaning(s, y); if (!m) { if (!wi) owed_node(k, "attest", y); continue; }
+                    said_as(k, m, S, v); } }
             }
             if (s->att[a].of[0]) { S = S0; has = had; }
             k->voiced = was; k->voice = wv; }
@@ -782,8 +867,9 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
             while (sp) { int32_t c = stack[--sp]; const SNode *y = &t->n[c]; if (y->kind != S_GROUP) continue; Ref v; int named = 0;
                 for (int z = 0; z < s->hold[a].n && !named; z++) named = named_as(y, s->hold[a].name[z]);
                 if (named && thing_of(k, t, c, &v, 0)) { if (memcmp(&v.id, &S.id, 16)) {
-                        const SNode *by = y; if (s->hold[a].file) { int32_t via = c; while (t->n[via].parent >= 0 && t->n[via].parent != (int32_t)g) via = t->n[via].parent; by = &t->n[via]; }    /* via: the element between them names the relation */
-                        Ref p[3] = { S, string_ref(by->name, by->nlen), v }; claim(k, p, 3); } continue; }
+                        const SNode *by = y; if (s->hold[a].file) { int32_t via = c; while (t->n[via].parent >= 0 && t->n[via].parent != (int32_t)g) via = t->n[via].parent; by = &t->n[via]; }    /* via: the element between them */
+                        const Dis *m = meaning(s, by);                       /* an element's name is markup, and what holds what is the tree's: a claim only of what value means */
+                        if (!m) owed_node(k, "holds", by); else said_as(k, m, S, v); } continue; }
                 { Ref tmp; if (thing_of(k, t, c, &tmp, 0)) continue; }               /* another thing: what it holds is its own */
                 size_t nk = 0; for (int32_t q = y->first; q >= 0; q = t->n[q].next) nk++;
                 if (sp + nk > scap) { while (sp + nk > scap) scap *= 2; stack = xrealloc(stack, sizeof(int32_t) * scap); }
@@ -794,8 +880,10 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
             int was = k->voiced; Ref wv = k->voice; int32_t who[WHO]; int nw = whos(s, t, (int32_t)g, s->rel[a].by, who);
             for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !voice_of(k, t, who[wi])) continue;
             Ref rel, o;
-            if (!strcmp(s->rel[a].rel, "{file}")) rel = k->fstem;                /* the relation the file's own name gives (noun.exc: noun) */
-            else { int32_t rc = child_path(t, (int32_t)g, s->rel[a].rel); if (rc < 0 || !value_of(k, t, rc, &rel, 0)) break; }
+            if (!strcmp(s->rel[a].rel, "{file}")) { if (!wi) owed(k, 'o', "relate", (const uint8_t *)"{file}", 6, NULL, 0); break; }     /* a file's name is never a relation */
+            else { int32_t rc = child_path(t, (int32_t)g, s->rel[a].rel); if (rc < 0 || !value_of(k, t, rc, &rel, 0)) break;
+                const Dis *m = meaning(s, &t->n[rc]); if (!m) { if (!wi) owed_node(k, "relate", &t->n[rc]); break; }     /* a layer's name, a field's: no relation; one of the source's own inventory, which value names */
+                of_class(k, m, &rel); }
             if (!strcmp(s->rel[a].to, "...")) {                              /* to each of the parts the file gives no name */
                 for (int32_t c = x->first; c >= 0; c = t->n[c].next) { const SNode *y = &t->n[c]; if (y->kind != S_TEXT || y->nlen || left_empty(s, y)) continue; o = text_of(y->val, y->vlen); Ref p[3] = { S, rel, o }; claim(k, p, 3); } }
             else if (s_child(t, (int32_t)g, s->rel[a].to, s_child(t, (int32_t)g, s->rel[a].to, -1)) >= 0) {   /* several parts of that name: the relation to each */
@@ -824,10 +912,12 @@ static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
         const SNode *x = &t->n[root]; char stack[4096], *ln = x->vlen < sizeof stack ? stack : malloc(x->vlen + 1); memcpy(ln, x->val, x->vlen); ln[x->vlen] = 0;
         for (int i = 0; i < s->nline; i++) { regmatch_t m[5]; if (regexec(&s->line[i].re, ln, 5, m, 0)) continue;
             Ref part[4]; int np = 0; for (int q = 1; q < 5 && np < 4; q++) if (m[q].rm_so >= 0 && m[q].rm_eo > m[q].rm_so) part[np++] = text_of((const uint8_t *)ln + m[q].rm_so, (size_t)(m[q].rm_eo - m[q].rm_so));
-            if (s->line[i].mode == 3 && np == 2) { Ref p[3] = { part[0], string_ref((const uint8_t *)s->line[i].pred, strlen(s->line[i].pred)), part[1] }; claim(k, p, 3); }
+            /* a predicate the recipe writes, and a line's first part taken as the relation, are a heading's or a field's name:
+             * an obligation, never a relation (Laplace-Engine#32) */
+            if (s->line[i].mode == 3 && np == 2) owed(k, 'o', "line :: predicate", (const uint8_t *)s->line[i].pred, strlen(s->line[i].pred), NULL, 0);
             else if (s->line[i].mode == 2 && np == 2) claim(k, part, 2);
             else if (s->line[i].mode == 1 && np >= 2) claim(k, part, np);
-            else if (s->line[i].mode == 0 && np == 2 && k->has_fabout) { Ref p[3] = { k->fabout, part[0], part[1] }; claim(k, p, 3); } }
+            else if (s->line[i].mode == 0 && np == 2 && k->has_fabout) owed(k, 'o', "line", (const uint8_t *)ln + m[1].rm_so, (size_t)(m[1].rm_eo - m[1].rm_so), NULL, 0); }
         if (ln != stack) free(ln); }
     int speaks = spoken_of(s, t, root, s->whole);
     Pend pend[64]; int np_ = 0;      /* the parts whose claims are said together, still open */
@@ -981,7 +1071,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         for (uint64_t j = 0; j < part[i].ev.n; j++) ev_push(&f->ev, &part[i].ev.e[j]);
         for (size_t j = 0; j < part[i].things.n; j++) push(&things, &part[i].things.c[j]);
         for (size_t j = 0; j < part[i].meta.n; j++) push(&meta, &part[i].meta.c[j]);
-        open += part[i].open[0]; free(part[i].ev.e); free(part[i].things.c); free(part[i].meta.c);
+        open += part[i].open[0]; owed_keep(r->name, &part[i]); free(part[i].ev.e); free(part[i].things.c); free(part[i].meta.c);
         free(part[i].tc); free(part[i].ts); free(part[i].dm); if (part[i].ix) lp_strmap_free(part[i].ix); lp_buf_free(&part[i].ix_key); free(part[i].grp.c); }
     if (open) { fprintf(stderr, "\n  %s: %llu named parts of %s have no disposition in the recipe: they are left open, not read:", r->name, (unsigned long long)open, f->path);
         char seen[64][64]; int ns = 0;

@@ -210,6 +210,7 @@ void attest_layout(const Recipe *, File *, const uint8_t *src, size_t n);       
 typedef struct Hw Hw;
 void say_highway(const Recipe *, File *, const uint8_t *src, size_t n, Hw *);
 int  say_has_highway(const Recipe *);
+void say_obligations(FILE *);                                                /* the parts a claim would name with no meaning the recipe gives (value): said, and forgotten */
 void hw_type(Hw *, const char *list, const char *say, Ref thing);                 /* a type of the list: the thing it is */
 void hw_key(Hw *, const char *list, Ref thing, const char *key);                  /* a resource's key of that type */
 void hw_alias(Hw *, const char *list, const char *key, const char *to);           /* a key that names the type another key names */

@@ -18,4 +18,7 @@ type filler ili
 content role
 together row
 relate row {file} to role
+# a role is a value of VerbAtlas's role inventory (Agent, Theme, ...), the relation of the frame to its filler. The
+# file's name (shadow, implicit) is no relation: an unresolved obligation (relate {file})
+value - role
 relate row role to filler

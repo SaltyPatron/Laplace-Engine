@@ -49,6 +49,19 @@ own dc:source
 content adjposition
 omit dc:* xmlns:* status note confidenceScore version url email license citation logo lexicographer
 
+# What each part a claim is made of means (Laplace-Engine#32): never the attribute's or the element's name.
+# partOfSpeech: a value of WN-LMF's part-of-speech list (WN-LMF-1.3.dtd: partOfSpeech (n|v|a|r|s|t|c|p|x|u)), as
+# written ([dog, n]); lexfile: a value of the lexicographer files the highway lists ([synset, noun.animal]); ili: the
+# concept the synset's ILI names, a value of the ILI road class; relType: a value of WN-LMF's relation list (the DTD's
+# relType enumeration: hypernym, antonym, ...), the relation of a SenseRelation or SynsetRelation.
+value - partOfSpeech relType
+value lexfile lexfile
+value ili ili
+# Every other part the claims below name (script, writtenForm, variety, category, synset, subcat, lexicalized,
+# adjposition, Count, Definition, ILIDefinition, Example, language, ref, senses) has no meaning given here: an
+# unresolved obligation, no claim (the definition, the example, a form and a sense want a relation the registry
+# does not yet hold; a sense's synset is the lexicalization itself, Laplace-Engine#20; a Count is an observation).
+
 holds Lexicon Synset LexicalEntry SyntacticBehaviour
 attest Lexicon language
 attest Requires ref

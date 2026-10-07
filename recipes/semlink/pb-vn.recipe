@@ -17,6 +17,8 @@ type class.key vnclass
 content argument.key value
 
 itself class
+# an argument's key is a PropBank argument (ARG0), its value the VerbNet role: the source's own correspondence
+value - argument.key
 relate argument key to value
 
 maps class ^roleset/key pbroleset to key vnclass
