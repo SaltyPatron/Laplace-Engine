@@ -13,13 +13,14 @@ So:
 
 - **Nothing is renamed, normalized, abbreviated, expanded, translated, re-cased or re-spelled.** `Number=Sing` is
   recorded as `Number` and `Sing`, never as "singular". `Ref_Name` stays `Ref_Name`, never "Reference Name".
-- **Every predicate comes from the source itself**: a header row, an attribute or element name, a JSON key, a
-  `KEY=VALUE` key, a name in the file's name. For a table with no header row, column names may come **only** from the
-  source's own documentation (its README, its format page, in the set's directory). Quote the documentation line in a
-  `#` comment of the recipe. If the source does not name a column anywhere, **do not invent a name**: use a pair or a
-  tuple in the row's own order (see `pair`, and `subject in / predicate in / object in`), or report it.
-- **Break values down as far as the source's own notation says**, no further: a field of `A=B|C=D` parts is four
-  entities and two claims, not one string. Stop at words.
+- **No predicate comes from the markup**: a header row, an attribute or element name, a JSON key, a `KEY=VALUE` key
+  or a name in the file's name says where a value is, never what it means (see "A relation is meaning", below). For a
+  table with no header row, column names may come **only** from the source's own documentation (its README, its
+  format page, in the set's directory): they name the columns for the recipe's lines, and are in no claim. Quote the
+  documentation line in a `#` comment of the recipe. If the source does not name a column anywhere, **do not invent a
+  name**: use a pair or a tuple in the row's own order (see `pair`), or report it.
+- **Break values down as far as the source's own notation says**, no further: a field of `A=B|C=D` parts is two
+  entities `[A, B]` and `[C, D]`, not one string. Stop at words.
 - A claim is a **tuple of entities** (`[subject, predicate, object]`, a pair, or a longer path). Every part is content.
 - Whatever a source leaves empty (its own empty marker) attests nothing.
 - The witness is named **as the source names itself** (its README title, its own `label`), and that name is content
@@ -164,11 +165,18 @@ So:
   common noun, its PENN layer `nns` a Penn Treebank plural common noun, each reaching `NOUN` through that
   equivalence). A per-span label (a frame element, grammatical function or phrase type in one sentence's annotation)
   goes in the sentence's layer, never on the word. A pointer's attribute name (`feID`, `ID`) never appears in a claim.
-  As built, `attest` and `relate` record `[cell, column header, value]`: `framenet.recipe`'s `relate label ^/name to
-  name by cBy` gives `[dog, BNC, NN1]` and `[dog, GF, Head]`, `attest label itype feID` gives `[dog, feID, Animals,
-  Animal]`, `attest lexUnit POS` gives `[dog.n, POS, N]`, and `matrix.recipe`'s `attest row *` gives `[pred, role,
-  10_VN_ROLE, vn:Theme]`. Where the source documents what a field means, report it; where it does not, report the
-  field as unresolved rather than guess.
+  The recipe says what each field a claim is made of means, with `value LIST NAME...`: the field's value is a value of
+  the road class LIST (a list `laplace highway` holds, such as `upos`, `deprel`, `lexfile`, `ili`; `-` where the
+  highway lists none yet and the field's values are the source's own vocabulary), recorded as written. Then
+  `attest TIER NAME` gives `[thing, value]` (`[forces, NOUN]`, `[forces, force]`), a `KEY=VALUE` piece of a valued
+  field gives `[thing, [KEY, VALUE]]` (`[forces, [Number, Plur]]`), `holds` gives `[thing, other]`, and `relate TIER
+  NAME to NAME` takes its relation from a field `value` names (WN-LMF's `relType`, FrameNet's frame-relation type).
+  A field a claim names that no `value` line gives a meaning, `relate {file}` and `line ... :: predicate` make **no
+  claim**: each is an unresolved obligation, counted by its name and listed at the end of the ingest
+  (`== unresolved obligations`). Give a field a meaning only where the source's own documentation says what its
+  values are (quote it in a `#` comment); never to restore the header as a relation. Until a field's meaning is
+  given (a definition, an example, a number the source states, a per-span label that belongs in its sentence's
+  layer, a pointer's attribute such as `feID`), leave it an obligation rather than guess.
 
 These are stated design for recipe authors. The engine does not do all of them yet: read a file this way, and
 report where a recipe cannot say it.
@@ -263,8 +271,8 @@ reads text
 Notes:
 - In a recipe, `#` begins a comment when it starts a line or follows a space. `comment #` and `remark #` are the way to
   name `#` itself as a character.
-- Do not use `enter`. Do not use `predicate TEXT` with a word of your own: only with a name the source's own
-  documentation gives, quoted in a comment.
+- Do not use `enter`. `line ... :: predicate TEXT` makes no claim (an obligation): a heading is no relation. Never
+  write a word of your own as a relation.
 - `match` globs are matched against the file's name only, and the most specific wins. Inside one source make them
   unambiguous.
 - As built, a set can give a witness per file or directory, named with `{dir}` or `{first NAME}` (a treebank, a

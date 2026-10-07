@@ -60,6 +60,18 @@ key WordForm id
 omit lexemeentryids wordformids lexemeid
 content *
 
+# What each part a claim is made of means (Laplace-Engine#32), never an attribute's, an element's or a layer's name:
+# POS a value of FrameNet's part-of-speech list (N, V, A, ADV, PREP, ...): [lexical unit, N]; coreType a value of
+# FrameNet's coreness ("core, peripheral, and extra-thematic"): [frame element, Core]; a frame relation's type
+# (frameRelationType's name, Inheritance, Using, Subframe, ...; a frame file's "Inherits from") a relation of FrameNet's
+# own frame-relation inventory.
+value - POS coreType frameRelationType.name frameRelation.type
+# No meaning is given, so each is an unresolved obligation and no claim: what a frame holds (holds: containment, the
+# file's tree); definition, abbrev, incorporatedFE, superType, a lexeme's name, breakBefore and headword; a valence
+# unit's GF, PT and FE (one valence pattern, not three claims); an annotation set's names; and every label: the name
+# of the layer a label is in (BNC, PENN, FE, GF, PT, ...) is no relation, and the label belongs in its sentence's
+# layer (Laplace-Engine#24); itype is that layer's too, and feID is the attribute of an internal pointer, in no claim.
+
 holds frame FE lexUnit semType frameRelation
 holds FE requiresFE excludesFE semType
 holds lexUnit semType sentence
@@ -76,7 +88,7 @@ relate frameRelation type to relatedFrame
 attest valenceUnit GF PT FE
 together valenceUnit
 relate label ^/name to name by cBy
-# an FE label names its frame element by FrameNet's number too: the stretch is said to be that element
+# an FE label names its frame element by FrameNet's number (feID): an internal pointer, in no claim (no meaning given)
 attest label itype feID by cBy
 attest annotationSet cxnName luName frameName
 

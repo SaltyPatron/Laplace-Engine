@@ -39,6 +39,16 @@ metadata note:newdoc* note:newpar* note:doc_* note:doc* note:meta::* note:meta_*
 # every other note is what the treebank says of the sentence under the note's name: a translation (text_en), a
 # transliteration, who spoke it and when, its genre (the format: "# key = value")
 content note:*
+# What each column a claim is made of means (Laplace-Engine#32; the format page, universaldependencies.org/format.html),
+# never the column's name: UPOS a value of the UPOS road class ("Universal part-of-speech tag"): [forces, NOUN];
+# XPOS a value of the treebank's own tagset ("Language-specific part-of-speech tag"); LEMMA the word's lemma ("Lemma or
+# stem of word form"): [forces, force]; FEATS each Name=Value of the feature inventory, the pair itself:
+# [forces, [Number, Plur]]; DEPREL a value of the dependency relations the highway lists, the relation to the HEAD.
+# MISC's keys and the sentence's notes have no meaning given here: unresolved obligations (what UD documents each
+# MISC key and note to mean, and the sentence's layers, are Laplace-Engine#27; the speaker, #29).
+value upos UPOS
+value - XPOS LEMMA FEATS
+value deprel DEPREL
 
 attest row LEMMA UPOS XPOS FEATS by MISC.Annotator
 attest row MISC

@@ -511,6 +511,7 @@ int cmd_ingest(int argc, char **argv){
     printf("   %'llu compositions, %'llu reused; %'llu claims said by records\n",(unsigned long long)table_total(), (unsigned long long)table_hits(), (unsigned long long)nev);
     { uint64_t inc = 0; for (int i = 0; i < nfiles; i++) inc += files[i].incomplete;
       if (inc) printf("   %'llu parts were not read whole: what parses is recorded, and what they attest is incomplete (see above); the source still goes in\n", (unsigned long long)inc); }
+    say_obligations(stdout);                                                 /* what the recipes left unresolved: no claim of it was made */
     printf("\n== phases\n");
     printf("  %-44s %8.2f s   %8.1f MB/s\n", "decompose (all threads)", t_dec, bytes / 1e6 / (t_dec > 0 ? t_dec : 1));
     printf("  %-44s %8.2f s\n", "recompose and compare", t_rec);
