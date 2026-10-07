@@ -1,0 +1,9 @@
+name atomic-10x
+# ATOMIC10X: a JSON object on every line, each a head, a relation and a tail, with what the set says of that tuple.
+# THE CONTAINMENT PROOF (Engine#22, #39 step 2): the first 200,000 lines of ATOMIC10X.jsonl, copied to the proof's
+# data folder: every tuple scored by p_valid_model, a number between 0 and 1, so outcomes other than a win are carried.
+witness ATOMIC10X
+class AIModelProbe
+files D:/Temp/containment-proof/data/Atomic/ATOMIC10X.jsonl
+room 32
+after unicode iso-639

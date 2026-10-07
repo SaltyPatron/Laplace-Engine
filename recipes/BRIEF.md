@@ -36,14 +36,15 @@ So:
   so, never that the statement is true. ISO 639 is each authority its own corpus (the Library of Congress's 639-2 with
   the 2-letter codes, SIL's 639-3, IANA's registry, Unicode's CLDR supplemental data, Glottolog), and the 2↔3-letter
   links and macrolanguage relations are relations those corpora attest; as built, the one `iso-639` source names a
-  witness per recipe. A claim's standing is stored on every claim, keyed by the claim. As built, the engine cites the name's text as the witness of each attestation (`named_for`
-  in `recipe.c`) and keeps provenance in attestation rows, one per claim and witness, holding its games, score and
-  position. The target is provenance by containment: a record is a path over the claims it asserts,
-  inside its file's content tree, so walking up from a claim finds every source that asserts it, with the source's
-  trunk as the witness (Laplace-Engine#22). The attestation rows stay until a working prototype on real data shows
-  containment answers everything they answer today (who said a claim, its games, score and position, and forgetting
-  a source: `laplace forget` deletes the source's rows and the standing of what no other witness attested, and replays
-  no standing) with nothing lost. Either way the `witness` line is written the same.
+  witness per recipe, and since the witness is the source's trunk, those authorities are one witness until the source
+  is parted per authority. A claim's standing is stored on every claim, keyed by the claim. Provenance is containment
+  (Laplace-Engine#22, proven side by side and the attestation table retired): every part a recipe speaks of is a
+  record, a path over the claims it says inside its file's content tree, each claim's vertex carrying its run, outcome
+  and position; walking up from a claim finds every source trunk that holds it, and the trunk is the witness, with
+  the source's trust and lineage. The `witness` line names the source's record (its trunk's first part); `{dir}`,
+  `{name}` and `{first NAME}` now only name what voices are composed under, and the treebank or file a claim came from
+  is the file's path under the trunk. Who in a record says a claim (`voices`, `by`) is a voice vertex in the record:
+  content of it, never a witness.
 - **The corpus is the trunk, from the trunk to its leaves.** Universal Dependencies is one source trunk, `[source
   record, its files' trunks in path order]`, and one witness. Its treebanks (`UD_English-EWT/`) are directories of
   files: a directory's path is a file's metadata, and a treebank is never a witness of its own. Every file is
@@ -145,10 +146,9 @@ So:
   nothing. A number the source states (a usage count, a sense's order) is content, an observation, never games.
   Packaging is not the source asserting again: a cross-product layout or an automatic tagger's per-token output
   repeating one fact is not the source saying it again (UD EWT's README says its UPOS and features were mainly
-  assigned automatically). As built (`db.c`), a claim plays one Glicko-2 matchup at the witness's trust the first
-  time a witness lineage attests it, at that attestation's score; every later attestation of it by that lineage, in
-  the same file, a later batch or a later ingestion, plays no matchup and adds a game to the attestation row, whose
-  score is the mean over its games: an attestation's games are counted and never played.
+  assigned automatically). As built (`db.c`, `standings_write`), what a source says is folded over all its batches,
+  each claim's games the records that say it and its score their mean, and played once, at the source's trust, as one
+  solved series (`lp_attest_series`); a later ingestion of the same files says nothing again.
 - **Trust bounds a vote; count is never independence.** Each game's outcome is pulled toward a draw by the witness's
   trust, `s_eff = 0.5 + t(s - 0.5)`, so no repetition takes a source past its trust's ceiling, symmetrically for
   affirmation and refutation, and one witness alone gives a claim only bounded certainty. Witnesses sharing a

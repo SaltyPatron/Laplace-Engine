@@ -43,7 +43,8 @@ static size_t fetch(Reader *r){
         Ent *x = ent(r, col_id(q, j, 0), 0); if (!x || x->state == 1) continue;
         lp_path p = col_path(q, j, 1);
         x->kid = malloc(sizeof(lp_id) * (p.n ? p.n : 1)); x->run = malloc(4 * (p.n ? p.n : 1)); x->nv = (uint32_t)p.n; x->state = 1;
-        for (size_t i = 0; i < p.n; i++) { x->kid[i] = lp_path_id(p, i); x->run[i] = lp_path_run(p, i); }
+        for (size_t i = 0; i < p.n; i++) { x->kid[i] = lp_path_id(p, i); double m; memcpy(&m, p.v + i * 32 + 24, 8); uint32_t sd = lp_m_said(m);
+            x->run[i] = sd == LP_SAID_CLAIM || sd == LP_SAID_VOICE ? 0 : lp_path_run(p, i); }     /* what a record says is not its text: it reads as its thing */
     }
     PQclear(q); args_free(&a); lp_vec_free(&ids);
     return nw;
@@ -91,10 +92,14 @@ size_t reader_parts(Reader *r, const lp_id *id, lp_id *out, size_t cap){
     size_t n = 0; for (uint32_t v = 0; v < x->nv; v++) for (uint32_t k = 0; k < x->run[v]; k++, n++) if (n < cap) out[n] = x->kid[v];
     return n < cap ? n : cap;
 }
-/* A trajectory's constituents in order, runs written out, from a path as the database sends it. */
+/* A trajectory's constituents in order, runs written out, from a path as the database sends it. What a record says, its
+ * claims and the voices that say them (LP_SAID_CLAIM, LP_SAID_VOICE), is no part of its content's order: they are left
+ * out, and a record reads as its thing. */
 Run run_of(const uint8_t *ewkb, size_t len){
-    lp_path p = lp_path_of(ewkb, len); size_t n = lp_path_len(p); Run r = { malloc(sizeof(lp_id) * (n ? n : 1)), (int)n };
-    lp_path_expand(p, r.id, n); return r;
+    lp_path p = lp_path_of(ewkb, len); size_t n = lp_path_len(p); Run r = { malloc(sizeof(lp_id) * (n ? n : 1)), 0 };
+    for (size_t i = 0; i < p.n; i++) { double m; memcpy(&m, p.v + i * 32 + 24, 8); uint32_t sd = lp_m_said(m); if (sd == LP_SAID_CLAIM || sd == LP_SAID_VOICE) continue;
+        lp_id id = lp_path_id(p, i); uint32_t run = lp_path_run(p, i); for (uint32_t k = 0; k < run; k++) r.id[r.n++] = id; }
+    return r;
 }
 
 /* ---- every leaf at once -------------------------------------------------

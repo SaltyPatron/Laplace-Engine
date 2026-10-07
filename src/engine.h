@@ -95,8 +95,8 @@ int cmd_flags(int argc, char **argv);
 int cmd_highway(int argc, char **argv);
 int cmd_bench(int argc, char **argv);
 int cmd_model(int argc, char **argv);
-int cmd_held(int argc, char **argv);                                  /* provenance.c: who said a strand, by containment or by the table */
-int cmd_replay(int argc, char **argv);                                /* provenance.c: standings from containment, against the recorded */
+int cmd_held(int argc, char **argv);                                  /* provenance.c: who said a claim, a walk up from it to the trunks that hold it */
+int cmd_replay(int argc, char **argv);                                /* provenance.c: standings from containment alone, against the recorded */
 int cmd_structure(int argc, char **argv);
 
 /* ---- the bits a row must have (physicality.mask): what it is, by LP_KIND_*; as the text of a smallint[] parameter */
@@ -105,7 +105,7 @@ int cmd_structure(int argc, char **argv);
 typedef lp_ref Ref;
 
 /* ---- the node table: compositions keyed by ID, sharded by the ID's first byte, each shard behind its own lock */
-typedef struct { lp_id id; uint64_t m; } __attribute__((packed)) Vtx;        /* m: M as it is written: the run, and above it what the vertex is (lp_m_of) */
+typedef struct { lp_id id; uint64_t m; uint32_t spare; } __attribute__((packed)) Vtx;   /* m: M as it is written: the run, and above it what the vertex is and how it was said (lp_m_full); spare: its spare bits (a score) */
 #define VRUN(m) ((uint32_t)((m) & ((1ull << LP_M_RUN_BITS) - 1)))
 #define VSAID(m) ((uint32_t)(((m) >> LP_M_RUN_BITS) & LP_M_SAID_MASK))
 static inline Ref said_claim(Ref r){ r.said = LP_SAID_CLAIM; return r; }
@@ -128,6 +128,7 @@ Ref    atom(uint32_t cp);
 Ref    compose(const Ref *ch, uint32_t n, uint8_t tier);             /* one child is that child */
 uint8_t ref_above(const Ref *r, size_t n);                            /* the tier above the highest of them (255 stays 255) */
 Node  *table_find(const lp_id *id);                                   /* NULL for atoms and unknown IDs */
+Ref    ref_of_id(const lp_id *id, int *ok);                         /* its node's coordinate and tier, or the codepoint's; ok = 0 when neither */
 size_t table_parts(const lp_id *id, lp_id *out, size_t cap);         /* a composition's constituents in order, its runs written out; 0 when it is not in the table */
 void   table_size(uint64_t bytes);                                    /* while the table is empty: room for what a batch of this many bytes makes */
 uint64_t table_count(void);
@@ -176,12 +177,14 @@ Source *sources_loaded(int *n);                                       /* in the 
 Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of);   /* of: among that source's recipes only */
 int     recipes_broken(const Recipe *r, int n, const Source *of);             /* how many of a source's recipes (NULL: of the formats) did not load; each is said */
 
-/* ---- attestation events, in reading order within each file */
+/* ---- what a file says, in reading order within each file */
 /* What was witnessed is the claim with its specifics; the claim is its main components, and holds the standing. A
- * statement that stands alone is both at once. A record (a sentence with what is said of it) is witnessed once, and
- * every claim in it is witnessed in it. */
+ * statement that stands alone is both at once. Every claim is said within a record, and the record is a path over the
+ * claims it says, in its file's content tree (say.c, record_of): its provenance is that containment, under the source's
+ * trunk, which is the witness. run: how many times the record says it; rec: the node of the file's tree that is its
+ * record; witness: who in the record says it (a voice), where the source names one for this statement. */
 enum { EV_CLAIM = 0, EV_RECORD = 1, EV_MEMBER = 2 };      /* a claim that is its own record; a record; a claim within the record before it */
-typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviation; uint32_t position; uint8_t kind, own_witness; lp_id witness; uint8_t inner; } Event;   /* witness: who witnessed it, when the source names one for this statement and not for the whole file */
+typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviation; uint32_t position; uint8_t kind, own_witness; lp_id witness; uint32_t run; int32_t rec; } Event;
 typedef struct { Event *e; uint64_t n, cap; } Events;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */
@@ -212,7 +215,7 @@ void attest_layout(const Recipe *, File *, const uint8_t *src, size_t n);       
 typedef struct Hw Hw;
 void say_highway(const Recipe *, File *, const uint8_t *src, size_t n, Hw *);
 int  say_has_highway(const Recipe *);
-int  say_contains(const Recipe *);                                         /* its records hold what they say: provenance by containment (say.c contain) */
+
 void hw_type(Hw *, const char *list, const char *say, Ref thing);                 /* a type of the list: the thing it is */
 void hw_key(Hw *, const char *list, Ref thing, const char *key);                  /* a resource's key of that type */
 void hw_alias(Hw *, const char *list, const char *key, const char *to);           /* a key that names the type another key names */
@@ -226,8 +229,26 @@ void table_reset(void);                                                      /* 
 Ref  string_ref(const uint8_t *s, size_t n);                          /* text as its entity, remembered per thread */
 void ev_push(Events *, const Event *);
 
-typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, led, std_new, std_upd, known, content_known; double t_dedup, t_copy, t_sem, t_read, t_play, t_wit, t_led; } LoadStats;
+typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, std_new, std_upd, known; double t_dedup, t_copy, t_sem, t_read, t_play, t_led; } LoadStats;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
+int files_known(PGconn **pg, int npg, File *files, int nfiles, LoadStats *st);   /* the files whose trunks are recorded: known, saying nothing again */
+int ingest_known(const char *conninfo, File *files, int nfiles);                /* the same, on a connection of its own */
+/* What a source says, folded over every batch of it: each claim's games and their scores, played once at its end as one
+ * series a claim, at the witness's trust (db.c) */
+typedef struct Fold Fold;
+Fold *fold_new(void);
+void  fold_free(Fold *);
+uint64_t fold_count(const Fold *);
+void  fold_events(Fold *, const File *files, int nfiles);
+int   standings_write(const char *conninfo, int npg, Fold *, double trust, LoadStats *st);
+/* ---- provenance by containment (provenance.c): who said a claim, how many times and how, by a walk up the container
+ * index from it to the records, files and trunks that hold it; a trunk in the witness table is a witness. One row a
+ * claim and trunk: games (the records under the trunk that say it), tokens (with the times each says it), the sum of
+ * their scores, the least position any gave it (0 none), and the trunk's trust. */
+typedef struct { lp_id claim, trunk; double games, tokens, score; uint32_t position; double trust; int witness; } Attested;
+Attested *attested(PGconn *pg, const lp_id *claims, int n, int *nout, uint64_t *rows);
+lp_id *trunk_claims(PGconn *pg, const lp_id *trunk, size_t *n);            /* the claims a trunk's records say: a walk down */
+int standings_replay(PGconn *pg, const lp_id *claims, size_t n, uint64_t *played, uint64_t *orphaned);   /* their standings again, from the witnesses that hold them */
 int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers, uint64_t n);   /* every one of them recorded (in its tier's partition) */
 int merge(const char *conninfo, int npg);            /* what the runs staged, into the real tables at once (db.c) */
 int tier0_write(const char *conninfo, int npg);       /* every codepoint, once, from the perf-cache, into the real tables (laplace deploy) */

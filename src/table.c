@@ -138,12 +138,30 @@ static inline void tier_floor(Node *x, uint8_t tier){
     while (tier < t && !__atomic_compare_exchange_n(&x->tier, &t, tier, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) ;
 }
 uint8_t ref_above(const Ref *r, size_t n){ uint8_t t = 0; for (size_t i = 0; i < n; i++) if (r[i].tier > t) t = r[i].tier; return (uint8_t)(t < 255 ? t + 1 : 255); }
+/* What a child is within this path, above its run: what it is said to be and, a claim of a record, how the record said
+ * it (lp_m_full); the spare bits carry a score. Zero above the run is a child said nothing of. */
+static inline uint64_t m_above(const Ref *c){ return lp_m_full(1, c->said, c->outcome, c->position) & ~((1ull << LP_M_RUN_BITS) - 1); }
+static uint64_t said_differently;                                       /* a record composed again whose claims were said otherwise (records_differ) */
+uint64_t records_differ(void){ return __atomic_load_n(&said_differently, __ATOMIC_RELAXED); }
+/* A composition met again whose children say how they are said: the node keeps what was said first, and a record whose
+ * claims were said otherwise (another outcome or place) under the same ID is counted. Its ID is its content's either
+ * way; what differs is metadata that ID cannot hold twice. */
+static void said_same(const Ref *ch, uint32_t n, const lp_id *id){
+    int any = 0; for (uint32_t i = 0; i < n && !any; i++) any = ch[i].outcome || ch[i].position || ch[i].spare;
+    if (!any) return;
+    Node *x = table_find(id); if (!x) return; uint32_t v = 0, r = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (v >= x->nv) { __atomic_fetch_add(&said_differently, 1, __ATOMIC_RELAXED); return; }
+        const Vtx *w = &VTX[x->voff + v];
+        if ((w->m & ~((1ull << LP_M_RUN_BITS) - 1)) != m_above(&ch[i]) || w->spare != ch[i].spare) { __atomic_fetch_add(&said_differently, 1, __ATOMIC_RELAXED); return; }
+        if (++r == VRUN(w->m)) { v++; r = 0; } }
+}
 /* A composition, recorded: Laplace-Native gives its ID and coordinate; the table keeps it, once, with its path. */
 Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     if (n == 1) return ch[0];
-    Ref r = lp_ref_compose(ch, n, tier); r.said = 0;
+    Ref r = lp_ref_compose(ch, n, tier); r.said = 0; r.outcome = 0; r.position = 0; r.spare = 0;
     Seen *c = seen_of(); uint64_t h = hkey(&r.id); uint32_t at = (uint32_t)(h >> 17) & (SEEN - 1);
-    if (!memcmp(&c->id[at], &r.id, 16) && c->tier[at] <= tier) { c->hits++; return r; }   /* in the table, as this thread found, at this tier or lower */
+    if (!memcmp(&c->id[at], &r.id, 16) && c->tier[at] <= tier) { c->hits++; said_same(ch, n, &r.id); return r; }   /* in the table, as this thread found, at this tier or lower */
     c->id[at] = r.id; c->tier[at] = tier;                               /* in the table once this returns, found or added, at this tier or lower */
     if (__atomic_load_n(&node_top, __ATOMIC_RELAXED) > grow_at) grow();
     enter(c);
@@ -154,11 +172,11 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
             if (!__atomic_compare_exchange_n(&slot[k], &w, tag | BUSY, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) continue;  /* another thread took it: look again */
             Node *x = node_new(c); int own; uint64_t vo = vtx_room(c, n, &own); Vtx *vt = &VTX[vo]; uint32_t nv = 0;
             x->id = r.id; memcpy(x->m, r.c.m, 32); x->tier = tier; x->len = n; x->voff = vo; x->keep = 0; x->kind = 0;
-            for (uint32_t i = 0; i < n; i++) {                                          /* runs of the same child; what each is within this path, above the run */
-                uint64_t said = (uint64_t)(ch[i].said & LP_M_SAID_MASK) << LP_M_RUN_BITS;
-                if (nv && !memcmp(&vt[nv - 1].id, &ch[i].id, 16) && (vt[nv - 1].m & (LP_M_SAID_MASK << LP_M_RUN_BITS)) == said
+            for (uint32_t i = 0; i < n; i++) {                                          /* runs of the same child said the same way; what each is within this path, above the run */
+                uint64_t above = m_above(&ch[i]);
+                if (nv && !memcmp(&vt[nv - 1].id, &ch[i].id, 16) && (vt[nv - 1].m & ~((1ull << LP_M_RUN_BITS) - 1)) == above && vt[nv - 1].spare == ch[i].spare
                        && VRUN(vt[nv - 1].m) < (1u << LP_M_RUN_BITS) - 1) { vt[nv - 1].m++; continue; }
-                vt[nv].id = ch[i].id; vt[nv].m = 1ull | said; nv++;
+                vt[nv].id = ch[i].id; vt[nv].m = 1ull | above; vt[nv].spare = ch[i].spare; nv++;
             }
             x->nv = nv; x->live = 1; if (!own) c->v_at += nv;
             __atomic_store_n(&slot[k], tag | (uint64_t)(x - NODE + 1), __ATOMIC_RELEASE);
@@ -166,7 +184,7 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
         }
         if ((w & ~IDX_MASK) == tag) {
             if ((w & IDX_MASK) == BUSY) w = published(&slot[k]);
-            if (!memcmp(&NODE[(w & IDX_MASK) - 1].id, &r.id, 16)) { tier_floor(&NODE[(w & IDX_MASK) - 1], tier); leave(c); c->hits++; return r; }
+            if (!memcmp(&NODE[(w & IDX_MASK) - 1].id, &r.id, 16)) { tier_floor(&NODE[(w & IDX_MASK) - 1], tier); leave(c); c->hits++; said_same(ch, n, &r.id); return r; }
         }
         k = (k + 1) & smask;
     }
@@ -239,3 +257,11 @@ void table_reset(void){
 }
 uint64_t table_total(void){ return nodes_before + table_count(); }
 uint64_t table_hits(void){ return hits_before + seen_sum(0); }
+/* What an ID is as a reference: its node's coordinate and tier, or the codepoint's from tier 0. ok = 0 when it is
+ * neither in the table nor a codepoint. */
+Ref ref_of_id(const lp_id *id, int *ok){
+    Ref r; memset(&r, 0, sizeof r); *ok = 1;
+    Node *x = table_find(id); if (x) { r.id = *id; memcpy(r.c.m, x->m, 32); r.tier = x->tier; return r; }
+    int64_t cp = lp_tier0_codepoint(T0, id); if (cp >= 0) return atom((uint32_t)cp);
+    *ok = 0; r.id = *id; return r;
+}

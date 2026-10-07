@@ -58,9 +58,9 @@ int cmd_deploy(int argc, char **argv){
       PQfreemem(esc); esc = PQescapeLiteral(pg, lp_highway_path(), strlen(lp_highway_path()));
       snprintf(q, sizeof q, "ALTER DATABASE %s SET laplace.highway = %s", db, esc); if (!run(pg, q, "the highway: the types, and the mappings between them")) return 1;
       PQfreemem(esc); PQfreemem(db); }
-    /* the schema is the extension's: the five tables, their partitions and every index, from CREATE EXTENSION. A
+    /* the schema is the extension's: the four tables, their partitions and every index, from CREATE EXTENSION. A
      * database that had them before the extension owned them keeps them, and they are made the extension's here. */
-    { PGresult *r = PQexec(pg, "SELECT c.oid::regclass::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND (c.relname ~ '^(entity|physicality)(_[0-9a-f]{2})?$' OR c.relname ~ '^(attestation|consensus)(_[0-9a-f])?$' OR c.relname = 'witness') "
+    { PGresult *r = PQexec(pg, "SELECT c.oid::regclass::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND (c.relname ~ '^(entity|physicality)(_[0-9a-f]{2})?$' OR c.relname ~ '^consensus(_[0-9a-f])?$' OR c.relname = 'witness') "
                                "AND NOT EXISTS (SELECT 1 FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND e.extname = 'laplace')");
       int n = PQresultStatus(r) == PGRES_TUPLES_OK ? PQntuples(r) : 0;
       for (int i = 0; i < n; i++) { char q[256]; snprintf(q, sizeof q, "ALTER EXTENSION laplace ADD TABLE %s", PQgetvalue(r, i, 0)); PGresult *a = PQexec(pg, q); PQclear(a); }
@@ -131,8 +131,10 @@ int cmd_status(int argc, char **argv){
                    "WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname ~ '^(entity|physicality)_[0-9a-f]{2}$'");
     if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) printf("  entities and paths %'14lld rows   %s\n", atoll(PQgetvalue(r, 0, 0)), PQgetvalue(r, 0, 1));
     PQclear(r);
-    r = PQexec(pg, "SELECT c.relname, c.reltuples::bigint, pg_size_pretty(pg_total_relation_size(c.oid)) FROM pg_class c "
-                   "WHERE c.relname IN ('witness', 'attestation', 'consensus') AND c.relkind = 'r' ORDER BY 1");
+    /* the witnesses (each a source's trunk) and the standings, the partitions of a table summed: a partition the planner
+     * has not counted yet (reltuples -1) makes the sum not counted */
+    r = PQexec(pg, "SELECT regexp_replace(c.relname, '_[0-9a-f]$', ''), CASE WHEN min(c.reltuples) < 0 THEN -1 ELSE sum(c.reltuples) END::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))::bigint) "
+                   "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND (c.relname = 'witness' OR c.relname ~ '^consensus_[0-9a-f]$') GROUP BY 1 ORDER BY 1");
     printf("\nsemantics\n");
     for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) {
         if (atoll(PQgetvalue(r, i, 1)) < 0) printf("  %-24s %16s   %s\n", PQgetvalue(r, i, 0), "not counted yet", PQgetvalue(r, i, 2));
@@ -152,17 +154,19 @@ int cmd_sources(int argc, char **argv){
     PGconn *pg = db_connect(conn_arg(argc, argv)); tier0_open(NULL); lp_text *tx = lp_text_new(T0);
     Recipe *rec = NULL; int nrec = recipes_load(laplace_recipes(), &rec), n; Source *s = sources_loaded(&n);
     printf("%-4s %-28s %-8s %-9s %s\n", "", "source", "recipes", "in", "kept at");
+    /* a source is in when a witness is its trunk: [its record, its files' trunks], its record the source's name */
+    lp_idmap *records = lp_idmap_new();
+    { PGresult *r = ask_try(pg, "SELECT id FROM witness", NULL); Reader *rd = reader_new(pg);
+      for (int j = 0; r && j < PQntuples(r); j++) { lp_id first[2]; if (reader_parts(rd, col_id(r, j, 0), first, 2)) lp_idmap_put(records, &first[0], NULL); }
+      PQclear(r); reader_free(rd); }
     for (int i = 0; i < n; i++) {
         int mine = 0, in = 0;
         for (int k = 0; k < nrec; k++) mine += rec[k].source == i;
-        if (s[i].witness[0] && !strchr(s[i].witness, '{')) {                   /* it is in when its witness is known */
-            lp_id w = lp_text_decompose(tx, (const uint8_t *)s[i].witness, strlen(s[i].witness), NULL, NULL).id; Args a = { 0 }; arg_ids(&a, &w, 1);
-            PGresult *r = ask_try(pg, "SELECT 1 FROM witness WHERE id = ANY($1::blake3[])", &a);
-            in = r && PQntuples(r) > 0; PQclear(r); args_free(&a);
-        }
+        const char *called = source_called(&s[i]);
+        if (called) { lp_id w = lp_text_decompose(tx, (const uint8_t *)called, strlen(called), NULL, NULL).id; in = lp_idmap_find(records, &w) >= 0; }
         printf("%-4d %-28s %-8d %-9s %s\n", i + 1, s[i].name, mine, in ? "yes" : "no", s[i].found[0] ? s[i].found : "(not at any of its roots)");
         if (s[i].nafter) { printf("     %-28s after", ""); for (int a = 0; a < s[i].nafter; a++) printf(" %s", s[i].after[a]); printf("\n"); }
     }
-    PQfinish(pg);
+    lp_idmap_free(records); PQfinish(pg);
     return 0;
 }

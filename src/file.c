@@ -40,7 +40,7 @@ int source_trunk(const Source *s, const File *files, int nfiles, Ref *out){
     for (int i = 0; i < nfiles; i++) if (files[i].source == s && files[i].has_file && !files[i].skipped) at[n++] = i;
     if (!n) { free(at); return 0; }
     by_path_of = files; qsort(at, (size_t)n, sizeof(int), by_path);
-    Ref *t = malloc(sizeof(Ref) * (size_t)n); for (int k = 0; k < n; k++) { t[k] = files[at[k]].file; t[k].said = 0; }
+    Ref *t = malloc(sizeof(Ref) * (size_t)n); for (int k = 0; k < n; k++) { t[k] = files[at[k]].file; if (t[k].said != LP_SAID_HOLDS && t[k].said != LP_SAID_RECORD) { t[k].said = 0; t[k].outcome = 0; t[k].position = 0; t[k].spare = 0; } }     /* a file is said nothing; one with no metadata, what its content is */
     Ref content = compose(t, (uint32_t)n, ref_above(t, (uint64_t)n)); content.said = 0;
     Ref two[2] = { said_metadata(text_ref(CTX[0], (const uint8_t *)what, strlen(what))), content }; two[1].said = 0;
     *out = compose(two, 2, ref_above(two, 2)); out->said = 0; free(t); free(at); return 1;

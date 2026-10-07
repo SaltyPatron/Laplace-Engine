@@ -33,12 +33,13 @@
  *   content, key, refer, type, metadata, omit, own, thing, attest, relate, pair, holds, itself, voices, together,
  *   score, where, when, ...       what each named part of the file's tree is, and what the file attests (say.c)
  *   like RECIPE                   it reads as that recipe does, under its own name, witness, lineage and trust
- *   witness NAME...               the source as witness, named as content ({dir}: the directory the file is in;
- *                                 {name}: the file's own name, without what follows its last dot;
+ *   witness NAME...               the source's record, named as content: its trunk [record, its files' trunks] is the
+ *                                 witness. In a recipe, the name its voices are composed under ({dir}: the directory the
+ *                                 file is in; {name}: the file's own name, without what follows its last dot;
  *                                 {first NAME}: what the file first writes as NAME="...")
- *   lineage NAME...               the witness this one derives from, named as content. Copies of one lineage play one
- *                                 matchup per claim; each copy is still an attestation
- *   class NAME                    this recipe's witness's trust class, when it is not the source's
+ *   lineage NAME...               the witness this one derives from, named as content: the source's, kept beside its
+ *                                 trunk in witness (a recipe's own is said and not used)
+ *   class NAME                    a trust class; the source's is its trunk's, and every claim it says plays at it
  * A recipe that says what a file's parts are is a curated source: what is recorded is the file's tree as its recipe
  * reads it, over its metadata tree, and what it attests. A recipe that says only a grammar records the file as its
  * syntax tree: each node the composition of its children with the bytes between them kept as text, so it recomposes

@@ -16,7 +16,12 @@ const char *firmware_path(void){
 }
 static void names(Firmware *fw, char (*into)[96], int *n, int cap, const char *path, int line){
     char *tok; int any = 0;
-    while ((tok = strtok(NULL, " \t\r\n"))) { if (tok[0] == '#') break; if (*n >= cap) { fprintf(stderr, "%s:%d: more names than a firmware holds (%d)\n", path, line, cap); exit(2); } snprintf(into[(*n)++], 96, "%s", tok); any = 1; }
+    while ((tok = strtok(NULL, " \t\r\n"))) { if (tok[0] == '#') break; if (*n >= cap) { fprintf(stderr, "%s:%d: more names than a firmware holds (%d)\n", path, line, cap); exit(2); }
+        if (tok[0] == '"') {                                                 /* a name of several words, in quotes: "Universal Dependencies" */
+            char nm[96]; size_t l = (size_t)snprintf(nm, sizeof nm, "%s", tok + 1);
+            while ((!l || nm[l - 1] != '"') && (tok = strtok(NULL, " \t\r\n"))) l += (size_t)snprintf(nm + l, l < sizeof nm ? sizeof nm - l : 0, " %s", tok);
+            if (l && l < sizeof nm && nm[l - 1] == '"') nm[--l] = 0; snprintf(into[(*n)++], 96, "%s", nm); any = 1; continue; }
+        snprintf(into[(*n)++], 96, "%s", tok); any = 1; }
     if (!any) { fprintf(stderr, "%s:%d: nothing is named\n", path, line); exit(2); }
     (void)fw;
 }

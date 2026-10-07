@@ -1,17 +1,18 @@
-/* laplace forget: what witnesses attested, taken back out.
- *   laplace forget [-d conninfo] [-j connections] witness...
+/* laplace forget: what witnesses said, taken back out (Sequence: Maintenance; Semantics: Attestations, Witnesses).
+ *   laplace forget [-d conninfo] [-j connections] [--trunk] witness...
  *   laplace forget --except witness...        every witness but these
- * Their attestations go. What no other witness witnessed goes, with the consensus on it; what others witnessed
- * stays. Then, level by level down the DAG, whatever nothing holds any more goes too: an entity stays while any path
- * holds it, or while it is a file, a witness, or witnessed. A file whose content is what it witnessed stays while any
- * of that is still witnessed. Atoms always stay.
+ * A witness is a source's trunk, [its record, its files' trunks]: named by the source's name its record is, or by its
+ * ID (--trunk). Its witness row goes; then, level by level down from the trunk, whatever it alone held goes: its files,
+ * their records, and the claims and content no other trunk or path holds, with the standings of the claims that go.
+ * Then the standings of every claim its records said and something still holds are played again from the witnesses
+ * that hold them (laplace replay's walk, for those claims alone). Atoms always stay.
  * SQL fetches and deletes sets of rows; what to delete is decided here.
  *
  * laplace sweep: whatever nothing holds, removed.
  *   laplace sweep [-d conninfo] [-j connections] [--dry]
  * One pass over every path counts, for every entity, the places that hold it. An entity no path holds goes, unless it is
- * a file, a witness, or something attestation says was witnessed; the consensus on it, if there is one, goes with it.
- * What it held is counted down, and goes in turn when its count reaches nothing. */
+ * a witness (a trunk), a lineage, or a file whose content is its own; the consensus on it, if there is one, goes with
+ * it. What it held is counted down, and goes in turn when its count reaches nothing. */
 #include "engine.h"
 #include <locale.h>
 #include <omp.h>
@@ -102,21 +103,13 @@ static void row_path(PGresult *r, Batch *b){
     lp_path p = col_path(r, 0, 1); lp_vertex *vt = vertices(p);
     int file = 0; lp_id content; uint8_t curated = 0; memset(&content, 0, sizeof content);
     for (size_t i = 0; i < p.n; i++) { batch_put(b, &vt[i].id, 0);
-        uint32_t said = vt[i].said; if (said == LP_SAID_METADATA) file = 1; else if (file) { content = vt[i].id; curated = said == LP_SAID_RECORD || said == LP_SAID_CLAIM; } }
+        uint32_t said = vt[i].said; if (said == LP_SAID_METADATA) file = 1; else if (file) { content = vt[i].id; curated = said == LP_SAID_RECORD || said == LP_SAID_CLAIM || said == LP_SAID_HOLDS; } }
     if (file) {                                                                /* a file: a trunk over its metadata and its content */
         batch_put(b, &e, 3);
         pthread_mutex_lock(&kept_mu); lp_push(&kept, (Kept){ e, content, curated }); pthread_mutex_unlock(&kept_mu);
     }
 }
 static void row_root(PGresult *r, Batch *b){ for (int f = 0; f < PQnfields(r); f++) if (!PQgetisnull(r, 0, f)) batch_put(b, col_id(r, 0, f), 2); }
-/* A curated file's content: whether any of what it witnessed is still witnessed. */
-static void each_content(const PGresult *r, int j, const uint64_t *place, void *into){
-    (void)place;
-    lp_path p = col_path(r, j, 1); lp_vertex *vt = vertices(p); int still = 0;
-    for (size_t i = 0; i < p.n && !still; i++) { if (!vt[i].said) continue;
-        Count *c = count_of(&cs[vt[i].id.b[0]], &vt[i].id, 0); still = c && c->root; }
-    if (still) set_add(into, col_id(r, j, 0));
-}
 /* What an entity that is going held: each counted down; whatever reaches nothing goes next. */
 static void each_release(const PGresult *r, int j, const uint64_t *place, void *into){
     (void)place;
@@ -143,16 +136,11 @@ static uint64_t sweep(PGconn **pg, int npg, int dry, const Set *seed){
     PQclear(r);
     printf("  %-52s %'12llu   (%.1f s)\n", "paths read, every holder counted", (unsigned long long)paths, now() - t); fflush(stdout);
     t = now(); { Batch b = { 0 };
-      stream(pg[0], "SELECT claim FROM attestation", row_root, &b);
       stream(pg[0], "SELECT id, lineage FROM witness", row_root, &b); batch_done(&b); }
-    /* files: one whose content is its own stays; one whose content is what it witnessed stays while any of that is
-     * witnessed still */
-    if (!seed) { Set *live = set_new(), *ask = set_new();
-      for (size_t i = 0; i < kept.n; i++) if (kept.v[i].curated) { Count *c = count_of(&cs[kept.v[i].content.b[0]], &kept.v[i].content, 0); set_add(c && c->root ? live : ask, &kept.v[i].content); }
-      if (lp_idmap_count(ask)) over_parts(pg, npg, pparts, lp_idmap_keys(ask), lp_idmap_count(ask), "SELECT entity, path FROM %s WHERE entity = ANY($1::blake3[])", each_content, live, "what files witnessed");
-      for (size_t i = 0; i < kept.n; i++) { Count *c = count_of(&cs[kept.v[i].file.b[0]], &kept.v[i].file, 0); if (!c) continue;
-          if (!kept.v[i].curated || set_has(live, &kept.v[i].content)) c->root = 1; }
-      lp_idmap_free(live); lp_idmap_free(ask); } lp_vec_free(&kept);
+    /* files: one whose content is its own stays; one whose content is what a source says (records) is held by its
+     * source's trunk, the witness, and goes when nothing holds it */
+    if (!seed) for (size_t i = 0; i < kept.n; i++) { Count *c = count_of(&cs[kept.v[i].file.b[0]], &kept.v[i].file, 0); if (c && !kept.v[i].curated) c->root = 1; }
+    lp_vec_free(&kept);
     Set *going = set_new(); uint64_t entities = 0, roots = 0;
     for (int sh = 0; sh < 256; sh++) for (size_t i = 0; i < lp_idmap_count(cs[sh].m); i++) {
         Count *c = lp_idmap_at(cs[sh].m, i); entities += c->entity; roots += c->root && c->entity;
@@ -197,32 +185,41 @@ int cmd_sweep(int argc, char **argv){
 int cmd_forget(int argc, char **argv){
     const char *conninfo = laplace_db(); int npg = 0, except = 0, trunk = 0;
     int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-j", 'i', &npg }, { "--except", 'b', &except }, { "--trunk", 'b', &trunk }, { NULL } });
-    if (a >= argc && !except) { fprintf(stderr, "usage: laplace forget [-d conninfo] [-j connections] witness...\n       laplace forget --except witness...   (every witness but these)\n"); return 2; }
+    if (a >= argc && !except) { fprintf(stderr, "usage: laplace forget [-d conninfo] [-j connections] [--trunk] witness...\n       laplace forget --except witness...   (every witness but these)\n"); return 2; }
     if (npg <= 0) npg = omp_get_num_procs();
     setlocale(LC_NUMERIC, "en_US.UTF-8");
     double T = now(), t; tier0_open(NULL); Ctx *c = lp_text_new(T0);
     PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) pg[i] = db_connect(conninfo);
-    Set *named = set_new(), *going = named;
-    /* --trunk: each named by its ID, a source's trunk: the witness under containment, and what it alone holds goes with it */
+    /* A witness is a source's trunk, [its record, its files' trunks]: named by its ID (--trunk), or by its record, the
+     * source's name, which every trunk of that source begins with. */
+    Set *named = set_new(), *going = set_new();
     for (int i = a; i < argc; i++) { lp_id id; if (trunk) { if (!id_parse(argv[i], &id)) { fprintf(stderr, "%s: not an ID\n", argv[i]); return 2; } }
         else id = lp_text_decompose(c, (const uint8_t *)argv[i], strlen(argv[i]), NULL, NULL).id; set_add(named, &id); }
-    if (except) {                                                           /* every witness but the ones named */
-        going = set_new(); PGresult *r = ask_once(pg[0], "SELECT id FROM witness", NULL);
-        for (int j = 0; j < PQntuples(r); j++) if (!set_has(named, col_id(r, j, 0))) set_add(going, col_id(r, j, 0));
-        PQclear(r);
-    }
+    { PGresult *r = ask_once(pg[0], "SELECT id FROM witness", NULL); Reader *rd = reader_new(pg[0]);
+      for (int j = 0; j < PQntuples(r); j++) { const lp_id *w = col_id(r, j, 0); lp_id first[2]; size_t m = reader_parts(rd, w, first, 2);
+          int is = set_has(named, w) || (!trunk && m && set_has(named, &first[0]));
+          if (is != except) set_add(going, w); }
+      PQclear(r); reader_free(rd); }
     uint64_t ng = lp_idmap_count(going); const lp_id *gid = lp_idmap_keys(going);
     printf("laplace forget   %s   %llu witness%s\n", PQdb(pg[0]), (unsigned long long)ng, ng == 1 ? "" : "es");
-    if (!ng) { printf("  nothing to forget\n"); return 1; }
-    { Reader *rd = reader_new(pg[0]); for (uint64_t i = 0; i < ng; i++) { char *tx = reader_text(rd, &gid[i], 80); printf("  %s\n", tx); free(tx); } reader_free(rd); }
+    if (!ng) { printf("  nothing to forget: no witness's trunk is named so\n"); return 1; }
+    { Reader *rd = reader_new(pg[0]); for (uint64_t i = 0; i < ng; i++) { char hx[33]; id_text(&gid[i], hx); lp_id first[2]; size_t m = reader_parts(rd, &gid[i], first, 2);
+          char *tx = m ? reader_text(rd, &first[0], 80) : strdup("?"); printf("  %s   %s\n", hx, tx); free(tx); } reader_free(rd); }
 
-    /* what they attested goes; whatever nothing holds or witnesses any more goes with the sweep */
-    t = now();
-    uint64_t nl = over(pg, 1, gid, ng, "DELETE FROM attestation WHERE witness = ANY($1::blake3[])", NULL, NULL, "attestation");
-    over(pg, 1, gid, ng, "DELETE FROM witness WHERE id = ANY($1::blake3[])", NULL, NULL, "the witnesses");
-    printf("  %-52s %'12llu   (%.1f s)\n\n", "attestations", (unsigned long long)nl, now() - t); fflush(stdout);
-    sweep(pg, npg, 0, trunk ? going : NULL);
+    /* what its records say: the claims whose standings it moved, played again below from what still holds them */
+    t = now(); lp_vec(lp_id) touched = { 0 }; Set *tset = set_new();
+    for (uint64_t i = 0; i < ng; i++) { size_t n = 0; lp_id *cl = trunk_claims(pg[0], &gid[i], &n);
+        for (size_t k = 0; k < n; k++) { bool f; lp_idmap_put(tset, &cl[k], &f); if (f) lp_push(&touched, cl[k]); } free(cl); }
+    printf("  %-52s %'12zu   (%.1f s)\n", "claims their records say", touched.n, now() - t); fflush(stdout);
+    /* the witnesses go; what only their trunks held goes with the sweep, down from them */
+    t = now(); over(pg, 1, gid, ng, "DELETE FROM witness WHERE id = ANY($1::blake3[])", NULL, NULL, "the witnesses");
+    printf("  %-52s %'12llu   (%.1f s)\n\n", "witnesses", (unsigned long long)ng, now() - t); fflush(stdout);
+    sweep(pg, npg, 0, going);
+    /* the standings they touched, played again from the witnesses that still hold each, in the order the sources go in */
+    t = now(); uint64_t played = 0, orphaned = 0; standings_replay(pg[0], touched.v, touched.n, &played, &orphaned);
+    printf("\n  %-52s %'12llu   series played again; %'llu claims no witness holds now, without a standing   (%.1f s)\n", "standings they touched", (unsigned long long)played, (unsigned long long)orphaned, now() - t);
     printf("\n== total %.1f s\n", now() - T);
+    lp_vec_free(&touched); lp_idmap_free(tset);
     for (int i = 0; i < npg; i++) PQfinish(pg[i]);
     return 0;
 }
