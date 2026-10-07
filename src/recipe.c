@@ -107,12 +107,14 @@ static int recipe_parse(const char *path, Recipe *r){
         else if (!strcmp(tok, "like")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->like, sizeof r->like, "%s", tok); }
         else if (!strcmp(tok, "witness")) rest_of(r->witness, sizeof r->witness);
         else if (!strcmp(tok, "lineage")) rest_of(r->lineage, sizeof r->lineage);
-        else { int sv = say_says(r, path, tok);                             /* the file's layout and the disposition of its parts */
+        else { int sv = chess_says(r, path, tok);                           /* a PGN recipe's own lines (chess.c) */
+            if (!sv) sv = say_says(r, path, tok);                           /* the file's layout and the disposition of its parts */
             if (!sv) fprintf(stderr, "%s: \"%s\" is not something a recipe says\n", path, tok);
             if (sv <= 0) { fclose(f); return 0; } }
     }
     fclose(f);
     if (r->like[0]) return 1;
+    if (!strcmp(r->grammar, "pgn")) return chess_recipe(r, path);          /* PGN: its games read by chess.c */
     if (say_lays(r)) {                                                       /* configured: a grammar named gives the tree, else the layout's tiers do */
         if (r->grammar[0] && strcmp(r->grammar, "layout")) { r->lang = grammar_load(r->grammar); if (!r->lang) return 0; } else snprintf(r->grammar, sizeof r->grammar, "layout");
         r->curated = 1; return 1; }
@@ -409,6 +411,7 @@ void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
             char w[512], l[512]; named_for(r->witness[0] ? r->witness : r->name, f->path, src, n, w, sizeof w); named_for(r->lineage, f->path, src, n, l, sizeof l);
             f->witness = text_ref(c, (const uint8_t *)w, strlen(w)); f->trunk = f->witness;
             if (l[0]) { f->lineage = text_ref(c, (const uint8_t *)l, strlen(l)); f->has_lineage = 1; } }
+        if (r->chess) { chess_read(r, f, src, n); return; }                 /* PGN (chess.c) */
         attest_layout(r, f, src, n); return; }
     if (!r || !r->lang) { f->trunk = text_ref(c, src, n); return; }        /* text: UAX #29 */
     TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang);     /* content: the file as its syntax tree, byte for byte */

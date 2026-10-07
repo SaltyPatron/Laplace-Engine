@@ -1,0 +1,14 @@
+name chess-com
+# Games played on chess.com, as its public archive gives them: one PGN file a player's archive (a fetch of the chess
+# lab, FabianoCaruana_chesscom.pgn: 4,673 games). PGN is the PGN standard's export format; chess.com writes its own
+# tags beside the Seven Tag Roster (Link, Timezone, StartTime, EndDate, EndTime, CurrentPosition, ECO, ECOUrl,
+# Tournament, Variant, SetUp, FEN) and a clock comment ([%clk]) after every move. A PGN is one corpus witnessing its
+# records, as ToxiGen is: White and Black are participants named in each record, content as written, never witnesses
+# (Sequence 9, Sources).
+witness Chess.com
+# StructuredCorpus: the class Sequence 9 (the estate) gives the game collections
+class StructuredCorpus
+root $LAPLACE_DATA/Games/Chess
+files $LAPLACE_DATA/Games/Chess/Initial-Corpus/*.pgn
+files $LAPLACE_DATA/Games/Chess/later-corpus/*.pgn
+after unicode

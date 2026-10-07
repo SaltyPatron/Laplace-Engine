@@ -1,0 +1,74 @@
+[Event "Study of the Ruy Lopez"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[Annotator "Laplace test"]
+
+{A lesson.} 1. e4 e5 2. Nf3 Nc6 3. Bb5 $1 {The Spanish.} (3. Bc4 Bc5 (3... Nf6 4. Ng5 $2) 4. c3) 3... a6 4. Ba4 Nf6 5. O-O!? Be7 *
+
+[Event "Unfinished"]
+[Site "Somewhere"]
+[Date "2024.01.02"]
+[Round "1"]
+[White "Carlsen, Magnus"]
+[Black "Magnus Carlsen"]
+[Result "*"]
+
+1. d4 d5 2. c4 *
+
+[Event "No moves"]
+[Site "Here"]
+[Date "2024.01.03"]
+[Round "2"]
+[White "A"]
+[Black "B"]
+[Result "1-0"]
+[Termination "forfeit"]
+
+1-0
+
+[Event "From a position"]
+[Site "There"]
+[Date "2024.01.04"]
+[Round "3"]
+[White "C"]
+[Black "D"]
+[Result "1/2-1/2"]
+[SetUp "1"]
+[FEN "4k3/8/8/3pP3/8/8/8/4K2R w K d6 0 40"]
+
+40. exd6 Kd7 41. O-O Kxd6 42. Rd1+ Ke5 1/2-1/2
+
+[Event "Transposition"]
+[Site "There"]
+[Date "2024.01.05"]
+[Round "4"]
+[White "E"]
+[Black "F"]
+[Result "0-1"]
+
+1. Nf3 d5 2. d4 Nf6 3. Qd3 Qd6 4. Qxh7 Rxh7 0-1
+
+[Event "Transposition 2"]
+[Site "There"]
+[Date "2024.01.05"]
+[Round "5"]
+[White "E"]
+[Black "F"]
+[Result "0-1"]
+
+1. d4 Nf6 2. Nf3 d5 3. Qd3 Qd6 4. Qxh7 Rxh7 0-1
+
+[Event "Promotion"]
+[Site "There"]
+[Date "2024.01.06"]
+[Round "6"]
+[White "G"]
+[Black "H"]
+[Result "1-0"]
+
+1. e4 d5 2. exd5 c6 3. dxc6 Nf6 4. cxb7 Nbd7 5. bxa8=Q Qc7 6. Qxc8+ Qxc8 1-0
+
