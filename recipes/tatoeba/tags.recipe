@@ -14,4 +14,7 @@ empty \\N
 thing row "Sentence id"
 refer "Sentence id" tatoeba-sentences
 content "Tag name"
+# A tag (the page, above: "has been assigned the "proverb" tag") is a value of Tatoeba's own tag vocabulary:
+# [sentence, proverb].
+value - "Tag name"
 attest row "Tag name"

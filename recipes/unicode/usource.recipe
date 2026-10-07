@@ -19,13 +19,35 @@ match USourceData.txt
 tier row by \n
 comment hash
 padded
-names "U-source identifier" Status 2 kRSUnicode "Virtual KangXi dictionary position" "Ideographic Description Sequence (IDS)" Sources "General comments" kTotalStrokes "First residual stroke"
+# The columns are numbered as the header numbers them, only to say where a part is; what each says is in UAX #45 (revision 32,
+# Unicode 17.0.0), "2 Text File Data", and, for fields 3 and 8, in UAX #38.
+names 0 1 2 3 4 5 6 7 8 9
 tier field by ;
-part Sources by *
+part 6 by *
 
-thing row "U-source identifier"
-content "U-source identifier" Status kRSUnicode "Virtual KangXi dictionary position" "Ideographic Description Sequence (IDS)" Sources "General comments" kTotalStrokes "First residual stroke"
+thing row 0
+content 0 1 3 4 5 6 7 8 9
 codepoints 2
-attest row Status kRSUnicode "Virtual KangXi dictionary position" "Ideographic Description Sequence (IDS)" Sources "General comments" kTotalStrokes "First residual stroke"
+# UAX #45: "A string indicating the ideograph's current status." "The possible values are Comp, ExtA, ExtB, ..., Variant,
+# WS-2024, and strings matching the regular expressions UTC-\d{5}, UCI-\d{5}, and UK-\d{5}.": a value of that list
+value - 1
+# Field 3, "kRSUnicode property value (see UAX #38)"; UAX #38, kRSUnicode: "The standard radical-stroke count for this
+# ideograph" (the XML's kRSUnicode, worded the same)
+relation "standard radical-stroke count" 3
+# UAX #45: "A KangXi dictionary index for the ideograph, ... This field is no longer used and contains no data."
+relation "KangXi dictionary index" 4
+# UAX #45: "An Ideographic Description Sequence (IDS) for the ideograph, if one can be generated."
+relation "Ideographic Description Sequence (IDS)" 5
+# UAX #45: "A string indicating the ideograph's source and an optional index within the source."; "Multiple sources are
+# separated by asterisks."
+relation "source and an optional index within the source" 6
+# UAX #45: "General comments regarding the ideograph."
+relation "General comments regarding the ideograph" 7
+# Field 8, "kTotalStrokes property value (see UAX #38)"; UAX #38, kTotalStrokes: "The total number of strokes in the
+# ideograph (including the radical) ..." (the XML's kTotalStrokes, worded the same)
+relation "total number of strokes in the ideograph" 8
+# UAX #45: "The ideograph's first residual stroke."
+relation "first residual stroke" 9
+attest row 1 3 4 5 6 7 8 9
 when 2 matches ^U\+[0-9A-F]+$
 pair row 2

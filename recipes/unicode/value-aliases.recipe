@@ -1,5 +1,17 @@
 name unicode-property-value-aliases
 # The standard's own list of what each property's values stand for: the property, the value's short name, its long name.
+# The header:
+#   "First Field: The first field describes the property for which that property value name is used."
+#   "Second Field: The second field is the short name for the property value."
+#   "Third Field: The third field is the long name for the property value, typically the formal name used in
+#    documentation about the property value."
+#   "In the case of Canonical_Combining_Class (ccc), there are 4 fields: The second field is numeric, the third is the
+#    short name, and the fourth is the long name."
+#   "The above are the preferred aliases. Other aliases may be listed in additional fields."
+# A value is a value within its property: the row's thing is the path of the property and the value's short name
+# ([gc, Lu]), and each further name the row writes is a name of that value ([[gc, Lu], Uppercase_Letter]), as
+# PropertyAliases.txt's rows pair a property's short name with its long one. The short name is never a relation
+# (Laplace-Engine#32).
 match PropertyValueAliases.txt
 
 tier row by \n
@@ -9,8 +21,8 @@ padded
 names property short long alias...
 tier field by ;
 
-thing row property
+thing row property short
 content property short long alias
-relate row short to long
-# "Other aliases may be listed in additional fields" (the header)
-relate row short to alias
+# the long name and every other alias: names of the value, in the standard's own vocabulary of value names
+value - long alias
+attest row long alias

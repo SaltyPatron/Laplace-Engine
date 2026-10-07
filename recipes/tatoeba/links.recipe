@@ -12,7 +12,13 @@ tier field by \t
 # "\\N: Unknown (rare)."
 empty \\N
 
-thing row "Sentence id"
+# The page says of the row 1 [tab] 77 that "sentence #77 is the translation of sentence #1": the row's thing is the
+# sentence "Translation id" points at, and it is the translation of the one "Sentence id" points at:
+# [77, is the translation of, 1]. Both ids are pointers (Laplace-Engine#20), resolved and in no claim; the reciprocal
+# row says the reverse.
+thing row "Translation id"
 refer "Sentence id" tatoeba-sentences
 refer "Translation id" tatoeba-sentences
-attest row "Translation id"
+# "1 [tab] 77 means that sentence #77 is the translation of sentence #1."
+relation "is the translation of" "Sentence id"
+attest row "Sentence id"

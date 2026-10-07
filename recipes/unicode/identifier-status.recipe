@@ -15,4 +15,7 @@ tier field by ;
 thing row "code point"
 range "code point"
 content Identifier_Status
+# The header: "the property Identifier_Status is defined as an enumerated property of code points. ... The possible values
+# are: Allowed, Restricted"
+value - Identifier_Status
 attest row Identifier_Status

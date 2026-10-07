@@ -9,4 +9,7 @@ tier field by \t
 thing row WordNet_synset_ID
 type WordNet_synset_ID ili
 content lemma
+# README: "A mapping from a WordNet synset to a lemma. Each line contains a WordNet synset ID and a lemma": a lemma of
+# the synset, a value of it as a word's lemma is, [concept, repaint] (Laplace-Engine#32)
+value - lemma
 attest row lemma

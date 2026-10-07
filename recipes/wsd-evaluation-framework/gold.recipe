@@ -13,4 +13,8 @@ tier field by space
 thing row "instance id"
 refer "instance id" wsd-data
 type "gold key" ili
+# each gold key is a WordNet 3.0 sense key, read as the concept it is a key of (type "gold key" ili): a value of the
+# ILI road class, said of the instance ([art, <ili>]). The sense key as the lexicalization [lemma, language, ILI]
+# rather than its concept is Laplace-Engine#20.
+value ili "gold key"
 attest row "gold key"

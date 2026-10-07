@@ -20,6 +20,18 @@ key text id
 omit text.source
 content corpus.source
 content wf instance lemma pos lang
+# What each part means (Laplace-Engine#32). Data_Validation/README: "each sentences consists of "wf" (non-disambiguated)
+# and "instance" (disambiguated) tags. Both types should contain two mandatory attributes ("lemma" and "pos") ... The
+# "pos" tag (Part-of-Speech), should follow the Universal PoS tags (http://universaldependencies.org/u/pos/index.html)":
+# pos is a value of UPOS ([art, NOUN]); the files also write the older universal tags schema.xsd allows (PRT, CONJ, .),
+# which the highway's UPOS list does not hold and are said as written. lemma is the word's lemma, a value as UD's
+# LEMMA is ([is, be]). Said of the word within its sentence (together sentence); the sentence's lemma and POS as
+# layers aligned to its words is Laplace-Engine#27.
+value upos pos
+value - lemma
+# lang: schema.xsd's attribute of the corpus, which the README words nowhere; the language is a part of each
+# lexicalization and record the corpus holds, not a claim on the corpus's name: an unresolved obligation
+# (Laplace-Engine#20).
 attest corpus lang
 attest wf lemma pos
 attest instance lemma pos

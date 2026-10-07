@@ -2,8 +2,23 @@ name civil-comments-comments
 # The set's files are Parquet; each is written out beside it as a table (extracted/): the first row the columns' own
 # names, every value as the file holds it.
 # The set's card (README.md, "Data Fields"): text, toxicity, severe_toxicity, obscene, threat, insult,
-# identity_attack, sexual_explicit. It says nothing of what a number stands for, so each is recorded as the number
-# the set gives the comment under that name, and is not taken for a score.
+# identity_attack, sexual_explicit, each "a `float32` feature"; "Jigsaw extended this dataset by adding additional
+# labels for toxicity and identity mentions". It says nothing more of what a number stands for, so each is recorded
+# as the number the set gives the comment, and is not taken for a score.
+# The card's paper ("Nuanced Metrics for Measuring Unintended Bias with Real Data for Text Classification"): "This
+# data was also labeled for toxicity using the same crowd rating guidelines as published by the Perspective API ...
+# Raters were also asked about several subtypes of toxicity". Perspective API's attribute table
+# (github.com/conversationai/perspectiveapi, 2-api/models.md) words each:
+#   TOXICITY "Rude, disrespectful, or unreasonable comment that is likely to make people leave a discussion."
+#   SEVERE_TOXICITY "A very hateful, aggressive, disrespectful comment or otherwise very likely to make a user leave
+#   a discussion or give up on sharing their perspective."
+#   OBSCENE "Obscene or vulgar language such as cursing."
+#   THREAT "Describes an intention to inflict pain, injury, or violence against an individual or group."
+#   INSULT "Insulting, inflammatory, or negative comment towards a person or a group of people."
+#   IDENTITY_ATTACK "Negative or hateful comments targeting someone because of their identity."
+#   SEXUALLY_EXPLICIT "Contains references to sexual acts, body parts, or other lewd content."
+# Each number is said of its comment in those words (the engine keeps a relation's words to 63 bytes, so the longer
+# ones are their first clause), the same words RealToxicityPrompts' Perspective scores are said in.
 # A comment has no name of its own in the set: it is the text it is. What a row says of it, it says together.
 match train-*.tsv validation-*.tsv test-*.tsv
 
@@ -15,4 +30,11 @@ tier field by \t
 thing row text
 content text toxicity severe_toxicity obscene threat insult identity_attack sexual_explicit
 together row
+relation "Rude, disrespectful, or unreasonable comment" toxicity
+relation "A very hateful, aggressive, disrespectful comment" severe_toxicity
+relation "Obscene or vulgar language such as cursing" obscene
+relation "Describes an intention to inflict pain, injury, or violence" threat
+relation "Insulting, inflammatory, or negative comment" insult
+relation "hateful comments targeting someone because of their identity" identity_attack
+relation "references to sexual acts, body parts, or other lewd content" sexual_explicit
 attest row toxicity severe_toxicity obscene threat insult identity_attack sexual_explicit

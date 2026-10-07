@@ -13,4 +13,8 @@ empty \\N
 thing row Username Lang
 own Username
 content Lang "Skill level" Details
+# "Indicates the self-reported skill levels of members in individual languages.": [[member, language], self-reported
+# skill levels, 5]. The page gives Details no wording at all (only its place in "Fields and structure"), so what it
+# states is left an unresolved obligation (Laplace-Engine#32: no documented meaning).
+relation "self-reported skill levels" "Skill level"
 attest row "Skill level" Details by Username

@@ -17,7 +17,16 @@ thing row name
 key row ID
 type "prototypical synset" ili
 content name definition "definition of the prototypical synset" "small definition"
-attest row definition "prototypical synset" "definition of the prototypical synset" "small definition"
+# What each column means (Laplace-Engine#32), in the README's words: "From VerbAtlas 1.1.0, we also provide a
+# definition, a prototypical synset (i.e., the synset that roughly represents the frame), the definition of the
+# prototypical synset, and a "small definition" of the frame."; its changelog: "Added frame definitions and small
+# definitions." The definition of the prototypical synset is said of that synset (the concept), not of the frame.
+relation "frame definition" definition
+relation "the synset that roughly represents the frame" "prototypical synset"
+relation "small definition of the frame" "small definition"
+relation "definition" "definition of the prototypical synset"
+attest row definition "prototypical synset" "small definition"
+attest row "definition of the prototypical synset" of "prototypical synset"
 
 # the highway: a frame is its name (TOLERATE), and its id (va:0001f) is VerbAtlas's key of it
 types vaframe "VerbAtlas frame" row

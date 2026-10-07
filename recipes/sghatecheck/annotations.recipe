@@ -22,5 +22,17 @@ key row t_id
 omit "Unnamed: 0" "Unnamed: 0.1" index
 content c_testcase c_group p_label p_value p_target t_case_local t_function t_gold t_direction annotation_common annotation_selected annotator_*
 omit c_order
+# As in testcases.recipe: the README's figure, "men (placeholder) + I hate {placeholder} (template) = I hate men (test
+# case)", and "Placeholders represent the target of each test case". The labels the set gives the case are values of
+# its own vocabularies.
+value - p_label t_function t_gold t_direction
+relation "placeholder" p_value
+relation "template" t_case_local
+relation "the target of each test case" p_target
+# Obligations (Laplace-Engine#32):
+#   c_group (only in ta_annotations.csv, 1 to 3): the README says nothing of it, and nothing tells what it groups.
+#   annotation_common, annotation_selected (hateful, non-hateful, nonsensical, no_match, undecided): what the
+#   annotations came to, but the README words neither, nor how they differ; as bare values they would fold into the
+#   gold label t_gold ([case, hateful] once), losing that the annotators said it.
 attest row c_group p_label p_value p_target t_case_local t_function t_gold t_direction annotation_common annotation_selected
 voices row annotator_* within-file
