@@ -253,7 +253,8 @@ typedef struct {
     uint8_t *path; int path_len; lp_rating r; int matches;
 } Hold;
 Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standing, int *nout);
-Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout);   /* every tier, one probe a leaf: each path that holds any key and with as well; src -1, the caller reads which key from the path */
+Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout);
+Hold *holds_both(const lp_id *keys, int nkeys, const lp_id *with, int *nout);                  /* per key, what holds it and with too: a two-key probe a key, every leaf at once */   /* every tier, one probe a leaf: each path that holds any key and with as well; src -1, the caller reads which key from the path */
 Hold *holds_any(const lp_id *keys, int nkeys, int *nout);                                     /* every tier, one probe a leaf: each path that holds any key; src -1 */
 void holds_free(Hold *h, int n);
 Hold *holds_capped(const lp_id *keys, int nkeys, int cap, int standing, int kinds, int *hub, int *nout);   /* kinds: 1 claims, 2 observations, 3 both */   /* each key's holders, its claims and observations a hub's when more than cap: hub[2k], hub[2k + 1] */

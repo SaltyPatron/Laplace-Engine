@@ -374,6 +374,10 @@ void coords_of(const lp_id *ids, int n, double *out, uint8_t *has){
     }
     free(bucket); free(head); free(link);
 }
+/* What holds each key together with one more ID: per key, the paths that hold both, one statement a leaf for the
+ * whole set (each key's own two-key probe of the container index), every leaf at once. src is the key's place. A key
+ * with many holders is never read through: only what holds both. */
+Hold *holds_both(const lp_id *keys, int nkeys, const lp_id *with, int *nout){ return holds_core(keys, nkeys, -1, 1, 0, with, nout); }
 Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout){ return holds_core(keys, nkeys, -1, 2, standing, with, nout); }
 Hold *holds_any(const lp_id *keys, int nkeys, int *nout){ return holds_core(keys, nkeys, -1, 2, 0, NULL, nout); }
 void holds_free(Hold *h, int n){ if (!h) return; for (int i = 0; i < n; i++) free(h[i].path); free(h); }

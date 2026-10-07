@@ -90,6 +90,10 @@ for pull
   fan 4096
   # the evidence a turn weighs: walks from every position, how the trajectory so far attends to a proposal, and the
   # election order over it; a tie is what nothing in the evidence tells apart, and this firmware takes the first by ID
+  # a text's language, read as translation reads it: what holds a word under the first (its lexicons' entries) and what
+  # that says under the second (the lexicon's language); a rendering in the prompt's language is taken first (Forward:
+  # REALIZE, text in the query's language)
+  language LexicalEntry language
   nearest 512
   walks 64
   walkfan 512

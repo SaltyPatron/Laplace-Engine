@@ -52,6 +52,7 @@
 #include <string.h>
 
 #define MAXOCC 256
+#define LANGS 64
 typedef struct { uint64_t w[MAXOCC / 64]; } Bits;
 static void bit_set(Bits *b, int i){ if (i >= 0 && i < MAXOCC) b->w[i >> 6] |= 1ull << (i & 63); }
 static int bit_count_and(const Bits *a, const Bits *b){ int n = 0; for (int i = 0; i < MAXOCC / 64; i++) n += __builtin_popcountll(a->w[i] & b->w[i]); return n; }
@@ -91,7 +92,8 @@ typedef struct {
     uint64_t admitted;                                                        /* the prompt's entities its admission recorded new */
     uint8_t seed[32];                                                         /* every draw of the pass is BLAKE3 of this and the draw's place */
     int npos;                                                                 /* positions: the prompt's occurrences, then each word emitted (attention reads both) */
-    lp_id pass[4096]; int npass;                                              /* the pass's own trajectory: what it read, chose and emitted, in order */
+    lp_id pass[4096]; int npass;
+    lp_id lang[8]; int nlang;                                             /* the prompt's language: what most of its words are lexicalized in */                                              /* the pass's own trajectory: what it read, chose and emitted, in order */
     lp_idmap *walk_at; int *walk_visits; size_t walk_cap; uint64_t walk_steps, walk_homes; int walk_read;    /* where each position's walkers stood, MAXOCC counts an entity */
     lp_idmap *walk_am; struct Adj_ *walk_adj; size_t walk_acap; int walk_nadj;  /* the strands of every place stood on, read once a pass */
     lp_idmap *ctx[MAXOCC]; int ctx_n[MAXOCC], ctx_hub[MAXOCC]; lp_idmap *ctx_all; int ctx_total;            /* what the observations holding each word hold */
@@ -360,24 +362,60 @@ static int beside_grounds(const State *st, int i, const lp_id *id){
  * word when its record set does, weighed by how hard the word pulls: the intersection Research: Trust measured at 66.2
  * on the WSD sets. Then how often the other words' walkers stood on the branch's record set, within the walks' error.
  * When neither tells the branches apart, -1: the chain keeps its own order (the witness's, a sense's frequency). */
+/* ---- a text's language, as the firmware names how to read it (language HELD SAYS): what holds each word under HELD
+ * (a lexicon's entries) and what each of those says under SAYS (the lexicon's language). out[i]: up to 4 languages of
+ * word i; returns how many words have one. Every leaf at once, two sets; a word more than the fan's strands hold is
+ * a hub and has none. */
+static int langs_of(State *st, const lp_id *w, int n, lp_id (*out)[LANGS], int *nout){
+    const Firmware *fw = st->fw; memset(nout, 0, sizeof(int) * (size_t)n); if (!n || !fw->language[0][0]) return 0;
+    /* [lexicon, HELD, word]: the word and HELD together, one intersection of the container index a word (a word with
+     * many strands is not read through: only the claims that hold both) */
+    Ids rv = { 0 };
+    lp_idmap *lx = lp_idmap_new(); int *lw = NULL, *lhead = malloc(sizeof(int) * (size_t)n); size_t lcap = 0; int nl = 0; for (int i = 0; i < n; i++) lhead[i] = -1;
+    int *lnext = NULL; size_t ncap = 0; int *lof = NULL; size_t ocap = 0;
+    { int nh = 0; Hold *h = holds_both(w, n, &fw->id.language[0], &nh); st->trips++;
+      for (int r = 0; r < nh; r++) { int i = h[r].src; if (i < 0 || i >= n || !h[r].claim) continue; path_into(&rv, lp_path_of(h[r].path, (size_t)h[r].path_len));
+          if (rv.n != 3 || !lp_id_eq(&rv.v[1], &fw->id.language[0]) || !lp_id_eq(&rv.v[2], &w[i])) continue;      /* [lexicon, HELD, word] */
+          bool f; size_t li = lp_idmap_put(lx, &rv.v[0], &f);
+          lp_reserve((void **)&lof, &ocap, (size_t)nl + 1, sizeof(int)); lp_reserve((void **)&lnext, &ncap, (size_t)nl + 1, sizeof(int)); lp_reserve((void **)&lw, &lcap, (size_t)nl + 1, sizeof(int));
+          lof[nl] = (int)li; lw[nl] = i; lnext[nl] = lhead[i]; lhead[i] = nl; nl++; }
+      holds_free(h, nh); }
+    size_t nlx = lp_idmap_count(lx); lp_id *lang = calloc(nlx ? nlx : 1, sizeof(lp_id)); uint8_t *has = calloc(nlx ? nlx : 1, 1);
+    /* a lexicon holds every entry it lists, a hub: its language is read by the two IDs together, the lexicon and SAYS,
+     * one intersection of the container index a lexicon, never its fan */
+    if (nlx) { int n2 = 0; Hold *h2 = holds_both(lp_idmap_keys(lx), (int)nlx, &fw->id.language[1], &n2); st->trips++;
+        for (int r = 0; r < n2; r++) { int i = h2[r].src; if (i < 0 || (size_t)i >= nlx || !h2[r].claim || has[i]) continue; path_into(&rv, lp_path_of(h2[r].path, (size_t)h2[r].path_len));
+            if (rv.n != 3 || !lp_id_eq(&rv.v[0], lp_idmap_key(lx, (size_t)i)) || !lp_id_eq(&rv.v[1], &fw->id.language[1])) continue;    /* [lexicon, SAYS, language] */
+            lang[i] = rv.v[2]; has[i] = 1; }
+        holds_free(h2, n2); }
+    int known = 0;
+    for (int i = 0; i < n; i++) { for (int e = lhead[i]; e >= 0; e = lnext[e]) { int li = lof[e]; if (!has[li]) continue; int dup = 0;
+            for (int z = 0; z < nout[i] && z < LANGS; z++) dup |= lp_id_eq(&out[i][z], &lang[li]); if (!dup) { if (nout[i] < LANGS) out[i][nout[i]] = lang[li]; nout[i]++; } }
+        known += nout[i] > 0; }
+    free(lang); free(has); free(lw); free(lhead); free(lnext); free(lof); lp_idmap_free(lx); lp_vec_free(&rv);
+    return known;
+}
 typedef struct { State *st; const lp_id *word; int last_hold, last_n; } ForkCtx;
 static int fork_choice(void *vc, const Claim *cl, int n){
     ForkCtx *fc = vc; State *st = fc->st; const Firmware *fw = st->fw;
     lp_id *ends = malloc(sizeof(lp_id) * (size_t)n); for (int k = 0; k < n; k++) ends[k] = cl[k].part[cl[k].np - 1];
     lp_idmap **rec = calloc((size_t)n, sizeof *rec); for (int k = 0; k < n; k++) { bool f; rec[k] = lp_idmap_new(); lp_idmap_put(rec[k], &ends[k], &f); }
-    /* hop one: each branch's strands; hop two: the strands of what they reach, words left out (a word's strands are its own record, not the branch's) */
-    /* both hops every leaf at once, a hub (a relation, a part of speech, a language: more strands than the fan) reached and its strands never read */
-    int *hb = malloc(sizeof(int) * 2 * (size_t)n), m1 = 0; Hold *c1 = holds_capped(ends, n, fw->fan, 0, 1, hb, &m1); st->trips++; Ids rv = { 0 };
-    lp_id *mid = malloc(sizeof(lp_id) * (size_t)(m1 + 1)); int *mof = malloc(sizeof(int) * (size_t)(m1 + 1)), nm = 0;
-    for (int r = 0; r < m1; r++) { int b = c1[r].src; if (b < 0 || b >= n || !c1[r].claim) continue; path_into(&rv, lp_path_of(c1[r].path, (size_t)c1[r].path_len));
-        int o = lp_tuple_other(rv.v, rv.n, &ends[b]); if (o < 0) continue;     /* the strand's other end; its middle (a relation) is not the branch's record */
-        const lp_id *x = &rv.v[o]; bool f; lp_idmap_put(rec[b], x, &f);
-        if (f && !lp_id_eq(x, fc->word) && !table_find(x)) { int dup = 0; for (int z = 0; z < nm && !dup; z++) dup = lp_id_eq(&mid[z], x) && mof[z] == b; if (!dup) { mid[nm] = *x; mof[nm++] = b; } } }
-    holds_free(c1, m1); free(hb);
-    int m2 = 0, *hb2 = malloc(sizeof(int) * 2 * (size_t)(nm ? nm : 1)); Hold *c2 = nm ? holds_capped(mid, nm, fw->fan, 0, 1, hb2, &m2) : NULL; if (nm) st->trips++;
-    for (int r = 0; r < m2; r++) { int s_ = c2[r].src; if (s_ < 0 || s_ >= nm || !c2[r].claim) continue; path_into(&rv, lp_path_of(c2[r].path, (size_t)c2[r].path_len));
-        int o = lp_tuple_other(rv.v, rv.n, &mid[s_]); if (o < 0) continue; bool f; lp_idmap_put(rec[mof[s_]], &rv.v[o], &f); }
-    holds_free(c2, m2); free(hb2); lp_vec_free(&rv); Claim *c1_ = NULL, *c2_ = NULL; int *s1 = NULL, *s2 = NULL; (void)c1_; (void)c2_;
+    /* one hop out, every leaf at once; a hub (a relation, a part of speech, a language: more strands than the fan) is reached and its strands never read */
+    /* a branch is read from itself and its own parts: a sense is the word with its synset, so its synset (and the
+     * synset's definitions and examples) is one step down from it before it is one step out; bubble down, then out */
+    lp_id *k1 = malloc(sizeof(lp_id) * (size_t)n * 17); int *b1 = malloc(sizeof(int) * (size_t)n * 17), nk1 = 0;
+    for (int k = 0; k < n; k++) { k1[nk1] = ends[k]; b1[nk1++] = k; reader_want(st->rd, &ends[k]); }
+    for (int k = 0; k < n; k++) { lp_id pp[16]; size_t np = reader_parts(st->rd, &ends[k], pp, 16); if (np > 16) np = 16;
+        for (size_t v = 0; v < np; v++) { if (lp_tier0_codepoint(T0, &pp[v]) >= 0 || lp_id_eq(&pp[v], fc->word) || table_find(&pp[v])) continue;
+            bool f; lp_idmap_put(rec[k], &pp[v], &f); if (f) { k1[nk1] = pp[v]; b1[nk1++] = k; } } }
+    int *hb = malloc(sizeof(int) * 2 * (size_t)nk1), m1 = 0; Hold *c1 = holds_capped(k1, nk1, fw->fan, 0, 1, hb, &m1); st->trips++; Ids rv = { 0 };
+    for (int r = 0; r < m1; r++) { int s1_ = c1[r].src; if (s1_ < 0 || s1_ >= nk1 || !c1[r].claim) continue; int b = b1[s1_]; path_into(&rv, lp_path_of(c1[r].path, (size_t)c1[r].path_len));
+        int o = lp_tuple_other(rv.v, rv.n, &k1[s1_]); if (o < 0) continue;     /* the strand's other end; its middle (a relation) is not the branch's record */
+        const lp_id *x = &rv.v[o]; bool f; lp_idmap_put(rec[b], x, &f); }
+    holds_free(c1, m1); free(hb); free(k1); free(b1);
+    /* one hop out is the record (Research: Trust): from the branch and its synset, its definitions, its examples and its
+     * relation neighbours; the neighbours' members and the observations' words come from opening them below */
+    lp_vec_free(&rv);
     /* the words of every observation a record set holds, its gloss and its examples: each composition above a word is
      * opened, level by level, down to the words (a composition of atoms alone is a word, and is not opened) */
     lp_id parts[256]; size_t *done = calloc((size_t)n, sizeof(size_t));
@@ -409,14 +447,25 @@ static int fork_choice(void *vc, const Claim *cl, int n){
             for (size_t i = 0; i < cnt; i++) walks[k] += st->role[j] * visits(st, lp_idmap_key(rec[k], i), j); }
         hold[k] /= norm; walks[k] /= norm;
         int rank = cl[k].position > 0 ? cl[k].position : k + 1; score[k] = -log((double)rank) + hold[k]; }
+    /* a rendering in the prompt's language first: the share of a branch's own words lexicalized in it */
+    double *inlang = calloc((size_t)n, sizeof(double));
+    if (st->nlang) { lp_id (*bw)[64] = calloc((size_t)n, sizeof *bw); int *nbw = calloc((size_t)n, sizeof(int)); lp_id all[4096]; int na = 0;
+        for (int k = 0; k < n; k++) { lp_id pp[256]; size_t np = reader_parts(st->rd, &ends[k], pp, 256); if (np > 256) np = 256;
+            for (size_t v = 0; v < np; v++) { if (lp_tier0_codepoint(T0, &pp[v]) >= 0) continue; lp_id sub_[64]; size_t ns = reader_parts(st->rd, &pp[v], sub_, 64); size_t atoms = 0; for (size_t q = 0; q < ns && q < 64; q++) atoms += lp_tier0_codepoint(T0, &sub_[q]) >= 0;
+                if (ns && atoms == ns && nbw[k] < 64 && na < 4096) { bw[k][nbw[k]++] = pp[v]; all[na++] = pp[v]; } } }
+        lp_id (*lg)[LANGS] = calloc((size_t)(na ? na : 1), sizeof *lg); int *nlg = calloc((size_t)(na ? na : 1), sizeof(int)); langs_of(st, all, na, lg, nlg);
+        int at = 0; for (int k = 0; k < n; k++) { int known = 0, ours = 0;
+            for (int v = 0; v < nbw[k]; v++, at++) { if (!nlg[at]) continue; known++; int hit = 0; for (int z = 0; z < nlg[at] && z < LANGS && !hit; z++) for (int y = 0; y < st->nlang; y++) hit |= lp_id_eq(&lg[at][z], &st->lang[y]); ours += hit; }
+            inlang[k] = known ? (double)ours / known : 0; }
+        free(bw); free(nbw); free(lg); free(nlg); }
     int best = 0; for (int k = 1; k < n; k++) { double tol = fw->sure * sqrt((walks[k] + walks[best]) / 4.0);
-        if (score[k] > score[best] || (score[k] == score[best] && walks[k] > walks[best] + tol)) best = k; }
-    int told = 0; for (int k = 0; k < n; k++) if (k != best && (score[best] > score[k] || walks[best] > walks[k] + fw->sure * sqrt((walks[k] + walks[best]) / 4.0))) told++;
+        if (inlang[k] > inlang[best] || (inlang[k] == inlang[best] && (score[k] > score[best] || (score[k] == score[best] && walks[k] > walks[best] + tol)))) best = k; }
+    int told = 0; for (int k = 0; k < n; k++) if (k != best && (inlang[best] > inlang[k] || (inlang[best] == inlang[k] && (score[best] > score[k] || walks[best] > walks[k] + fw->sure * sqrt((walks[k] + walks[best]) / 4.0))))) told++;
     int pick = told == n - 1 ? best : -1;
-    if (getenv("LAPLACE_TIMES")) for (int k = 0; k < n; k++) { char *tx = reader_text(st->rd, &ends[k], 50); fprintf(stderr, "fork: %s%-50s record %zu, holds %.3f, prior %.2f, score %.3f, walks %.2f\n", k == pick ? "* " : "  ", tx, lp_idmap_count(rec[k]), hold[k], -log((double)(cl[k].position > 0 ? cl[k].position : k + 1)), score[k], walks[k]); free(tx); }
+    if (getenv("LAPLACE_TIMES")) for (int k = 0; k < n; k++) { char *tx = reader_text(st->rd, &ends[k], 50); fprintf(stderr, "fork: %s%-50s in language %.2f, record %zu, holds %.3f, prior %.2f, score %.3f, walks %.2f\n", k == pick ? "* " : "  ", tx, inlang[k], lp_idmap_count(rec[k]), hold[k], -log((double)(cl[k].position > 0 ? cl[k].position : k + 1)), score[k], walks[k]); free(tx); }
     fc->last_hold = (int)(hold[best] * 1000 + 0.5); fc->last_n = n;
     for (int k = 0; k < n; k++) lp_idmap_free(rec[k]);
-    free(rec); free(ends); free(s1); free(s2); free(mid); free(mof); free(hold); free(walks); free(score);
+    free(rec); free(ends); free(hold); free(walks); free(score); free(inlang);
     return pick;
 }
 /* A chain the firmware names, followed from a word (chain_follow), the oriented reading taken where the chain passes
@@ -625,11 +674,21 @@ int cmd_turn(int argc, char **argv){
              if (fw.seed_session) { blake3_hasher_update(&h, &handle.id, 16); int32_t od = ordinal; blake3_hasher_update(&h, &od, sizeof od); } }
       blake3_hasher_finalize(&h, st->seed, 32); }
     resolve_roles(st); ROLE = st->role;
+    { lp_id w[MAXOCC]; int nw = 0; for (int i = 0; i < st->nocc; i++) if (st->composed[i]) { int dup = 0; for (int z = 0; z < nw && !dup; z++) dup = lp_id_eq(&w[z], &st->occ[i]); if (!dup) w[nw++] = st->occ[i]; }   /* each word once: a word said twice is one vote */
+      lp_id (*lg)[LANGS] = calloc((size_t)(nw ? nw : 1), sizeof *lg); int *nlg = calloc((size_t)(nw ? nw : 1), sizeof(int)); langs_of(st, w, nw, lg, nlg);
+      /* each word gives each language it is lexicalized in a share of one vote: a word in one language says which; a
+       * word lexicalized in many (a homograph of every language's "a") says little */
+      lp_id cand[64]; double cnt[64]; int nc = 0;
+      for (int i = 0; i < nw; i++) for (int z = 0; z < nlg[i] && z < LANGS; z++) { int k = -1; for (int y = 0; y < nc; y++) if (lp_id_eq(&cand[y], &lg[i][z])) k = y; if (k < 0 && nc < 64) { cand[nc] = lg[i][z]; cnt[nc] = 0; k = nc++; } if (k >= 0) cnt[k] += 1.0 / nlg[i]; }
+      double top = 0; for (int y = 0; y < nc; y++) if (cnt[y] > top) top = cnt[y];
+      for (int y = 0; y < nc && st->nlang < 8; y++) if (cnt[y] == top && top > 0) st->lang[st->nlang++] = cand[y];
+      free(lg); free(nlg); }
     memcpy(st->traj, st->occ, sizeof(lp_id) * (size_t)st->nocc); st->ntraj = st->nocc;
     for (int i = 0; i < st->nocc; i++) reader_want(st->rd, &st->occ[i]);
     char idt[33]; lp_id_hex(&pr.id, idt);
     printf("RESOLVE    prompt %s, tier %d, %d occurrences; session \"%s\" of %s, turn %d (%d before it, %d discourse entities)\n", idt, pr.tier, st->nocc, session, user, ordinal, nturn, st->ndisc);
     if (!read_only) printf("           admitted as content, the user witnessing it: %llu entities new\n", (unsigned long long)st->admitted);
+    printf("           language:"); for (int y = 0; y < st->nlang; y++) { reader_want(st->rd, &st->lang[y]); char *tl = reader_text(st->rd, &st->lang[y], 16); printf(" %s", tl); free(tl); } if (!st->nlang) printf(" not known"); printf("\n");
     printf("           obligations:"); for (int i = 0; i < st->nocc; i++) if (st->composed[i]) { char *tx = reader_text(st->rd, &st->occ[i], 32); printf(" %s%s(%.2f)", tx, (st->open.w[i >> 6] >> (i & 63)) & 1 ? "" : "~", st->role[i]); free(tx); } printf("\n");
 
     /* ---- the loop: each emitted constituent changes the state the next is chosen from */
