@@ -60,10 +60,60 @@ key WordForm id
 omit lexemeentryids wordformids lexemeid
 content *
 
-holds frame FE lexUnit semType frameRelation
+# What each part a claim is made of means (Laplace-Engine#32), never an attribute's, an element's or a layer's name:
+# POS a value of FrameNet's part-of-speech list (N, V, A, ADV, PREP, ...): [lexical unit, N]; coreType a value of
+# FrameNet's coreness ("core, peripheral, and extra-thematic"): [frame element, Core]; a frame relation's type
+# (frameRelationType's name, Inheritance, Using, Subframe, ...; a frame file's "Inherits from") a relation of FrameNet's
+# own frame-relation inventory. A lexeme's POS is said of its lexical unit, as before (POS, everywhere it stands).
+value - POS coreType frameRelationType.name frameRelation.type
+# a semantic type is a value of FrameNet's semantic-type hierarchy, said of the frame, frame element or lexical unit it
+# is on: [frame, Container]. The FrameNet book (6.2.1): "These semantic types are used to classify the denotation of
+# lexical units, frames, and frame elements."
+value - semType
+# The FrameNet book (3.1): "Thus, the frame elements in the Revenge frame are Avenger, Punishment, Offender, Injury,
+# and Injured party." / "Lexical units in this frame include avenge.v, avenger.n, get even.v, ..."
+relation "frame element" frame.FE
+relation "lexical unit" frame.lexUnit
+# The FrameNet book (3.2.2.2): "In this situation, we mark a Requires relation"; (3.2.2.3): "we say that Items excludes
+# Item and Goal" ... "The Excludes relation also manifests in frames where ..."
+relation "Requires" FE.requiresFE
+relation "Excludes" FE.excludesFE
+# The FrameNet book (3.1): "Some example sentences with the lexical unit avenge are given here." (a lexical unit's
+# file holds its annotated sentences, by subcorpus)
+relation "example sentence" subCorpus.sentence
+# The FrameNet book (1): "complete frame and FE descriptions"; (2): "coming up with a description of each frame as a
+# whole and each of its frame elements"
+relation "description" frame.definition FE.definition
+# The FrameNet book (1.1): "Like dictionary subentries, FrameNet lexical units come with definitions, either from the
+# Concise Oxford Dictionary, 10th Edition ... or a definition written by a FrameNet staff member."
+relation "come with definitions" lexUnit.definition
+# The FrameNet book (3.2.4): "in the Placing frame, many verbs incorporate the Goal FE"
+relation "incorporate" lexUnit.incorporatedFE
+# The FrameNet book (B.1): "The Lexical Database contains the relationships of word forms, lexemes, lemmas, and their
+# parts of speech." ... "A lemma may consist of multiple lexemes."
+relation "consist of" lexeme.name
+# The FrameNet book (6.2.1): "The types are related to each other via subtype relations, which are logically
+# equivalent to Inheritance or is-a."
+relation "subtype" superType.superTypeName
+# The FrameNet book (3.2.7.3) writes a name and its short form so: "a new category of syntactic governor called
+# Controller, abbreviated in the data as Ctrlr": an FE's abbrev is how its name is abbreviated in the data.
+relation "abbreviated" FE.abbrev
+# No meaning is given, so each is an unresolved obligation and no claim (Laplace-Engine#24): a valence unit's GF, PT
+# and FE (one valence pattern, not three claims); every label: the name of the layer a label is in (BNC, PENN, FE, GF,
+# PT, ...) is no relation, and the label belongs in its sentence's layer; itype is that layer's too (the null
+# instantiation of a frame element: CNI, DNI, INI); feID is the attribute of an internal pointer, in no claim; and an
+# annotation set's cxnName, luName and frameName: the book (1): "get a new set of annotation layers (frame element,
+# grammatical function, phrase type)", the set is its sentence's layers, relative to its target's LU and frame.
+# A lexeme's breakBefore and headword say how it stands in its lexical unit (whether a break comes before it, whether
+# it is the head of a multiword unit); neither the book nor the release notes nor the schema gives them any wording:
+# an unresolved obligation (Laplace-Engine#32), until the lexemes of a lexical unit are its path.
+# A frame file's frameRelation is no thing (only frRelation.xml's, by its subID, are), so neither "holds frame
+# frameRelation" nor "holds frameRelationType frameRelation" (a frameRelationType is no thing) ever made a claim: both
+# are gone; frRelation.xml says each frame relation, under its type, below.
+
+holds frame FE lexUnit semType
 holds FE requiresFE excludesFE semType
 holds lexUnit semType sentence
-holds frameRelationType frameRelation
 attest frame definition by cBy
 attest FE coreType abbrev definition by cBy
 attest lexUnit POS definition incorporatedFE by cBy
@@ -76,7 +126,7 @@ relate frameRelation type to relatedFrame
 attest valenceUnit GF PT FE
 together valenceUnit
 relate label ^/name to name by cBy
-# an FE label names its frame element by FrameNet's number too: the stretch is said to be that element
+# an FE label names its frame element by FrameNet's number (feID): an internal pointer, in no claim (no meaning given)
 attest label itype feID by cBy
 attest annotationSet cxnName luName frameName
 

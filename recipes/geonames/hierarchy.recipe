@@ -1,8 +1,10 @@
 name geonames-hierarchy
 # readme.txt:
-#   "hierarchy.zip		: parentId, childId, type. The type 'ADM' stands for the admin hierarchy modeled by the admin1-4 codes."
-# Both ids are keys of the geoname table's rows: each is read as the place it points at. What a row says of its
-# parent (the child, and the type) it says together.
+#   "hierarchy.zip		: parentId, childId, type. The type 'ADM' stands for the admin hierarchy modeled by the admin1-4 codes. The other entries are entered with the user interface. The relation toponym-adm hierarchy is not included in the file, it can instead be built from the admincodes of the toponym."
+# Both ids are keys of the geoname table's rows: each is read as the place it points at, and neither is in a claim.
+# Every row says the parent is above the child in the hierarchy, the readme's word for the relation; a row that
+# gives a type (ADM, a value of GeoNames's own list of hierarchies; most rows give none) says the parent is above the
+# child in that hierarchy too.
 match hierarchy.txt
 
 tier row by \n
@@ -13,5 +15,7 @@ thing row parentId
 refer parentId geonames-geoname
 refer childId geonames-geoname
 content type
-together row
-attest row childId type
+relation "hierarchy" childId
+value - type
+attest row childId
+relate row type to childId

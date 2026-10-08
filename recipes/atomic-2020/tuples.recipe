@@ -13,4 +13,6 @@ tier field by \t
 
 thing row head
 content head relation tail
+# the relation column is ATOMIC's own relation inventory (README: "edge relation (e.g., xWant, xAttr, AtLocation)")
+value - relation
 relate row relation to tail

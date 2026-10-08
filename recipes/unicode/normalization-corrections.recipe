@@ -13,10 +13,15 @@ tier row by \n
 comment hash
 remark hash
 padded
-names "Unicode code point" "Original (erroneous) decomposition" "Corrected decomposition" 3
+# The columns are numbered as the header numbers them, only to say where a part is; what each says is its header line.
+names 0 1 2 3
 tier field by ;
 
-thing row "Unicode code point"
-codepoints "Unicode code point" "Original (erroneous) decomposition" "Corrected decomposition"
+thing row 0
+codepoints 0 1 2
 omit 3
-attest row "Original (erroneous) decomposition" "Corrected decomposition"
+# "Field 1: Original (erroneous) decomposition"
+relation "Original (erroneous) decomposition" 1
+# "Field 2: Corrected decomposition"
+relation "Corrected decomposition" 2
+attest row 1 2

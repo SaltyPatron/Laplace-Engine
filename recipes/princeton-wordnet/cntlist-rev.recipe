@@ -13,4 +13,9 @@ thing row sense_key
 type sense_key ili
 key row sense_number
 content tag_cnt
+# cntlist.5: "tag_cnt is the decimal number of times the sense is tagged in the corresponding semantic concordance": a
+# number the file states of the sense, an observation. The sense key is read as the concept its synset is (type
+# sense_key ili), so the claim is said of the concept, not of the lemma's sense: the sense key as the lexicalization
+# [lemma, language, ILI] is Laplace-Engine#20.
+relation "number of times the sense is tagged" tag_cnt
 attest row tag_cnt

@@ -2,7 +2,8 @@ name geonames-language-codes
 # readme.txt:
 #   "iso-languagecodes.txt    : iso 639 language codes, as used for alternate names in file alternateNames.zip"
 # The file has a header row: "ISO 639-3	ISO 639-2	ISO 639-1	Language Name". Language Name is the one column no row
-# leaves empty; every row says of it the codes the other columns hold.
+# leaves empty; every row says of it the codes the other columns hold, each an ISO 639 code (a highway node), which
+# the readme words "iso 639 language codes". Which part of ISO 639 a code is from is the code's own list's to say.
 match iso-languagecodes.txt
 
 tier row by \n
@@ -11,4 +12,5 @@ tier field by \t
 
 thing row "Language Name"
 content "Language Name" "ISO 639-3" "ISO 639-2" "ISO 639-1"
+relation "iso 639 language codes" "ISO 639-3" "ISO 639-2" "ISO 639-1"
 attest row "ISO 639-3" "ISO 639-2" "ISO 639-1"

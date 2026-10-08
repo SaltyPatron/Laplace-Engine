@@ -1,6 +1,7 @@
 name iso-639-3
-# ISO 639-3's code table: every row says of its identifier what each column holds, under the column's own name, as the
-# header spells it. The Comment column is the editors' note on the row, read by nothing.
+# ISO 639-3's code table: every row says of its identifier what each column means, as SIL's table definition
+# (iso639-3_table_definition.txt, linked from https://iso639-3.sil.org/code_tables/download_tables) words it. The
+# Comment column is the editors' note on the row, read by nothing.
 match iso-639-3.tab
 # The tables do not name who publishes them; the pages kept beside them in sil/ are signed "Copyright © 2026 SIL Global".
 witness SIL Global
@@ -12,4 +13,17 @@ tier field by \t
 thing row Id
 content Id Part2b Part2t Part1 Scope Language_Type Ref_Name
 omit Comment
+# The equivalent codes are the same language under another code set's identifier (a highway node, content):
+#   "Part2B  char(3) NULL,  -- Equivalent 639-2 identifier of the bibliographic applications code set, if there is one"
+#   "Part2T  char(3) NULL,  -- Equivalent 639-2 identifier of the terminology applications code set, if there is one"
+#   "Part1   char(2) NULL,  -- Equivalent 639-1 identifier, if there is one"
+relation "Equivalent 639-2 identifier of the bibliographic applications code set" Part2b
+relation "Equivalent 639-2 identifier of the terminology applications code set" Part2t
+relation "Equivalent 639-1 identifier" Part1
+# Scope and Type are values of ISO 639-3's own lists (the header writes Type as Language_Type):
+#   "Scope   char(1) NOT NULL,  -- I(ndividual), M(acrolanguage), S(pecial)"
+#   "Type    char(1) NOT NULL,  -- A(ncient), C(onstructed), E(xtinct), H(istorical), L(iving), S(pecial)"
+value - Scope Language_Type
+#   "Ref_Name   varchar(150) NOT NULL,  -- Reference language name"
+relation "Reference language name" Ref_Name
 attest row Part2b Part2t Part1 Scope Language_Type Ref_Name

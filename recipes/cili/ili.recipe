@@ -15,6 +15,11 @@ thing triple property[predicate=skos:definition]/object_list/rdf_literal/value
 omit subject
 content *
 
+# A Turtle predicate is an RDF property, of the source's own relation inventory (RDF 1.1 Turtle, 2.4: "The token 'a'
+# in the predicate position of a Turtle triple represents the IRI http://www.w3.org/1999/02/22-rdf-syntax-ns#type").
+# The relation is kept as the file writes it, a; that it is rdf:type, and the prefixed names' IRIs, are the notation
+# Laplace-Engine#20 resolves.
+value - predicate
 when predicate is a
 relate property predicate to object_list
 always

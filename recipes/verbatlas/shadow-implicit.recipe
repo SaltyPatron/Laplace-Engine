@@ -14,8 +14,17 @@ part filler by |
 stem 2 .
 thing row synset
 type synset ili
-type filler ili
-content role
+# A filler is a BabelNet synset, nearly always a noun's (bn:00030466n): VerbAtlas's bn2wn maps only verbs to WordNet,
+# so a filler read as the ILI concept resolved to nothing and its claim was never made. It is recorded as written, as
+# VA_preference_info's reference synsets are.
+content role filler
 together row
 relate row {file} to role
+# a role is a value of VerbAtlas's role inventory (Agent, Theme, ...), the relation of the frame to its filler. The
+# file's name (shadow, implicit) is no relation: an unresolved obligation (relate {file}). The README: "6.
+# VA_bn2shadow.tsv Each line contains the shadow arguments, if any, for each BabelNet synset ID." and "7.
+# VA_bn2implicit.tsv Each line contains the implicit arguments": that an argument is shadow or implicit is written only
+# in the file's name, and the recipe language cannot yet say a file's name as a value of the argument (value refuses
+# {file}): it stays an obligation until it can (Laplace-Engine#32).
+value - role
 relate row role to filler

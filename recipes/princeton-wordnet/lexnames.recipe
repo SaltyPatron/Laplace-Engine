@@ -16,6 +16,10 @@ tier field by \t
 thing line "lexicographer file"
 key line "file number"
 content "lexicographer file" "syntactic category"
+# lexnames.5: "the third field is an integer that indicates the syntactic category of the synsets contained in the
+# file", "encoded as follows: 1 NOUN 2 VERB 3 ADJECTIVE 4 ADVERB": a value of WordNet's syntactic categories as
+# written, said of the lexicographer file ([noun.event, 1])
+value - "syntactic category"
 attest line "syntactic category"
 
 types lexfile "WordNet lexicographer file" line

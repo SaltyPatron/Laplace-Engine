@@ -17,13 +17,49 @@ content lemma name pos descr f n resource rolelink alias type text arg rel slots
 # bookkeeping, read by nothing: which releases a roleset is in use in, a link's version, confidence and how it was made
 omit usagenotes version confidence src start end relloc note
 
+# What each part a claim is made of means (Laplace-Engine#32), in the words of PropBank's frameset.dtd, never an
+# element's or an attribute's name:
+# frameset.dtd: "Each predicate will contain a set of roles in an entity called a roleset. ... Multiple rolesets per
+# predicate are necessary for the accomodation of different senses of the predicate."
+relation "sense" predicate.roleset
+# frameset.dtd: "pos = Part of Speech / Can take the following values: r = Adverb, p = Preposition, v = Verb, n = Noun,
+# j = Adjective ...": an alias's pos is a value of PropBank's part-of-speech list, said of the roleset: [roleset, v]
+value - alias.pos
+# frameset.dtd: "roles have a number (or an "M" associated with them, for common adjuncts that don't qualify for
+# number argument status). Both numbered arguments and adjuncts are labeled with the function tags from the list
+# below: EXT extent, LOC location, ... PAG prototypical agent, PPT prototypical patient, ..." (an example's arg: "the n
+# and f attributes corresponds to those of the roles described above")
+relation "number" role.n
+value - f
+# frameset.dtd: "The rolesets give mneumonics of the argument labels for each different set of arguments."
+relation "mneumonic" role.descr
+# frameset.dtd: "The examples usually have names which are often space delimited descriptions of the annotation."
+relation "description of the annotation" example.name
+# frameset.dtd: "The examples contain plain text sentences and then assign arguments to segments of the sentence."
+# An arg's type (ARG0, ARGM-TMP, ...: the DTD's list) is a value of PropBank's argument labels, the relation of the
+# example to the segment it is assigned to: [example, ARG0, the Big Board].
+value - arg.type
+# frameset.dtd: "examples demonstrating some of the primary considerations in predicate argument annotation for the
+# predicate+roleset in consideration": rel is the example's predicate, [example, predicate, abandoned]
+relation "predicate" rel
+# A link's class is the VerbNet class or FrameNet frame it names, read as that type (type class): a value of that
+# road class, [roleset, leave-51.2]. Its resource (VerbNet, FrameNet) is which road class that is, said by the type the
+# class is read as: no claim of its own (it stays content of the roleset's tree).
+value - class
+# An alias is a word PropBank lists for the roleset, a lemma (the DTD names it only: "<!ELEMENT alias (#PCDATA)>",
+# with its "pos = Part of Speech"): a value, [roleset, abandonment]. A rolelink's text is the role the roleset's role is
+# in the class it links to (theme, initial_location: VerbNet's thematic roles and FrameNet's frame elements, as PropBank
+# writes them; the DTD names it only, "<!ELEMENT rolelink (#PCDATA)>"): a value of that resource's role inventory.
+value - alias rolelink
+
 holds predicate roleset
 attest alias pos .
 attest role descr f n
-attest rolelink class resource .
-attest lexlink class resource
+attest rolelink class .
+attest lexlink class
 attest example name
-attest arg type f .
+attest arg f
+relate arg type to arg
 attest rel .
 
 # the highway: rolesets by their ids, and the VerbNet classes and FrameNet frames their links name

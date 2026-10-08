@@ -22,6 +22,49 @@ content ID type name Value value primary secondary features bool logic EXAMPLE
 # bookkeeping, read by nothing
 omit verbnet_key xtag descriptionNumber xmlns:xsi xsi:noNamespaceSchemaLocation
 
+# What each part a claim is made of means (Laplace-Engine#32), never an element's or an attribute's name. The words are
+# VerbNet's: its guidelines (VerbNet_Guidelines.pdf, verbs.colorado.edu/verb-index/VerbNet_Guidelines.pdf), its
+# reference page (verbs.colorado.edu/verb-index/vn/reference.php) and vn_schema-3.xsd.
+# Guidelines: "Class Hierarchy - ... classes may include one or more subclasses." / "VerbNet subclasses inherit
+# features from the top class"
+relation "subclass" VNSUBCLASS
+# Guidelines: "Members - Contains the list of verbs belonging to a specific class or subclass. Most verb members are
+# mapped to entries in other lexical resources including FrameNet ..., WordNet ..."
+relation "verb member" MEMBER
+# Guidelines: "Roles - Thematic roles refer to the semantic relationship between a predicate and its arguments. ...
+# For each class, the roles that are thought to be core to the verb members' behavior are listed.": a value of the
+# highway's thematic roles, [leave-51.2, Theme]
+value vnrole THEMROLE
+# Guidelines: "Frames - The syntactic frames in VerbNet provide a description of the different surface realizations
+# and diathesis alternations allowed for the members of the class."
+relation "syntactic frame" FRAME
+# a member's mappings, each a value of the road class its key names: grouping PropBank rolesets, wn WordNet senses (the
+# concepts they resolve to), fn_mapping a FrameNet frame; vn_schema-3.xsd: features "These are verb-specific features
+# that appear on individual class members"
+value pbroleset grouping
+value ili wn
+value fnframe fn_mapping
+value - features
+# Guidelines: "Selectional restrictions further specify semantic roles, and can be combined with operators such as |
+# (OR) and & (AND). These restrictions denote the existence (+) or absence (-) of properties such as [CONCRETE],
+# [ANIMATE], [ORGANIZATION]": logic, Value and type are values of VerbNet's restriction vocabulary, said of the role
+value - SELRESTRS.logic SELRESTR.Value SELRESTR.type
+# Reference page: "Primary frame names are flat phrase-structure representations of the frames, intended to be
+# generalizable across classes. ... The downloadable .xml files of the classes include the old primary and secondary
+# names in the "secondary" feature"
+relation "primary frame name" DESCRIPTION.primary
+relation "old primary and secondary names" DESCRIPTION.secondary
+# Guidelines: "The Frames section consists of syntactic constructions, example sentences, and the semantic roles mapped
+# to syntactic arguments."
+relation "example sentence" EXAMPLE
+# an NP's value is the thematic role mapped to that syntactic argument: a value of the highway's thematic roles
+value vnrole NP.value
+# Guidelines: "Semantic predicates such as CAUSE and MOTION are applied to reveal the core meaning of the construction.
+# ... Additional operators can be added to the predicates to further define the semantics of the construction, such as
+# negation (NOT)": a PRED's value is a value of VerbNet's predicates, its bool (!) the negation; an ARG's type (Event,
+# ThemRole, ...: vn_class-3.dtd) and value (e1, Agent) values of VerbNet's predicate arguments
+value - PRED.value PRED.bool ARG.type ARG.value
+
 holds VNCLASS VNSUBCLASS THEMROLE MEMBER FRAME
 holds VNSUBCLASS VNSUBCLASS THEMROLE MEMBER FRAME
 attest MEMBER grouping wn fn_mapping features

@@ -1,6 +1,10 @@
 name opensubtitles-ja
 # The Japanese side: line N is the same subtitle as line N of OpenSubtitles.en-ja.en, so each Japanese sentence says
-# what its English is: [the Japanese sentence, en, the English sentence].
+# what its English is. The relation is never "en", the paired file's name: the README says the package is "a new
+# collection of translated movie subtitles", their lines aligned ("improved sentence alignment"), so the Japanese
+# sentence and the English sentence on its line translate each other: [the Japanese sentence, translated, the English
+# sentence]. The line number is how the files are joined (numbered, refer), a position recorded nowhere. Each side's
+# language, written only in the file's name, is not yet in the claim (Laplace-Engine#30).
 match OpenSubtitles.en-ja.ja
 
 tier row by \n
@@ -11,4 +15,6 @@ tier field by \t
 thing row ja
 content ja
 refer en opensubtitles-en
+# README: "This is a new collection of translated movie subtitles from http://www.opensubtitles.org/."
+relation "translated" en
 attest row en

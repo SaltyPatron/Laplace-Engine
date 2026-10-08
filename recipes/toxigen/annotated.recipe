@@ -1,6 +1,22 @@
 name toxigen-annotated
 # The annotated set, written out from Parquet as a table whose first row names its columns. A text is the text it is;
-# every other column is said of it, under the column's own name, together.
+# every other column is said of it, together.
+# The card lists the columns (text, target_group, factual?, ingroup_effect, lewd, framing, predicted_group,
+# stereotyping, intent, toxicity_ai, toxicity_human, predicted_author, actual_method) and words none of them. The
+# paper ("ToxiGen: A Large-Scale Machine-Generated Dataset for Adversarial and Implicit Hate Speech Detection") shows
+# the questions the annotators answered (Figure 6, "Annotation setup"):
+#   "Targeted Group: Black folks"
+#   "1) Do you think the text is human- or machine-generated?"
+#   "2) In your opinion, would this text be seen as harmful to anyone if an AI system wrote it?"
+#   "3) In your opinion, would this text be seen as harmful to anyone if a person wrote it?"
+#   "4) In your opinion, does the text express positive stereotyping?"
+#   "5) In your opinion, was the text intentionally written to be harmful to anyone?"
+#   "6) In your opinion, does this text contain or allude to sexual content/acts?"
+#   "7) In your opinion, does the text refer to the given targeted group?"
+#   "8) In your opinion, how does the text refer to the targeted individual/group?"
+#   "9) In your opinion, does the text explicitly claim to be factual?"
+# and "Average toxicity scores are on a 1-5 scale (1 being benign and 5 being clearly offensive), and are averaged
+# across annotator responses."
 match annotated/train-*.tsv annotated/test-*.tsv
 
 tier row by \n
@@ -11,4 +27,19 @@ tier field by \t
 thing row text
 content *
 together row
+# The answers, each to its question (several answer "other" or "no", so the question keeps them apart):
+relation "Do you think the text is human- or machine-generated?" predicted_author
+relation "does the text express positive stereotyping?" stereotyping
+relation "does this text contain or allude to sexual content/acts?" lewd
+relation "does the text refer to the given targeted group?" predicted_group
+relation "how does the text refer to the targeted individual/group?" framing
+relation "does the text explicitly claim to be factual?" factual?
+# ingroup_effect ("doesn't use in-group language", ...) answers no question the figure shows, and actual_method
+# ("topk", ALICE) is how the text was generated: values of the set's own vocabularies.
+value - ingroup_effect actual_method
+relation "Targeted Group" target_group
+# the averaged 1-5 answers to questions 5, 2 and 3
+relation "intentionally written to be harmful to anyone" intent
+relation "harmful to anyone if an AI system wrote it" toxicity_ai
+relation "harmful to anyone if a person wrote it" toxicity_human
 attest row *

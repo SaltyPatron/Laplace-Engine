@@ -36,4 +36,18 @@ key row ref_templ_id
 refer ref_case_id hatecheck-cases
 content test_case functionality label_gold target_ident direction focus_words focus_lemma case_templ
 together row
+# functionality, label_gold and direction ("the binary secondary label") are labels the set gives the case: values of
+# its own vocabularies.
+value - functionality label_gold direction
+# "the protected group targeted or referenced by the test case"
+relation "the protected group targeted or referenced by the test case" target_ident
+# "the key word or phrase in a given test case"
+relation "the key word or phrase" focus_words
+# "the corresponding lemma"
+relation "the corresponding lemma" focus_lemma
+# The README, of template_placeholders.csv: "the tokens that the placeholders in the case templates are replaced with"
+relation "case templates" case_templ
+# ref_case_id: an obligation. The README gives it two relations, chosen by the case's gold label: of a hateful case
+# "the simpler hateful case which was perturbed to generate them", of a non-hateful one "the hateful case which is
+# contrasted"; a relation cannot yet be chosen by a condition on another field (Laplace-Engine#32).
 attest row functionality label_gold target_ident direction focus_words focus_lemma ref_case_id case_templ

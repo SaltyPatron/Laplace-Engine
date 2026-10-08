@@ -39,6 +39,163 @@ metadata note:newdoc* note:newpar* note:doc_* note:doc* note:meta::* note:meta_*
 # every other note is what the treebank says of the sentence under the note's name: a translation (text_en), a
 # transliteration, who spoke it and when, its genre (the format: "# key = value")
 content note:*
+# What each column a claim is made of means (Laplace-Engine#32; the format page, universaldependencies.org/format.html),
+# never the column's name: UPOS a value of the UPOS road class ("Universal part-of-speech tag"): [forces, NOUN];
+# XPOS and LEMMA (below) the relations the format page words them as; FEATS each Name=Value of the feature inventory, the pair itself:
+# [forces, [Number, Plur]]; DEPREL a value of the dependency relations the highway lists, the relation to the HEAD.
+value upos UPOS
+value - FEATS
+# XPOS: the format page, "XPOS: Language-specific part-of-speech tag; underscore if not available." Said as that relation:
+# a treebank's tag can be the token itself (EWT's XPOS of "." is "."), and a value equal to its thing is no claim
+relation "Language-specific part-of-speech tag" XPOS
+# LEMMA: the format page, "LEMMA: Lemma or stem of word form". Said as that relation, so a word that is its own lemma
+# (the, the) is still said: [the, Lemma or stem of word form, the]
+relation "Lemma or stem of word form" LEMMA
+value deprel DEPREL
+
+# What MISC's keys and the sentence's notes say, where UD's documentation or the treebank's own README says it
+# (Laplace-Engine#32). MISC is for "any additional annotation that data providers want to store at the token level"
+# (the MISC page, universaldependencies.org/misc.html); each key below is what that page, or the README of the treebank
+# that uses it, says it is, in their words. A key neither documents stays an unresolved obligation: what each
+# treebank's README documents its own keys and notes to mean, and the sentence's layers, are Laplace-Engine#27.
+#
+# The MISC page (misc.html), key by key:
+#   Translit: "Transliteration or transcription of the word form to another writing system."
+relation "Transliteration or transcription of the word form" MISC.Translit
+#   LTranslit: "Transliteration or transcription of the lemma to another writing system."
+relation "Transliteration or transcription of the lemma" MISC.LTranslit
+#   Gloss: "Approximate translation of the word form or the lemma to another language"
+relation "Approximate translation" MISC.Gloss
+#   LGloss: "An explanation of the meaning of the lemma/lexeme."
+relation "An explanation of the meaning of the lemma/lexeme" MISC.LGloss
+#   MGloss: "Glossing of individual morphemes as commonly used in interlinear glossed text"
+relation "Glossing of individual morphemes" MISC.MGloss
+#   MSeg: "Morphemic segmentation as commonly used in interlinear glossed text"
+relation "Morphemic segmentation" MISC.MSeg
+#   Morf: "Morphological analysis as output by a treebank-specific tool or resource."; Analysis: "conveys the kind of
+#   information that other treebanks store in the Morf attribute"
+relation "Morphological analysis" MISC.Morf MISC.Analysis
+#   Lang: "Language of the current token, if different from the main language of the file"
+relation "Language of the current token" MISC.Lang
+#   OrigLang: "Original language of the current token, if different from the main language of the file."
+relation "Original language of the current token" MISC.OrigLang
+#   LDeriv: "The lemma from which the lemma of the current token is morphologically derived"
+relation "morphologically derived" MISC.LDeriv
+#   LNumValue: "The numeric value of lexemes whose meaning relates to a number, expressed in Arabic digits."
+relation "The numeric value" MISC.LNumValue
+#   CorrectForm: "Shows the expected correct word form when there is a typo in the underlying text."
+relation "the expected correct word form" MISC.CorrectForm
+#   ModernForm: "Shows the modern spelling for words in old texts"
+relation "the modern spelling" MISC.ModernForm
+#   MWE: "Multi-word expression. The value serves to preserve a multi-word expression from the source corpus."
+relation "Multi-word expression" MISC.MWE
+#   MWEPOS: "The part of speech of a multi-word expression."
+relation "The part of speech of a multi-word expression" MISC.MWEPOS
+#   NamedEntity: "NamedEntity=Yes preserves the information that the word was tagged PROPN when it was first imported
+#   to UD."
+relation "was tagged PROPN when it was first imported to UD" MISC.NamedEntity
+#   Proper: "Proper=True preserves a same-named feature from the original Google annotation"
+relation "a same-named feature from the original Google annotation" MISC.Proper
+#   Root: "The consonant root of the words in Semitic languages"
+relation "The consonant root" MISC.Root
+#   Vform: "the fully vocalized (diacriticized) version of an Arabic word"
+relation "the fully vocalized (diacriticized) version" MISC.Vform
+#   Tam: "In Indian corpora, Tam encodes tense, aspect and modality."
+relation "tense, aspect and modality" MISC.Tam
+#   Vib: "In Indian corpora, Vib encodes the vibhakti"
+relation "the vibhakti" MISC.Vib
+#   Stype: "Sentence type (modality)."
+relation "Sentence type" MISC.Stype
+#   Reduplication: "expresses in terms of UD morphological features the value of the reduplication"
+relation "the value of the reduplication" MISC.Reduplication
+#   Subject: "the outer subject(s) is (are) then labeled with the relation subtype nsubj:outer ... This is done by
+#   adding Subject=Outer to the MISC column"
+relation "the outer subject(s)" MISC.Subject
+#   TraditionalMood, TraditionalTense: "supplies the traditional denominations of verb forms", the values the page lists
+#   (Indicativus, Perfectum ...): values of that vocabulary
+value - MISC.TraditionalMood MISC.TraditionalTense
+#   SpacesAfter, SpacesBefore: the spaces of "the untokenized text", the text's own layout, as SpaceAfter (omitted
+#   above); NewPar: a paragraph boundary, as the newpar note (the file's metadata); XML: "opening and closing XML/HTML
+#   tags in source documents, which are not part of the text": the source document's markup. None says anything of
+#   the word.
+omit MISC.SpacesAfter MISC.SpacesBefore MISC.NewPar MISC.XML
+#   Correct{FEATURE} (CorrectNumber=Sing: "the value of a morphological feature that would correspond to the correct
+#   form") and CorrectSpaceAfter carry the feature, or the spacing, in the key's own name: the corrected layer of the
+#   sentence, an unresolved obligation (Laplace-Engine#27). Discourse, PDTB and Split give discourse units and entity
+#   groups by their ids and token ranges, and CopyOf (an empty node's copy of row N) a row's number: pointers and the
+#   sentence's discourse layer, unresolved obligations (Laplace-Engine#20, #27).
+#
+# UD_English-EWT's README ("MISC Annotations"), for the keys it documents:
+#   Cxn: "The Cxn attribute allows for description of constructions that go beyond the words and relations described
+#   by the UD standard": a value of the construction inventory (UCxn's, and EWT's relative clause subtypes)
+value - MISC.Cxn
+#   STREUSLE's keys ("incorporated in the MISC column via the attributes MWECat, MWELemma, MWELen, MWEString,
+#   Supersense, and PRel"; STREUSLE's FORMAT.md words them): "Supersense (if there is only one, i.e. all nouns/verbs
+#   and many prepositions), OR Supersense[coding] (a.k.a. function or ss2) and Supersense[scene] (a.k.a. role or ss)"
+value - MISC.Supersense
+relation "role" MISC.Supersense[scene]
+relation "function" MISC.Supersense[coding]
+#   "PRel[config], PRel[gov], PRel[obj] (structure of the prepositional/possessive relation associated with a SNACS
+#   supersense ...)". PRel[gov] and PRel[obj] are written ROW:FORM (2:place), a row's number, as CxnElt is
+#   (4:Interrogative-WHInfo-Direct.Clause): pointers, unresolved obligations (Laplace-Engine#20).
+relation "structure of the prepositional/possessive relation" MISC.PRel[config]
+#   "MWECat (lexical category of the MWE)", "MWELemma (sequence of word lemmas and gap-lengths ...)", "MWELen (length
+#   of span from first to last token of the MWE)", "MWEString (surface forms if different from MWELemma ...)".
+#   "Plain MWECat, MWELemma, MWELen togther represent a strong expression. A weak expression is represented with
+#   MWECat[weak], MWELemma[weak], MWELen[weak]": the same relations, of the weak expression.
+relation "lexical category of the MWE" MISC.MWECat
+relation "sequence of word lemmas and gap-lengths" MISC.MWELemma
+relation "length of span from first to last token of the MWE" MISC.MWELen
+relation "surface forms" MISC.MWEString
+relation "lexical category of the weak expression" MISC.MWECat[weak]
+relation "sequence of word lemmas and gap-lengths of the weak expression" MISC.MWELemma[weak]
+relation "length of span of the weak expression" MISC.MWELen[weak]
+relation "surface forms of the weak expression" MISC.MWEString[weak]
+#   "Idiosyncratic MISC Attributes", "experimental and specific to EWT":
+#   "Citation=Yes: Indicates a parenthetical citation"
+relation "a parenthetical citation" MISC.Citation
+#   "Depictive=Yes: Indicates the secondary predicate is semantically depictive."
+relation "semantically depictive" MISC.Depictive
+#   "Resultative=Yes: Indicates the secondary predicate is semantically resultative."
+relation "semantically resultative" MISC.Resultative
+#   "Exclamative=Yes: Clause bearing exclamative syntax"
+relation "exclamative syntax" MISC.Exclamative
+#   "Footnote=Yes: Indicates a reference to a footnote"
+relation "a reference to a footnote" MISC.Footnote
+#   "FlatType: Explains the use of flat for a special kind of entity. ... Current values: Enumerated, Filename,
+#   Iconic, NumericLocator, Postcode, Phone"
+value - MISC.FlatType
+#   "Mentioned=Yes: A metalinguistic mention (as opposed to a use) of a term."
+relation "A metalinguistic mention" MISC.Mentioned
+#   "MissingWordAfter=Yes: Indicates that an unspecified word would need to be inserted to make the sentence
+#   grammatical."
+relation "an unspecified word would need to be inserted" MISC.MissingWordAfter
+#   "MissingWordsAfter: Value is a specific word or words that can be inferred as having been accidentally omitted."
+relation "accidentally omitted" MISC.MissingWordsAfter
+#   "Promoted=Yes: Makes explicit that a word has been promoted to the head of the phrase"
+relation "promoted to the head of the phrase" MISC.Promoted
+#   "Signature=Yes: Indicates a trailing phrase within a sentence interpreted as the author's signature."
+relation "the author's signature" MISC.Signature
+#   "SpecialEncoding=Yes: Indicates an unusual character encoding"
+relation "an unusual character encoding" MISC.SpecialEncoding
+#   "Superlocation=Yes: Indicates the nmod:unmarked phrase is a containing-location (or organization) of a more
+#   specific place or subunit"
+relation "a containing-location (or organization)" MISC.Superlocation
+#   "TemporalNPAdjunct=Yes: Indicates an adjunct previously annotated obl:tmod or nmod:tmod."
+relation "an adjunct previously annotated obl:tmod or nmod:tmod" MISC.TemporalNPAdjunct
+#   ManuallyChecked and TODO: "A note for treebank maintainers": the treebank's bookkeeping.
+omit MISC.ManuallyChecked MISC.TODO
+#
+# The sentence's notes (the format page, "Sentence Boundaries and Comments"):
+#   "the transliteration of the entire sentence as a sentence-level comment; use # translit = ..."
+relation "the transliteration of the entire sentence" note:translit
+#   "the fluent translation of the sentence to English or another language. Use # text_en = ... for English (and a
+#   similar comment with the corresponding language code for other languages)"
+relation "the fluent translation of the sentence to English" note:text_en
+#   text_fr, text_de ... name their language only in the note's own name: unresolved obligations until the language
+#   code in a note's name is read as the language (Laplace-Engine#27). Every other note (genre, source, speaker_*, ...)
+#   is the treebank's own, documented, if at all, in its README: unresolved obligations (Laplace-Engine#27; the
+#   speaker's, #29).
 
 attest row LEMMA UPOS XPOS FEATS by MISC.Annotator
 attest row MISC
@@ -46,6 +203,8 @@ attest record note:*
 when speaker_id matches .
 itself record by note:speaker_id
 always
+# what the treebank writes of the speaker is said of the speaker; no meaning is given its notes here: unresolved
+# obligations (people as content, Laplace-Engine#29)
 attest record note:speaker note:speaker_role note:speaker_sex note:speaker_age note:speaker_education note:speaker_residence note:speaker_primary_other_language note:speaker_naija_competency note:speaker_birthplace note:speaker_fullname note:speaker_family_social_role note:speaker_gender of note:speaker_id
 # a HEAD that numbers no row (0, the root) names nothing: the word's relation alone
 relate row DEPREL to HEAD alone

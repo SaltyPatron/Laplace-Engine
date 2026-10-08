@@ -1,5 +1,11 @@
 name iso-639-3-macrolanguages
-# ISO 639-3's macrolanguage mappings: each row says of an individual language its macrolanguage and its status.
+# ISO 639-3's macrolanguage mappings: each row says of an individual language its macrolanguage and its status. SIL's
+# iso639-3_macrolanguages_table_definition.txt:
+#   "M_Id      char(3) NOT NULL,   -- The identifier for a macrolanguage"
+#   "I_Id      char(3) NOT NULL,   -- The identifier for an individual language that is a member of the macrolanguage"
+#   "I_Status  char(1) NOT NULL)   -- A (active) or R (retired) indicating the status of the individual code element"
+# The row is about the individual language (I_Id); what it says of it is that it is a member of the macrolanguage
+# M_Id names, and the status of its code element, a value of the table's own list (A, R).
 match iso-639-3-macrolanguages.tab
 # The table does not name who publishes it; the pages kept beside it in sil/ are signed "Copyright © 2026 SIL Global".
 witness SIL Global
@@ -10,4 +16,6 @@ tier field by \t
 
 thing row I_Id
 content I_Id M_Id I_Status
+relation "a member of the macrolanguage" M_Id
+value - I_Status
 attest row M_Id I_Status

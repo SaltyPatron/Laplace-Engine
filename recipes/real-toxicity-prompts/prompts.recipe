@@ -1,8 +1,9 @@
 name real-toxicity-prompts-prompts
 # A JSON object on every line: "Each instance represents a prompt and its metadata" (dataset card). The objects under
-# "prompt" and "continuation" each hold a "text" and are the thing it names, and their scores are said of that text
-# under the score's own key. An instance is its prompt and its continuation together: what it says of itself
-# ("challenging") is said of that pair. The card shows filename, begin and end in its example instance
+# "prompt" and "continuation" each hold a "text" and are the thing it names, and their scores are said of that text.
+# An instance is its prompt and its continuation together, the path [prompt, continuation]: what it says of itself
+# ("challenging") is said of that pair. That the pair holds its prompt and its continuation is the path itself,
+# read from it, and no claim. The card shows filename, begin and end in its example instance
 # ("0766186-bc7f2a64cb271f5f56cf6f25570cd9ed.txt", 340, ...) and does not say what they are; its one sentence on where
 # the texts come from: "We select our prompts from sentences in the OPEN-WEBTEXT CORPUS (Gokaslan and Cohen, 2019), a
 # large corpus of English web text scraped from outbound URLs from Reddit". The recipe reads the three as keys.
@@ -18,7 +19,30 @@ key record begin
 key record end
 content text challenging profanity sexually_explicit identity_attack flirtation threat insult severe_toxicity toxicity
 
-holds record prompt continuation
+# The paper ("RealToxicityPrompts: Evaluating Neural Toxic Degeneration in Language Models"), "Prompts That Challenge
+# All Models": "We find that certain prompts consistently cause all models to generate toxicity", and its footnote:
+# "When releasing REALTOXICITYPROMPTS, we will include a flag for prompts belong to this challenging subset."
+relation "consistently cause all models to generate toxicity" challenging
+# The card: "The scores accompanying the prompt and the continuation are generated using the Perspective API". The
+# paper's "Table 13: PERSPECTIVE API label descriptions" words each score's attribute:
+#   SEXUAL "References to sexual acts, body parts, or other lewd content."
+#   TOXICITY "Rude, disrespectful, or unreasonable comment; likely to make people leave a discussion."
+#   SEV. TOXICITY "A very hateful, aggressive, disrespectful comment."
+#   PROFANITY "Swear words, curse words, or other obscene or profane language."
+#   INSULT "Insulting, inflammatory, or negative comment towards a person or group."
+#   FLIRTATION "Pickup lines, complimenting appearance, subtle sexual innuendos, etc."
+#   IDEN. ATTACK "Negative or hateful comments targeting someone because of their identity."
+#   THREAT "Describes an intention to inflict pain, injury, or violence against an individual or group."
+# Each score is a number the set states of its text: the relation is the attribute in those words (the engine keeps a
+# relation's words to 63 bytes, so the longer ones are their first clause).
+relation "References to sexual acts, body parts, or other lewd content" sexually_explicit
+relation "Rude, disrespectful, or unreasonable comment" toxicity
+relation "A very hateful, aggressive, disrespectful comment" severe_toxicity
+relation "Swear words, curse words, or other obscene or profane language" profanity
+relation "Insulting, inflammatory, or negative comment" insult
+relation "Pickup lines, complimenting appearance, subtle sexual innuendos" flirtation
+relation "hateful comments targeting someone because of their identity" identity_attack
+relation "Describes an intention to inflict pain, injury, or violence" threat
 attest record challenging
 attest prompt profanity sexually_explicit identity_attack flirtation threat insult severe_toxicity toxicity
 attest continuation profanity sexually_explicit identity_attack flirtation threat insult severe_toxicity toxicity

@@ -5,13 +5,16 @@ name social-bias-frames-annotations
 #   offensiveYN: could the post be offensive to anyone;  sexPhrase: part of the post that references something sexual;
 #   speakerMinorityYN: whether the speaker was part of the same minority group that's being targeted;
 #   WorkerId: hashed version of the MTurk workerId;  HITId: id that uniquely identifies each post;
-#   annotatorGender, annotatorMinority, annotatorPolitics, annotatorRace, annotatorAge: of the MTurk worker;
+#   annotatorGender: gender of the MTurk worker;  annotatorMinority: whether the MTurk worker identifies as a minority;
+#   annotatorPolitics: political leaning of the MTurk worker;  annotatorRace: race of the MTurk worker;
+#   annotatorAge: age of the MTurk worker;
 #   post: post that was annotated;  targetMinority: demographic group targeted;
 #   targetCategory: high-level category of the demographic group(s) targeted;  targetStereotype: implied statement;
 #   dataSource: source of the post
 # A line is one worker's reading of one post. What the worker answered of the post, the worker says, of the post;
 # what the line holds of the worker is said of the worker; where the post was said (dataSource), the set says.
 # A post is its text; the HITId is the crowdsourcing task's key. A worker stands within the set: [the set, WorkerId, the id].
+# Each field states a relation in the README's words above; the answers are numbers (1.0, 0.5, 0.0) or free text.
 match SBIC.v2.trn.csv SBIC.v2.dev.csv SBIC.v2.tst.csv
 
 tier row by \n
@@ -24,6 +27,22 @@ key row HITId
 own WorkerId
 content post whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype annotator* dataSource
 
+relation "group vs. individual target" whoTarget
+relation "was the intent behind the statement to offend" intentYN
+relation "is the post a sexual or lewd reference" sexYN
+relation "free text explanations of what is sexual" sexReason
+relation "could the post be offensive to anyone" offensiveYN
+relation "part of the post that references something sexual" sexPhrase
+relation "whether the speaker was part of the same minority group" speakerMinorityYN
+relation "demographic group targeted" targetMinority
+relation "high-level category of the demographic group(s) targeted" targetCategory
+relation "implied statement" targetStereotype
+relation "gender of the MTurk worker" annotatorGender
+relation "whether the MTurk worker identifies as a minority" annotatorMinority
+relation "political leaning of the MTurk worker" annotatorPolitics
+relation "race of the MTurk worker" annotatorRace
+relation "age of the MTurk worker" annotatorAge
+relation "source of the post" dataSource
 attest row whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype by WorkerId
 attest row annotator* of WorkerId
 # where the post was said ("source of the post (t/...: means Twitter, r/...: means a subreddit)"), the set says

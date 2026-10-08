@@ -18,4 +18,11 @@ range code
 codepoints mapping
 content status
 when status is T
+# The header: "<code>; <status>; <mapping>; # <name>" ... "T: special case for uppercase I and dotted uppercase I ... For
+# Turkic languages (tr, az), this mapping can be used instead of the normal mapping for these characters." The
+# normal mapping is the XML's cf (Case_Folding); this one is the special case, worded as the header words it
+relation "special case for uppercase I and dotted uppercase I" mapping
+# The header: "The status field is: C: common case folding, ... F: full case folding, ... S: simple case folding, ... T:
+# special case for uppercase I and dotted uppercase I": a value of the file's own list
+value - status
 attest row mapping status

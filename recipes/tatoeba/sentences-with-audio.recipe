@@ -18,4 +18,7 @@ refer "Sentence id" tatoeba-sentences
 key row "Audio id"
 own Username
 omit License "Attribution URL"
+# "Other fields indicate who recorded the audio": [sentence, who recorded the audio, the member]. The member stays as
+# built, a witness of its own (own Username; people as content are Laplace-Engine#29).
+relation "who recorded the audio" Username
 attest row Username

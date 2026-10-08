@@ -49,14 +49,87 @@ own dc:source
 content adjposition
 omit dc:* xmlns:* status note confidenceScore version url email license citation logo lexicographer
 
+# What each part a claim is made of means (Laplace-Engine#32): never the attribute's or the element's name. The words
+# are WN-LMF's documentation's: the GWA's format page (globalwordnet.github.io/schemas, "Global WordNet Formats"), the
+# Global Wordnet RDF Schema it publishes beside the DTD (wn-lemon-1.3.ttl, its rdfs:comment lines), and the W3C
+# OntoLex-Lemon model the format page maps WN-LMF onto ("Words are ontolex:LexicalEntry ... Senses are
+# ontolex:LexicalSense, they must have a ontolex:reference ... Synsets are ontolex:LexicalConcept"); and, for what
+# WN-LMF took over from Princeton WordNet, WordNet's own manual pages.
+# partOfSpeech: a value of WN-LMF's part-of-speech list (WN-LMF-1.3.dtd: partOfSpeech (n|v|a|r|s|t|c|p|x|u)), as
+# written ([dog, n]); lexfile: a value of the lexicographer files the highway lists ([synset, noun.animal]); ili: the
+# concept the synset's ILI names, a value of the ILI road class; relType: a value of WN-LMF's relation list (the DTD's
+# relType enumeration: hypernym, antonym, ...), the relation of a SenseRelation or SynsetRelation.
+value - partOfSpeech relType
+value lexfile lexfile
+value ili ili
+# adjposition: the DTD's adjposition (a|ip|p), Princeton WordNet's adjective markers, wninput(5WN): "An adjective may be
+# annotated with a syntactic marker indicating a limitation on the syntactic position the adjective may have in
+# relation to noun that it modifies ... (p) predicate position (a) prenominal (attributive) position (ip) immediately
+# postnominal position": a value of that list, as written ([galore, ip])
+value - adjposition
+# script: wn-lemon-1.3.ttl, wn:script: "The script as a 4 letter ISO 15924 code": a value of ISO 15924's codes
+value - script
+# a Tag: the format page, "Grammatical Properties": "Grammatical properties such as gender, number, case, and tense can
+# be represented with the <Tag> element ... the value is the text of the tag" and "A universal tagging scheme is not
+# prescribed": a value of the lexicon's own tagging scheme, said of the lemma's entry or of the form it is in
+# ([gatos, plural])
+value - Tag
+# a Form: OntoLex, "The other form property relates a lexical entry to a non-preferred ("non-lemma") form that realizes
+# the given lexical entry" (the format page's RDF example writes a <Form> as ontolex:otherForm). A form is the thing its
+# written form names, so what is said inside it (its tags, its pronunciations, its script) is said of the form.
+thing Form writtenForm
+relation "other form" Form
+# a Sense: OntoLex, "The sense property relates a lexical entry to one of its lexical senses" (the format page: "Senses
+# are ontolex:LexicalSense"). The sense is the entry with its synset: the lexicalization.
+relation "lexical sense" Sense
+# a sense's synset: the format page, "Senses are ontolex:LexicalSense, they must have a ontolex:reference"; OntoLex,
+# "The reference property relates a lexical sense to an ontological predicate that represents the denotation of the
+# corresponding lexical entry". The synset is part of what the sense is ([entry, synset]), so it is said already and no
+# claim is made of it again; the sense as the lexicalization [lemma, language, ILI] is Laplace-Engine#20.
+relation "reference" synset
+# a sense's subcat: the format page, "Syntactic behaviour can also be given as part of the lexicon and referred to with
+# the subcat property"; OntoLex, "The syntactic behavior property relates a lexical entry to one of its syntactic
+# behaviors as captured by a syntactic frame"
+relation "syntactic behaviour" subcat
+# a syntactic behaviour's senses: wn-lemon-1.3.ttl, wn:senseSubcat: "Indicates that a syntactic behaviour applies to a
+# specific sense"
+relation "applies to" senses
+# wn-lemon-1.3.ttl, wn:pronunciation: "Indicates the pronunciation of a form" (the format page: "the <Pronunciation>
+# element, which gives the IPA text")
+relation "pronunciation of a form" Pronunciation
+# wn-lemon-1.3.ttl, wn:count: "The count of usages of a sense in some corpus": a number the lexicon states of the sense,
+# an observation
+relation "count of usages" Count
+# wn-lemon-1.3.ttl, wn:definition: "A definition of the synset"; wn:iliDefinition: "The English standard definition of
+# the synset in the ILI"; wn:example: "An example usage of a sense or synset"
+relation "definition of the synset" Definition
+relation "standard definition of the synset in the ILI" ILIDefinition
+relation "example usage" Example
+# What stays an unresolved obligation, each with its reason:
+#   holds Lexicon ...: a lexicon holding its entries, synsets and syntactic behaviours is the file's tree (containment,
+#     provenance), not a relation the format documents (Laplace-Engine#22).
+#   language (of a Lexicon): the format page, "language: Please follow BCP-47"; the language is a part of each
+#     lexicalization [lemma, language, ILI], not a claim on the lexicon's label (Laplace-Engine#20).
+#   ref (of a Requires): "the required wordnet should be loaded as well": a dependence between two sources' trunks, the
+#     corpus as the witness (Laplace-Engine#28).
+#   lexicalized: the DTD's (true|false) "true", which the format's documentation words nowhere (the GWA's schemas#43
+#     lists it as "apparently unused"); the Open Multilingual Wordnet writes "false" for a lexical gap (omw-he's README:
+#     "GAP for synsets that are not lexicalized in Hebrew"): the absence of a lexicalization [lemma, language, ILI],
+#     Laplace-Engine#20.
+#   variety (of a Pronunciation): wn-lemon-1.3.ttl, "Indicates the variety of language the pronunciation represents":
+#     said of the pronunciation, which is no thing a claim can be made of here (said of the entry it would say
+#     [virtuoso, US]); a qualifier of the pronunciation claim (Laplace-Engine#32).
+#   category (of a Tag): "a category attribute which indicates the type of grammatical property" (gender, number): said
+#     of the tag, the kind its value is of, not of the entry or form (Laplace-Engine#32).
+
 holds Lexicon Synset LexicalEntry SyntacticBehaviour
 attest Lexicon language
 attest Requires ref
-holds LexicalEntry Sense
+holds LexicalEntry Sense Form
 # an entry's claims are one record, its senses in the order the file gives them
 together LexicalEntry
 attest Lemma partOfSpeech script
-attest Form writtenForm script
+attest Form script
 attest Pronunciation variety .
 attest Tag category .
 attest Sense synset subcat lexicalized adjposition

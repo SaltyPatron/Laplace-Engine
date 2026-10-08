@@ -19,4 +19,7 @@ range 0
 codepoints 1
 content "DoNotEmit type"
 pair row 1
+# The header: "Field 2  DoNotEmit type of the original character sequence"; "These are the values used for Field 2:"
+# (Indic_Atomic_Consonant, Indic_Consonant_Conjunct, ..., Discouraged, Preferred_Spelling): a value of that list
+value - "DoNotEmit type"
 attest row "DoNotEmit type"

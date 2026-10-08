@@ -3,6 +3,9 @@ name toxigen-annotations
 # worker's reading of one text: what the set says of the text (Input.*) it says; what the worker answered of the text
 # (Answer.*) the worker says; what the row holds of the worker (Answer.annotator*) is said of the worker.
 # A worker stands within the set: [the set, HashedWorkerId, the id].
+# The card lists the columns and words none; the questions are the paper's (Figure 6, see annotated.recipe), and
+# Input.prompt, Input.generation_method and the prompt's label are the generations' fields the card words (see
+# generations.recipe).
 match annotations/train-*.tsv
 
 tier row by \n
@@ -13,6 +16,33 @@ tier field by \t
 thing row Input.text
 own HashedWorkerId
 content Input.* Answer.*
+# "**prompt** is the prompt used for **generation**."
+relation "the prompt used for generation" Input.prompt
+# "Targeted Group: Black folks" (the annotation setup)
+relation "Targeted Group" Input.target_group
+# "**prompt_label** is the binary value indicating whether or not the prompt is toxic (1 is toxic, 0 is benign)."
+relation "whether or not the prompt is toxic" Input.binary_prompt_label
+# How the text was generated (TopK, CBS, ...) and the prompt's label (hate, neutral): values of the set's vocabularies.
+value - Input.generation_method Input.prompt_label
+# The answers the worker picked from a list, each to its question (framingQ and refTarget both answer "other"):
+#   "9) In your opinion, does the text explicitly claim to be factual?"
+relation "does the text explicitly claim to be factual?" Answer.factSelect
+#   "8) In your opinion, how does the text refer to the targeted individual/group?"
+relation "how does the text refer to the targeted individual/group?" Answer.framingQ
+#   "7) In your opinion, does the text refer to the given targeted group?"
+relation "does the text refer to the given targeted group?" Answer.refTarget
+# "If you selected "Other," please provide a single sentence explaining how the individual/group is being targeted"
+relation "explaining how the individual/group is being targeted" Answer.stateFrame
+# "If the text refers directly/indirectly to one or more other groups, please list them below"
+relation "refers directly/indirectly to one or more other groups" Answer.stateGroup
+# Obligations:
+#   Input.time (1.225530386, 188.0342498, ...): neither the card nor the paper says what it is (Laplace-Engine#32).
+#   Answer.inGroup.on, Answer.ingroup.1-3, Answer.intent.1-5, Answer.lewd.1-3, Answer.stereo.1-3, Answer.toAI.1-5,
+#   Answer.toPER.1-5, Answer.writer.1-2: each column is one choice of one question's scale (the form's checkboxes),
+#   true where the worker picked it; the answer is the choice the column's place stands for, which the recipe cannot
+#   yet read as the value of the question (Laplace-Engine#32).
 attest row Input.prompt Input.time Input.generation_method Input.prompt_label Input.target_group Input.binary_prompt_label
 attest row Answer.factSelect Answer.framingQ Answer.inGroup* Answer.ingroup* Answer.intent* Answer.lewd* Answer.refTarget Answer.stateFrame Answer.stateGroup Answer.stereo* Answer.toAI* Answer.toPER* Answer.writer* by HashedWorkerId
+# Answer.annotator* (age, gender, minority, race, politics.1-5): what the corpus reports of the worker, worded nowhere;
+# an obligation, with the people the corpus names (Laplace-Engine#29).
 attest row Answer.annotator* of HashedWorkerId

@@ -13,5 +13,8 @@ tier field by \t
 thing row name
 key row ID
 content name "reference BabelNet synset ID" fourth
+# README: "Each line contains the ID of a VerbAtlas selectional preference, its reference BabelNet synset ID, and its
+# name": the synset the preference refers to, by BabelNet's ID as written (Laplace-Engine#32)
+relation "reference BabelNet synset" "reference BabelNet synset ID"
 attest row "reference BabelNet synset ID"
 pair row fourth
