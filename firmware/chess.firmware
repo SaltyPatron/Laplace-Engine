@@ -1,0 +1,18 @@
+# The rules a PGN record is replayed under (Sequence 28, Games: game rules are firmware; Sequence 27.1). They are
+# decisions read from this file, never records: which variant a record's Variant tag names, and how that variant
+# castles. A ruleset governs which moves are legal; it is in no position's ID, and the same position reached under
+# two rulesets is one position. Read by chess.c (LAPLACE_CHESS_FIRMWARE names another file).
+#
+#   variant NAME castling standard | chess960
+#                              a variant a Variant tag can name (as the tag writes it; "Two Words" quoted).
+#                              standard: the king castles from e with the rooks of a and h, and a FEN's KQkq name
+#                              them. chess960: the king castles from wherever it starts with either rook it stands
+#                              between, ending on g or c with the rook beside it on f or d (Chess960's rule, which
+#                              holds standard's); a FEN's KQkq name the outermost rook on that side, a file letter
+#                              (Shredder-FEN) that file's rook
+#   default NAME               the variant of a record that names none (the PGN standard: standard chess)
+#
+# A record whose Variant no line here names is not replayed: its movetext is kept as its text and said.
+default Standard
+variant Standard castling standard
+variant Chess960 castling chess960

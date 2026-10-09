@@ -98,6 +98,7 @@ int cmd_model(int argc, char **argv);
 int cmd_held(int argc, char **argv);                                  /* provenance.c: who said a claim, a walk up from it to the trunks that hold it */
 int cmd_replay(int argc, char **argv);                                /* provenance.c: standings from containment alone, against the recorded */
 int cmd_structure(int argc, char **argv);
+int cmd_pgn(int argc, char **argv);                  /* chess.c: a PGN file's records written again from the database alone */
 
 /* ---- the bits a row must have (physicality.mask): what it is, by LP_KIND_*; as the text of a smallint[] parameter */
 #define CLAIM_BITS "{0}"
@@ -156,6 +157,7 @@ typedef struct {
     int broken; char file[512];                       /* it did not load: it stops the source it belongs to, and no other */
     int curated;                                      /* it attests: a curated source, mined for what it says, not kept byte for byte */
     void *say;                                        /* the file's layout and the disposition of its parts, as the recipe configures them (say.c) */
+    void *chess;                                      /* grammar pgn: what the file's records are (chess.c) */
 } Recipe;
 /* A source: a body of content with one identity, however many files it comes in. Its recipes say how each kind of
  * its files reads; the source says who the witness is, where the source is kept, and which sources it comes after. */
@@ -224,6 +226,10 @@ void highway_file(Ctx *, File *, Hw *);                                         
 int  source_files(const Source *, Recipe *rec, int nrec, char ***paths, Recipe ***of);   /* a source's files its recipes read, in the order they are read (ingest.c) */
 void decompose_file(Ctx *, File *);
 void decompose_bytes(Ctx *, File *, uint8_t *src, size_t n, int first);     /* a stretch of a file that is read a stretch at a time */
+/* ---- chess (chess.c): a recipe that says "grammar pgn" has its files read as PGN, each game a record over its line */
+int  chess_says(Recipe *, const char *path, char *tok);                     /* a PGN recipe's own line: 1; 0 when the recipe is no PGN recipe; -1 written wrong */
+int  chess_recipe(Recipe *, const char *path);                             /* a PGN recipe, read to its end */
+void chess_read(const Recipe *, File *, const uint8_t *src, size_t n);    /* a PGN file: its records, what they attest, its trunk */
 int  reads_in_stretches(const Recipe *, char *boundary);                    /* whether a file of this recipe can be: 1 at a line's end, 2 at an empty line */
 void table_reset(void);                                                      /* what was decomposed is recorded: the table is emptied for what comes next */
 Ref  string_ref(const uint8_t *s, size_t n);                          /* text as its entity, remembered per thread */
