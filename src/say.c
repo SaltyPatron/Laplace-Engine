@@ -44,7 +44,7 @@ enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, 
 /* A key as a resource writes it, matched by a pattern and written as a template (\1: the pattern's first part) where it
  * writes it otherwise than those it points at write it (vn:51.2 for 51.2): the highway's lines, and a type's key. */
 typedef struct { char list[32], path[160], as[64]; regex_t re; int has_re; } KSpec;
-typedef struct { char name[64]; int what; char arg[64]; KSpec k;
+typedef struct { char name[64]; int what; char arg[64]; KSpec k; uint32_t when;      /* when: the conditions (where[]) it holds under, of what holds the part; 0: always */
                  struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; } Dis;   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse) */
 typedef struct { char tier[32], name[64]; } Pair;
 typedef struct { char tier[32]; char name[64][64]; int n; uint32_t when; char by[64], of[64]; int file; } Att;      /* when: the conditions it is said under, by their places in where[]; by: the part that names who says it; of: the part it is said of; file: a witness stands within the file */
@@ -91,8 +91,9 @@ static int in_perf(const Say *s, const char *name, size_t n){
 static int dis_add(Say *s, const char *path, const char *name, int what, const char *arg){
     if (s->ndis == 256) { fprintf(stderr, "%s: more parts than a recipe disposes of (256)\n", path); return -1; }
     for (int i = 0; i < s->ndis; i++) if (!strcmp(s->dis[i].name, name)) { if (what == D_KEY && s->dis[i].what == D_KEY) return 1;      /* one name may be the key of several kinds of thing (id) */
+        if (s->now || s->dis[i].when) continue;                              /* under a when: one disposition for each condition, the first that holds taken; one with none last */
         fprintf(stderr, "%s: the part %s is given two dispositions\n", path, name); return -1; }
-    Dis *d = &s->dis[s->ndis++]; snprintf(d->name, sizeof d->name, "%s", name); dis_parse(d); d->what = what; snprintf(d->arg, sizeof d->arg, "%s", arg ? arg : ""); return 1;
+    Dis *d = &s->dis[s->ndis++]; snprintf(d->name, sizeof d->name, "%s", name); dis_parse(d); d->what = what; d->when = s->now; snprintf(d->arg, sizeof d->arg, "%s", arg ? arg : ""); return 1;
 }
 /* A recipe's line, if it lays the file out or disposes of a part: 1, or 0 for something else, or -1 when written wrong. */
 int say_says(Recipe *r, const char *path, char *tok){
@@ -258,7 +259,7 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
                  Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int16_t *dm; uint32_t dm_cap;
-                 struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; } Sink;          /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
+                 struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; int keys_only; } Sink;      /* keys_only: a first reading of a file whose recipe refers to its own rows: the keys kept, nothing said */          /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
     if (k->nhr == k->chr) { k->chr = k->chr ? k->chr * 2 : 1024; k->hr = xrealloc(k->hr, sizeof(HwRec) * k->chr); }
@@ -283,12 +284,15 @@ static inline int composing(int32_t g){ for (int i = busy_base; i < nbusy; i++) 
 /* named_as, for a name split when the recipe was read */
 static inline int name_is(const SNode *x, const char *n, uint8_t off, uint8_t len, uint8_t wild, uint8_t note){
     if (note && x->kind != S_NOTE) return 0; return wild ? x->nlen >= len && !memcmp(x->name, n + off, len) : s_named(x, n + off, len); }
+static int spoken_of(const Say *s, const STree *t, int32_t root, uint32_t which);
+/* Whether a disposition said under a when (when NAME is VALUE ...) holds for this part: the condition is of what holds the part. */
+static int dis_holds(const Say *s, const Dis *d, const SNode *x){ return !d->when || (TT && x->parent >= 0 && spoken_of(s, TT, x->parent, d->when)); }
 static const Dis *dis_scan(const Say *s, const SNode *x){
     if (TT && x->parent >= 0) {                                              /* ELEMENT.NAME first: it says more than NAME */
         const SNode *el = &TT->n[x->parent]; if (el->nlen == x->nlen && !memcmp(el->name, x->name, x->nlen) && el->parent >= 0) el = &TT->n[el->parent];   /* a piece of a part: the part's element */
         for (int i = 0; i < s->ndis; i++) { const Dis *d = &s->dis[i]; if (!d->el_l) continue;
-            if (el->nlen == d->el_l && !memcmp(el->name, d->name, d->el_l) && name_is(x, d->name, d->part.off, d->part.len, d->part.wild, d->part.note)) return d; } }
-    for (int i = 0; i < s->ndis; i++) { const Dis *d = &s->dis[i]; if (name_is(x, d->name, d->whole.off, d->whole.len, d->whole.wild, d->whole.note)) return d; }
+            if (el->nlen == d->el_l && !memcmp(el->name, d->name, d->el_l) && name_is(x, d->name, d->part.off, d->part.len, d->part.wild, d->part.note) && dis_holds(s, d, x)) return d; } }
+    for (int i = 0; i < s->ndis; i++) { const Dis *d = &s->dis[i]; if (name_is(x, d->name, d->whole.off, d->whole.len, d->whole.wild, d->whole.note) && dis_holds(s, d, x)) return d; }
     return NULL;
 }
 /* A part's disposition, found once for each node of the tree being read (DM, shared by the threads reading it). */
@@ -826,6 +830,7 @@ static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
     if (k->tc_cap < t->count) { k->tc_cap = t->count * 2; k->tc = xrealloc(k->tc, sizeof(Ref) * k->tc_cap); k->ts = xrealloc(k->ts, k->tc_cap); }
     k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); k->ix_tree = NULL;      /* a new tree: nothing of the last is known of it */
     if (k->hw) { unit_highway(k, t, root); keep_keys(k, t, root); return; }     /* read for the highway: its types, not what it attests */
+    if (k->keys_only) { keep_keys(k, t, root); return; }                    /* the first reading: every row's key, so a row may point at one after it */
     if (s->nline && t->n[root].kind == S_TEXT) {                             /* a line of a page: where it matches a pattern, it says the pattern's parts */
         const SNode *x = &t->n[root]; char stack[4096], *ln = x->vlen < sizeof stack ? stack : malloc(x->vlen + 1); memcpy(ln, x->val, x->vlen); ln[x->vlen] = 0;
         for (int i = 0; i < s->nline; i++) { regmatch_t m[5]; if (regexec(&s->line[i].re, ln, 5, m, 0)) continue;
@@ -972,6 +977,11 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         size_t want = (n - at) / (2u << 20) + 1; cut = xrealloc(cut, sizeof(size_t) * (want + 2)); cut[0] = at;
         for (size_t i = 1; i < want; i++) { size_t c = s_boundary(&s.lay, src, n, at + (n - at) / want * i); if (c > cut[nc - 1] && c < n) cut[nc++] = c; }
         cut[nc] = n; part = calloc(nc, sizeof(Sink));
+        int self = 0; { const char *nm; for (int z = 0; (nm = say_refers(r, z)); z++) if (!strcmp(nm, r->name)) self = 1; }      /* refer NAME to this recipe: rows point at rows of the same file, after as well as before */
+        if (self) {                                                          /* read once for every row's key first; the keys are kept for the source (keys_put) */
+            #pragma omp taskloop grainsize(1)
+            for (size_t i = 0; i < nc; i++) { part[i].r = r; part[i].s = &s; part[i].er = er; part[i].ed = ed; part[i].fw = f->witness; part[i].fname = fname; part[i].fstem = fstem; part[i].hw = hw; part[i].fabout = fabout; part[i].has_fabout = has_fabout; part[i].keys_only = 1; s_decompose(&s.lay, src + cut[i], cut[i + 1] - cut[i], unit, &part[i]); part[i].keys_only = 0; }
+        }
         #pragma omp taskloop grainsize(1)
         for (size_t i = 0; i < nc; i++) { part[i].r = r; part[i].s = &s; part[i].er = er; part[i].ed = ed; part[i].fw = f->witness; part[i].fname = fname; part[i].fstem = fstem; part[i].hw = hw; part[i].fabout = fabout; part[i].has_fabout = has_fabout; s_decompose(&s.lay, src + cut[i], cut[i + 1] - cut[i], unit, &part[i]); }
     }

@@ -1,0 +1,53 @@
+name wordnet-data-noun
+# wndb.5, "Data File Format": "Each data file begins with several lines containing a copyright notice, version number
+# and license agreement. These lines all begin with two spaces and the line number. All other lines are in the following
+# format. Integer fields are of fixed length, and are zero-filled.
+#   synset_offset lex_filenum ss_type w_cnt word lex_id [word lex_id...] p_cnt [ptr...] [frames...] | gloss"
+# "w_cnt: Two digit hexadecimal integer indicating the number of words in the synset"; "p_cnt: Three digit decimal
+# integer indicating the number of pointers from this synset to other synsets"; each ptr is
+# "pointer_symbol synset_offset pos source/target", "where synset_offset is the byte offset of the target synset in the
+# data file corresponding to pos".
+# The synset is the words it lists (word, "with spaces replaced by underscore characters"), and holds each of them.
+# A synset's offset with the letter of its type is WordNet's key of it, which CILI names the ILI concept by
+# (00001740-n): the offset is read as that concept, as index.sense and cntlist read sense keys, so a synset is typed
+# as the concept it is and a pointer's target is the concept it names, in this file or another. The pointer_symbol is
+# the relation, as the file writes it (@ Hypernym, ~ Hyponym, ...: wninput.5 "Pointers"). lex_filenum is lexnames'
+# number of the lexicographer file. w_cnt and p_cnt count; lex_id is the source's identifier of a sense within a
+# lexicographer file; pos is the key's letter: none is content. source/target (the word numbers a lexical pointer
+# names) is left open here: it says which words, which these recipes do not yet read.
+match data.noun
+
+tier line by \n
+comment space
+names synset_offset lex_filenum ss_type w_cnt p_cnt bar gloss
+repeat word count w_cnt hex word lex_id
+repeat pointers count p_cnt pointer_symbol synset_offset pos source_target
+tail gloss
+tier field by space
+
+thing word word
+thing line of word
+content word gloss ss_type pointer_symbol
+omit w_cnt p_cnt bar lex_id pos
+type lex_filenum lexfile
+type synset_offset ili as \0-n
+when pos is n
+type pointers.synset_offset ili as \0-n
+always
+when pos is v
+type pointers.synset_offset ili as \0-v
+always
+when pos is a
+type pointers.synset_offset ili as \0-a
+always
+when pos is s
+type pointers.synset_offset ili as \0-s
+always
+when pos is r
+type pointers.synset_offset ili as \0-r
+always
+type pointers.synset_offset ili
+
+holds line word
+attest line synset_offset lex_filenum ss_type gloss
+relate pointers pointer_symbol to synset_offset

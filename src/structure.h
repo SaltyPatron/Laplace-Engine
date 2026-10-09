@@ -14,6 +14,10 @@
  *     is SEP                    each part of this tier is written KEY SEP VALUE: the part is named KEY
  *     continued                 a part of this tier that begins with white space goes on with the one before it
  *     escaped CHAR              the character after CHAR is itself, a tier's separator included
+ *     repeat GROUP count COUNT [hex] FIELD...
+ *                               after the part named COUNT, as many GROUPs as it counts (a hexadecimal count when hex is
+ *                               written), each of these FIELDs in order, named so; the names go on after them
+ *     tail NAME                 the part named NAME is the rest of the tier's text, as written (a gloss after its fields)
  *   part PATH by SEP [is IS] [pieces N] [space CHAR]
  *                               a named part is itself parts, parted by SEP; with IS, each is KEY IS VALUE; with pieces,
  *                               at most N, the last of them the rest as written; with space, CHAR in it stands for a space.
@@ -41,12 +45,15 @@ typedef struct { SNode *n; uint32_t count, cap; uint8_t **pool; size_t npool, us
 
 #define S_TIERS 8
 #define S_NAMES 256
+typedef struct { char count[64], group[64], field[8][64]; int nfield, hex; } SRepeat;     /* repeat GROUP count COUNT [hex] FIELD... */
 typedef struct {
     char name[32], sep[16]; int seplen;
     char note[8], note_is[8], comment[8]; int notelen, islen, commentlen;
     char remark, escaped; int header, quoted, skip, padded;
     char kv[8]; int kvlen, continued;                     /* kv: each part is written KEY kv VALUE (the recipe's "is"); continued: a part that begins with white space goes on with the one before */
     char numbered[32];                                    /* numbered NAME: each part also holds NAME, its line in the file (empty lines counted), so files written line for line join by it */
+    char tail[64];                                        /* tail NAME: the part so named is the rest of the tier's text, as written */
+    SRepeat rep[4]; int nrep;                                 /* repeat GROUP count COUNT [hex] FIELD...: after the part named COUNT, as many GROUPs as it counts, each these FIELDs in order */
     char names[S_NAMES][64]; int nnames, rest;            /* the names of the parts of the tier below, by position; rest: the last (written NAME...) names every further part too */
 } STier;
 typedef struct { char path[64], sep[8], is[8]; int seplen, islen, pieces; char space; } SPart;     /* pieces: at most so many, the last the rest as written; space: the character the file writes for a space in it */

@@ -97,6 +97,13 @@ int layout_says(Layout *l, const char *path, char *tok){
     if (!strcmp(tok, "padded")) { t->padded = 1; return 1; }
     if (!strcmp(tok, "continued")) { t->continued = 1; return 1; }
     if (!strcmp(tok, "numbered")) { char *v = strtok(NULL, " \t\r\n"); if (!v) { fprintf(stderr, "%s: numbered NAME\n", path); return -1; } snprintf(t->numbered, sizeof t->numbered, "%s", v); return 1; }
+    if (!strcmp(tok, "tail")) { char *v = strtok(NULL, " \t\r\n"); if (!v) { fprintf(stderr, "%s: tail NAME\n", path); return -1; } snprintf(t->tail, sizeof t->tail, "%s", v); return 1; }
+    if (!strcmp(tok, "repeat")) { char *g = strtok(NULL, " \t\r\n"), *cw = strtok(NULL, " \t\r\n"), *cn = strtok(NULL, " \t\r\n"), *w;
+        if (!g || !cw || strcmp(cw, "count") || !cn || t->nrep == 4) { fprintf(stderr, "%s: repeat GROUP count COUNT [hex] FIELD... (at most 4 a tier)\n", path); return -1; }
+        SRepeat *r = &t->rep[t->nrep]; memset(r, 0, sizeof *r); snprintf(r->group, sizeof r->group, "%s", g); snprintf(r->count, sizeof r->count, "%s", cn);
+        while ((w = strtok(NULL, " \t\r\n"))) { if (!r->nfield && !strcmp(w, "hex")) { r->hex = 1; continue; } if (r->nfield == 8) break; snprintf(r->field[r->nfield++], 64, "%s", w); }
+        if (!r->nfield) { fprintf(stderr, "%s: repeat %s count %s: the fields of a %s\n", path, g, cn, g); return -1; }
+        t->nrep++; return 1; }
     if (!strcmp(tok, "is")) { char *v = strtok(NULL, " \t\r\n"); if (!v || !(t->kvlen = sep_read(v, t->kv, sizeof t->kv))) { fprintf(stderr, "%s: is SEPARATOR\n", path); return -1; } return 1; }
     if (!strcmp(tok, "skip")) { char *v = strtok(NULL, " \t\r\n"); t->skip = v ? atoi(v) : 0; return 1; }
     if (!strcmp(tok, "note")) { char *p = strtok(NULL, " \t\r\n"), *is = strtok(NULL, " \t\r\n"); if (!p) { fprintf(stderr, "%s: note PREFIX [IS]\n", path); return -1; }
@@ -212,6 +219,7 @@ static void parts_of(STree *t, int32_t x, const Layout *l){
 static void tier_read(STree *t, const Layout *l, int k, int32_t in, const uint8_t *s, size_t lo, size_t hi){
     if (k + 1 >= l->ntier) return;
     const STier *me = &l->tier[k], *t1 = &l->tier[k + 1]; int pos = 0, innermost = k + 2 >= l->ntier;
+    const SRepeat *R = NULL; long rleft = 0; int rfi = 0; int32_t rg = -1;    /* the repeat being read (repeat GROUP count COUNT): groups left, the field within the group, the group's node */
     for (size_t i = lo; i < hi || (i == hi && pos && innermost && hi > lo && !memcmp(s + hi - t1->seplen, t1->sep, (size_t)t1->seplen)); ) {
         size_t next, e = i < hi ? part_end(l, k + 1, s, i, hi, &next) : hi; if (i >= hi) next = hi + 1;
         size_t len = e - i;
@@ -233,13 +241,25 @@ static void tier_read(STree *t, const Layout *l, int k, int32_t in, const uint8_
                 SNode *v = &t->n[t->n[in].last]; size_t cn = stop - i; const uint8_t *cp = trimmed(s + i, &cn); uint8_t *o = own(t, v->vlen + cn + 1);
                 memcpy(o, v->val, v->vlen); size_t j = v->vlen; if (j && cn) o[j++] = ' '; memcpy(o + j, cp, cn); v = &t->n[t->n[in].last]; v->val = o; v->vlen = (uint32_t)(j + cn);
                 i = next; continue; }
+            if (R) {                                                        /* a field of a repeated group (repeat GROUP count COUNT FIELD...): named by the group's fields, in order */
+                if (!rfi) { rg = node(t, S_GROUP, (uint8_t)(k + 1), in, i); t->n[rg].name = (const uint8_t *)R->group; t->n[rg].nlen = (uint32_t)strlen(R->group); }
+                int32_t x = node(t, S_VALUE, (uint8_t)(k + 1), rg, i); t->n[x].name = (const uint8_t *)R->field[rfi]; t->n[x].nlen = (uint32_t)strlen(R->field[rfi]);
+                text_put(t, x, l, k + 1, s + i, stop - i); if (l->npart) parts_of(t, x, l); t->n[rg].end = stop;
+                if (++rfi == R->nfield) { rfi = 0; if (!--rleft) R = NULL; }
+                i = next; continue; }
             const uint8_t *is = t1->kvlen && stop > i ? memmem(s + i, stop - i, t1->kv, (size_t)t1->kvlen) : NULL;
             int np = pos < me->nnames ? pos : me->rest && me->nnames ? me->nnames - 1 : -1;     /* the name this position has, if any */
+            int last = np >= 0 && me->tail[0] && !strcmp(me->names[np], me->tail);          /* tail NAME: the rest of the tier's text, as written */
+            if (last) { stop = hi; while (stop > i && (s[stop - 1] == ' ' || s[stop - 1] == '\t' || s[stop - 1] == '\r' || s[stop - 1] == '\n')) stop--; }
             int32_t x = node(t, np >= 0 || is ? S_VALUE : S_TEXT, (uint8_t)(k + 1), in, i);
             if (is) { size_t kn = (size_t)(is - s - i), vn = stop - (size_t)(is - s) - (size_t)t1->kvlen; const uint8_t *kp = trimmed(s + i, &kn), *vp = trimmed(is + t1->kvlen, &vn);   /* KEY IS VALUE: named by its key */
                 t->n[x].name = kp; t->n[x].nlen = (uint32_t)kn; t->n[x].val = vp; t->n[x].vlen = (uint32_t)vn; (void)(kp + t1->kvlen); if (l->npart) parts_of(t, x, l); pos++; i = next; continue; }
             if (np >= 0) { t->n[x].name = (const uint8_t *)me->names[np]; t->n[x].nlen = (uint32_t)strlen(me->names[np]); }
             text_put(t, x, l, k + 1, s + i, stop - i); if (l->npart && t->n[x].nlen) parts_of(t, x, l);
+            if (last) { i = hi; pos++; break; }
+            if (np >= 0) for (int r = 0; r < me->nrep; r++) if (!strcmp(me->names[np], me->rep[r].count)) {      /* a count: as many groups follow */
+                char z[24]; uint32_t zl = t->n[x].vlen < 23 ? t->n[x].vlen : 23; memcpy(z, t->n[x].val, zl); z[zl] = 0;
+                long n = strtol(z, NULL, me->rep[r].hex ? 16 : 10); if (n > 0) { R = &me->rep[r]; rleft = n; rfi = 0; } break; }
             if (stop < e) { i = hi; pos++; break; }
         }
         pos++; i = next;
