@@ -1,5 +1,5 @@
 /* Writing to PostgreSQL: trunk-to-leaf deduplication, binary COPY straight into each leaf partition on its own
- * connection, and the semantics (witnesses, attestation, consensus). SQL only fetches and writes. */
+ * connection, and the semantics (witnesses and consensus; provenance is containment). SQL only fetches and writes. */
 #define _GNU_SOURCE
 #include "engine.h"
 #include <arpa/inet.h>
@@ -21,7 +21,6 @@ static void cf_i16(Copy *c, int16_t v){ c32(c, 2); c16(c, (uint16_t)v); }
 static void cf_i32(Copy *c, int32_t v){ c32(c, 4); c32(c, (uint32_t)v); }
 static void cf_i64(Copy *c, int64_t v){ c32(c, 8); c64(c, (uint64_t)v); }
 static void cf_f64(Copy *c, double v){ uint64_t u; memcpy(&u, &v, 8); c32(c, 8); c64(c, u); }
-static void cf_f32(Copy *c, float v){ uint32_t u; memcpy(&u, &v, 4); c32(c, 4); c32(c, u); }
 static void copy_begin(Copy *c, PGconn *pg, const char *sql){
     c->pg = pg; if (!c->b) { c->cap = 1 << 22; c->b = malloc(c->cap); } c->n = 0; c->rows = 0;
     PGresult *r = PQexec(pg, sql); if (PQresultStatus(r) != PGRES_COPY_IN) { fprintf(stderr, "%s: %s", sql, PQerrorMessage(pg)); exit(1); } PQclear(r);
@@ -45,7 +44,7 @@ static void part_name(int p, const char *table, char *out, size_t cap){ snprintf
 /* ---- the stage: what an ingest has deduplicated and played, held until it goes into the real tables at once (merge).
  * The inventor: "decompose and stage all the records necessary... deduplicated and all of that but just the records...
  * and then we batch that into the real database". A stage table is UNLOGGED, one for each leaf partition of entity,
- * physicality, attestation and consensus, in the schema stage under the leaf's own name: what is staged writes no WAL.
+ * physicality and consensus, in the schema stage under the leaf's own name: what is staged writes no WAL.
  * Lookups during an ingest read the leaf and its stage table both. A crash empties every stage table (unlogged) and
  * leaves the real tables as they were before the run: the run is begun again. */
 static int stage_ready;
@@ -69,9 +68,9 @@ static int stage_open(PGconn *pg){
     if (stage_ready) return 1;
     /* made once: every leaf has its stage table already when the stage holds as many tables as the real tables have
      * leaves (measured: the CREATE ... IF NOT EXISTS of all of them took 7.3 s each time a process asked) */
-    { PGresult *q = PQexec(pg, "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'stage' AND c.relkind = 'r') "
+    { PGresult *q = PQexec(pg, "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'stage' AND c.relkind = 'r' AND c.relname ~ '^(entity|physicality|consensus)_') "
                                "= (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' "
-                               "AND c.relispartition AND c.relname ~ '^(entity|physicality|attestation|consensus)_')");
+                               "AND c.relispartition AND c.relname ~ '^(entity|physicality|consensus)_')");
       int made = PQresultStatus(q) == PGRES_TUPLES_OK && PQntuples(q) && PQgetvalue(q, 0, 0)[0] == 't'; PQclear(q);
       if (made) return stage_ready = stage_emptied(pg); }
     const char *sql =
@@ -79,10 +78,9 @@ static int stage_open(PGconn *pg){
         "DO $$ DECLARE r record; BEGIN"
         "  FOR r IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
         "           WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relispartition"
-        "             AND c.relname ~ '^(entity|physicality|attestation|consensus)_' LOOP"
+        "             AND c.relname ~ '^(entity|physicality|consensus)_' LOOP"
         "    EXECUTE format('CREATE UNLOGGED TABLE IF NOT EXISTS stage.%I (LIKE public.%I INCLUDING DEFAULTS)', r.relname, r.relname);"
-        "    IF r.relname LIKE 'attestation%' THEN EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON stage.%I (claim, witness)', r.relname || '_cw', r.relname);"
-        "    ELSIF r.relname LIKE 'consensus%' THEN EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS %I ON stage.%I (claim)', r.relname || '_claim', r.relname);"
+        "    IF r.relname LIKE 'consensus%' THEN EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS %I ON stage.%I (claim)', r.relname || '_claim', r.relname);"
         "    END IF;"
         "  END LOOP; END $$";
     PGresult *r = PQexec(pg, sql); int ok = PQresultStatus(r) == PGRES_COMMAND_OK;
@@ -136,7 +134,7 @@ static int by_hilbert(const void *a, const void *b){ uint64_t x = ((const NRef *
  * recorded once by the source that records it (tier0_write). */
 static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_t *rows_e, uint64_t *rows_p, int own_txn){
     char tn[64]; Copy c = { 0 }; char sql[160]; uint8_t geo[64 * 1024];
-    lp_id *ids = NULL; uint64_t *runs = NULL; size_t idc = 0;
+    lp_id *ids = NULL; uint64_t *runs = NULL; uint32_t *spare = NULL; size_t idc = 0;
     /* a stretch's entities and their paths are one transaction: a load cut off between the two leaves no entity
      * without a physicality (Physicality: the counts match, or the system is wrong). The file trunks are written
      * inside the transaction that holds what they attested, which is already open: that one is not begun or ended here. */
@@ -155,10 +153,10 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
     copy_begin(&c, pg, sql);
     for (uint64_t b = lo; b < hi; b++) {
         Node *x = &NODE[bucket[p][b].idx];
-        if (x->nv > idc) { idc = x->nv * 2; ids = xrealloc(ids, idc * sizeof(lp_id)); runs = xrealloc(runs, idc * 8); }
-        for (uint32_t v = 0; v < x->nv; v++) { ids[v] = VTX[x->voff + v].id; runs[v] = VTX[x->voff + v].m; }
-        size_t gl = lp_ewkb_runs(ids, runs, x->nv, NULL, 0); uint8_t *gp = gl > sizeof geo ? malloc(gl) : geo;
-        lp_ewkb_runs(ids, runs, x->nv, gp, gl);
+        if (x->nv > idc) { idc = x->nv * 2; ids = xrealloc(ids, idc * sizeof(lp_id)); runs = xrealloc(runs, idc * 8); spare = xrealloc(spare, idc * 4); }
+        for (uint32_t v = 0; v < x->nv; v++) { ids[v] = VTX[x->voff + v].id; runs[v] = VTX[x->voff + v].m; spare[v] = VTX[x->voff + v].spare; }
+        size_t gl = lp_ewkb_runs_spare(ids, runs, spare, x->nv, NULL, 0); uint8_t *gp = gl > sizeof geo ? malloc(gl) : geo;
+        lp_ewkb_runs_spare(ids, runs, spare, x->nv, gp, gl);
         /* the row's own bank, kind: what the row is. What its constituents are (a part of speech, a dependency relation)
          * is their banks', on the rows those banks describe (manifest/banks.tsv), never this row's */
         memset(mask + 4, 0, 32); for (int b = 0; b < 8; b++) if (x->kind & (1u << b)) mask[4 + (b >> 3)] |= (uint8_t)(0x80 >> (b & 7));
@@ -167,7 +165,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
     }
     copy_end(&c); *rows_p = c.rows;
     if (own_txn) { PGresult *e = PQexec(pg, "COMMIT"); if (PQresultStatus(e) != PGRES_COMMAND_OK) { fprintf(stderr, "commit: %s", PQerrorMessage(pg)); exit(1); } PQclear(e); }
-    free(c.b); free(ids); free(runs);
+    free(c.b); free(ids); free(runs); free(spare);
 }
 
 /* ---- standings: a map from claim ID to its slot */
@@ -183,81 +181,11 @@ static Standing *stand_get(const lp_id *id, bool add){
     sn = lp_idmap_count(smap); return &stand[i];
 }
 
-/* What attestation already holds, by the witnessed thing and the witness that witnessed it: the same witness attesting
- * the same thing again, from other content, adds games to that row (part_write). Content already recorded attests
- * nothing again (load: a file whose content tree is recorded), so a retried job does not multiply the same witnessing. */
-typedef struct { lp_id w, by; } Recorded;
-static Recorded *ldg; static uint8_t *ldg_used; static uint64_t ldg_cap, ldg_n;
-static uint64_t ldg_slot(const lp_id *w, const lp_id *by){ uint64_t a, b; memcpy(&a, w->b, 8); memcpy(&b, by->b + 8, 8); return (a ^ b * 0x9E3779B97F4A7C15ull) & (ldg_cap - 1); }
-static void ldg_put(const lp_id *w, const lp_id *by){
-    if ((ldg_n + 1) * 2 > ldg_cap) {                                         /* half full: twice the room */
-        Recorded *o = ldg; uint8_t *ou = ldg_used; uint64_t oc = ldg_cap; ldg_cap = oc ? oc * 2 : 1 << 16;
-        ldg = malloc(sizeof(Recorded) * ldg_cap); ldg_used = calloc(ldg_cap, 1);
-        for (uint64_t i = 0; i < oc; i++) if (ou[i]) { uint64_t k = ldg_slot(&o[i].w, &o[i].by); while (ldg_used[k]) k = (k + 1) & (ldg_cap - 1); ldg_used[k] = 1; ldg[k] = o[i]; }
-        free(o); free(ou); }
-    uint64_t k = ldg_slot(w, by);
-    while (ldg_used[k]) { if (!memcmp(&ldg[k].w, w, 16) && !memcmp(&ldg[k].by, by, 16)) return; k = (k + 1) & (ldg_cap - 1); }
-    ldg_used[k] = 1; ldg[k].w = *w; ldg[k].by = *by; ldg_n++;
-}
-static int ldg_has(const lp_id *w, const lp_id *by){
-    if (!ldg_cap) return 0; uint64_t k = ldg_slot(w, by);
-    while (ldg_used[k]) { if (!memcmp(&ldg[k].w, w, 16) && !memcmp(&ldg[k].by, by, 16)) return 1; k = (k + 1) & (ldg_cap - 1); }
-    return 0;
-}
-/* One partition of the semantics, on one connection: the attestations whose witnessed thing's ID begins with h, in
- * reading order (its order is the order of play), the new standings and the recorded ones updated. Each partition is
- * written by one connection, inside that connection's part of the batch's transaction (load: prepared, then committed
- * as one). Returns 0, or 1 when the database refused. */
-static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led, uint64_t *nnew, uint64_t *nupd){
-    /* Each (witnessed, witness) is one attestation: its games the times this witness attested it, its score the series'
-     * score, the mean over its games (a claim is a game series: games plus a score). A pair already recorded gains this
-     * batch's games in one statement; a new pair is copied. */
-    typedef struct { lp_id w, by; uint32_t games, position; double sum; } Series;
-    Series *ser = NULL; uint64_t ns = 0, cs = 0; lp_idmap *mine = lp_idmap_new(); char sql[1024];
-    for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i];
-        if (e->kind == EV_MEMBER || (e->witnessed.b[0] >> 4) != h) continue;                /* witnessed within its record: the record's row */
-        const lp_id *by = e->own_witness ? &e->witness : &files[fi].witness.id;
-        lp_id pair; for (int b = 0; b < 16; b++) pair.b[b] = e->witnessed.b[b] ^ by->b[(b + 7) & 15];   /* both are hashes: their mix names the pair */
-        bool fresh; size_t at = lp_idmap_put(mine, &pair, &fresh);
-        if (fresh) { if (ns == cs) { cs = cs ? cs * 2 : 4096; ser = xrealloc(ser, sizeof(Series) * cs); } ser[ns++] = (Series){ e->witnessed, *by, 0, e->position, 0 }; }
-        ser[at].games++; ser[at].sum += e->score; }
-    lp_idmap_free(mine);
-    Copy lc = { 0 }; snprintf(sql, sizeof sql, "COPY stage.attestation_%x (claim, witness, score, position, games) FROM STDIN (FORMAT binary)", h);
-    copy_begin(&lc, pg, sql); uint64_t nold = 0;
-    for (uint64_t j = 0; j < ns; j++) { const Series *x = &ser[j];
-        if (ldg_has(&x->w, &x->by)) { ser[nold++] = *x; continue; }                         /* recorded already: gains its games below */
-        c16(&lc, 5); cfield(&lc, x->w.b, 16); cfield(&lc, x->by.b, 16); cf_f32(&lc, (float)(x->sum / x->games));
-        if (x->position) cf_i32(&lc, (int32_t)x->position); else c32(&lc, 0xFFFFFFFFu);
-        cf_i32(&lc, (int32_t)x->games); lc.rows++; }
-    copy_end(&lc); *led += lc.rows; free(lc.b);
-    for (uint64_t j0 = 0; j0 < nold; j0 += 100000) {                             /* recorded series: one statement a chunk */
-        uint32_t n = (uint32_t)(nold - j0 < 100000 ? nold - j0 : 100000); static const uint32_t oid[4] = { 0, 0, 23, 701 }; static const int w[4] = { 16, 16, 4, 8 };
-        uint8_t *arr[4]; int alen[4];
-        for (int f = 0; f < 4; f++) {
-            arr[f] = malloc(20 + (size_t)n * (4 + w[f])); uint8_t *q = arr[f] + 20;
-            uint32_t hdr[5] = { htonl(1), htonl(0), htonl(f < 2 ? id_oid : oid[f]), htonl(n), htonl(1) }; memcpy(arr[f], hdr, 20);
-            for (uint32_t j = 0; j < n; j++) { const Series *x = &ser[j0 + j]; uint32_t l = htonl((uint32_t)w[f]); memcpy(q, &l, 4); q += 4;
-                if (f == 0) memcpy(q, x->w.b, 16); else if (f == 1) memcpy(q, x->by.b, 16);
-                else if (f == 2) { uint32_t g = htonl(x->games); memcpy(q, &g, 4); }
-                else { uint64_t u; memcpy(&u, &x->sum, 8); for (int y = 0; y < 8; y++) q[y] = (uint8_t)(u >> (56 - 8 * y)); }
-                q += w[f]; }
-            alen[f] = (int)(q - arr[f]); }
-        const char *v[4] = { (char *)arr[0], (char *)arr[1], (char *)arr[2], (char *)arr[3] }; int fm[4] = { 1, 1, 1, 1 };
-        /* a pair staged already gains the games where it is staged; a pair only recorded is staged with what it will
-         * be, its recorded games and these (merge puts the staged row in place of the recorded one) */
-        snprintf(sql, sizeof sql, "WITH u AS (SELECT * FROM unnest($1::blake3[], $2::blake3[], $3::int[], $4::float8[]) AS u(c, w, g, s)), "
-            "st AS (UPDATE stage.attestation_%x a SET score = (a.score * a.games + u.s) / (a.games + u.g), games = a.games + u.g "
-            "FROM u WHERE a.claim = u.c AND a.witness = u.w RETURNING a.claim, a.witness) "
-            "INSERT INTO stage.attestation_%x (claim, witness, score, position, games) "
-            "SELECT a.claim, a.witness, (a.score * a.games + u.s) / (a.games + u.g), a.position, a.games + u.g "
-            "FROM public.attestation_%x a JOIN u ON a.claim = u.c AND a.witness = u.w "
-            "WHERE NOT EXISTS (SELECT 1 FROM st WHERE st.claim = u.c AND st.witness = u.w)", h, h, h);
-        PGresult *u = PQexecParams(pg, sql, 4, NULL, v, alen, fm, 0); int bad = PQresultStatus(u) != PGRES_COMMAND_OK;
-        if (bad) fprintf(stderr, "games: %s", PQerrorMessage(pg));
-        PQclear(u); for (int f = 0; f < 4; f++) free(arr[f]); if (bad) { free(ser); return 1; } }
-    free(ser);
-    /* The standings: new ones, and recorded or staged ones this batch's matchups moved, staged as they now stand. A
-     * standing staged before is taken out of the stage first; merge puts a staged standing in place of the recorded one. */
+/* One partition of the standings, on one connection: the new standings and the recorded or staged ones this source's
+ * series moved, staged as they now stand. A standing staged before is taken out of the stage first; merge puts a staged
+ * standing in place of the recorded one. Returns 0, or 1 when the database refused. */
+static int standings_part(PGconn *pg, int h, uint64_t *nnew, uint64_t *nupd){
+    char sql[256];
     uint64_t *idx = malloc(sizeof(uint64_t) * (sn + 1)), n = 0, nmoved = 0;
     for (uint64_t i = 0; i < sn; i++) { const Standing *s = &stand[i]; if ((s->id.b[0] >> 4) != h) continue;
         if (!s->had) idx[n++] = i; else if (s->matches != s->m0) { idx[n++] = i; nmoved++; } }
@@ -277,6 +205,75 @@ static int part_write(PGconn *pg, int h, File *files, int nfiles, uint64_t *led,
     copy_end(&c); free(c.b); free(idx);
     *nnew += n - nmoved; *nupd += nmoved;
     return 0;
+}
+
+/* ---- what a source says, folded over all of it: each claim's games (the records that say it) and the sum of their
+ * scores, as the records' vertices carry them (lp_score_carried). The client folds a source's repeats before the
+ * database sees anything: one series a claim, played once, at the end of the source (standings_write). */
+struct Fold { lp_idmap *m; };                                              /* claim -> Said */
+typedef struct { uint32_t games; double sum; } Said;
+Fold *fold_new(void){ Fold *f = calloc(1, sizeof *f); f->m = lp_idmap_sized(sizeof(Said)); return f; }
+void fold_free(Fold *f){ if (!f) return; lp_idmap_free(f->m); free(f); }
+uint64_t fold_count(const Fold *f){ return f ? lp_idmap_count(f->m) : 0; }
+void fold_events(Fold *f, const File *files, int nfiles){
+    for (int fi = 0; fi < nfiles; fi++) { if (files[fi].known || files[fi].skipped) continue;
+        for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (e->kind != EV_CLAIM) continue;
+            bool fresh; Said *s = lp_idmap_get(f->m, &e->claim, &fresh); s->games++; s->sum += lp_score_carried(e->score); } }
+}
+/* The series, played: each claim's standing, from what is recorded (or staged) of it, moved once by the source's series
+ * at the witness's trust (lp_attest_series: each outcome pulled toward a draw by the trust, the deviation never below
+ * what one witness of that trust can give), and staged for merge. The claims on every core: a standing is moved by its
+ * own claim's series and by nothing else. Returns 0, or 1 when the database refused. */
+int standings_write(const char *conninfo, int npg, Fold *fold, double trust, LoadStats *st){
+    uint64_t nc = fold_count(fold); if (!nc) return 0;
+    double t = now(), tp = t;
+    PGconn **pg = malloc(sizeof(PGconn *) * npg); db_connect_many(conninfo, npg, pg);
+    for (int i = 0; i < npg; i++) PQclear(PQexec(pg[i], "SET synchronous_commit = off"));
+    if (!stage_open(pg[0])) return 1;
+    const lp_id *ids = lp_idmap_keys(fold->m);
+    smap = lp_idmap_new(); stand = malloc(sizeof(Standing) * (nc + 1)); sn = 0;
+    for (uint64_t i = 0; i < nc; i++) stand_get(&ids[i], true);
+    /* the recorded standings, then the staged ones: a staged standing is the later one; each read from its one partition */
+    uint64_t ocnt[17] = { 0 }; lp_id *old = malloc(sizeof(lp_id) * (nc + 1));
+    for (uint64_t i = 0; i < nc; i++) ocnt[(ids[i].b[0] >> 4) + 1]++;
+    for (int h = 0; h < 16; h++) ocnt[h + 1] += ocnt[h];
+    { uint64_t fill[16]; memcpy(fill, ocnt, sizeof fill); for (uint64_t i = 0; i < nc; i++) old[fill[ids[i].b[0] >> 4]++] = ids[i]; }
+    const uint64_t CH = 100000; typedef struct { int h; uint64_t lo, n; } OJob; OJob *oj = malloc(sizeof(OJob) * (nc / CH + 17)); uint64_t noj = 0;
+    for (int h = 0; h < 16; h++) for (uint64_t lo = ocnt[h]; lo < ocnt[h + 1]; lo += CH) oj[noj++] = (OJob){ h, lo, ocnt[h + 1] - lo < CH ? ocnt[h + 1] - lo : CH };
+    int bad = 0;
+    #pragma omp parallel for num_threads(npg) schedule(dynamic) reduction(+:bad)
+    for (uint64_t j = 0; j < noj; j++) {
+        uint32_t k = (uint32_t)oj[j].n; uint8_t *ab = malloc(20 + 20 * (size_t)k);
+        size_t len = ids_param(ab, old + oj[j].lo, k); PGconn *c = pg[omp_get_thread_num()];
+        const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
+        for (int from = 0; from < 2; from++) {
+            char sql[160]; snprintf(sql, sizeof sql, "SELECT claim, rating, deviation, volatility, matches FROM %s.consensus_%x WHERE claim = ANY($1::blake3[])", from ? "stage" : "public", oj[j].h);
+            PGresult *q = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
+            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "standing: %s", PQerrorMessage(c)); bad++; PQclear(q); break; }
+            #pragma omp critical
+            for (int r = 0; r < PQntuples(q); r++) {
+                lp_id id; memcpy(id.b, PQgetvalue(q, r, 0), 16); Standing *s = stand_get(&id, false); if (!s) continue;
+                s->r = (lp_rating){ lp_be_f64(PQgetvalue(q, r, 1)), lp_be_f64(PQgetvalue(q, r, 2)), lp_be_f64(PQgetvalue(q, r, 3)) };
+                const uint8_t *mb = (const uint8_t *)PQgetvalue(q, r, 4); s->matches = s->m0 = (uint32_t)mb[0] << 24 | mb[1] << 16 | mb[2] << 8 | mb[3]; s->had = 1; }
+            PQclear(q); }
+        free(ab);
+    }
+    free(old); free(oj); if (bad) return 1;
+    st->t_read += now() - tp; tp = now();
+    #pragma omp parallel for schedule(dynamic, 4096)
+    for (uint64_t i = 0; i < nc; i++) { const Said *q = lp_idmap_at(fold->m, i); Standing *s = &stand[i];      /* the map's places are the order of first meeting: stand's */
+        lp_attest_series(&s->r, trust, q->games, q->sum / q->games, LP_ATTEST_FLOOR); s->matches += q->games; }
+    st->t_play += now() - tp; tp = now();
+    uint64_t nnew = 0, nupd = 0; int nparts = npg < 16 ? npg : 16;
+    #pragma omp parallel for num_threads(nparts) schedule(static, 1) reduction(+:nnew, nupd, bad)
+    for (int j = 0; j < nparts; j++) {
+        PGconn *c = pg[j]; PQclear(PQexec(c, "BEGIN")); int mine = 0;
+        for (int h = j; h < 16; h += nparts) { uint64_t a = 0, b = 0; mine += standings_part(c, h, &a, &b); nnew += a; nupd += b; }
+        PGresult *e = PQexec(c, mine ? "ROLLBACK" : "COMMIT"); if (PQresultStatus(e) != PGRES_COMMAND_OK) { fprintf(stderr, "standings: %s", PQerrorMessage(c)); mine++; } PQclear(e); bad += mine; }
+    st->std_new += nnew; st->std_upd += nupd; st->t_led += now() - tp; st->t_sem += now() - t;
+    free(stand); lp_idmap_free(smap); stand = NULL; smap = NULL;
+    for (int i = 0; i < npg; i++) PQfinish(pg[i]); free(pg);
+    return bad ? 1 : 0;
 }
 /* A statement that must succeed. */
 static int must(PGconn *pg, const char *sql){
@@ -302,6 +299,23 @@ static int resolve_parts(PGconn *pg){
         PQclear(r); }
     return 1;
 }
+/* The files of a batch whose trunks are recorded: each is recorded, with everything under it and everything it says,
+ * and nothing of it is looked for, played or written again. Asked by ingest before it folds what the batch says (the
+ * batch may then be written by a child of its own), and by load again, which finds the same. A file whose trunk is new
+ * holds what it says under that trunk even where its content tree is recorded under another: its source's trunk is
+ * another witness, and the walk up from what it says finds both (provenance by containment). */
+int files_known(PGconn **pg, int npg, File *files, int nfiles, LoadStats *st){
+    lp_id *trunk = malloc(sizeof(lp_id) * (size_t)(nfiles + 1)); int *of = malloc(sizeof(int) * (size_t)(nfiles + 1)); uint64_t nt = 0; int n = 0;
+    for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { of[nt] = fi; trunk[nt++] = files[fi].file.id; }
+    if (nt) { uint8_t *tt = malloc(nt); for (uint64_t i = 0; i < nt; i++) { Node *x = table_find(&trunk[i]); tt[i] = x ? x->tier : files[of[i]].file.tier; }
+              uint8_t *hit = recorded(pg, npg, trunk, tt, nt); free(tt); if (st) st->checked += nt;
+              for (uint64_t i = 0; i < nt; i++) if (hit[i]) { files[of[i]].known = 1; n++; if (st) { st->known++; st->found++; } Node *x = table_find(&trunk[i]); if (x) x->keep = 2; }
+              free(hit); }
+    free(trunk); free(of); return n;
+}
+int ingest_known(const char *conninfo, File *files, int nfiles){
+    PGconn *pg = db_connect(conninfo); int n = files_known(&pg, 1, files, nfiles, NULL); PQfinish(pg); return n;
+}
 int load_whole;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     table_kinds();                                                           /* what each child is said to be: on the child, for its mask */
@@ -324,22 +338,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     #define FPUSH(x) do { if (nf == cap) { cap *= 2; front = xrealloc(front, cap * sizeof(lp_id)); } front[nf++] = (x); } while (0)
     if (load_whole)                                                          /* every node is looked for: nothing is taken to be recorded because what holds it is */
         TABLE_EACH(x) if (!x->keep) { x->keep = 3; FPUSH(x->id); }
-    /* The files first, by their trunks: a file whose trunk is recorded is recorded, with everything under it and
-     * everything it attested, and nothing of it is looked for, played or written again. */
-    { lp_id *trunk = malloc(sizeof(lp_id) * (size_t)(nfiles + 1)); int *of = malloc(sizeof(int) * (size_t)(nfiles + 1)); uint64_t nt = 0;
-      for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file) { of[nt] = fi; trunk[nt++] = files[fi].file.id; }
-      if (nt) { uint8_t *tt = malloc(nt); for (uint64_t i = 0; i < nt; i++) { Node *x = table_find(&trunk[i]); tt[i] = x ? x->tier : files[of[i]].file.tier; }
-                uint8_t *hit = recorded(pg, npg, trunk, tt, nt); free(tt); st->checked += nt;
-                for (uint64_t i = 0; i < nt; i++) if (hit[i]) { files[of[i]].known = 1; st->known++; st->found++; Node *x = table_find(&trunk[i]); if (x) x->keep = 2; }
-                free(hit); }
-      /* A file whose trunk is new but whose content tree is recorded (its OS record changed, its content did not):
-       * what its content attests was attested when that content was recorded, and is not attested again. */
-      nt = 0; for (int fi = 0; fi < nfiles; fi++) if (!files[fi].known && !files[fi].skipped && files[fi].has_file && files[fi].ev.n) { of[nt] = fi; trunk[nt++] = files[fi].trunk.id; }
-      if (nt) { uint8_t *tt = malloc(nt); for (uint64_t i = 0; i < nt; i++) { Node *x = table_find(&trunk[i]); tt[i] = x ? x->tier : files[of[i]].trunk.tier; }
-                uint8_t *hit = recorded(pg, npg, trunk, tt, nt); free(tt); st->checked += nt;
-                for (uint64_t i = 0; i < nt; i++) if (hit[i]) { files[of[i]].ev.n = 0; st->content_known++; }
-                free(hit); }
-      free(trunk); free(of); }
+    files_known(pg, npg, files, nfiles, st);
     for (int fi = 0; fi < nfiles; fi++) {
         if (files[fi].known || files[fi].skipped) continue;
         if (files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (x && !x->keep) { x->keep = 3; FPUSH(x->id); } }
@@ -399,151 +398,6 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
     for (int p = 0; p < NPART; p++) { free(bucket[p]); bucket[p] = NULL; }
     st->t_copy += now() - t;
 
-    /* ---- semantics: witnesses, attestations, and standings played in reading order */
-    t = now(); double tp = t; uint64_t nev = 0;      /* tp: where each part of it began */
-    for (int fi = 0; fi < nfiles; fi++) { if (files[fi].known) { free(files[fi].ev.e); memset(&files[fi].ev, 0, sizeof files[fi].ev); } nev += files[fi].ev.n; }
-    /* What the files attested goes in the same transaction as their nodes: all of it is recorded, or none. */
-    if (nev) {
-        smap = lp_idmap_new(); stand = malloc(sizeof(Standing) * (nev + 1)); sn = 0;
-        for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) if (files[fi].ev.e[i].kind != EV_RECORD) stand_get(&files[fi].ev.e[i].claim, true);
-        /* claims already recorded start from their recorded standing */
-        /* the statistics are partitioned by the claim's first hex digit: each read goes to its one partition */
-        lp_id *old = malloc(sizeof(lp_id) * (sn + 1)); uint64_t nold = 0, ocnt[17] = { 0 };
-        for (uint64_t i = 0; i < sn; i++) { Node *x = table_find(&stand[i].id); if (!x || x->keep != 1) { old[nold++] = stand[i].id; ocnt[(stand[i].id.b[0] >> 4) + 1]++; } }   /* a claim new to the database has no standing to read */
-        for (int h = 0; h < 16; h++) ocnt[h + 1] += ocnt[h];
-        { lp_id *by = malloc(sizeof(lp_id) * (nold + 1)); uint64_t fill[16]; memcpy(fill, ocnt, sizeof fill); for (uint64_t i = 0; i < nold; i++) by[fill[old[i].b[0] >> 4]++] = old[i]; free(old); old = by; }
-        const uint64_t CH = 100000; typedef struct { int h; uint64_t lo, n; } OJob; OJob *oj = malloc(sizeof(OJob) * (nold / CH + 17)); uint64_t noj = 0;
-        for (int h = 0; h < 16; h++) for (uint64_t lo = ocnt[h]; lo < ocnt[h + 1]; lo += CH) oj[noj++] = (OJob){ h, lo, ocnt[h + 1] - lo < CH ? ocnt[h + 1] - lo : CH };
-        #pragma omp parallel for num_threads(npg) schedule(dynamic)
-        for (uint64_t j = 0; j < noj; j++) {
-            uint32_t k = (uint32_t)oj[j].n; uint8_t *ab = malloc(20 + 20 * (size_t)k);
-            size_t len = ids_param(ab, old + oj[j].lo, k); PGconn *c = pg[omp_get_thread_num()];
-            const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
-            for (int from = 0; from < 2; from++) {                            /* recorded, then staged: a staged standing is the later one */
-                char sql[160]; snprintf(sql, sizeof sql, "SELECT claim, rating, deviation, volatility, matches FROM %s.consensus_%x WHERE claim = ANY($1::blake3[])", from ? "stage" : "public", oj[j].h);
-                PGresult *q = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
-                if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "standing: %s", PQerrorMessage(c)); exit(1); }
-                #pragma omp critical
-                for (int j = 0; j < PQntuples(q); j++) {
-                    lp_id id; memcpy(id.b, PQgetvalue(q, j, 0), 16); Standing *s = stand_get(&id, false); if (!s) continue;
-                    double d[3]; for (int z = 0; z < 3; z++) { uint64_t u = 0; const uint8_t *b = (const uint8_t *)PQgetvalue(q, j, 1 + z); for (int y = 0; y < 8; y++) u = u << 8 | b[y]; memcpy(&d[z], &u, 8); }
-                    const uint8_t *mb = (const uint8_t *)PQgetvalue(q, j, 4);
-                    s->r = (lp_rating){ d[0], d[1], d[2] }; s->matches = s->m0 = (uint32_t)mb[0] << 24 | mb[1] << 16 | mb[2] << 8 | mb[3]; s->had = 1;
-                }
-                PQclear(q); }
-            free(ab);
-        }
-        free(old); free(oj);
-        /* What attestation already holds for this batch's witnessed things, by witness: a pair recorded or staged
-         * gains this batch's games where it is (part_write). */
-        uint64_t nrec = 0; for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) nrec += files[fi].ev.e[i].kind != EV_MEMBER;
-        lp_id *wold = malloc(sizeof(lp_id) * (nrec + 1)); uint64_t nwold = 0, lin_at[17] = { 0 };
-        for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (e->kind == EV_MEMBER) continue;
-            Node *x = table_find(&e->witnessed); if (!x || x->keep != 1) wold[nwold++] = e->witnessed; }   /* a new claim was witnessed by nothing before */
-        /* each claim read from the one partition of attestation it is in (its ID's first hex digit): asked of the whole
-         * table, every one of the 16 partitions probes every claim of the batch */
-        { lp_id *by = malloc(sizeof(lp_id) * (nwold + 1)); uint64_t at[17] = { 0 };
-          for (uint64_t i = 0; i < nwold; i++) at[(wold[i].b[0] >> 4) + 1]++;
-          for (int h = 0; h < 16; h++) at[h + 1] += at[h];
-          uint64_t put[16]; memcpy(put, at, sizeof put); for (uint64_t i = 0; i < nwold; i++) by[put[wold[i].b[0] >> 4]++] = wold[i];
-          free(wold); wold = by; memcpy(lin_at, at, sizeof at); }
-        OJob *lj = malloc(sizeof(OJob) * (nwold / CH + 17)); uint64_t nlj = 0;
-        for (int h = 0; h < 16; h++) for (uint64_t lo = lin_at[h]; lo < lin_at[h + 1]; lo += CH) lj[nlj++] = (OJob){ h, lo, lin_at[h + 1] - lo < CH ? lin_at[h + 1] - lo : CH };
-        #pragma omp parallel for num_threads(npg) schedule(dynamic)
-        for (uint64_t jx = 0; jx < nlj; jx++) {
-            uint64_t i0 = lj[jx].lo; uint32_t k = (uint32_t)lj[jx].n; uint8_t *ab = malloc(20 + 20 * (size_t)k);
-            size_t len = ids_param(ab, wold + i0, k); PGconn *c = pg[omp_get_thread_num()];
-            const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 }; char sql[512];
-            snprintf(sql, sizeof sql, "SELECT claim, witness FROM public.attestation_%x WHERE claim = ANY($1::blake3[]) "
-                                      "UNION SELECT claim, witness FROM stage.attestation_%x WHERE claim = ANY($1::blake3[])", lj[jx].h, lj[jx].h);
-            PGresult *q = PQexecParams(c, sql, 1, NULL, v, l, f, 1);
-            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "attested: %s", PQerrorMessage(c)); exit(1); }
-            #pragma omp critical
-            for (int j = 0; j < PQntuples(q); j++) {
-                lp_id wit, wid; memcpy(wit.b, PQgetvalue(q, j, 0), 16); memcpy(wid.b, PQgetvalue(q, j, 1), 16);
-                ldg_put(&wit, &wid);
-            }
-            PQclear(q); free(ab);
-        }
-        free(wold); free(lj);
-        st->t_read += now() - tp; tp = now();
-        /* The series: what one lineage attests of one claim in this batch is one series, its games every time the
-         * lineage attests it here and its score their mean, played once as one solved update (lp_attest_series): each
-         * outcome pulled toward a draw by the witness's trust, against the anchor, the deviation never below what one
-         * witness of that trust can give. A claim within a record is attested each time its record is. Content
-         * already recorded attests nothing again (a file whose content tree is recorded brings no events), so the
-         * same content ingested twice plays nothing the second time. A claim's series are played in the order their
-         * lineages first attest it, the claims on every core: a standing is moved by its own claim's series and by
-         * nothing else. Trust is the witness's class prior. */
-        typedef struct { lp_id claim; uint32_t games; double sum, trust; } Series;
-        const int NP = 64; lp_idmap *smine = lp_idmap_new(); Series *ser = NULL; uint64_t nser = 0, cser = 0;
-        for (int fi = 0; fi < nfiles; fi++) { const lp_id *flin = files[fi].has_lineage ? &files[fi].lineage.id : &files[fi].witness.id;
-            for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (e->kind == EV_RECORD) continue;
-                const lp_id *lin = e->own_witness ? &e->witness : flin;
-                lp_id pair; for (int b = 0; b < 16; b++) pair.b[b] = e->claim.b[b] ^ lin->b[(b + 7) & 15];   /* both are hashes: their mix names the pair */
-                bool fresh; size_t at = lp_idmap_put(smine, &pair, &fresh);
-                if (fresh) { if (nser == cser) { cser = cser ? cser * 2 : 4096; ser = xrealloc(ser, sizeof(Series) * cser); } ser[nser++] = (Series){ e->claim, 0, 0, files[fi].trust }; }
-                ser[at].games++; ser[at].sum += e->score; } }
-        lp_idmap_free(smine);
-        #pragma omp parallel for schedule(dynamic, 1)
-        for (int p = 0; p < NP; p++)
-            for (uint64_t x = 0; x < nser; x++) { const Series *q = &ser[x]; if (q->claim.b[7] % NP != p) continue;
-                Standing *s = stand_get(&q->claim, false);
-                if (!s->had && !s->entered) s->entered = 1;
-                lp_attest_series(&s->r, q->trust, q->games, q->sum / q->games, LP_ATTEST_FLOOR); s->matches += q->games; }
-        free(ser);
-        st->t_play += now() - tp; tp = now();
-        Copy c = { 0 };
-        /* witnesses: each once, and only those the database does not know yet */
-        lp_id *wid = malloc(sizeof(lp_id) * (size_t)nfiles); int *wfile = malloc(sizeof(int) * (size_t)nfiles), nw = 0; lp_idmap *wmap = lp_idmap_new();
-        for (int fi = 0; fi < nfiles; fi++) if (files[fi].ev.n) {                  /* the map's places are the order of first meeting: wid's */
-            bool fresh; lp_idmap_put(wmap, &files[fi].witness.id, &fresh);
-            if (fresh) { wid[nw] = files[fi].witness.id; wfile[nw++] = fi; }
-        }
-        /* witnesses a source names statement by statement: each is its own lineage, and plays at the source's trust */
-        lp_id *own = NULL; double *owntrust = NULL; uint64_t nown = 0, cown = 0; lp_idmap *oseen = lp_idmap_new();
-        for (int fi = 0; fi < nfiles; fi++) for (uint64_t i = 0; i < files[fi].ev.n; i++) { const Event *e = &files[fi].ev.e[i]; if (!e->own_witness) continue;
-            bool fresh; lp_idmap_put(oseen, &e->witness, &fresh); if (!fresh) continue;
-            if (nown == cown) { cown = cown ? cown * 2 : 4096; own = xrealloc(own, cown * sizeof(lp_id)); owntrust = xrealloc(owntrust, cown * 8); }
-            own[nown] = e->witness; owntrust[nown] = files[fi].trust; nown++; }
-        uint8_t *oknown = calloc(nown ? nown : 1, 1);
-        for (uint64_t i0 = 0; i0 < nown; i0 += 50000) { uint32_t k = (uint32_t)(nown - i0 < 50000 ? nown - i0 : 50000); uint8_t *ab = malloc(20 + 20 * (size_t)k); size_t len = ids_param(ab, own + i0, k);
-            const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
-            PGresult *q = PQexecParams(pg[0], "SELECT u.i FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN witness w ON w.id = u.id", 1, NULL, v, l, f, 0);
-            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg[0])); return 1; }
-            for (int j = 0; j < PQntuples(q); j++) oknown[i0 + (uint64_t)atoll(PQgetvalue(q, j, 0)) - 1] = 1;
-            PQclear(q); free(ab); }
-        uint8_t *known = calloc((size_t)(nw ? nw : 1), 1);
-        { uint8_t *ab = malloc(20 + 20 * (size_t)nw); size_t len = ids_param(ab, wid, (uint32_t)nw);
-          const char *v[1] = { (const char *)ab }; int l[1] = { (int)len }, f[1] = { 1 };
-          PGresult *q = PQexecParams(pg[0], "SELECT id FROM witness WHERE id = ANY($1::blake3[])", 1, NULL, v, l, f, 1);
-          if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg[0])); return 1; }
-          for (int j = 0; j < PQntuples(q); j++) { lp_id x; memcpy(x.b, PQgetvalue(q, j, 0), 16); int64_t k = lp_idmap_find(wmap, &x); if (k >= 0) known[k] = 1; }
-          PQclear(q); free(ab); }
-        copy_begin(&c, pg[0], "COPY witness (id, lineage, trust) FROM STDIN (FORMAT binary)");
-        for (int k = 0; k < nw; k++) if (!known[k]) {
-            int fi = wfile[k];
-            c16(&c, 3); cfield(&c, files[fi].witness.id.b, 16);
-            if (files[fi].has_lineage) cfield(&c, files[fi].lineage.id.b, 16); else c32(&c, 0xFFFFFFFFu);
-            cf_f64(&c, files[fi].trust);
-        }
-        for (uint64_t i = 0; i < nown; i++) if (!oknown[i]) { if (lp_idmap_find(wmap, &own[i]) >= 0) continue;
-            c16(&c, 3); cfield(&c, own[i].b, 16); c32(&c, 0xFFFFFFFFu); cf_f64(&c, owntrust[i]); }
-        copy_end(&c); free(wid); free(wfile); free(known); free(own); free(owntrust); lp_idmap_free(oseen); free(oknown); lp_idmap_free(wmap);
-        st->t_wit += now() - tp; tp = now();
-        /* attestations and standings, a partition a connection at a time on every connection: each connection's
-         * part of the batch's transaction (prepared and committed as one below) */
-        uint64_t led = 0, nnew = 0, nupd = 0; int bad = 0;
-        #pragma omp parallel for num_threads(nparts) schedule(static, 1) reduction(+:led, nnew, nupd, bad)
-        for (int j = 0; j < nparts; j++) for (int h = j; h < 16; h += nparts) { uint64_t a = 0, b = 0, c = 0; bad += part_write(pg[j], h, files, nfiles, &a, &b, &c); led += a; nnew += b; nupd += c; }
-        if (bad) return 1;
-        st->led += led; st->std_new += nnew; st->std_upd += nupd;
-        free(ldg); free(ldg_used); ldg = NULL; ldg_used = NULL; ldg_cap = ldg_n = 0;
-        st->t_led += now() - tp; tp = now();
-    }
-    if (nev) { free(stand); lp_idmap_free(smap); stand = NULL; smap = NULL; }
-    st->t_sem += now() - t;
-
     /* one transaction in parts: each prepared, part 0 last; then part 0 committed, which decides, and the rest */
     if (begun == 1) { if (!must(pg[0], "COMMIT")) return 1; }
     else { char sql[96];
@@ -566,17 +420,17 @@ int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers
  * (prepared, then committed). The stage holds each node of the source once, and only nodes the real tables did not
  * hold when it was staged (the descent in load asked them, trunk to leaf; the client staged nothing twice). A leaf:
  *   a leaf that holds nothing yet is loaded: truncated and copied FREEZE, in its order (Hilbert for entity and
- *     physicality, the claim for attestation and consensus). A truncated table's files are new, written without WAL at
+ *     physicality, the claim for consensus). A truncated table's files are new, written without WAL at
  *     wal_level minimal and synced when the transaction is prepared, its indexes with it; frozen rows leave no hint
  *     bits for a later read to log (data_checksums is on). TRUNCATE locks that leaf alone.
  *   a leaf that holds rows takes the staged rows, one INSERT ... SELECT (its primary key refuses a row it holds);
- *     attestation and consensus put a staged row in place of the recorded one (its games and standing as the source left them).
+ *     consensus puts a staged standing in place of the recorded one (as the source left it).
  * An entity leaf is always appended: a physicality's entity is a foreign key to it, and a table a foreign key points
  * at cannot be truncated alone. An entity leaf and the physicality leaf of the same range go to one connection, the
  * entities first, so the paths it copies find their entities in its own part of the transaction. */
 typedef struct { char name[64]; int table; double live, staged_rows, staged_bytes; int rewrite, worker; } MLeaf;
-enum { M_ENTITY, M_PHYS, M_ATT, M_CONS };
-static const char *M_ORDER[4] = { "hilbert", "hilbert", "claim, witness", "claim" };
+enum { M_ENTITY, M_PHYS, M_CONS };
+static const char *M_ORDER[3] = { "hilbert", "hilbert", "claim" };
 static int mleaf_by_table(const void *a, const void *b){ return ((const MLeaf *)a)->table - ((const MLeaf *)b)->table; }   /* entities before their paths */
 static int leaf_range(const char *name){ const char *u = strrchr(name, '_'); return u ? (int)strtol(u + 1, NULL, 16) : 0; }    /* entity_ab, physicality_ab: 0xab */
 static char *cols_of(PGconn *pg, const char *leaf){                          /* the leaf's columns, in order */
@@ -588,10 +442,10 @@ static char *cols_of(PGconn *pg, const char *leaf){                          /* 
 static int merge_leaf(PGconn *w, PGconn *rd, const MLeaf *L, uint64_t *rows){
     char *cols = cols_of(w, L->name); if (!cols) { fprintf(stderr, "merge %s: no columns\n", L->name); return 1; }
     size_t sl = strlen(cols) * 3 + 1024; char *sql = malloc(sl); int bad = 0;
-    const char *same = L->table == M_ATT ? "s.claim = l.claim AND s.witness = l.witness" : "s.claim = l.claim";   /* a staged row in place of the recorded one */
+    const char *same = "s.claim = l.claim";                                  /* a staged standing in place of the recorded one */
     if (L->rewrite) {
         /* read whole, before the leaf is truncated: what it held (less what the stage holds in its place) and what was staged */
-        if (L->table >= M_ATT) snprintf(sql, sl, "COPY (SELECT %s FROM public.%s l WHERE NOT EXISTS (SELECT 1 FROM stage.%s s WHERE %s) UNION ALL SELECT %s FROM stage.%s ORDER BY %s) TO STDOUT (FORMAT binary)",
+        if (L->table == M_CONS) snprintf(sql, sl, "COPY (SELECT %s FROM public.%s l WHERE NOT EXISTS (SELECT 1 FROM stage.%s s WHERE %s) UNION ALL SELECT %s FROM stage.%s ORDER BY %s) TO STDOUT (FORMAT binary)",
                                         cols, L->name, L->name, same, cols, L->name, M_ORDER[L->table]);
         else snprintf(sql, sl, "COPY (SELECT %s FROM public.%s UNION ALL SELECT %s FROM stage.%s ORDER BY %s) TO STDOUT (FORMAT binary)", cols, L->name, cols, L->name, M_ORDER[L->table]);
         PGresult *r = PQexec(rd, sql);
@@ -611,14 +465,13 @@ static int merge_leaf(PGconn *w, PGconn *rd, const MLeaf *L, uint64_t *rows){
             while ((r = PQgetResult(w))) { if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "merge %s, write: %s", L->name, PQerrorMessage(w)); bad = 1; } PQclear(r); } }
         free(buf);
     } else {
-        if (L->table >= M_ATT) {
+        if (L->table == M_CONS) {
             /* A staged row is new, or takes the recorded one's place: two set operations along the primary key, the
              * recorded rows updated by a join and the new ones inserted by an anti-join, each one statement over the
              * leaf (Ingestion: Deduplication: set-based, never per-row conflict handling). ON CONFLICT arbitrated every
              * row through the index: 2.3 s a leaf-call on 13 sources (pg_stat_statements, 2026-10-05). */
-            const char *key = L->table == M_ATT ? "p.claim = s.claim AND p.witness = s.witness" : "p.claim = s.claim";
-            const char *set = L->table == M_ATT ? "score = s.score, games = s.games"
-                                                : "rating = s.rating, deviation = s.deviation, volatility = s.volatility, matches = s.matches";
+            const char *key = "p.claim = s.claim";
+            const char *set = "rating = s.rating, deviation = s.deviation, volatility = s.volatility, matches = s.matches";
             snprintf(sql, sl, "UPDATE public.%s p SET %s FROM stage.%s s WHERE %s", L->name, set, L->name, key);
             bad = !must(w, sql);
             if (!bad) { snprintf(sql, sl, "INSERT INTO public.%s (%s) SELECT %s FROM stage.%s s WHERE NOT EXISTS (SELECT 1 FROM public.%s p WHERE %s) ORDER BY %s",
@@ -660,11 +513,11 @@ int merge(const char *conninfo, int npg){
     if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "merge: %s", PQerrorMessage(pg0)); return 1; }
     int minimal = !strcmp(PQgetvalue(r, 0, 0), "minimal"); double wal0 = atof(PQgetvalue(r, 0, 1)), fpi0 = atof(PQgetvalue(r, 0, 2)); PQclear(r);
     /* what is staged, leaf by leaf, and what each way would write */
-    r = PQexec(pg0, "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'stage' AND c.relkind = 'r' ORDER BY 1");
+    r = PQexec(pg0, "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'stage' AND c.relkind = 'r' AND c.relname ~ '^(entity|physicality|consensus)_' ORDER BY 1");
     if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "merge: %s", PQerrorMessage(pg0)); return 1; }
     int nl = PQntuples(r); MLeaf *L = calloc((size_t)nl + 1, sizeof(MLeaf));
     for (int i = 0; i < nl; i++) { snprintf(L[i].name, sizeof L[i].name, "%s", PQgetvalue(r, i, 0));
-        L[i].table = !strncmp(L[i].name, "entity", 6) ? M_ENTITY : !strncmp(L[i].name, "physicality", 11) ? M_PHYS : !strncmp(L[i].name, "attestation", 11) ? M_ATT : M_CONS; }
+        L[i].table = !strncmp(L[i].name, "entity", 6) ? M_ENTITY : !strncmp(L[i].name, "physicality", 11) ? M_PHYS : M_CONS; }
     PQclear(r);
     PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg), **rd = malloc(sizeof(PGconn *) * (size_t)npg);
     db_connect_many(conninfo, npg, pg); db_connect_many(conninfo, npg, rd);

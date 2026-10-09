@@ -137,22 +137,19 @@ Claim *claims_of(PGconn *pg, const lp_id *e, int fan, double k, int *n, int *cap
     lp_id part[3] = { *e, *e, *e }; int have[3] = { 1, 0, 0 };
     return claims_like(pg, part, have, fan, k, n, capped);
 }
-/* The position each claim was given by the witnesses that gave one: the least, as recorded in attestation. */
+/* The position each claim was given by the records that gave one: the least, as each record's vertex for it carries it
+ * (provenance by containment: a walk up from the claims to the records and trunks that hold them). */
 void positions_of(PGconn *pg, Claim *c, int n){
     if (!n) return;
-    lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) ids[i] = c[i].id;
-    uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n);
-    const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = db_ask(pg, "SELECT claim, position FROM laplace_attested($1::blake3[]) WHERE position IS NOT NULL", 1, v, l, f);
-    if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "positions: %s", PQerrorMessage(pg)); exit(1); }
-    for (int j = 0; j < PQntuples(q); j++) {
-        uint32_t pb; memcpy(&pb, PQgetvalue(q, j, 1), 4); int pos = (int)ntohl(pb);
-        for (int i = 0; i < n; i++) if (!memcmp(c[i].id.b, PQgetvalue(q, j, 0), 16)) { if (!c[i].position || pos < c[i].position) c[i].position = pos; break; }
-    }
-    PQclear(q);
+    lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); lp_idmap *at = lp_idmap_sized(sizeof(int));
+    for (int i = 0; i < n; i++) { ids[i] = c[i].id; bool f; int *x = lp_idmap_get(at, &c[i].id, &f); if (f) *x = i; }
+    int na = 0; Attested *a = attested(pg, ids, n, &na, NULL);
+    for (int j = 0; j < na; j++) { if (!a[j].position) continue; const int *x = lp_idmap_lookup(at, &a[j].claim); if (!x) continue;
+        int i = *x, pos = (int)a[j].position; if (!c[i].position || pos < c[i].position) c[i].position = pos; }
+    free(a); lp_idmap_free(at); uint8_t *ab = NULL;
     /* A claim said within a record has its place in the record's own trajectory (Physicality: the trajectory records
      * the order of the constituents, so no ordinal is needed): the entry lists its senses in the order its witness
-     * gave them. For the claims attestation gave no place, the records that hold each are fetched as one set, and the
+     * gave them. For the claims no record gave a place, the paths that hold each are fetched as one set, and the
      * claim's place is where it stands in the path, the least when several records hold it. */
     int need = 0; for (int i = 0; i < n; i++) need += !c[i].position;
     if (need) {                                                              /* the paths that hold any of them, one set (holds_above gives each path to the claims it holds) */
@@ -179,7 +176,7 @@ int claim_by_position(const void *a, const void *b){
 }
 
 /* The kinds of strand a firmware refuses, taken out of a set before it is used: a claim that holds a refused
- * predicate in its middle, and a claim only refused witnesses attested. Returns how many are left. */
+ * predicate in its middle, and a claim only refused witnesses hold (a walk up to the trunks over it). Returns how many are left. */
 int refused(PGconn *pg, Ctx *c, const Firmware *fw, Claim *cl, int n){
     if (!n || (!fw->nrefuse_predicate && !fw->nrefuse_witness)) return n;
     lp_id pred[FW_NAMES], wit[FW_NAMES];
@@ -188,17 +185,17 @@ int refused(PGconn *pg, Ctx *c, const Firmware *fw, Claim *cl, int n){
     uint8_t *out = calloc((size_t)n, 1);
     for (int i = 0; i < n; i++) for (int p = 1; p < cl[i].np - 1 || (p == 1 && cl[i].np == 2); p++) { if (p >= cl[i].np) break;
         for (int z = 0; z < fw->nrefuse_predicate; z++) if (!memcmp(&cl[i].part[p], &pred[z], 16)) out[i] = 1; }
-    if (fw->nrefuse_witness) {
-        lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); for (int i = 0; i < n; i++) ids[i] = cl[i].id;
-        uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(ab, ids, (uint32_t)n);
-        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-        PGresult *q = db_ask(pg, "SELECT claim, witness FROM laplace_attested($1::blake3[])", 1, v, l, f);
-        if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg)); exit(1); }
+    if (fw->nrefuse_witness) {                                               /* a witness by its name: the record of its source's trunk, [record, files] */
+        lp_id *ids = malloc(sizeof(lp_id) * (size_t)n); lp_idmap *at = lp_idmap_sized(sizeof(int));
+        for (int i = 0; i < n; i++) { ids[i] = cl[i].id; bool f; int *x = lp_idmap_get(at, &cl[i].id, &f); if (f) *x = i; }
+        int na = 0; Attested *a = attested(pg, ids, n, &na, NULL); Reader *rd = reader_new(pg); lp_idmap *named = lp_idmap_sized(1);
         uint8_t *other = calloc((size_t)n, 1), *theirs = calloc((size_t)n, 1);
-        for (int j = 0; j < PQntuples(q); j++) { int is = 0; for (int z = 0; z < fw->nrefuse_witness; z++) is |= !memcmp(PQgetvalue(q, j, 1), wit[z].b, 16);
-            for (int i = 0; i < n; i++) if (!memcmp(cl[i].id.b, PQgetvalue(q, j, 0), 16)) { if (is) theirs[i] = 1; else other[i] = 1; break; } }
+        for (int j = 0; j < na; j++) { if (!a[j].witness) continue; const int *x = lp_idmap_lookup(at, &a[j].claim); if (!x) continue;
+            bool f; uint8_t *is = lp_idmap_get(named, &a[j].trunk, &f);
+            if (f) { lp_id first[2]; size_t m = reader_parts(rd, &a[j].trunk, first, 2); *is = 1; for (int z = 0; m && z < fw->nrefuse_witness; z++) if (!memcmp(&first[0], &wit[z], 16)) *is = 2; }
+            if (*is == 2) theirs[*x] = 1; else other[*x] = 1; }
         for (int i = 0; i < n; i++) if (theirs[i] && !other[i]) out[i] = 1;
-        PQclear(q); free(ab); free(ids); free(other); free(theirs);
+        free(a); free(ids); free(other); free(theirs); lp_idmap_free(at); lp_idmap_free(named); reader_free(rd);
     }
     int m = 0; for (int i = 0; i < n; i++) if (!out[i]) cl[m++] = cl[i];
     free(out); return m;

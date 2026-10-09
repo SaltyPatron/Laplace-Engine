@@ -12,7 +12,7 @@
 #   top always | within N      whether the top of a set is taken every time, or how near a tie has to be before
 #                              another strand can be taken (the temperature of that choice)
 #   refuse predicate NAME...   kinds of strand refused before they are scored
-#   refuse witness NAME...
+#   refuse witness NAME...     claims only these witnesses hold: a witness by its source's name (in quotes where it has spaces)
 #   emit N                     how many constituents a turn may emit: the emission budget STEER is given
 #   enough N                   a turn is complete when no more than N (0 to 1) of what its obligations owed at the
 #                              start, each word as hard as it pulls, is still owed; 0 unless said: all of it answered

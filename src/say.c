@@ -63,7 +63,10 @@ typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thi
                  char selfmark;                                              /* what the source writes, in a value, for the code point the part is (UCD: #) */
                  regex_t about_re; int has_about;                            /* a page's lines: the first that matches names what the page is about */
                  struct { regex_t re; int mode; char pred[64]; } line[8]; int nline;    /* a line that matches says its parts: 0 of what the page is about, 1 the claim itself, 2 a pair, 3 under a name */
-                 Score score[4]; int nscore; Where where[16]; int nwhere; uint32_t whole, now; Pair voice; } Say;   /* whole: the conditions on the outermost part (where); now: the ones the lines being read are said under (when) */
+                 Score score[4]; int nscore; Where where[16]; int nwhere; uint32_t whole, now; Pair voice;   /* whole: the conditions on the outermost part (where); now: the ones the lines being read are said under (when) */
+                 /* a record's layers down its rows and its tree by head, where the recipe gives them (layers, tree): parts of the
+                  * record's path beside the claims it says (record_of) */
+                 char lay_tier[32], lay_row[32], layer[16][64]; int nlayer; char tree_tier[32], tree_row[32], tree_head[64], tree_rel[64]; } Say;
 
 static char *name_next(char **at, char *out, size_t cap){
     char *p = *at; if (!p) return NULL; while (*p == ' ' || *p == '\t') p++;
@@ -140,6 +143,19 @@ int say_says(Recipe *r, const char *path, char *tok){
             x->from = atof(lo); x->to = atof(hi); x->mapped = 1; }
         return 1; }                                                          /* the part is still what its own disposition says (content, usually) */
     if (!strcmp(tok, "always") && LAID) { s->now = 0; return 1; }
+    /* Every part the recipe speaks of whole (the outermost tier) is a record: a path in the file's content tree over its
+     * thing and the claims it says (record_of). Where the recipe gives them, the record holds its rows' layers and tree too:
+     * layers TIER ROW NAME...            each NAME a path down the TIER's ROWs, aligned to them: a value the row leaves
+     *                                    empty stands as the file writes empty
+     * tree TIER ROW HEAD REL             the ROWs' tree by HEAD (a row's key, or 0 for none), each subtree the path of its
+     *                                    dependents' subtrees and [REL, the row's thing] in the rows' order */
+    if (!strcmp(tok, "layers") && LAID) { at = strtok(NULL, "\r\n");
+        if (!name_next(&at, s->lay_tier, sizeof s->lay_tier) || !name_next(&at, s->lay_row, sizeof s->lay_row)) { fprintf(stderr, "%s: layers TIER ROW NAME...\n", path); return -1; }
+        while (s->nlayer < 16 && name_next(&at, s->layer[s->nlayer], sizeof s->layer[0])) s->nlayer++;
+        if (!s->nlayer) { fprintf(stderr, "%s: layers TIER ROW NAME...\n", path); return -1; } return 1; }
+    if (!strcmp(tok, "tree") && LAID) { at = strtok(NULL, "\r\n");
+        if (!name_next(&at, s->tree_tier, sizeof s->tree_tier) || !name_next(&at, s->tree_row, sizeof s->tree_row) || !name_next(&at, s->tree_head, sizeof s->tree_head) || !name_next(&at, s->tree_rel, sizeof s->tree_rel)) { fprintf(stderr, "%s: tree TIER ROW HEAD REL\n", path); return -1; }
+        return 1; }
     if ((!strcmp(tok, "where") || !strcmp(tok, "when")) && LAID) { char op[16]; int when = tok[2] == 'e' && tok[3] == 'n'; at = strtok(NULL, "\r\n");
         if (!name_next(&at, nm, sizeof nm) || !name_next(&at, op, sizeof op) || s->nwhere == 16) { fprintf(stderr, "%s: %s NAME is VALUE | is-not VALUE | matches PATTERN\n", path, tok); return -1; }
         if (when) s->now |= 1u << s->nwhere; else s->whole |= 1u << s->nwhere;
@@ -258,7 +274,7 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
                  Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int32_t wide_of; KeyRank kr; int16_t *dm; uint32_t dm_cap;
-                 struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; } Sink;          /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
+                 struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; int32_t rec; } Sink;   /* rec: the node of the tree whose record what is read now is said in */          /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
     if (k->nhr == k->chr) { k->chr = k->chr ? k->chr * 2 : 1024; k->hr = xrealloc(k->hr, sizeof(HwRec) * k->chr); }
@@ -561,8 +577,9 @@ static int whos(const Say *s, const STree *t, int32_t g, const char *by, int32_t
  * attest * *, for a sense of a Wiktextract entry) are one statement, not two: the same witness attesting the same claim
  * in one record twice would play it twice. The claims a part has made are kept by the claim and who says it, for the
  * part being read alone (cs_epoch: a new part, an empty set, nothing cleared): the pair itself, so no two pairs share a slot
- * by a mix of their IDs. */
-struct CSeen { lp_id claim, voice; uint64_t epoch; };
+ * by a mix of their IDs. Said again, it is the same statement said once more: its run in the record (ev: the event that
+ * says it, in this sink). */
+struct CSeen { lp_id claim, voice; uint64_t epoch, ev; };
 static int said_already(Sink *k, const lp_id *c){
     if (!k->cs_epoch) k->cs_epoch = 1;                                      /* a slot never used is of epoch 0: no part's */
     lp_id voice; memset(&voice, 0, sizeof voice); if (k->voiced) voice = k->voice.id;     /* the source's own voice: no ID */
@@ -572,19 +589,25 @@ static int said_already(Sink *k, const lp_id *c){
             while (k->cs[s].epoch == k->cs_epoch) s = (s + 1) & (k->cs_cap - 1); k->cs[s] = o[i]; }
         free(o); }
     uint64_t h, w; memcpy(&h, c->b, 8); memcpy(&w, voice.b + 8, 8); uint64_t s = (h ^ w) & (k->cs_cap - 1);
-    while (k->cs[s].epoch == k->cs_epoch) { if (!memcmp(&k->cs[s].claim, c, 16) && !memcmp(&k->cs[s].voice, &voice, 16)) return 1; s = (s + 1) & (k->cs_cap - 1); }
-    k->cs[s].claim = *c; k->cs[s].voice = voice; k->cs[s].epoch = k->cs_epoch; k->cs_n++; return 0;
+    while (k->cs[s].epoch == k->cs_epoch) { if (!memcmp(&k->cs[s].claim, c, 16) && !memcmp(&k->cs[s].voice, &voice, 16)) {
+            uint64_t e = k->cs[s].ev; if (e < k->ev.n && k->ev.e[e].run < (1u << LP_M_RUN_BITS) - 1) k->ev.e[e].run++; return 1; }
+        s = (s + 1) & (k->cs_cap - 1); }
+    k->cs[s].claim = *c; k->cs[s].voice = voice; k->cs[s].epoch = k->cs_epoch; k->cs[s].ev = k->ev.n; k->cs_n++; return 0;
+}
+/* A claim said by the part being read: an event, in the record being read (rec), said once (run 1) so far. */
+static void said(Sink *k, const lp_id *c, float score){
+    Event x = { *c, *c, score, k->er, k->ed, 0, EV_CLAIM }; x.run = 1; x.rec = k->rec;
+    if (k->voiced) { x.own_witness = 1; x.witness = k->voice.id; } ev_push(&k->ev, &x);
 }
 static void claim(Sink *k, Ref *part, int n){
     for (int i = 0; i < n; i++) if (part[i].said != LP_SAID_TUPLE) part[i].said = 0;      /* a tuple held by a claim stays a tuple: M says so, the ID is the same */
     Ref c = said_claim(compose(part, (uint32_t)n, ref_above(part, (size_t)n)));
     if (said_already(k, &c.id)) return;
-    Event x = { c.id, c.id, k->score, k->er, k->ed, 0, EV_CLAIM }; if (k->voiced) { x.own_witness = 1; x.witness = k->voice.id; } ev_push(&k->ev, &x);
+    said(k, &c.id, k->score);
     push(&k->grp, &c);
 }
-/* What a part said, with everything inside it, in the order its source gave it: each claim is attested on its own, by
- * its witness, and keeps its place among the part's claims (attestation.position: the place a witness gave the claim
- * among its like). No entity is made of the claims together: a source's record is its own row, not a composition.
+/* What a part said, with everything inside it, in the order its source gave it: each claim keeps its place among the
+ * part's claims (position: the place the source gave the claim among its like, in the claim's vertex of its record).
  * e0 .. the end: the events it and what is inside it made. */
 static void together(Sink *k, uint64_t e0, const Ref *about){
     (void)about; uint32_t at = 0;
@@ -707,7 +730,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
     for (uint32_t g = g0; g < g1; g++) { const SNode *x = &t->n[g];
         /* a part of a wide part is a part of its own: what it says is said once in it (said_already), never once in the run
          * of parts a worker happens to read, whose bounds are the number of threads (runs_of): the same claims on any machine */
-        if (k->worker && x->parent == k->wide_of) { k->cs_epoch++; k->cs_n = 0; }
+        if (k->worker && x->parent == k->wide_of) { k->cs_epoch++; k->cs_n = 0; k->rec = (int32_t)g; }     /* and its own record */
         while (np_ && pend[np_ - 1].end < (int32_t)g) { np_--; together(k, pend[np_].e0, pend[np_].has ? &pend[np_].about : NULL); }
         if (x->kind == S_NOTE || x->kind == S_VALUE) { const Dis *d = dis_of(s, x);
             if (d && d->what == D_METADATA && !left_empty(s, x)) { Ref p[2] = { string_ref(x->name, x->nlen), text_of(x->val, x->vlen) }; Ref m = said_tuple(compose(p, 2, ref_above(p, 2))); push(&k->meta, &m); }
@@ -729,7 +752,7 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
             Ref X; if (!thing_of(k, t, (int32_t)g, &X, 0)) break;
             int32_t who[WHO]; int nw = whos(s, t, (int32_t)g, s->itself[a].by, who), was = k->voiced; Ref wv = k->voice;
             for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !voice_of(k, t, who[wi])) continue;
-                Event e = { X.id, X.id, sc, k->er, k->ed, 0, EV_CLAIM }; if (k->voiced) { e.own_witness = 1; e.witness = k->voice.id; } ev_push(&k->ev, &e); }
+                said(k, &X.id, sc); }
             k->voiced = was; k->voice = wv; }
         for (int a = 0; a < s->npair; a++) { if (!named_as(x, s->pair[a].tier) || !spoken_of(s, t, (int32_t)g, s->pair[a].when)) continue;      /* nothing written between the two: the pair */
             Ref P;
@@ -813,9 +836,119 @@ static void unit_range(Sink *k, const STree *t, uint32_t g0, uint32_t g1, int sp
     }
     *npp = np_;
 }
+/* ---- provenance by containment (Engine#22; Semantics: Attestations, Witnesses): what a source says of a part it speaks
+ * of is a record, a path in the file's content tree, under the file's trunk, under the source's trunk, which is the
+ * witness:
+ *   record   [its thing, its layers and tree where the recipe gives them, the claims it says]
+ *   claim    a vertex said to be a claim (LP_SAID_CLAIM), in the order the source said them; its run is how many times
+ *            the record says it, and its M says how: the outcome (a score in the vertex's spare bits) and its position
+ *            among the claims said together (lp_m_full)
+ *   voice    a vertex said to be a voice (LP_SAID_VOICE) right before a claim says who in the record says it (a column
+ *            of annotators, a speaker): content of the record, never a witness of its own
+ *   layer    the values of one name down the record's rows, aligned to them; one the row leaves empty as the file writes it
+ *   tree     each row's subtree: its dependents' subtrees and [REL, its thing], in the rows' order; a leaf is its pair
+ * A record that is one claim said once is that claim, standing in the content tree as its own record (LP_SAID_RECORD,
+ * its outcome and position on that vertex). Pointers (the row's key, HEAD) resolve here and are written nowhere. Who
+ * said a claim, how many times and how, is a walk up the container index from it to the records, files and trunks that
+ * hold it (provenance.c); nothing else records it. */
+static Ref empty_ref(const Say *s){ return s->lay.nempty ? string_ref((const uint8_t *)s->lay.empty[0], (size_t)s->lay.emptylen[0]) : string_ref((const uint8_t *)"_", 1); }
+static int field_of(Sink *k, const STree *t, int32_t row, const char *name, Ref *out){
+    int32_t c = s_child(t, row, name, -1); if (c < 0) return 0;
+    Ref v; if (!entity_of(k, t, c, &v)) return 0; if (v.said != LP_SAID_TUPLE) v.said = 0; *out = v; return 1;
+}
+static int32_t text_int(const STree *t, int32_t row, const char *name, int *ok){
+    int32_t c = s_child(t, row, name, -1); *ok = 0; if (c < 0) return 0;
+    const SNode *x = &t->n[c]; if (x->kind == S_GROUP && x->first >= 0 && t->n[x->first].next < 0) x = &t->n[x->first];
+    if (!x->vlen || x->vlen > 9) return 0; int32_t v = 0; for (uint32_t i = 0; i < x->vlen; i++) { if (x->val[i] < '0' || x->val[i] > '9') return 0; v = v * 10 + (x->val[i] - '0'); }
+    *ok = 1; return v;
+}
+typedef struct { Ref head; int parent, first, next, last; } TNode;
+static Ref subtree(TNode *tn, int i, int depth, int n){
+    Ref part[256]; uint32_t np = 0; int put = 0;
+    for (int c = tn[i].first; c >= 0 && depth < n; c = tn[c].next) {
+        if (!put && c > i && np < 256) { part[np++] = tn[i].head; put = 1; }
+        if (np < 256) { part[np] = subtree(tn, c, depth + 1, n); part[np].said = 0; np++; } }
+    if (!put && np < 256) part[np++] = tn[i].head;
+    return np == 1 ? part[0] : compose(part, np, ref_above(part, np));
+}
+/* The record's layers and tree, where the recipe gives them for its tier: appended to part, at most cap; the count. */
+static uint32_t record_rows(Sink *k, const STree *t, int32_t root, Ref *part, uint32_t cap){
+    const Say *s = k->s; uint32_t np = 0, nrow = 0;
+    int lay = s->nlayer && named_as(&t->n[root], s->lay_tier), tree = s->tree_row[0] && named_as(&t->n[root], s->tree_tier);
+    if (!lay && !tree) return 0;
+    int32_t rows_s[512], *rows = rows_s; uint32_t rcap = 512;
+    for (int32_t c = t->n[root].first; c >= 0; c = t->n[c].next) {
+        if (t->n[c].kind != S_GROUP || !named_as(&t->n[c], lay ? s->lay_row : s->tree_row)) continue;
+        if (nrow == rcap) { rcap *= 2; rows = rows == rows_s ? memcpy(malloc(sizeof(int32_t) * rcap), rows_s, sizeof rows_s) : xrealloc(rows, sizeof(int32_t) * rcap); }
+        rows[nrow++] = c; }
+    Ref empty = empty_ref(s), *v = malloc(sizeof(Ref) * (nrow ? nrow : 1));
+    for (int L = 0; lay && L < s->nlayer && nrow && np < cap; L++) {           /* each layer down the rows */
+        for (uint32_t r = 0; r < nrow; r++) if (!field_of(k, t, rows[r], s->layer[L], &v[r])) v[r] = empty;
+        Ref x = nrow == 1 ? v[0] : compose(v, nrow, ref_above(v, nrow)); x.said = 0; part[np++] = x; }
+    if (tree && nrow && np < cap) {                                           /* the tree by head: pointers resolved, written nowhere */
+        const char *key = NULL; for (int i = 0; i < s->nkey; i++) if (!strcmp(s->key[i].tier, s->tree_row)) key = s->key[i].name;
+        TNode *tn = calloc(nrow, sizeof(TNode)); int32_t *id = malloc(sizeof(int32_t) * nrow); int nw = 0, *at = malloc(sizeof(int) * nrow);
+        for (uint32_t r = 0; r < nrow; r++) { int ok; int32_t x = key ? text_int(t, rows[r], key, &ok) : 0; if (!key || !ok) continue;   /* a range or an empty node: no word of the tree */
+            Ref w, rel; if (!thing_of(k, t, rows[r], &w, 0)) continue; if (!field_of(k, t, rows[r], s->tree_rel, &rel)) rel = empty;
+            w.said = 0; rel.said = 0; Ref p2[2] = { rel, w }; tn[nw].head = said_tuple(compose(p2, 2, ref_above(p2, 2))); tn[nw].first = tn[nw].last = -1; tn[nw].next = -1; id[nw] = x; at[nw] = (int)r; nw++; }
+        int nroot = 0, roots[64];
+        for (int i = 0; i < nw; i++) { int ok; int32_t h = text_int(t, rows[at[i]], s->tree_head, &ok); tn[i].parent = -2;
+            if (ok && h == 0) { tn[i].parent = -1; if (nroot < 64) roots[nroot++] = i; continue; }
+            for (int j = 0; ok && j < nw; j++) if (id[j] == h && j != i) { tn[i].parent = j; break; }
+            if (tn[i].parent >= 0) { int p = tn[i].parent; if (tn[p].last < 0) tn[p].first = i; else tn[tn[p].last].next = i; tn[p].last = i; } }
+        if (nroot) { Ref rt[64]; for (int i = 0; i < nroot; i++) { rt[i] = subtree(tn, roots[i], 0, nw); rt[i].said = 0; }
+            Ref x = nroot == 1 ? rt[0] : compose(rt, (uint32_t)nroot, ref_above(rt, (size_t)nroot)); x.said = 0; part[np++] = x; }
+        free(tn); free(id); free(at); }
+    free(v); if (rows != rows_s) free(rows);
+    return np;
+}
+static uint64_t claims_unplaced;                                              /* a claim no reference could be made of: in no record (said) */
+/* A claim of a record as the vertex it is there: said to be a claim, said run times, with its outcome and position. */
+static int claim_vertex(const Event *e, Ref *out){
+    int ok; Ref c = ref_of_id(&e->claim, &ok); if (!ok) { __atomic_fetch_add(&claims_unplaced, 1, __ATOMIC_RELAXED); return 0; }
+    c.said = LP_SAID_CLAIM; c.outcome = (uint8_t)lp_outcome_of((double)e->score, &c.spare); c.position = e->position; *out = c; return 1;
+}
+/* The records of a part read whole, made of what it said: one record a node of the tree that is a record (rec: the part
+ * itself, or each part of a wide part, which says its own), in the order first said; the part's own record holds its
+ * thing T, where it has one, first, and its layers and tree. Each record goes into the file's content tree. */
+/* A node of the tree as a key of an ID map: its index spread over all sixteen bytes, as an ID's are (the map reads some of them) */
+static lp_id rec_key(int32_t r){ lp_id k; uint64_t x = (uint64_t)(uint32_t)r * 0x9E3779B97F4A7C15ull, y = (x ^ (x >> 29)) * 0xBF58476D1CE4E5B9ull; memcpy(k.b, &x, 8); memcpy(k.b + 8, &y, 8); return k; }
+static void records_of(Sink *k, const STree *t, int32_t root, uint64_t ev0, const Ref *T){
+    uint64_t n = k->ev.n - ev0;
+    /* the records, in the order first said, and each event's: one pass over the events, a map of the record nodes */
+    lp_idmap *rm = lp_idmap_sized(0); uint32_t *of = malloc(sizeof(uint32_t) * (n ? n : 1)); lp_vec(int32_t) recs = { 0 };
+    for (uint64_t e = 0; e < n; e++) { lp_id key = rec_key(k->ev.e[ev0 + e].rec);
+        bool fresh; size_t i = lp_idmap_put(rm, &key, &fresh); if (fresh) lp_push(&recs, k->ev.e[ev0 + e].rec); of[e] = (uint32_t)i; }
+    { lp_id key = rec_key(root); bool fresh; lp_idmap_put(rm, &key, &fresh); if (fresh && T) lp_push(&recs, root); }   /* the part's own record, if only its thing */
+    /* the events of each record, in order: counted, then placed */
+    size_t nr = recs.n; uint64_t *at = calloc(nr + 1, sizeof(uint64_t)), *ord = malloc(sizeof(uint64_t) * (n ? n : 1));
+    for (uint64_t e = 0; e < n; e++) at[of[e] + 1]++;
+    for (size_t i = 0; i < nr; i++) at[i + 1] += at[i];
+    { uint64_t *fill = malloc(sizeof(uint64_t) * (nr + 1)); memcpy(fill, at, sizeof(uint64_t) * (nr + 1)); for (uint64_t e = 0; e < n; e++) ord[fill[of[e]]++] = ev0 + e; free(fill); }
+    uint64_t most = 0; for (size_t i = 0; i < nr; i++) { uint64_t need = 24; for (uint64_t j = at[i]; j < at[i + 1]; j++) need += (k->ev.e[ord[j]].run ? k->ev.e[ord[j]].run : 1) + 1; if (need > most) most = need; }
+    Ref *part = malloc(sizeof(Ref) * (most ? most : 24));                     /* each claim said run times, and a voice before it */
+    for (size_t ri = 0; ri < nr; ri++) { int32_t r = recs.v[ri]; uint32_t np = 0; int mine = r == root;
+        int t_claim = 0;                                                      /* the thing is itself a claim it says: that claim's vertex stands for it */
+        if (mine && T) for (uint64_t j = at[ri]; j < at[ri + 1] && !t_claim; j++) t_claim = !memcmp(&k->ev.e[ord[j]].claim, &T->id, 16);
+        if (mine && T && !t_claim) { part[np] = *T; part[np].said = 0; part[np].outcome = 0; part[np].position = 0; part[np].spare = 0; np++; }
+        if (mine) np += record_rows(k, t, root, part + np, 20);
+        uint32_t nclaims = 0, ones = 0;
+        for (uint64_t j = at[ri]; j < at[ri + 1]; j++) { const Event *x = &k->ev.e[ord[j]]; if (x->kind != EV_CLAIM) continue;
+            Ref c; if (!claim_vertex(x, &c)) continue;
+            if (x->own_witness) { int ok; Ref v = ref_of_id(&x->witness, &ok); if (ok) { v.said = LP_SAID_VOICE; v.outcome = 0; v.position = 0; v.spare = 0; part[np++] = v; } }
+            uint32_t run = x->run ? x->run : 1; for (uint32_t z = 0; z < run; z++) part[np++] = c;    /* said run times: one vertex, the run in M */
+            nclaims++; ones += run == 1 && !x->own_witness; }
+        if (!np) continue;
+        Ref R;
+        if (np == 1 && nclaims == 1 && ones == 1) { R = part[0]; R.said = LP_SAID_RECORD; }      /* one claim said once: the claim, its own record */
+        else if (np == 1 && !nclaims) { R = part[0]; R.said = 0; }                               /* only its thing: content that says nothing */
+        else { R = compose(part, np, ref_above(part, np)); R.said = nclaims ? LP_SAID_RECORD : 0; R.outcome = 0; R.position = 0; R.spare = 0; }
+        push(&k->things, &R); }
+    free(part); free(at); free(ord); free(of); lp_vec_free(&recs); lp_idmap_free(rm);
+}
 static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
     Sink *k = sink; const Say *s = k->s; k->kr.unit = ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f; TT = t;
-    k->cs_epoch++; k->cs_n = 0;                                              /* a new part: none of its claims made yet */
+    k->cs_epoch++; k->cs_n = 0; k->rec = root;                               /* a new part: none of its claims made yet, its own record */
     if (k->dm_cap < t->count) { k->dm_cap = t->count * 2; k->dm = xrealloc(k->dm, sizeof(int16_t) * k->dm_cap); } memset(k->dm, 0, sizeof(int16_t) * t->count); DM = k->dm;
     if (k->tc_cap < t->count) { k->tc_cap = t->count * 2; k->tc = xrealloc(k->tc, sizeof(Ref) * k->tc_cap); k->ts = xrealloc(k->ts, k->tc_cap); }
     k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); k->ix_tree = NULL;      /* a new tree: nothing of the last is known of it */
@@ -834,14 +967,14 @@ static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
     unit_range(k, t, 0, t->count, speaks, pend, &np_);
     while (np_) { np_--; together(k, pend[np_].e0, pend[np_].has ? &pend[np_].about : NULL); }
     keep_keys(k, t, root);
-    /* the part itself, whole, into the file's content tree; where it is the very tuple it attests (a row that is a
-     * claim), the tree holds it as the claim it is. A part the recipe does not speak of (a row its where leaves out)
-     * is in no tree: a recipe that says what a file's parts are reads a curated source, mined for what it says and
-     * not kept byte for byte (Storage: curated sources are mined for knowledge, not recorded bit-perfect) */
+    /* the part itself, whole, with what it says, into the file's content tree as its record (records_of). A part the
+     * recipe does not speak of (a row its where leaves out) is in no tree: a recipe that says what a file's parts are
+     * reads a curated source, mined for what it says and not kept byte for byte (Storage: curated sources are mined for
+     * knowledge, not recorded bit-perfect) */
     Ref T; int whole = speaks ? entity_of(k, t, root, &T) : 0;
-    if (whole) { T.said = 0; for (uint64_t e = ev0; e < k->ev.n; e++) if (!memcmp(&k->ev.e[e].claim, &T.id, 16)) { T.said = LP_SAID_CLAIM; break; } push(&k->things, &T); }
+    records_of(k, t, root, ev0, whole ? &T : NULL);
 }
-
+uint64_t say_unplaced(void){ return __atomic_load_n(&claims_unplaced, __ATOMIC_RELAXED); }
 /* What a file holds, in its order, as one composition. A few thousand parts are one path. More are factored into
  * blocks from the content alone (Storage: repeated blocks are factored from the content alone): a block ends after a
  * part whose own ID says so (one in BLOCK, by its bits), never at a count or a position, so the same parts always part
@@ -849,13 +982,21 @@ static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
  * wherever it stands. The blocks are composed the same way, level by level, until one holds them all: no path is
  * longer than a row can hold, and a file of millions of records is a tree of its own content. */
 #define BLOCK 4096
+/* A block holding records, or blocks that hold them, is said to hold them (LP_SAID_HOLDS): a walk down from a trunk
+ * to what its records say goes through it, and past content that says nothing. A part standing alone in its block keeps
+ * what it is said to be, and how. */
+static int any_records(const Ref *r, size_t n){ for (size_t i = 0; i < n; i++) if (r[i].said == LP_SAID_RECORD || r[i].said == LP_SAID_HOLDS) return 1; return 0; }
+static Ref block(Ref *r, size_t n){
+    if (n == 1) { Ref x = r[0]; if (x.said != LP_SAID_TUPLE && x.said != LP_SAID_CLAIM && x.said != LP_SAID_RECORD && x.said != LP_SAID_HOLDS) x.said = 0; return x; }
+    Ref x = compose(r, (uint32_t)n, ref_above(r, n)); x.said = any_records(r, n) ? LP_SAID_HOLDS : 0; return x;
+}
 static Ref blocks_of(Ref *r, size_t n){
     if (n == 1) return r[0];
-    if (n <= BLOCK) return compose(r, (uint32_t)n, ref_above(r, n));
+    if (n <= BLOCK) return block(r, n);
     Ref *up = malloc(sizeof(Ref) * n); size_t m = 0, from = 0;
     for (size_t i = 0; i < n; i++) { uint64_t b; memcpy(&b, r[i].id.b + 8, 8);
-        if ((b & (BLOCK - 1)) == 0 || i == n - 1) { Ref x = i - from + 1 == 1 ? r[from] : compose(r + from, (uint32_t)(i - from + 1), ref_above(r + from, i - from + 1)); if (x.said != LP_SAID_TUPLE && x.said != LP_SAID_CLAIM) x.said = 0; up[m++] = x; from = i + 1; } }
-    Ref out = m == n ? compose(r, (uint32_t)n, ref_above(r, n)) : blocks_of(up, m); free(up); return out;
+        if ((b & (BLOCK - 1)) == 0 || i == n - 1) { up[m++] = block(r + from, i - from + 1); from = i + 1; } }
+    Ref out = m == n ? block(r, n) : blocks_of(up, m); free(up); return out;
 }
 /* The OS's record of a file, as parts named as the OS names them: its pathname and filename (POSIX), and what statx
  * returns. Each is disposed of by the file's recipe, else by the stock recipe file, as any part is: metadata, a
@@ -1013,9 +1154,10 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     Ref *m = malloc(sizeof(Ref) * (meta.n + 1)); size_t nr = (size_t)file_os(r, f, m);          /* the OS's record of it, one node, first */
     memcpy(m + nr, meta.c, sizeof(Ref) * meta.n);
     size_t nm = nr + meta.n; Ref metadata; memset(&metadata, 0, sizeof metadata); if (nm) metadata = blocks_of(m, nm); free(m);
-    if (things.n) { Ref content = blocks_of(things.c, things.n); content.said = 0;
-        if (nm) { Ref two[2] = { said_metadata(metadata), content }; two[1].said = 0; f->file = compose(two, 2, ref_above(two, 2)); } else f->file = content;
-        f->file.said = 0; f->has_file = 1; f->trunk = content; }
+    if (things.n) { Ref content = blocks_of(things.c, things.n); if (content.said != LP_SAID_HOLDS && content.said != LP_SAID_RECORD) content.said = 0;     /* what holds records says so in the file's path */
+        if (nm) { Ref two[2] = { said_metadata(metadata), content }; f->file = compose(two, 2, ref_above(two, 2)); } else f->file = content;
+        if (nm) { f->file.said = 0; f->file.outcome = 0; f->file.position = 0; f->file.spare = 0; }   /* a file with no metadata is its content: it says in its source's trunk what its content is (records, or a record) */
+        f->has_file = 1; f->trunk = content; }
     else if (f->ev.n && nm) { Ref two[1] = { said_metadata(metadata) }; f->file = two[0]; f->file.said = 0; f->has_file = 0; }
     free(things.c); free(meta.c); free(part); free(cut);
 }

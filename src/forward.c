@@ -119,15 +119,11 @@ int cmd_pull(int argc, char **argv){
             /* one member, curated by a witness the firmware trusts that far, is returned as a fact: the rest is held back */
             MINE(); if (!nmine || fw.fact > 1.0) continue;
             lp_id *ids = malloc(sizeof(lp_id) * (size_t)nmine); for (int i = 0; i < nmine; i++) ids[i] = mine[i].id;
-            uint8_t *ab = malloc(20 + 20 * (size_t)nmine); size_t al = ids_param(ab, ids, (uint32_t)nmine);
-            const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-            PGresult *q = db_ask(pg, "SELECT claim, trust FROM laplace_attested($1::blake3[])", 1, v, l, f);
-            if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "witnesses: %s", PQerrorMessage(pg)); return 1; }
+            int na = 0; Attested *at = attested(pg, ids, nmine, &na, NULL);    /* who holds each: a walk up to the witnesses' trunks, with their trust */
             int best = -1; double bt = -2;
-            for (int j = 0; j < PQntuples(q); j++) { uint64_t u = 0; const uint8_t *b = (const uint8_t *)PQgetvalue(q, j, 1); for (int y = 0; y < 8; y++) u = u << 8 | b[y]; double tr; memcpy(&tr, &u, 8);
-                if (tr < fw.fact) continue;
-                for (int i = 0; i < nmine; i++) if (!memcmp(mine[i].id.b, PQgetvalue(q, j, 0), 16)) { if (tr > bt || (tr == bt && best >= 0 && mine[i].conf > mine[best].conf)) { bt = tr; best = i; } break; } }
-            PQclear(q); free(ab); free(ids);
+            for (int j = 0; j < na; j++) { double tr = at[j].trust; if (!at[j].witness || tr < fw.fact) continue;
+                for (int i = 0; i < nmine; i++) if (!memcmp(&mine[i].id, &at[j].claim, 16)) { if (tr > bt || (tr == bt && best >= 0 && (mine[i].conf > mine[best].conf || (mine[i].conf == mine[best].conf && memcmp(&mine[i].id, &mine[best].id, 16) < 0)))) { bt = tr; best = i; } break; } }
+            free(at); free(ids);
             if (best >= 0) { printf("\nfact       curated at trust %g; the other %d strands of the set are held back   (%.1f ms)\n", bt, nmine - 1, (now() - t) * 1000);
                              printf("%10s %8s %6s %8s   %s\n", "confidence", "rating", "dev", "matches", "claim"); show_claim(rd, &mine[best], ""); held_back = 1; took++; }
         }

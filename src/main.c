@@ -4,7 +4,7 @@
  *   laplace highway generate the highway: the types the resources list, and the mappings between them
  *   laplace deploy  make a database a Laplace database: extensions, schema, semantics, settings
  *   laplace ingest  files through their recipes: decompose, deduplicate trunk to leaf, record, attest
- *   laplace forget  what one witness attested, taken back out
+ *   laplace forget  what one witness said, taken back out
  *   laplace sweep   whatever nothing holds, removed
  *   laplace index   build the indexes after a bulk load
  *   laplace tree    a file's syntax tree as its recipe's grammar reads it, for writing recipes

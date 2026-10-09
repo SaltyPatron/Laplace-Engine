@@ -27,6 +27,12 @@ static const Param
     BATCH    = { "batch", "--batch", ARG_INT, NULL, "B" },
     DRY      = { "dry", "--dry", ARG_FLAG, NULL, "dry" },
     EXCEPT   = { "except", "--except", ARG_FLAG, NULL, "every witness but these" },
+    TRUNK    = { "trunk", "--trunk", ARG_FLAG, NULL, "each witness named by its ID, its source's trunk, not by the source's name" },
+    VOICES   = { "voices", "--voices", ARG_FLAG, NULL, "the count under each voice as well (who in a record says it)" },
+    FILES    = { "files", "--files", ARG_FLAG, NULL, "the count under each file as well" },
+    TSV      = { "tsv", "--tsv", ARG_PATH, NULL, "FILE: one line a claim and who said it (a trunk, file:PATH, voice:ID): games, tokens, the sum of the scores, the least position" },
+    WRITE    = { "write", "--write", ARG_FLAG, NULL, "put the replayed standings in place" },
+    PART     = { "part", NULL, ARG_TEXT, NULL, "a part of the strand: a text, LIST:KEY for a type of the highway, ? for a part left open" },
     SOURCE   = { "source", "-s", ARG_TEXT, NULL, "the files named are this source's: a part of it at a time" },
     WHOLE    = { "whole", "--whole", ARG_FLAG, NULL, "after a run that was cut off: every node is looked for" },
     NO_LOAD  = { "no_load", "--no-load", ARG_FLAG, NULL, "no-load" },
@@ -63,8 +69,10 @@ static const Arg A_HIGHWAY[] = { O(OUT_HW), END };
 static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(WHOLE), O(NO_LOAD), O(PLAN), O(CLAIMS), O(ENTITIES),
                                 { &WHAT, ARG_MANY, NULL, NULL }, END };
 static const Arg A_MERGE[] = { O(CONNINFO), { &JOBS, 0, NULL, "every processor" }, END };
-static const Arg A_FORGET[] = { O(CONNINFO), O(JOBS), O(EXCEPT), { &WITNESS, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
+static const Arg A_FORGET[] = { O(CONNINFO), O(JOBS), O(EXCEPT), O(TRUNK), { &WITNESS, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
 static const Arg A_SWEEP[] = { O(CONNINFO), O(JOBS), O(DRY), END };
+static const Arg A_HELD[] = { O(CONNINFO), O(FILES), O(VOICES), O(TSV), { &PART, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
+static const Arg A_REPLAY[] = { O(CONNINFO), O(WRITE), O(TSV), O(VOICES), O(FILES), END };
 static const Arg A_STRUCTURE[] = { { &NODES, 0, NULL, "60" }, { &LAYOUT, ARG_REQUIRED, NULL, NULL }, { &FILE_, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_TREE[] = { O(RECIPES), O(GRAMMAR), { &NODES, 0, NULL, "400" }, { &FILE_, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_TEXT[] = { { &TEXT, ARG_REQUIRED, NULL, NULL }, END };
@@ -91,8 +99,10 @@ const Op OPS[] = {
     { "sources",   cmd_sources,   "the sources there are recipes for, in the order they go in", A_NONE, R_DB | R_F, "text" },
     { "ingest",    cmd_ingest,    "a source by its name, or files, through their recipes", A_INGEST, W_DB | R_F, "text" },
     { "merge",     cmd_merge,     "what the ingest staged, into the real tables at once", A_MERGE, W_DB, "text" },
-    { "forget",    cmd_forget,    "what one witness attested, taken back out", A_FORGET, W_DB | EFFECT_DESTROYS, "text" },
+    { "forget",    cmd_forget,    "what one witness said, taken back out: its trunk, what it alone holds, and the standings it touched played again", A_FORGET, W_DB | EFFECT_DESTROYS, "text" },
     { "sweep",     cmd_sweep,     "whatever nothing holds, removed", A_SWEEP, W_DB | EFFECT_DESTROYS, "text" },
+    { "held",      cmd_held,      "who said a claim, how many times and how: a walk up the container index from it to the records, files and trunks that hold it", A_HELD, R_DB | R_F, "text" },
+    { "replay",    cmd_replay,    "the standings again from containment alone: each witness's trunk down to the claims its records say, played in the order the sources go in, and compared", A_REPLAY, W_DB | R_F, "text" },
     { "index",     cmd_index,     "the indexes, if one was dropped: deploy makes them", A_NONE, W_DB, "text" },
     { "structure", cmd_structure, "a file's tree, as a layout parts it", A_STRUCTURE, R_F, "text" },
     { "tree",      cmd_tree,      "a file's syntax tree, as its recipe's grammar reads it", A_TREE, R_F, "text" },

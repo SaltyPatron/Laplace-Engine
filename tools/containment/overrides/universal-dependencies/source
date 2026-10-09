@@ -1,0 +1,11 @@
+name universal-dependencies
+# Universal Dependencies: treebanks of sentences, each with a row for every word and what the treebank says of it.
+# THE CONTAINMENT PROOF (Engine#22, #39 step 2): two treebanks of release 2.18, UD_English-EWT and UD_English-GUM, so
+# that the as-built engine names two witnesses ({dir}) where containment has the one trunk.
+witness {dir}
+called Universal Dependencies
+class AcademicCurated
+files $LAPLACE_DATA/.refresh-20260903/UD-Treebanks/extracted/ud-treebanks-v2.18/UD_English-EWT/*.conllu
+files $LAPLACE_DATA/.refresh-20260903/UD-Treebanks/extracted/ud-treebanks-v2.18/UD_English-GUM/*.conllu
+room 24
+after unicode iso-639
