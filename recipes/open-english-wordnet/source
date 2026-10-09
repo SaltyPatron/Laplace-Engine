@@ -4,7 +4,8 @@ witness {first label}
 called Open English WordNet
 lineage WordNet
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/OpenEnglishWordNet-2025-plus
+root $LAPLACE_DATA/.refresh-*/OpenEnglishWordNet-*
+root $LAPLACE_DATA/OpenEnglishWordNet-*
 # Measured when it was loaded: 4,489,027 compositions from 103 MB, at 750 bytes each with their indexes and standings.
 room 33
 after cili
