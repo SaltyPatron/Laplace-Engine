@@ -11,7 +11,7 @@ name geonames-alternate-names
 #   "from		  : from period when the name was used"
 #   "to		  : to period when the name was used"
 # The geonameid is read as the place it is GeoNames's key of; the alternateNameId is the row's own key. What a row
-# says of the place it says together.
+# says of the place it says together: a name of the place, its language, and how and when the name is used, one record.
 match alternateNamesV2.txt
 
 tier row by \n
@@ -23,4 +23,16 @@ key row alternateNameId
 refer geonameid geonames-geoname
 content isolanguage "alternate name" isPreferredName isShortName isColloquial isHistoric from to
 together row
+# isolanguage is a value of GeoNames's list of what a name is written in: an ISO 639 code, optionally with a country
+# or variant, or one of its own ("4-characters 'post' for postal codes and 'iata','icao' and faac for airport codes,
+# fr_1793 for French Revolution names,  abbr for abbreviation, link to a website (mostly to wikipedia), wkdt for the
+# wikidataid")
+value - isolanguage
+relation "alternate name or name variant" "alternate name"
+relation "an official/preferred name" isPreferredName
+relation "a short name" isShortName
+relation "a colloquial or slang term" isColloquial
+relation "historic and was used in the past" isHistoric
+relation "from period when the name was used" from
+relation "to period when the name was used" to
 attest row isolanguage "alternate name" isPreferredName isShortName isColloquial isHistoric from to

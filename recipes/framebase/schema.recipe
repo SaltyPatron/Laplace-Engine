@@ -9,5 +9,9 @@ tier statement by \n
 thing triple subject
 thing rdf_literal value
 content *
+# A statement's predicate is an RDF property (rdfs:subClassOf, owl:sameAs, lemon:entry, ...): a relation of the RDF
+# vocabularies the file writes, as written: [subject, property, object] (Laplace-Engine#32). These files write every
+# IRI whole; the resolution of a prefixed name to the IRI it abbreviates is Laplace-Engine#20.
+value - predicate
 relate property predicate to object_list
 pair rdf_literal lang_tag datatype

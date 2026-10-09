@@ -23,4 +23,6 @@ when 1 matches ^(Hyphen|Grapheme_Link|Expands_On_NFC|Expands_On_NFD|Expands_On_N
 pair row 1
 always
 when 1 is FC_NFKC
+# the field 1 here is the property itself (FC_NFKC), a property of the Unicode Character Database's own inventory
+value - 1
 relate row 1 to 2

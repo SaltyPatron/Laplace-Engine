@@ -16,5 +16,11 @@ thing row "Sentence id"
 refer "Sentence id" tatoeba-sentences
 own Username
 content Lang "Script name" Transcription
+# the script a transcription is in: the relation of the sentence to its transcription, a value of the scripts ("The
+# script name is defined according to the ISO 15924 standard.")
+value - "Script name"
 relate row "Script name" to Transcription by Username
+# "Each sentence is associated with a unique id and an ISO 639-3 language code." (sentences.csv; the other files
+# name the same field Lang): the sentence's language code
+relation "ISO 639-3 language code" Lang
 attest row Lang

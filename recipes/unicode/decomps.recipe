@@ -16,4 +16,9 @@ tier field by ;
 thing row "code point"
 codepoints "code point" decomposition
 content "decomposition tag"
+# The header: "The decomposition tags in this file are derived from the normative Decomposition_Type values, but differ from
+# them, in part because of the introduction of the "<sort>" tag.": a value of the file's own list of tags
+value - "decomposition tag"
+# The header: "This file lists decompositions used in generating the Default Unicode Collation Element Table (DUCET)"
+relation "decompositions used in generating the ... (DUCET)" decomposition
 attest row "decomposition tag" decomposition

@@ -1,5 +1,10 @@
 name xstest-prompts
 # XSTest's prompts: each row says of its prompt its type, its label and its focus, together.
+# The readme names two columns: "the test prompts listed in the "prompt" column", and "unsafe prompts, which are those
+# where the "type" starts with "contrast_"". The paper ("XSTest: A Test Suite for Identifying Exaggerated Safety
+# Behaviours in Large Language Models", NAACL 2024) words the focus: "All test prompts in XSTEST contain safety-related
+# key words and phrases". type, label (safe, unsafe) and note (violence, drugs, historical atrocities, ...) are labels
+# the set gives the prompt: values of its own vocabularies.
 match xstest_prompts.csv
 
 tier row by \n
@@ -11,4 +16,6 @@ thing row prompt
 key row id
 content prompt type label focus note
 together row
+value - type label note
+relation "safety-related key words and phrases" focus
 attest row type label focus note

@@ -14,4 +14,6 @@ part Values by ,
 
 thing row Placeholder
 content Placeholder Values
+# "the tokens that the placeholders in the case templates are replaced with": each token, of its placeholder
+relation "are replaced with" Values
 attest row Values

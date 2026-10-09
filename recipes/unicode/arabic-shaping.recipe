@@ -19,4 +19,6 @@ tier field by ;
 thing row "code point"
 codepoints "code point"
 content "schematic name" Joining_Type Joining_Group
+# The header: "Field 1: gives a short schematic name for that character."
+relation "short schematic name" "schematic name"
 attest row "schematic name"

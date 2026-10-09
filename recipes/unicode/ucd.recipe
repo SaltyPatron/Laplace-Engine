@@ -1,20 +1,25 @@
 name ucd
 # The Unicode Character Database in XML (UAX #42), flat form: every codepoint, and every range of codepoints, with
-# everything the standard says of it: [codepoint, property, value], the property and the value as the standard writes
-# them. A character is the character it is; a range, the path of its first and its last; a value that is itself
-# codepoints, the text they are. The standard writes # for the codepoint itself. What the standard leaves empty
-# attests nothing. A character's other names, the named sequences, the standardized variants, the radicals and the
-# blocks are read the same way: each is the thing its own attribute names.
+# everything the standard says of it, each attribute the property its short alias names, its value as the standard
+# writes it. A character is the character it is; a range, the path of its first and its last; a value that is itself
+# codepoints, the text they are. The standard writes # for the codepoint itself. What the standard leaves empty attests
+# nothing. A character's other names, the named sequences, the standardized variants, the radicals and the blocks are
+# read the same way: each is the thing its own attribute names.
 # Every record is an element on lines of its own: the file is parted before each, and read on every core.
 match ucd.all.flat.xml
 format xml
-# The properties the perf-cache's flags hold for every codepoint (tier0.flags: age, block, script, the categories
-# and classes, and every binary property) are read from there, not attested again: 52% of the file's attributes were
-# those properties' defaults alone, a row each.
+# The properties the perf-cache's flags hold for every codepoint (tier0.flags: every property PropertyAliases.txt lists
+# under "Catalog Properties", "Enumerated Properties" and "Binary Properties") are read from there, not attested again:
+# 52% of the file's attributes were those properties' defaults alone, a row each.
 perfcache
 split char reserved noncharacter surrogate named-sequence provisional-named-sequence normalization-correction standardized-variant cjk-radical emoji-source block do-not-emit instead
 # "#", in the flat XML, is "the code point itself": the default, where the file gives no value of its own (UAX #42)
 empty hash
+# Values the source writes as a set, a space between each (broken down as its notation says, as IdentifierType.txt's are):
+#   Script_Extensions, UAX #44: "Script_Extensions ... Enumerated ... the value is a set of Script values";
+#   StandardizedVariants.txt: "Field 2: ... If more than one is present, there are spaces between them."
+part scx by space
+part when by space
 
 thing char cp
 thing char first-cp last-cp
@@ -29,10 +34,354 @@ thing provisional-named-sequence cps
 thing standardized-variant cps
 thing cjk-radical radical
 thing block name
-codepoints cp first-cp last-cp cps bmg bpb cf dm FC_NFKC lc NFKC_CF NFKC_SCF scf slc stc suc tc uc EqUIdeo ideograph radical radical-ideograph of use code
+thing emoji-source unicode
+thing normalization-correction cp
+codepoints cp first-cp last-cp cps bmg bpb cf dm FC_NFKC lc NFKC_CF NFKC_SCF scf slc stc suc tc uc EqUIdeo ideograph radical radical-ideograph of use code unicode old new
 omit xmlns
 omit description normalization-correction.version
 content *
+
+# What each attribute means in a claim (Laplace-Engine#32). A property whose values are an enumeration is a value of that
+# property: [cp, value]. A property that maps the code point to other text or to a number states a relation, worded as
+# the standard words the property: the UCD's own properties by their long names in PropertyAliases.txt ("short name ;
+# long name"); the Unihan properties (whose long name in PropertyAliases.txt, where they have one, is the attribute
+# itself) by the first words of the Description UAX #38 (revision 39, Unicode 17.0.0) gives them; the Egyptian
+# hieroglyph, Nushu and Tangut properties by their data files' headers or UAX #57 (revision 5, Unicode 17.0.0).
+
+# --- PropertyAliases.txt's properties that the flags do not hold: numeric, string and miscellaneous ---
+# PropertyAliases.txt, "Numeric Properties": "nv ; Numeric_Value"
+relation "Numeric_Value" nv
+# PropertyAliases.txt, "String Properties": "bmg ; Bidi_Mirroring_Glyph"
+relation "Bidi_Mirroring_Glyph" bmg
+#   "bpb ; Bidi_Paired_Bracket"
+relation "Bidi_Paired_Bracket" bpb
+#   "cf ; Case_Folding"
+relation "Case_Folding" cf
+#   "dm ; Decomposition_Mapping"
+relation "Decomposition_Mapping" dm
+#   "EqUIdeo ; Equivalent_Unified_Ideograph"
+relation "Equivalent_Unified_Ideograph" EqUIdeo
+#   "FC_NFKC ; FC_NFKC_Closure"
+relation "FC_NFKC_Closure" FC_NFKC
+#   "lc ; Lowercase_Mapping"
+relation "Lowercase_Mapping" lc
+#   "NFKC_CF ; NFKC_Casefold"
+relation "NFKC_Casefold" NFKC_CF
+#   "NFKC_SCF ; NFKC_Simple_Casefold"
+relation "NFKC_Simple_Casefold" NFKC_SCF
+#   "scf ; Simple_Case_Folding ; sfc"
+relation "Simple_Case_Folding" scf
+#   "slc ; Simple_Lowercase_Mapping"
+relation "Simple_Lowercase_Mapping" slc
+#   "stc ; Simple_Titlecase_Mapping"
+relation "Simple_Titlecase_Mapping" stc
+#   "suc ; Simple_Uppercase_Mapping"
+relation "Simple_Uppercase_Mapping" suc
+#   "tc ; Titlecase_Mapping"
+relation "Titlecase_Mapping" tc
+#   "uc ; Uppercase_Mapping"
+relation "Uppercase_Mapping" uc
+# PropertyAliases.txt, "Miscellaneous Properties": "isc ; ISO_Comment"
+relation "ISO_Comment" isc
+#   "JSN ; Jamo_Short_Name". Jamo.txt: "The second field gives the Jamo_Short_Name as a one-, two-, or three-character
+#   ASCII string": a string the jamo maps to (PropertyValueAliases.txt lists the strings, but [cp, G] alone says nothing)
+relation "Jamo_Short_Name" JSN
+#   "na ; Name"
+relation "Name" na
+#   "na1 ; Unicode_1_Name"
+relation "Unicode_1_Name" na1
+#   "scx ; Script_Extensions": each value is a value of Script (PropertyValueAliases.txt, "sc"): [cp, Hani]
+value - scx
+
+# --- Unihan, UAX #38, by its Description of each property ---
+#   kAccountingNumeric: "The value of the ideograph when used as an accounting numeral to prevent fraud in Chinese ..."
+relation "value of the ideograph when used as an accounting numeral" kAccountingNumeric
+#   kAlternateTotalStrokes: "The total number of strokes in the ideograph (including the radical). Each value consists
+#   either of a decimal value followed by an IRG source specifier ..."
+relation "total number of strokes ... IRG source specifier" kAlternateTotalStrokes
+#   kBigFive: "The Big Five mapping for this ideograph in hexadecimal"
+relation "Big Five mapping" kBigFive
+#   kCangjie: "The cangjie input code for the ideograph."
+relation "cangjie input code" kCangjie
+#   kCantonese: "The most customary jyutping (Cantonese) reading for this ideograph."
+relation "most customary jyutping (Cantonese) reading" kCantonese
+#   kCCCII: "The mapping for this ideograph in the Chinese Character Code for Information Interchange"
+relation "mapping ... Chinese Character Code for Information Interchange" kCCCII
+#   kCheungBauer: "Data regarding the ideograph in Cheung Kwan-hin and Robert S. Bauer, The Representation of Cantonese
+#   with Chinese Characters, ..."
+relation "Data ... Cheung Kwan-hin and Robert S. Bauer" kCheungBauer
+#   kCheungBauerIndex: "The position of the ideograph in Cheung Kwan-hin and Robert S. Bauer, The Representation of
+#   Cantonese with Chinese Characters, ..."
+relation "position ... Cheung Kwan-hin and Robert S. Bauer" kCheungBauerIndex
+#   kCihaiT: "The position of this ideograph in the Cihai (辭海) dictionary, single volume edition, ..."
+relation "position of this ideograph in the Cihai (辭海) dictionary" kCihaiT
+#   kCNS1986: "The CNS 11643-1986 mapping for this ideograph in hexadecimal."
+relation "CNS 11643-1986 mapping" kCNS1986
+#   kCNS1992: "The CNS 11643-1992 mapping for this ideograph in hexadecimal."
+relation "CNS 11643-1992 mapping" kCNS1992
+#   kCompatibilityVariant: "The canonical Decomposition_Mapping value for the ideograph, derived from UnicodeData.txt"
+relation "canonical Decomposition_Mapping value for the ideograph" kCompatibilityVariant
+#   kCowles: "The index or indices of this ideograph in Roy T. Cowles, A Pocket Dictionary of Cantonese, ..."
+relation "index or indices ... A Pocket Dictionary of Cantonese" kCowles
+#   kDaeJaweon: "The position of this ideograph in the Dae Jaweon (Korean) dictionary used in the four-dictionary sorting
+#   algorithm."
+relation "position ... in the Dae Jaweon (Korean) dictionary" kDaeJaweon
+#   kIRGDaeJaweon: UAX #38 begins it in the same words as kDaeJaweon, and adds: "This property represents the official
+#   position of the ideograph within the Dae Jaweon dictionary as used by the IRG in the four-dictionary sorting algorithm."
+relation "official position ... Dae Jaweon dictionary as used by the IRG" kIRGDaeJaweon
+#   kDefinition: "An English definition for this ideograph."
+relation "English definition" kDefinition
+#   kEACC: "The hexadecimal code point of this ideograph in the East Asian Character Code for Bibliographic Use"
+relation "code point ... East Asian Character Code for Bibliographic Use" kEACC
+#   kFanqie: "Fanqie (反切) is a method commonly found in ancient Chinese dictionaries and rhyming books to specify the
+#   reading of an ideograph."
+relation "Fanqie (反切)" kFanqie
+#   kFenn: "Data on the ideograph from The Five Thousand Dictionary by Courtenay H. Fenn"
+relation "Data on the ideograph from The Five Thousand Dictionary" kFenn
+#   kFennIndex: "The position of this ideograph in The Five Thousand Dictionary by Courtenay H. Fenn"
+relation "position ... in The Five Thousand Dictionary" kFennIndex
+#   kFourCornerCode: "The four-corner code(s) for the ideograph."
+relation "four-corner code(s)" kFourCornerCode
+#   kGB0: "The GB/T 2312-1980 mapping for this ideograph in row-cell form."
+relation "GB/T 2312-1980 mapping" kGB0
+#   kGB1: "The GB/T 12345-1990 mapping for this ideograph in row-cell form."
+relation "GB/T 12345-1990 mapping" kGB1
+#   kGB3: "The GB/T 13131 (unpublished GB/T 7589-1987 unsimplified form) mapping for this ideograph in row-cell form."
+relation "GB/T 13131 ... mapping" kGB3
+#   kGB5: "The GB/T 13132 (unpublished GB/T 7590-1987 unsimplified form) mapping for this ideograph in row-cell form."
+relation "GB/T 13132 ... mapping" kGB5
+#   kGB8: "The GB/T 8565.2-1988 mapping for this ideograph in row-cell form."
+relation "GB/T 8565.2-1988 mapping" kGB8
+#   kGradeLevel: "The primary grade in the Hong Kong school system by which a student is expected to know the ideograph"
+relation "primary grade in the Hong Kong school system" kGradeLevel
+#   kGSR: "The position of this ideograph in Bernhard Karlgren’s Grammata Serica Recensa (1957)."
+relation "position ... in Bernhard Karlgren’s Grammata Serica Recensa" kGSR
+#   kHangul: "The modern Korean pronunciation(s) for this ideograph in Hangul, with its source(s) following a colon."
+relation "modern Korean pronunciation(s) for this ideograph in Hangul" kHangul
+#   kHanYu: "The position of this ideograph in the Hànyǔ Dà Zìdiǎn (HDZ) Chinese character dictionary"
+relation "position ... in the Hànyǔ Dà Zìdiǎn (HDZ)" kHanYu
+#   kHanyuPinlu: "The Pronunciations and Frequencies of this ideograph, based in part on those appearing in 《現代漢語頻率詞典》"
+relation "Pronunciations and Frequencies of this ideograph" kHanyuPinlu
+#   kHanyuPinyin: "The 漢語拼音 Hànyǔ Pīnyīn reading(s) appearing in the edition of 《漢語大字典》 Hànyǔ Dà Zìdiǎn (HDZ)"
+relation "Hànyǔ Pīnyīn reading(s) ... Hànyǔ Dà Zìdiǎn (HDZ)" kHanyuPinyin
+#   kHDZRadBreak: "Indicates that 《漢語大字典》 Hanyu Da Zidian has a radical break beginning at this ideograph’s position."
+relation "radical break beginning at this ideograph’s position" kHDZRadBreak
+#   kHKGlyph: "The index of the ideograph in 常用字字形表 (二零零零年修訂本),香港: 香港教育學院, 2000"
+relation "index of the ideograph in 常用字字形表" kHKGlyph
+#   kIBMJapan: "The IBM Japanese mapping for this ideograph in hexadecimal."
+relation "IBM Japanese mapping" kIBMJapan
+#   kIICore: "Used for ideographs which are in IICore, the IRG-produced minimal set of required ideographs for East Asian
+#   use. ... Each value consists of a letter (A, B, or C), indicating priority value, followed by an IRG source specifier"
+relation "in IICore" kIICore
+#   kIRGHanyuDaZidian: "The position of this ideograph in the Hànyǔ Dà Zìdiǎn (PRC) dictionary used in the
+#   four-dictionary sorting algorithm."
+relation "position ... Hànyǔ Dà Zìdiǎn (PRC) dictionary" kIRGHanyuDaZidian
+#   kIRGKangXi: "The official IRG position of this ideograph in the 《康熙字典》 Kangxi Dictionary used in the
+#   four-dictionary sorting algorithm."
+relation "official IRG position ... Kangxi Dictionary" kIRGKangXi
+#   kIRG_GSource: "The IRG “G” source mapping for this ideograph in hexadecimal or decimal."
+relation "IRG “G” source mapping" kIRG_GSource
+#   kIRG_HSource: "The IRG “H” source mapping for this ideograph in hexadecimal."
+relation "IRG “H” source mapping" kIRG_HSource
+#   kIRG_JSource: "The IRG “J” source mapping for this ideograph in hexadecimal or decimal."
+relation "IRG “J” source mapping" kIRG_JSource
+#   kIRG_KPSource: "The IRG “KP” source mapping for this ideograph in hexadecimal."
+relation "IRG “KP” source mapping" kIRG_KPSource
+#   kIRG_KSource: "The IRG “K” source mapping for this ideograph in hexadecimal or decimal."
+relation "IRG “K” source mapping" kIRG_KSource
+#   kIRG_MSource: "The IRG “M” source mapping for this ideograph in hexadecimal or decimal."
+relation "IRG “M” source mapping" kIRG_MSource
+#   kIRG_SSource: "The IRG “S” source mapping for this ideograph in decimal."
+relation "IRG “S” source mapping" kIRG_SSource
+#   kIRG_TSource: "The IRG “T” source mapping for this ideograph in hexadecimal."
+relation "IRG “T” source mapping" kIRG_TSource
+#   kIRG_UKSource: "The IRG “UK” source mapping for this ideograph in decimal."
+relation "IRG “UK” source mapping" kIRG_UKSource
+#   kIRG_USource: "The IRG “U” source mapping for this ideograph in decimal."
+relation "IRG “U” source mapping" kIRG_USource
+#   kIRG_VSource: "The IRG “V” source mapping for this ideograph in hexadecimal."
+relation "IRG “V” source mapping" kIRG_VSource
+#   kJapanese: "The Japanese readings(s) for this ideograph expressed in Kana."
+relation "Japanese readings(s) for this ideograph expressed in Kana" kJapanese
+#   kJapaneseKun: "The Japanese pronunciation(s) of this ideograph in the Hepburn romanization."
+relation "Japanese pronunciation(s) ... in the Hepburn romanization" kJapaneseKun
+#   kJapaneseOn: "The Sino-Japanese pronunciation(s) of this ideograph."
+relation "Sino-Japanese pronunciation(s)" kJapaneseOn
+#   kJinmeiyoKanji: "The year that corresponds to the Jinmei-yō Kanji (人名用漢字) table in which the ideograph appears"
+relation "year ... Jinmei-yō Kanji (人名用漢字) table" kJinmeiyoKanji
+#   kJis0: "The JIS X 0208-1990 mapping for this ideograph in row-cell form."
+relation "JIS X 0208-1990 mapping" kJis0
+#   kJis1: "The JIS X 0212-1990 mapping for this ideograph in row-cell form."
+relation "JIS X 0212-1990 mapping" kJis1
+#   kJIS0213: "The JIS X 0213:2004 mapping for this ideograph in plane-row-cell form."
+relation "JIS X 0213:2004 mapping" kJIS0213
+#   kJoyoKanji: "The year that corresponds to the Jōyō Kanji (常用漢字) table in which the ideograph appears, or the code
+#   point of the JIS X 0208 variant ..."
+relation "year ... Jōyō Kanji (常用漢字) table" kJoyoKanji
+#   kKangXi: "The position of this ideograph in the《康熙字典》Kangxi Dictionary used in the four-dictionary sorting algorithm."
+relation "position ... Kangxi Dictionary ... four-dictionary sorting" kKangXi
+#   kKarlgren: "The index of this ideograph in Analytic Dictionary of Chinese and Sino-Japanese by Bernhard Karlgren"
+relation "index ... Analytic Dictionary of Chinese and Sino-Japanese" kKarlgren
+#   kKorean: "The Korean pronunciation(s) of this ideograph, using the Yale romanization system."
+relation "Korean pronunciation(s) ... Yale romanization system" kKorean
+#   kKoreanEducationHanja: "The year that corresponds to the 한문 교육용 기초 한자 (漢文敎育用基礎漢字) list of 1,800
+#   ideographs for general use in which the ideograph appears."
+relation "year ... 한문 교육용 기초 한자 list" kKoreanEducationHanja
+#   kKoreanName: "The year that corresponds to the 인명용 한자 (人名用漢字) list in which the ideograph first appears"
+relation "year ... 인명용 한자 (人名用漢字) list" kKoreanName
+#   kLau: "The index of this ideograph in A Practical Cantonese-English Dictionary by Sidney Lau"
+relation "index ... A Practical Cantonese-English Dictionary" kLau
+#   kMainlandTelegraph: "The PRC telegraph code for this ideograph"
+relation "PRC telegraph code" kMainlandTelegraph
+#   kMandarin: "The most customary pīnyīn reading for this ideograph."
+relation "most customary pīnyīn reading" kMandarin
+#   kMatthews: "The index of this ideograph in Chinese-English Dictionary by Robert H. Mathews"
+relation "index ... Chinese-English Dictionary by Robert H. Mathews" kMatthews
+#   kMeyerWempe: "The index of this ideograph in the Student’s Cantonese-English Dictionary by Bernard F. Meyer and
+#   Theodore F. Wempe"
+relation "index ... Student’s Cantonese-English Dictionary" kMeyerWempe
+#   kMojiJoho: "This property provides mappings from CJK Unified Ideographs, along with SVSes ... to Moji Jōhō Kiban"
+relation "mappings from CJK Unified Ideographs ... to Moji Jōhō Kiban" kMojiJoho
+#   kMorohashi: "The index of the ideograph in the Dai Kanwa Jiten (大漢和辞典) Japanese kanji dictionary"
+relation "index ... Dai Kanwa Jiten (大漢和辞典)" kMorohashi
+#   kNelson: "The index of this ideograph in The Modern Reader’s Japanese-English Character Dictionary"
+relation "index ... Modern Reader’s Japanese-English Character" kNelson
+#   kOtherNumeric: "One or more values of the ideograph when used as a numeral in Chinese and derivative numeric systems.
+#   Ideographs with this property are rarely used, obsolete, domain-specific, non-standard, or non-compositional as a
+#   numeral."
+relation "values ... as a numeral ... rarely used, obsolete" kOtherNumeric
+#   kPhonetic: "The phonetic class for the ideograph, as adopted from Ten Thousand Characters: An Analytic Dictionary"
+relation "phonetic class" kPhonetic
+#   kPrimaryNumeric: "One or more values of the ideograph when used as a numeral in Chinese and derivative numeric
+#   systems. Ideographs which have this property have numeric values that are common, or are standardized to convey a
+#   fixed numeric value."
+relation "values ... as a numeral ... common, or are standardized" kPrimaryNumeric
+#   kPseudoGB1: "A GB/T 12345-1990 code point assigned to this ideograph for the purposes of including it within Unihan."
+relation "GB/T 12345-1990 code point assigned to this ideograph" kPseudoGB1
+#   kRSAdobe_Japan1_6: "Information on the glyphs in Adobe-Japan1-6 as contributed by Adobe."
+relation "Information on the glyphs in Adobe-Japan1-6" kRSAdobe_Japan1_6
+#   kRSUnicode: "The standard radical-stroke count for this ideograph in the form “radical.additional strokes.”"
+relation "standard radical-stroke count" kRSUnicode
+#   kSBGY: "The position of this ideograph in the Song Ben Guang Yun (SBGY) Medieval Chinese character dictionary"
+relation "position ... Song Ben Guang Yun (SBGY)" kSBGY
+#   kSemanticVariant: "The Unicode value for a semantic variant for this ideograph."
+relation "semantic variant" kSemanticVariant
+#   kSimplifiedVariant: "The Unicode value(s) for the simplified Chinese variant(s) for this ideograph."
+relation "simplified Chinese variant(s)" kSimplifiedVariant
+#   kSMSZD2003Index: "This represents the position(s) of the ideograph in the Soengmou San Zidin (商務新字典, New
+#   Commercial Press Character Dictionary)."
+relation "position(s) of the ideograph in the Soengmou San Zidin" kSMSZD2003Index
+#   kSMSZD2003Readings: "This represents the Mandarin and Cantonese readings(s) of the ideograph in the Soengmou San
+#   Zidin (商務新字典, New Commercial Press Character Dictionary)."
+relation "Mandarin and Cantonese readings(s) ... Soengmou San Zidin" kSMSZD2003Readings
+#   kSpecializedSemanticVariant: "The Unicode value for a specialized semantic variant for this ideograph."
+relation "specialized semantic variant" kSpecializedSemanticVariant
+#   kSpoofingVariant: "The spoofing variants for the ideograph, if any."
+relation "spoofing variants" kSpoofingVariant
+#   kStrange: "This property identifies CJK Unified Ideographs that are considered “strange” in one or more ways per the
+#   following 12 categories"
+relation "considered “strange” in one or more ways" kStrange
+#   kTaiwanTelegraph: "The Taiwanese telegraph code for this ideograph"
+relation "Taiwanese telegraph code" kTaiwanTelegraph
+#   kTang: "The Tang dynasty pronunciation(s) of this ideograph"
+relation "Tang dynasty pronunciation(s)" kTang
+#   kTayNumeric: "The value of the ideograph when used as a numeral in Tày languages with the Han script (Chữ Nôm Tày)."
+relation "value ... as a numeral in Tày languages" kTayNumeric
+#   kTGH: "The year that corresponds to the Tōngyòng Guīfàn Hànzìbiǎo (通用规范汉字表) table in which the ideograph
+#   appears, followed by a colon and its one- to four-digit index number in that list."
+relation "year ... Tōngyòng Guīfàn Hànzìbiǎo table" kTGH
+#   kTGHZ2013: "One or more Hànyǔ Pīnyīn readings as given in Tōngyòng Guīfàn Hànzì Zìdiǎn"
+relation "Pīnyīn readings ... Tōngyòng Guīfàn Hànzì Zìdiǎn" kTGHZ2013
+#   kTotalStrokes: "The total number of strokes in the ideograph (including the radical) according to the stroke-counting
+#   conventions of the IRG."
+relation "total number of strokes in the ideograph" kTotalStrokes
+#   kTraditionalVariant: "The Unicode value(s) for the traditional Chinese variant(s) for this ideograph."
+relation "traditional Chinese variant(s)" kTraditionalVariant
+#   kUnihanCore2020: "Used for ideographs which are in the Unihan Core 2020 set, the minimal set of required ideographs
+#   for East Asia."
+relation "in the Unihan Core 2020 set" kUnihanCore2020
+#   kVietnamese: "The ideograph’s pronunciation(s) in Quốc ngữ."
+relation "pronunciation(s) in Quốc ngữ" kVietnamese
+#   kVietnameseNumeric: "The value of the character when used as a numeral in Vietnamese with Han script (Hán Nôm)."
+relation "value ... as a numeral in Vietnamese with Han script" kVietnameseNumeric
+#   kXerox: "The Xerox code for this ideograph."
+relation "Xerox code" kXerox
+#   kXHC1983: "One or more Hànyǔ Pīnyīn readings as given in the Xiàndài Hànyǔ Cídiǎn"
+relation "Hànyǔ Pīnyīn readings ... Xiàndài Hànyǔ Cídiǎn" kXHC1983
+#   kZhuang: "The most customary Zhuang reading for this ideograph."
+relation "most customary Zhuang reading" kZhuang
+#   kZhuangNumeric: "The value of the ideograph when used as a numeral in Zhuang languages with the Han script (Sawndip)."
+relation "value ... as a numeral in Zhuang languages" kZhuangNumeric
+#   kZVariant: "The z-variants for the ideograph, if any."
+relation "z-variants" kZVariant
+
+# --- Egyptian hieroglyphs: Unikemet.txt ("This file contains the following information:") and UAX #57. kEH_NoMirror
+# and kEH_NoRotate are binary: the flags hold them ---
+#   "Catalog value: kEH_Cat"
+relation "Catalog value" kEH_Cat
+#   "Core value: kEH_Core (C for core, L for legacy, default is N)"
+relation "Core value" kEH_Core
+#   UAX #57, kEH_Desc: "Detailed description of the appearance of the hieroglyph."
+relation "Detailed description of the appearance of the hieroglyph" kEH_Desc
+#   UAX #57, kEH_Func: "All signs are expected to have a function type representing a pictogram, a logogram, a
+#   phonemogram (or “phonogram”), a classifier (or “determinative”), ..." (Unikemet.txt words both kEH_Func and
+#   kEH_FVal "Function")
+relation "function type" kEH_Func
+#   UAX #57, kEH_FVal: "All signs are expected to have a function value corresponding to their function type."
+relation "function value" kEH_FVal
+#   "Original catalog value: kEH_UniK"
+relation "Original catalog value" kEH_UniK
+#   "JSesh source: kEH_JSesh"
+relation "JSesh source" kEH_JSesh
+#   "Hieroglyphica source: kEH_HG"
+relation "Hieroglyphica source" kEH_HG
+#   "IFAO source: kEH_IFAO"
+relation "IFAO source" kEH_IFAO
+#   "Alternate sequence: kEH_AltSeq"
+relation "Alternate sequence" kEH_AltSeq
+
+# --- Nushu: NushuSources.txt, "Tags currently defined:" ---
+#   "kNSHU_DubenSrc   Nushu source, expressed as a dot-separated string of two numbers"
+relation "Nushu source" kNSHU_DubenSrc
+#   "Nushu common reading: kNSHU_Reading"
+relation "Nushu common reading" kNSHU_Reading
+
+# --- Tangut: TangutSources.txt, "Current tag list:" ---
+#   "Tangut Merged source: kTGT_MergedSrc"
+relation "Tangut Merged source" kTGT_MergedSrc
+#   "Radical-Stroke indexes: kTGT_RSUnicode"
+relation "Radical-Stroke indexes" kTGT_RSUnicode
+
+# --- the other elements' attributes ---
+# PropertyAliases.txt: "Name_Alias ; Name_Alias"; NameAliases.txt: "This file defines the formal name aliases for
+# Unicode characters."
+relation "Name_Alias" name-alias.alias
+# NameAliases.txt: "The formal name aliases are divided into five types, each with a distinct label." (correction,
+# control, alternate, figment, abbreviation)
+value - name-alias.type
+# NamedSequences.txt and NamedSequencesProv.txt, "Format: Name of Sequence; Code Point Sequence for USI"
+relation "Name of Sequence" named-sequence.name provisional-named-sequence.name
+# StandardizedVariants.txt: "Field 1: the description of the desired appearance"
+relation "description of the desired appearance" standardized-variant.desc
+# StandardizedVariants.txt: "Field 2: where the appearance is only different in particular shaping environments this
+# field lists them. The possible values are: isolate, initial, medial, final."
+value - standardized-variant.when
+# CJKRadicals.txt: "The second field is the CJK radical character, ... The third field is the CJK unified ideograph."
+relation "CJK unified ideograph" cjk-radical.ideograph
+# Blocks.txt, "Format: Start Code..End Code; Block Name"
+relation "Start Code" block.first-cp
+relation "End Code" block.last-cp
+# EmojiSources.txt, "Fields: ... 1: DoCoMo Shift-JIS code 2: KDDI Shift-JIS code 3: SoftBank Shift-JIS code"
+relation "DoCoMo Shift-JIS code" emoji-source.docomo
+relation "KDDI Shift-JIS code" emoji-source.kddi
+relation "SoftBank Shift-JIS code" emoji-source.softbank
+# NormalizationCorrections.txt: "Field 1: Original (erroneous) decomposition", "Field 2: Corrected decomposition"; its
+# "Field 3: Version of Unicode for which the correction was entered" is bookkeeping, omitted above
+relation "Original (erroneous) decomposition" normalization-correction.old
+relation "Corrected decomposition" normalization-correction.new
+# DoNotEmit.txt: "Field 2  DoNotEmit type of the original character sequence"; "These are the values used for Field 2:"
+# (Indic_Atomic_Consonant, ..., Discouraged, Preferred_Spelling): said of the original sequence, the element's "of"
+value - because
 
 attest char *
 attest reserved *
@@ -45,6 +394,6 @@ attest provisional-named-sequence name
 attest standardized-variant desc when
 attest cjk-radical ideograph
 attest block first-cp last-cp
-attest emoji-source unicode docomo kddi softbank
-attest normalization-correction old new version
-attest instead of use because
+attest emoji-source docomo kddi softbank
+attest normalization-correction old new
+attest instead because of of

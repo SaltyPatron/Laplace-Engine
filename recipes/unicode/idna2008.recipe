@@ -15,4 +15,7 @@ tier field by ;
 thing row "code point"
 range "code point"
 content IDNA2008_Category
+# The header: "Field 1: IDNA2008_Category, consisting of one of these values "PVALID" ... "CONTEXTJ" ... "CONTEXT0" ...
+# "DISALLOWED" ... "UNASSIGNED""
+value - IDNA2008_Category
 attest row IDNA2008_Category

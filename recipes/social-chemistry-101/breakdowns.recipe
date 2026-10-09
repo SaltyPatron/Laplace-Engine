@@ -28,6 +28,36 @@ omit split n-characters rot-bad
 omit m
 content rot situation area rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical characters
 together row
+# The README, "Dataset Columns" and "Dataset Collection":
+#   situation "Text of the situation"; "A worker writes 1 -- 5 RoTs per situation."
+relation "RoTs per situation" situation
+#   area {confessions, dearabby, rocstories, amitheasshole}; "each domain (AITA, rocstories, etc.) is split independently"
+relation "domain" area
+#   characters '"|" separated list of characters that appeared'
+relation "characters that appeared" characters
+#   rot-agree: Worker answer to question "What portion of people probably agree that ${rot}?" (buckets 0 to 4)
+relation "What portion of people probably agree that ${rot}?" rot-agree
+#   rot-judgment: "Worker-written string representing the judgment portion of the RoT."
+relation "the judgment portion of the RoT" rot-judgment
+#   action: "The action (conjugated / tweaked substring of RoT), written by the worker."
+relation "The action (conjugated / tweaked substring of RoT)" action
+#   action-moral-judgment: Worker answer to the question which best matches the RoT's original judgment (${judgment})
+#   of ${action}?" (buckets -2 to 2)
+relation "best matches the RoT's original judgment" action-moral-judgment
+#   action-agree: Worker answer to the question, "What portion of people probably agree that ${action} is
+#   ${judgment}?" (buckets 0 to 4)
+relation "probably agree that ${action} is ${judgment}" action-agree
+#   action-pressure: Worker answer to question "How much cultural pressure do you (or those you know) feel about
+#   ${action}?" (buckets -2 to 2)
+relation "How much cultural pressure do you (or those you know) feel" action-pressure
+# The worker's labels from the README's choice lists, values of the set's own vocabularies: rot-categorization
+# {morality-ethics, social-norms, advice, description}; rot-moral-foundations {care-harm, fairness-cheating,
+# loyalty-betrayal, authority-subversion, sanctity-degradation}; action-agency {agency, experience}; action-legal
+# {legal, illegal, tolerated}; action-hypothetical {explicit-no, probable-no, hypothetical, probable, explicit}.
+value - rot-categorization rot-moral-foundations action-agency action-legal action-hypothetical
+# rot-char-targeting and action-char-involved: obligations. Their answer char-N "means that the worker picked
+# character N, a 0-index into the `characters` column": a pointer into the row's own list, to be resolved to the
+# character it names, never recorded as written (Laplace-Engine#20).
 attest row situation by rot-worker-id
 attest row rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical by breakdown-worker-id
 attest row area characters

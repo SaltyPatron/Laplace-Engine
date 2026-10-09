@@ -11,4 +11,9 @@ tier field by \t
 thing row frames
 key row synsets
 content frames lus
+# README: "file 'mapping_lus_synsets.txt': mapping between FrameNet frames, lus and WordNet synsets" ... "All frames and
+# lexical units included in the resource are described in FrameNet v. 1.3": the lexical unit is a value of FrameNet's
+# lexical units, [Buildings, hall.n] (Laplace-Engine#32). The highway lists FrameNet 1.7's, keyed by their numbers, so a
+# unit written by its name finds no slot there and is claimed as written.
+value fnlu lus
 attest row lus

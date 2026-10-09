@@ -21,4 +21,18 @@ range code
 codepoints lower title upper
 content condition_list
 when condition_list matches [A-Za-z]
+# The header: "This file is a supplement to the UnicodeData.txt file. The data in this file, combined with the simple case
+# mappings in UnicodeData.txt, defines the full case mappings Lowercase_Mapping (lc), Titlecase_Mapping (tc), and
+# Uppercase_Mapping (uc)." and "<code>, <lower>, <title>, and <upper> provide the respective full case mappings of <code>"
+relation "Lowercase_Mapping" lower
+relation "Titlecase_Mapping" title
+relation "Uppercase_Mapping" upper
+# The header: "The <condition_list> is optional. Where present, it consists of one or more language IDs or casing contexts,
+# separated by spaces." "The condition list is not represented in the UCD as a formal property.": each condition a value
+# of the file's own list (Final_Sigma, After_Soft_Dotted, More_Above, Before_Dot, After_I, Not_..., and BCP 47 language IDs)
+value - condition_list
 attest row lower title upper condition_list
+# "A condition list overrides the normal behavior if all of the listed conditions are true": a row's mappings hold under
+# its conditions, so they are one record, said together (the wiki's Unicode page: "with every condition of the list,
+# together")
+together row

@@ -14,4 +14,12 @@ thing row c_testcase
 key row t_id
 content c_testcase p_label p_value p_target t_case_local t_function t_gold t_direction
 together row
+# The README words the parts of a test case only in its figure, "men (placeholder) + I hate {placeholder} (template) =
+# I hate men (test case)", and "Placeholders represent the target of each test case"; "SGHateCheck inherits 30
+# functionalities from HateCheck". t_function, t_gold, t_direction and p_label (the placeholder as the template writes
+# it, {IDENTITY_P}) are labels the set gives the case: values of its own vocabularies.
+value - p_label t_function t_gold t_direction
+relation "placeholder" p_value
+relation "template" t_case_local
+relation "the target of each test case" p_target
 attest row p_label p_value p_target t_case_local t_function t_gold t_direction

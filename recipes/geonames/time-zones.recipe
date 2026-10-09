@@ -1,7 +1,8 @@
 name geonames-time-zones
 # readme.txt:
 #   "timeZones.txt            : countryCode, timezoneId, gmt offset on 1st of January, dst offset to gmt on 1st of July (of the current year), rawOffset without DST"
-# The file has a header row of its own, and its names are the ones recorded, as the file writes them.
+# The file has a header row of its own, and its names are the ones recorded, as the file writes them. The readme
+# words the country code, here only "countryCode", in the geoname table: "country code : ISO-3166 2-letter country code".
 match timeZones.txt
 
 tier row by \n
@@ -10,4 +11,8 @@ tier field by \t
 
 thing row TimeZoneId
 content TimeZoneId CountryCode "GMT offset*" "DST offset*" "rawOffset*"
+relation "ISO-3166 2-letter country code" CountryCode
+relation "gmt offset on 1st of January" "GMT offset*"
+relation "dst offset to gmt on 1st of July (of the current year)" "DST offset*"
+relation "rawOffset without DST" "rawOffset*"
 attest row CountryCode "GMT offset*" "DST offset*" "rawOffset*"

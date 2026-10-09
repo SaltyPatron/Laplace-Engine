@@ -18,4 +18,9 @@ tier field by ;
 thing row code_point(s)
 range code_point(s)
 content type_field description
+# The header: "type_field, one of the following: Basic_Emoji Emoji_Keycap_Sequence RGI_Emoji_Flag_Sequence ..."; "each of
+# the type fields defines the name of a binary property of strings": the sequence has that property, [sequence, Basic_Emoji]
+value - type_field
+# The header: "short name: CLDR short name of sequence"
+relation "CLDR short name of sequence" description
 attest row type_field description
