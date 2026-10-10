@@ -2,7 +2,6 @@ name propbank
 # PropBank's frame files: every predicate's rolesets, their roles, and their links to VerbNet and FrameNet.
 witness PropBank
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/PropBank/extracted/propbank-*/frames
 root $LAPLACE_DATA/PropBank/propbank-*/frames
 # Measured when it was loaded: 1,146,056 compositions from 30 MB, at 750 bytes each with their indexes and standings.
 room 29

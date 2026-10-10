@@ -6,5 +6,5 @@ witness GeoNames Gazetteer
 # Its users write it. readme.txt: "If you find errors or miss important places, please do use the wiki-style edit
 # interface on our website https://www.geonames.org to correct inaccuracies and to add new records."
 class UserCuratedResource
-root $LAPLACE_DATA/.refresh-*/GeoNames
+root $LAPLACE_DATA/GeoNames
 after unicode iso-639

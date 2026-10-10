@@ -147,8 +147,11 @@ static int source_parse(const char *path, Source *s){
     }
     fclose(f);
     if (s->nfiles) { os_list g; os_glob(s->files[0], &g); if (g.n) snprintf(s->found, sizeof s->found, "%s", s->files[0]); os_list_free(&g); }
-    for (int i = 0; i < s->nroot && !s->found[0]; i++) {                   /* the first root that exists; of a pattern, the newest */
-        os_list g; os_glob(s->root[i], &g); if (g.n) snprintf(s->found, sizeof s->found, "%s", g.item[g.n - 1]);
+    /* the first root that is there; of a pattern, the newest directory: an archive or a checksum kept beside the
+     * directory it was opened into matches the pattern too, and is not where the source is */
+    for (int i = 0; i < s->nroot && !s->found[0]; i++) {
+        os_list g; os_glob(s->root[i], &g);
+        for (size_t j = g.n; j > 0 && !s->found[0]; j--) if (os_is_dir(g.item[j - 1])) snprintf(s->found, sizeof s->found, "%s", g.item[j - 1]);
         os_list_free(&g);
     }
     return s->name[0] != 0;

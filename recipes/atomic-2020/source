@@ -3,7 +3,7 @@ name atomic-2020
 # The witness is named as the set's README.md titles itself: "# ATOMIC 2020 Knowledge Graph".
 witness ATOMIC 2020 Knowledge Graph
 class AcademicCurated
-root $LAPLACE_DATA/Atomic2020
+root $LAPLACE_DATA/Atomic/Atomic2020
 # Measured when it was loaded: 1,913,456 compositions from 68 MB, at 750 bytes each with their indexes and standings.
 room 21
 after unicode iso-639

@@ -3,7 +3,7 @@ name toxigen
 # ToxiGen"; pretty_name: ToxiGen.
 witness ToxiGen
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/Safety/ToxiGen/toxigen-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+root $LAPLACE_DATA/Safety/ToxiGen/toxigen-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
 # The set comes twice: as Parquet files, read here as they are written out in extracted/, and as the same rows in
 # CSV files beside them.
 except *.csv *.parquet

@@ -5,5 +5,5 @@ witness RealToxicityPrompts
 # The dataset card: "The scores accompanying the prompt and the continuation are generated using the Perspective API".
 lineage Perspective API
 class AIModelProbe
-root $LAPLACE_DATA/.refresh-*/Safety/RealToxicityPrompts/real-toxicity-prompts-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+root $LAPLACE_DATA/Safety/RealToxicityPrompts/real-toxicity-prompts-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
 after unicode iso-639

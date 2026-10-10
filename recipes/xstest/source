@@ -4,6 +4,6 @@ name xstest
 # Large Language Models".
 witness XSTest
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/Safety/XSTest/extracted/xstest-*
+root $LAPLACE_DATA/Safety/XSTest/xstest-*
 except */evaluation/* *.gitignore
 after unicode iso-639

@@ -3,5 +3,5 @@ name universal-dependencies-documentation
 # project's own words. Every page is also read as the text it is.
 witness Universal Dependencies
 class StandardsDerived
-root $LAPLACE_DATA/.refresh-*/UD-Docs/extracted/docs-pages-source
+root $LAPLACE_DATA/UD-Docs/docs-pages-source
 after universal-dependencies-tools

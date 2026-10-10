@@ -213,9 +213,13 @@ report where a recipe cannot say it.
 - **Never write to the database.** Only ever run the engine with `--claims`, `--no-load` or `--plan`.
 - **Never modify** the engine's sources (`src/`), the builds, or another source's recipes. If the engine cannot express what a file
   needs, do not work around it: report exactly what is missing, with three lines of the raw data.
-- Under `/vault/Data` you may only **extract an archive** into a directory named `extracted` beside the archive (this is
-  the existing convention, see `/vault/Data/.refresh-20260903/CILI/extracted`). Change nothing else there.
-- Prefer the refreshed copy of a set in `/vault/Data/.refresh-20260903/<Set>` when one exists; otherwise `/vault/Data/<Set>`.
+- A source's data is where Laplace-Operations' `data.tsv` declares its set: `$LAPLACE_DATA/<Set>`, fetched from its
+  publisher by `data.sh fetch` with an archive opened in place. A source has **one root, that place**: never a
+  machine's own path (`/vault/Data/...`), never a dated or staging directory (`.refresh-*`, `extracted`), and no second
+  root to fall back to. A recipe that names one machine's directory reads nothing on every other machine, and two
+  roots let two machines read two releases of one set. If the set is not declared yet, say so with its publisher's
+  URL: the declaration is added first, then the recipe names it.
+- Change nothing under `$LAPLACE_DATA`: fetching and opening archives is `data.sh`'s.
 
 ## The engine
 
@@ -267,7 +271,6 @@ name my-source
 witness The Name The Source Gives Itself
 # its trust class, one of Laplace-Native/manifest/trust_classes.toml, as the wiki (Sequence: Sources, the estate) gives it for the source
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/Set/extracted
 root $LAPLACE_DATA/Set
 after unicode iso-639
 reads text
