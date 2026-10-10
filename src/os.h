@@ -28,8 +28,9 @@ void os_glob(const char *pattern, os_list *out);
 /* The names in a directory, '.' and '..' included, unsorted; 0, or -1 when it cannot be read (errno set). */
 int os_list_dir(const char *dir, os_list *out);
 
-/* Whether anything exists at a path. */
+/* Whether anything exists at a path, and whether what is there is a directory. */
 int os_exists(const char *path);
+int os_is_dir(const char *path);
 
 /* A file moved over another (rename(2): the destination replaced; MoveFileEx with MOVEFILE_REPLACE_EXISTING, where
  * rename refuses an existing destination). 0, or -1 with errno set. */

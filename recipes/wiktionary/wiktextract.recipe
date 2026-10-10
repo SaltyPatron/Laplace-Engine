@@ -9,5 +9,5 @@ name wiktextract
 # list of gloss strings for the word sense"), a form the thing its "form" names, an example the thing its "text"
 # names. Lists of pairs are pairs ("links in the etymology as [display text, target] pairs").
 # Every key and value is recorded as written. The raw file and kaikki.org's extracts of it are read the same way.
-match raw-wiktextract-data-*
+match raw-wiktextract-data*
 like wiktextract-kaikki
