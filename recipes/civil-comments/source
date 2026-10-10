@@ -3,7 +3,7 @@ name civil-comments
 # "civil_comments". Its data is in Parquet files, read as they are written out in extracted/; the card is read as text.
 witness civil_comments
 class AcademicCuratedWithUserInput
-root $LAPLACE_DATA/.refresh-*/Safety/CivilComments/civil-comments-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+root $LAPLACE_DATA/Safety/CivilComments/civil-comments-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
 # The files are Parquet, read as they are written out in extracted/.
 except *.parquet
 after unicode iso-639

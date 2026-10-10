@@ -4,6 +4,6 @@ name sghatecheck
 # The README's title: "SGHateCheck: Functional Tests for Detecting Hate Speech in Low-Resource Languages of Singapore".
 witness SGHateCheck
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/Safety/SGHateCheck/extracted/sghatecheck-*
+root $LAPLACE_DATA/Safety/SGHateCheck/sghatecheck-*
 except */code/* *.png
 after unicode iso-639 hatecheck

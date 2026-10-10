@@ -5,7 +5,6 @@ name universal-dependencies-tools
 # language, and its auxiliaries and tokens with spaces. The repository names itself "tools", of UniversalDependencies.
 witness UniversalDependencies tools
 class StandardsDerived
-root $LAPLACE_DATA/.refresh-*/UD-Tools/*/data
 root $LAPLACE_DATA/UD-Tools/*/data
 # Measured when it was loaded: 388,693 compositions from 6.7 MB, at 750 bytes each with their indexes and standings.
 room 44

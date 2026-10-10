@@ -3,7 +3,7 @@ name open-multilingual-wordnet
 witness {first label}
 called Open Multilingual Wordnet
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/OMW-2.0/extracted/omw-*
+root $LAPLACE_DATA/OMW-2.0/omw-*
 # Measured when it was loaded: 29,072,501 compositions from 597 MB, at 750 bytes each with their indexes and standings.
 room 37
 after cili iso-639 open-english-wordnet

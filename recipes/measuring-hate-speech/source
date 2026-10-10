@@ -4,7 +4,7 @@ name measuring-hate-speech
 # Its data is in Parquet files, read as they are written out in extracted/; the card is read as text.
 witness Measuring Hate Speech
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/Safety/MeasuringHateSpeech/measuring-hate-speech-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+root $LAPLACE_DATA/Safety/MeasuringHateSpeech/measuring-hate-speech-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
 # The files are Parquet, read as they are written out in extracted/.
 except *.parquet */extracted/measuring-hate-speech.tsv
 after unicode iso-639

@@ -3,5 +3,5 @@ name social-chemistry-101
 # "Social-Chem-101 Dataset".
 witness Social-Chem-101 Dataset
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/Safety/SocialChemistry101/extracted/social-chem-101
+root $LAPLACE_DATA/Safety/SocialChemistry101/social-chem-101
 after unicode iso-639

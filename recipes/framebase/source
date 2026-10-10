@@ -4,7 +4,7 @@ name framebase
 # of the host of its identifiers (http://framebase.org/).
 witness FrameBase
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/FrameBase-2.0
+root $LAPLACE_DATA/FrameBase-2.0
 # Measured when it was loaded: 5,906,028 compositions from 589 MB, at 750 bytes each with their indexes and standings.
 room 8
 after unicode iso-639

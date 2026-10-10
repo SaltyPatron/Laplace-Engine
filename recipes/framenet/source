@@ -5,7 +5,6 @@ name framenet
 # README.txt: "Welcome to Release 1.7 of the FrameNet data!" ... "The FrameNet database in XML format"
 witness FrameNet
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/FrameNet/framenet_v17
 root $LAPLACE_DATA/FrameNet/framenet_v17
 # Measured when it was loaded: 15,952,613 compositions from 854 MB, at 750 bytes each with their indexes and standings.
 room 14

@@ -3,5 +3,5 @@ name hatecheck
 # ten annotators gave them. The README names it by that title.
 witness HateCheck
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/Safety/HateCheck/extracted/hatecheck-*
+root $LAPLACE_DATA/Safety/HateCheck/hatecheck-*
 after unicode iso-639

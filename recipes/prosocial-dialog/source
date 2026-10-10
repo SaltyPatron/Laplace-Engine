@@ -3,5 +3,5 @@ name prosocial-dialog
 # safety labels three workers gave. The dataset card's title: "Dataset Card for ProsocialDialog Dataset".
 witness ProsocialDialog
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/Safety/ProsocialDialog/prosocial-dialog-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+root $LAPLACE_DATA/Safety/ProsocialDialog/prosocial-dialog-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
 after unicode iso-639

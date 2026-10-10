@@ -3,5 +3,5 @@ name social-bias-frames
 # workers said of each; and the same aggregated per post.
 witness Social Bias Frames
 class AcademicCurated
-root $LAPLACE_DATA/.refresh-*/Safety/SocialBiasFrames/extracted
+root $LAPLACE_DATA/Safety/SocialBiasFrames
 after unicode iso-639
