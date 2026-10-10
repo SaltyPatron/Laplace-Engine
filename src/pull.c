@@ -600,7 +600,7 @@ void take_top(Claim *cl, int n, int want, const Firmware *fw, unsigned *seed){
  * through it; otherwise the top, as the firmware takes it (seed NULL: the top every time). The first of the firmware's
  * chains that reaches its end answers. Returns the steps the answering chain took, or, when none reached its end, the
  * most the last one tried took and -1 in *alt; *last is the last strand taken. */
-int chain_follow(PGconn *pg, Reader *rd, Firmware *fw, const lp_id *word, const lp_id *reading, unsigned *seed, lp_id *answer, Claim *last, int *alt){
+int chain_follow(PGconn *pg, Reader *rd, Firmware *fw, const lp_id *word, const lp_id *reading, unsigned *seed, ChainFork fork, void *fork_ctx, lp_id *answer, Claim *last, int *alt){
     firmware_ids(fw); int steps = 0;
     for (*alt = 0; *alt < fw->nalt; (*alt)++) {
         lp_id cur = *word; steps = 0;
@@ -618,6 +618,7 @@ int chain_follow(PGconn *pg, Reader *rd, Firmware *fw, const lp_id *word, const 
             positions_of(pg, cl, n); if (fw->order_witness) lp_sort(cl, (size_t)n, sizeof(Claim), claim_by_position);
             int take = -1;
             if (z == 0 && reading) for (int k = 0; k < n; k++) if (lp_id_eq(&cl[k].part[cl[k].np - 1], reading)) { take = k; break; }
+            if (take < 0 && fork && n > 1) take = fork(fork_ctx, cl, n);        /* what the context supports, when it tells the branches apart */
             if (take < 0) { take_top(cl, n, 1, fw, seed); take = 0; }
             *last = cl[take]; cur = cl[take].part[cl[take].np - 1]; steps++; free(cl);
         }

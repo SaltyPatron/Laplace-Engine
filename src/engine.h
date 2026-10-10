@@ -28,6 +28,8 @@ PGresult *db_ask(PGconn *, const char *sql, int n, const char *const *v, const i
 enum { FW_HOP, FW_SEARCH, FW_TRANSLATE, FW_FOLLOWS, FW_PULL, FW_OPS };
 enum { FW_FRECHET, FW_OUTLIERS, FW_DTW, FW_EDR };
 enum { FW_TAKE_FACT, FW_TAKE_SEGMENT, FW_TAKE_ATTESTATIONS, FW_TAKE_CONSTITUENTS, FW_TAKE_CHAIN };
+enum { FW_TIE_FIRST, FW_TIE_DRAW, FW_TIE_ASK };
+enum { FW_E_GROUNDS, FW_E_CONTINUITY, FW_E_AGREE, FW_E_COOCCUR, FW_E_WALKS, FW_E_SHAPE, FW_E_CONFIDENCE, FW_E_SHARED, FW_E_HEADS, FW_E_KEYS };
 #define FW_CHAIN 8
 #define FW_ALTS 4
 #define FW_NAMES 32
@@ -43,13 +45,20 @@ typedef struct {
     double fact;                                      /* the trust at which a curated member is returned as one fact; above 1: never */
     int order_witness;                                /* on an open claim, the witness's own order before the standing */
     int shape; double shape_n;
+    int walks, steps, walk_fan, nearest, rounds, breadth; double restart;   /* rounds: coupling rounds (layers); breadth: how many responding entities a round carries on */                 /* walkers from each word, the steps each walks, how often one goes home: the walks' share of the evidence */
+    double sure;                                      /* how many standard errors of the walks separate two counts; within them, the walks cannot tell two apart */
+    double lift;                                      /* how much more often than its base rate a word must be observed beside an occurrence to ground it */
+    int elect[FW_E_KEYS], nelect;                     /* the election order: the evidence keys a proposal is compared by, first to last */
+    int tie, seed_session;                            /* what a real tie gets (first, draw, ask); whether the seed holds the session and turn */
     char refuse_predicate[FW_NAMES][96], refuse_witness[FW_NAMES][96]; int nrefuse_predicate, nrefuse_witness;
+    char only_predicate[FW_NAMES][96]; int nonly_predicate;
+    char prevalence[96]; int prevalence_pair;      /* prevalence_pair: the count is of the pair [word, concept] itself */                              /* the relation by which a source counts a word's concepts (a tagged corpus): the prior of a fork */   /* when any is named, only strands whose relation is one of these are read: one head, or a few, alone */
     struct { int what, n; } take[FW_TAKES]; int ntake; /* a pull's steps, in order */
     char weigh_name[FW_WEIGHS][96]; double weigh[FW_WEIGHS]; int nweigh;
     char role_by[96], role_name[FW_WEIGHS][96]; double role[FW_WEIGHS]; int nrole;      /* how hard a word pulls, by what is attested of it under role_by (its part of speech) */
     char chain[FW_ALTS][FW_CHAIN][96]; int nchain[FW_ALTS], nalt;                                             /* the relations a pull follows from the word that pulls hardest, in order */
     char up[FW_CHAIN][96]; int nup; char language[2][96], gloss[96];                                          /* translation: the relations from a word up to its concept (followed back down in another language); how what stands below the concept says its language (what holds it under the first, and what that says under the second); what is shown of a concept */
-    struct { int ready; lp_id refuse[FW_NAMES], refuse_witness[FW_NAMES], weigh[FW_WEIGHS], role_by, role[FW_WEIGHS], chain[FW_ALTS][FW_CHAIN], up[FW_CHAIN], language[2], gloss; } id;
+    struct { int ready; lp_id prevalence; lp_id only[FW_NAMES], refuse[FW_NAMES], refuse_witness[FW_NAMES], weigh[FW_WEIGHS], role_by, role[FW_WEIGHS], chain[FW_ALTS][FW_CHAIN], up[FW_CHAIN], language[2], gloss; } id;
 } Firmware;                                           /* id: every name above as the entity it is, computed once a pass (firmware_ids) */
 /* ---- the lookups the forward pass is made of (pull.c) */
 #define MAXPARTS 12
@@ -72,7 +81,8 @@ void   weighed(lp_text *, const Firmware *, Claim *, int n);
 typedef struct Reader Reader;
 double role_of(PGconn *, Firmware *, const lp_id *word);                                  /* how hard a word pulls, by its role; -1 when nothing says */
 void   take_top(Claim *, int n, int want, const Firmware *, unsigned *seed);              /* the top, or as near a tie as the firmware allows (seed NULL: the top) */
-int    chain_follow(PGconn *, Reader *, Firmware *, const lp_id *word, const lp_id *reading, unsigned *seed, lp_id *answer, Claim *last, int *alt);                             /* each claim's confidence by its weight, and the set in that order */                  /* what the firmware refuses, taken out */
+typedef int (*ChainFork)(void *ctx, const Claim *cl, int n);           /* at a fork of a chain: the branch to take, or -1 for the chain's own order */
+int    chain_follow(PGconn *, Reader *, Firmware *, const lp_id *word, const lp_id *reading, unsigned *seed, ChainFork fork, void *fork_ctx, lp_id *answer, Claim *last, int *alt);                             /* each claim's confidence by its weight, and the set in that order */                  /* what the firmware refuses, taken out */
 
 /* ---- commands */
 int cmd_ingest(int argc, char **argv);
@@ -276,9 +286,14 @@ typedef struct {
     uint8_t *path; int path_len; lp_rating r; int matches;
 } Hold;
 Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standing, int *nout);
-Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout);   /* every tier, one probe a leaf: each path that holds any key and with as well; src -1, the caller reads which key from the path */
+Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout);
+Hold *holds_both(const lp_id *keys, int nkeys, const lp_id *with, int *nout);                  /* per key, what holds it and with too: a two-key probe a key, every leaf at once */   /* every tier, one probe a leaf: each path that holds any key and with as well; src -1, the caller reads which key from the path */
 Hold *holds_any(const lp_id *keys, int nkeys, int *nout);                                     /* every tier, one probe a leaf: each path that holds any key; src -1 */
 void holds_free(Hold *h, int n);
+Hold *holds_capped(const lp_id *keys, int nkeys, int cap, int standing, int kinds, int *hub, int *nout);   /* kinds: 1 claims, 2 observations, 3 both */   /* each key's holders, its claims and observations a hub's when more than cap: hub[2k], hub[2k + 1] */
+void coords_of(const lp_id *ids, int n, double *out, uint8_t *has);
+Hold *paths_of(const lp_id *ids, int n, int *nout);
+long holds_count(const lp_id *keys, int nkeys, int kind);                                     /* how many paths hold every key (kind 0 observations, 1 claims, -1 both): the index counts, no row is read */                                            /* each one's path, from the partition its ID names */                            /* each one's coordinate, 4 doubles; has[i]: found */
 int  tier_max(const lp_id *ids, int n);                                 /* the highest tier these IDs are recorded at; -1 when none are */
 #define ARGS_MAX 8
 typedef struct { lp_buf b; int binary; } SqlArg;
