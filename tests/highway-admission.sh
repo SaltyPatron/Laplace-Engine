@@ -10,16 +10,16 @@ trap 'rm -rf "$scratch"' EXIT
 export LAPLACE_CONNINFO='host=127.0.0.1 port=1 connect_timeout=1 dbname=unused'
 before=$(sha256sum "$LAPLACE_HIGHWAY" "$LAPLACE_HIGHWAY.layout" "$LAPLACE_HIGHWAY.keys" "$LAPLACE_HIGHWAY.nodes")
 "$L" highway --fingerprint > "$scratch/fingerprint.log"
-rg -q '^fingerprint [0-9a-f]{64}$' "$scratch/fingerprint.log"
+grep -Eq '^fingerprint [0-9a-f]{64}$' "$scratch/fingerprint.log"
 [[ "$before" == "$(sha256sum "$LAPLACE_HIGHWAY" "$LAPLACE_HIGHWAY.layout" "$LAPLACE_HIGHWAY.keys" "$LAPLACE_HIGHWAY.nodes")" ]]
 echo 'PASS fingerprint reads the artifact without rewriting it'
 "$L" ingest --highway --no-load -j 2 > "$scratch/valid.log" 2>&1
-rg -q 'validated; no database access' "$scratch/valid.log"
+grep -Eq 'validated; no database access' "$scratch/valid.log"
 echo 'PASS existing artifact validates with an unreachable database'
 reject() {
   local expected=$1; shift
   if "$@" > "$scratch/rejected.log" 2>&1; then cat "$scratch/rejected.log"; exit 1; fi
-  rg -q "$expected" "$scratch/rejected.log" || { cat "$scratch/rejected.log"; exit 1; }
+  grep -Eq "$expected" "$scratch/rejected.log" || { cat "$scratch/rejected.log"; exit 1; }
 }
 reject 'cannot read highway contents' env LAPLACE_HIGHWAY="$scratch/missing" "$L" ingest --highway -j 2
 echo 'PASS missing artifact refuses admission before database access'
