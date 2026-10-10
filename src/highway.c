@@ -142,7 +142,19 @@ static int swap_in(const char *path, const char *fresh){
 
 int cmd_highway(int argc, char **argv){
     const char *outp = lp_highway_path();
-    for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-o") && a + 1 < argc) outp = argv[++a]; else { fprintf(stderr, "usage: laplace highway [-o highway.bin]\n"); return 2; } }
+    int fingerprint = 0;
+    for (int a = 1; a < argc; a++) {
+        if (!strcmp(argv[a], "-o") && a + 1 < argc) outp = argv[++a];
+        else if (!strcmp(argv[a], "--fingerprint")) fingerprint = 1;
+        else { fprintf(stderr, "usage: laplace highway [-o highway.bin] [--fingerprint]\n"); return 2; }
+    }
+    if (fingerprint) {
+        const lp_highway *h = lp_highway_map(outp);
+        if (!h) { fprintf(stderr, "cannot map existing highway at %s\n", outp); return 1; }
+        uint8_t bytes[32]; char hex[65]; lp_highway_fingerprint(h, bytes); lp_hex(bytes, 32, hex);
+        printf("fingerprint %s\n", hex);
+        return 0;
+    }
     setlocale(LC_NUMERIC, "en_US.UTF-8"); double T = now();
     int threads = omp_get_num_procs(); omp_set_num_threads(threads); omp_set_max_active_levels(1);
     tier0_open(NULL); table_init(); ctx_open(threads); HW = NULL;           /* the highway being made is read by nothing while it is made */

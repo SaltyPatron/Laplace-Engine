@@ -1,7 +1,5 @@
-# Laplace-Engine on its runner: the engine built with icx, with Laplace-Native as part of it (checked out beside it;
-# private: the secret LAPLACE_CHECKOUT), and its own checks: the program answers, and every native operation is
-# measured on this machine when its tier 0 is there. The runner's environment (runner/.env, from agents.sh) names its
-# build root and the machine's dependencies, tier 0 and grammars.
+# Build the Engine with its native dependency and verify artifact/admission boundaries.
+# The runner declaration supplies dependencies and independently installed perf-caches.
 name: Laplace-Engine
 on:
   workflow_dispatch:
@@ -27,8 +25,9 @@ jobs:
       - name: checks
         run: |
           L=$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace
-          "$L" 2>&1 | head -5
-          [ -s "$LAPLACE_TIER0" ] && "$L" bench || echo "no tier 0 at $LAPLACE_TIER0 yet: the Operations deploy makes it"
+          export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
+          export TMPDIR=${RUNNER_TEMP:?}
+          bash Laplace-Engine/tests/highway-admission.sh "$L"
   # Every merge to main that passes deploys hart-server: Laplace-Operations' deployment runs with every repository at its
   # main (its laplace.yml, on a repository_dispatch main-merged; the token is the secret LAPLACE_CHECKOUT, agents.sh's).
   deploy:

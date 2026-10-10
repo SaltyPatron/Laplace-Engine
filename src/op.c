@@ -18,6 +18,7 @@ static const Param
     OUT_T0   = { "output", "-o", ARG_PATH, "LAPLACE_TIER0", "tier0.bin" },
     OUT_FL   = { "output", "-o", ARG_PATH, "LAPLACE_FLAGS, else tier 0's path with .flags", "tier0.flags" },
     OUT_HW   = { "output", "-o", ARG_PATH, "LAPLACE_HIGHWAY, else tier 0's path with .highway", "highway.bin" },
+    FINGERPRINT = { "fingerprint", "--fingerprint", ARG_FLAG, NULL, "read the existing highway fingerprint without generation" },
     FIRMWARE = { "firmware", "--firmware", ARG_PATH, "LAPLACE_FIRMWARE", "the firmware: how a standing is read, how far a search walks, how many claims are read and what is refused" },
     SEED     = { "seed", "--seed", ARG_INT, "the clock", "N: the seed that breaks ties between claims taken" },
     FAN      = { "fan", "--fan", ARG_INT, "the firmware's", "to measure against the firmware: over the firmware's fan" },
@@ -34,6 +35,7 @@ static const Param
     WRITE    = { "write", "--write", ARG_FLAG, NULL, "put the replayed standings in place" },
     PART     = { "part", NULL, ARG_TEXT, NULL, "a part of the strand: a text, LIST:KEY for a type of the highway, ? for a part left open" },
     SOURCE   = { "source", "-s", ARG_TEXT, NULL, "the files named are this source's: a part of it at a time" },
+    HIGHWAY  = { "highway", "--highway", ARG_FLAG, NULL, "admit the existing highway contents only; --no-load validates without database access" },
     WHOLE    = { "whole", "--whole", ARG_FLAG, NULL, "after a run that was cut off: every node is looked for" },
     NO_LOAD  = { "no_load", "--no-load", ARG_FLAG, NULL, "no-load" },
     PLAN     = { "plan", "--plan", ARG_FLAG, NULL, "plan" },
@@ -68,8 +70,8 @@ static const Param
 static const Arg A_NONE[] = { END };
 static const Arg A_TIER0[] = { O(UCD), O(OUT_T0), END };
 static const Arg A_FLAGS[] = { O(UCD), O(OUT_FL), END };
-static const Arg A_HIGHWAY[] = { O(OUT_HW), END };
-static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(WHOLE), O(NO_LOAD), O(PLAN), O(CLAIMS), O(ENTITIES),
+static const Arg A_HIGHWAY[] = { O(OUT_HW), O(FINGERPRINT), END };
+static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(HIGHWAY), O(WHOLE), O(NO_LOAD), O(PLAN), O(CLAIMS), O(ENTITIES),
                                 { &WHAT, ARG_MANY, NULL, NULL }, END };
 static const Arg A_MERGE[] = { O(CONNINFO), { &JOBS, 0, NULL, "every processor" }, END };
 static const Arg A_FORGET[] = { O(CONNINFO), O(JOBS), O(EXCEPT), O(TRUNK), { &WITNESS, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };

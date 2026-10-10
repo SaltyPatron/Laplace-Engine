@@ -67,31 +67,6 @@ int cmd_deploy(int argc, char **argv){
       if (n) printf("  %-52s %9d\n", "tables from before the extension owned them, adopted", n); PQclear(r); }
     if (!run(pg, "SELECT laplace_schema_indexes()", "every index, made where one is missing")) return 1;
     PQfinish(pg);
-    /* the highway's contents as entities: a type's content (a definition, a frame's name, a lemma and a roleset's name)
-     * is what a claim that holds the type renders and pulls through, whether or not any file wrote it as content. Each
-     * is recomposed here as the composition laplace highway wrote beside the highway, and its ID checked */
-    { char tp[4300]; snprintf(tp, sizeof tp, "%s.nodes", lp_highway_path()); FILE *f = fopen(tp, "r");
-      if (!f) printf("  %-52s %s\n", "the highway's contents", "not beside the highway: laplace highway writes them");
-      else { double t = now(); int threads = omp_get_num_procs(); table_init(); ctx_open(threads); char *line = NULL; size_t cap = 0; uint64_t n = 0, wrong = 0, types = 0, unknown = 0; const lp_highway *h = lp_highway_map(NULL);
-        Ref *ch = NULL; size_t cch = 0;
-        while (getline(&line, &cap, f) > 0) { if (line[0] == '#') continue; char *save = NULL, *kind = strtok_r(line, "\t\n", &save); if (!kind) continue;
-            if (kind[0] == 'N') { char *hid = strtok_r(NULL, "\t\n", &save), *tr = strtok_r(NULL, "\t\n", &save), *nv = strtok_r(NULL, "\t\n", &save), *c; if (!hid || !tr || !nv) { wrong++; continue; }
-                size_t k = 0; int ok = 1;
-                while ((c = strtok_r(NULL, "\t\n", &save))) { char *s1 = strchr(c, ':'), *s2 = s1 ? strchr(s1 + 1, ':') : NULL; if (!s2) { ok = 0; break; } *s1 = 0;
-                    Ref r; lp_id id; if (c[0] == 'U') r = atom((uint32_t)strtoul(c + 1, NULL, 16)); else { if (!id_parse(c, &id)) { ok = 0; break; } Node *x = table_find(&id); if (!x) { unknown++; ok = 0; break; } memset(&r, 0, sizeof r); r.id = x->id; memcpy(r.c.m, x->m, sizeof r.c.m); r.tier = x->tier; }
-                    r.said = (uint8_t)atoi(s1 + 1); uint32_t run = (uint32_t)strtoul(s2 + 1, NULL, 10);
-                    for (uint32_t q = 0; q < run; q++) { lp_reserve((void **)&ch, &cch, k + 1, sizeof(Ref)); ch[k++] = r; } }
-                lp_id want; if (!ok || !id_parse(hid, &want)) { wrong++; continue; }
-                Ref r = compose(ch, (uint32_t)k, (uint8_t)atoi(tr)); if (memcmp(&r.id, &want, 16)) wrong++; n++; }
-            else if (kind[0] == 'S') { char *ln = strtok_r(NULL, "\t\n", &save), *sl = strtok_r(NULL, "\t\n", &save), *c = strtok_r(NULL, "\t\n", &save); if (!ln || !sl || !c) { wrong++; continue; }
-                lp_id id; if (c[0] == 'U') id = atom((uint32_t)strtoul(c + 1, NULL, 16)).id; else if (!id_parse(c, &id)) { wrong++; continue; }
-                const lp_list *l = h ? lp_highway_list(h, ln) : NULL; const lp_tier0_record *x = l ? lp_highway_at(h, l, (uint32_t)strtoul(sl, NULL, 10)) : NULL; if (!x || memcmp(&x->id, &id, 16)) wrong++; types++; } }
-        free(line); free(ch); fclose(f);
-        extern int load_whole; load_whole = 1; File one = { 0 }; one.path = "the highway's contents"; LoadStats st = { 0 };
-        if (load(conn_arg(argc, argv), threads, &one, 1, &st)) return 1;
-        if (merge(conn_arg(argc, argv), threads)) return 1;                  /* what the load staged, into the real tables */
-        printf("  %-52s %'llu types, %'llu compositions, %'llu entities new, %'llu not as written%s   %.1f s\n", "the highway's contents, as entities", (unsigned long long)types, (unsigned long long)n, (unsigned long long)st.ent_rows, (unsigned long long)wrong, unknown ? ", some naming a node not written before them" : "", now() - t); }
-    }
     pg = db_connect(conn_arg(argc, argv));
     /* A named leaf keeps parallel_workers at 0. A statement on the parent is many leaves, and Gather is how it uses the cores. */
     { char *db = PQescapeIdentifier(pg, PQdb(pg), strlen(PQdb(pg))), q[256]; snprintf(q, sizeof q, "ALTER DATABASE %s SET enable_parallel_append = on", db); PQclear(PQexec(pg, q)); PQfreemem(db); }
