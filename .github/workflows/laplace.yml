@@ -27,8 +27,9 @@ jobs:
       - name: checks
         run: |
           L=$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace
-          "$L" 2>&1 | head -5
-          [ -s "$LAPLACE_TIER0" ] && "$L" bench || echo "no tier 0 at $LAPLACE_TIER0 yet: the Operations deploy makes it"
+          export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
+          export TMPDIR=${RUNNER_TEMP:?}
+          bash Laplace-Engine/tests/highway-admission.sh "$L"
   # Every merge to main that passes deploys hart-server: Laplace-Operations' deployment runs with every repository at its
   # main (its laplace.yml, on a repository_dispatch main-merged; the token is the secret LAPLACE_CHECKOUT, agents.sh's).
   deploy:

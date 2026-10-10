@@ -273,16 +273,52 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
     return found;
 }
 static lp_id witness_trunk, witness_lineage; static double witness_trust; static int has_witness_trunk, has_witness_lineage;   /* the source's trunk, the witness: its trust and lineage keyed by it */
+/* Explicit admission of an existing artifact. Generation and deployment never call this. */
+static int ingest_highway(const char *conninfo, const char *t0p, int threads, int do_load){
+    /* the highway's contents as entities: a type's content (a definition, a frame's name, a lemma and a roleset's name)
+     * is what a claim that holds the type renders and pulls through, whether or not any file wrote it as content. Each
+     * is recomposed here as the composition laplace highway wrote beside the highway, and its ID checked */
+    char tp[4300]; snprintf(tp, sizeof tp, "%s.nodes", lp_highway_path()); FILE *f = fopen(tp, "r");
+      if (!f) { fprintf(stderr, "cannot read highway contents %s\n", tp); return 1; }
+      double t = now(); tier0_open(t0p); if (threads <= 0) threads = omp_get_num_procs(); omp_set_num_threads(threads); table_init(); ctx_open(threads); char *line = NULL; size_t cap = 0; uint64_t n = 0, wrong = 0, types = 0, unknown = 0; const lp_highway *h = lp_highway_map(NULL); if (!h) { fclose(f); fprintf(stderr, "cannot map the independently generated highway\n"); return 1; }
+        Ref *ch = NULL; size_t cch = 0;
+        while (getline(&line, &cap, f) > 0) { if (line[0] == '#') continue; char *save = NULL, *kind = strtok_r(line, "\t\n", &save); if (!kind) continue;
+            if (!strcmp(kind, "N")) { char *hid = strtok_r(NULL, "\t\n", &save), *tr = strtok_r(NULL, "\t\n", &save), *nv = strtok_r(NULL, "\t\n", &save), *c; if (!hid || !tr || !nv) { wrong++; continue; }
+                size_t k = 0, vertices = 0; int ok = 1;
+                while ((c = strtok_r(NULL, "\t\n", &save))) { vertices++; char *s1 = strchr(c, ':'), *s2 = s1 ? strchr(s1 + 1, ':') : NULL; if (!s2) { ok = 0; break; } *s1 = 0;
+                    Ref r; lp_id id; if (c[0] == 'U') r = atom((uint32_t)strtoul(c + 1, NULL, 16)); else { if (!id_parse(c, &id)) { ok = 0; break; } Node *x = table_find(&id); if (!x) { unknown++; ok = 0; break; } memset(&r, 0, sizeof r); r.id = x->id; memcpy(r.c.m, x->m, sizeof r.c.m); r.tier = x->tier; }
+                    r.said = (uint8_t)atoi(s1 + 1); uint32_t run = (uint32_t)strtoul(s2 + 1, NULL, 10);
+                    for (uint32_t q = 0; q < run; q++) { lp_reserve((void **)&ch, &cch, k + 1, sizeof(Ref)); ch[k++] = r; } }
+                lp_id want; if (!ok || vertices != strtoul(nv, NULL, 10) || !id_parse(hid, &want)) { wrong++; continue; }
+                Ref r = compose(ch, (uint32_t)k, (uint8_t)atoi(tr)); if (memcmp(&r.id, &want, 16)) wrong++; n++; }
+            else if (!strcmp(kind, "S")) { char *ln = strtok_r(NULL, "\t\n", &save), *sl = strtok_r(NULL, "\t\n", &save), *c = strtok_r(NULL, "\t\n", &save); if (!ln || !sl || !c) { wrong++; continue; }
+                lp_id id; if (c[0] == 'U') id = atom((uint32_t)strtoul(c + 1, NULL, 16)).id; else if (!id_parse(c, &id)) { wrong++; continue; }
+                const lp_list *l = h ? lp_highway_list(h, ln) : NULL; const lp_tier0_record *x = l ? lp_highway_at(h, l, (uint32_t)strtoul(sl, NULL, 10)) : NULL; if (!x || memcmp(&x->id, &id, 16)) wrong++; types++; } else wrong++; }
+        int read_error = ferror(f); free(line); free(ch); fclose(f);
+        if (read_error || wrong || unknown || types != h->nrec || !types) { fprintf(stderr, "highway contents rejected before database access: %llu invalid, %llu unknown children, %llu types\n", (unsigned long long)wrong, (unsigned long long)unknown, (unsigned long long)types); return 1; }
+        if (!do_load) { printf("highway contents validated; no database access\n"); return 0; }
+        extern int load_whole; load_whole = 1; File one = { 0 }; one.path = "the highway's contents"; LoadStats st = { 0 };
+        if (load(conninfo, threads, &one, 1, &st)) return 1;
+        if (merge(conninfo, threads)) return 1;                  /* what the load staged, into the real tables */
+        printf("  %-52s %'llu types, %'llu compositions, %'llu entities new, %'llu not as written%s   %.1f s\n", "the highway's contents, as entities", (unsigned long long)types, (unsigned long long)n, (unsigned long long)st.ent_rows, (unsigned long long)wrong, unknown ? ", some naming a node not written before them" : "", now() - t);
+    return 0;
+}
+
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
-    int threads = 0, do_load = 1, show_claims = 0, entities = 0, asking = 1; const char *of = NULL; extern int load_whole;
+    int highway = 0, threads = 0, do_load = 1, show_claims = 0, entities = 0, asking = 1; const char *of = NULL; extern int load_whole;
     int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-t", 's', &t0p }, { "-r", 's', &rdir }, { "-j", 'i', &threads },
         { "-s", 's', &of },                                                       /* the files named are this source's: a part of it at a time */
+        { "--highway", 'b', &highway },
         { "--whole", 'b', &load_whole },                                          /* after a run that was cut off: every node is looked for */
         { "--no-load", 'v', &do_load, 0 }, { "--plan", 'v', &do_load, -1 },
         { "--claims", 'b', &show_claims },                                        /* what the recipes attest, as text; nothing is loaded */
         { "--entities", 'b', &entities },                                         /* what the recipes would record, entities and claims; nothing is loaded */
         { NULL } });
+    if (highway) {
+        if (a < argc || of || show_claims || entities || do_load < 0) { fprintf(stderr, "--highway admits only the existing highway contents; use -d, -t, -j or --no-load\n"); return 2; }
+        return ingest_highway(conninfo, t0p, threads, do_load);
+    }
     if (entities) show_claims = 1;
     if (show_claims) do_load = 0;
     if (a < argc && argv[a][0] == '-') { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] [--entities] file...\n"); return 2; }

@@ -42,6 +42,14 @@ cmake -S . -B "$LAPLACE_BUILD/Laplace-Engine/icx-release" -G Ninja -DCMAKE_C_COM
 cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
 ```
 
+## Generation, deployment and admission
+
+`laplace highway` generates the highway artifact and its `.layout`, `.keys` and `.nodes` sidecars. Generate into a separate output directory with `-o`; this command does not deploy a database. `laplace highway --fingerprint` reads an existing artifact without regenerating it.
+
+`laplace deploy` creates or updates extensions, schema, indexes and database settings. It does not load the highway contents. Admission of an already generated sidecar is explicit: `laplace ingest --highway`. `--no-load` validates its compositions and slots without database access. Missing or invalid contents fail before loading. Ordinary file/source ingestion does not implicitly invoke this operation.
+
+This separates lifecycle operations while retaining the existing content representation; it does not establish the invention's semantic correctness. Existing databases retain their admitted content. A newly deployed database remains empty until admission is explicitly requested.
+
 ## Firmware
 
 How a pull reads the records is not in the program and not in the records: it is a firmware, a file of decisions, one for each human being. `firmware/program.firmware` is the program's own and says what a firmware can decide; `$LAPLACE_FIRMWARE`, or `--firmware FILE` on `pull`, `hop`, `translate` and `degrees`, names another. The same records pulled under another firmware give another selection, and no standing changes.
