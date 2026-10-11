@@ -44,6 +44,12 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{identifier}";''')
         subprocess.run([str(executable)], env=env, check=True)
         subprocess.run([str(executable)], env=env, check=True)
         assert sql(identifier, "SELECT count(*) FROM pg_tables WHERE schemaname='stage';") == '2'
+        subprocess.run(['cc', '-O1', '-ffunction-sections', '-fdata-sections', '-fopenmp',
+            '-I' + str(native / 'include'), '-I' + str(native / 'src'), '-I' + str(pgbin.parent / 'include'),
+            str(ROOT / 'tests/read-pool.c'), '-Wl,--gc-sections', '-L' + str(lib), '-Wl,-rpath,' + str(lib),
+            '-lpq', '-o', str(executable)], check=True)
+        subprocess.run([str(executable)], env=env, check=True)
     print('Production stage_open passed: existing administrator-owned schema/index, missing partition staging table, scoped non-superuser and repeated invocation.')
+    print('Production reader pool respected its two-thread allocation.')
 finally:
     sql('postgres', f'DROP DATABASE IF EXISTS "{identifier}" WITH (FORCE); DROP ROLE IF EXISTS "{identifier}";')

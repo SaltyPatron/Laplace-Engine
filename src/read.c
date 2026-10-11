@@ -114,7 +114,7 @@ static int npool;
 static void pool_open(void){
     if (pool) return;
     const char *ci = db_noted(); if (!ci || !*ci) ci = laplace_db();
-    npool = omp_get_num_procs(); if (npool < 1) npool = 1;
+    npool = omp_get_max_threads(); if (npool < 1) npool = 1;
     pool = calloc((size_t)npool, sizeof *pool);
     for (int i = 0; i < npool; i++) pool[i] = db_connect(ci);
     const char *snap = db_snapshot();                                    /* a read: every leaf read at the instant the command's first statement saw */

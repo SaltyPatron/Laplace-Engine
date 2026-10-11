@@ -280,7 +280,7 @@ static int ingest_highway(const char *conninfo, const char *t0p, int threads, in
      * is recomposed here as the composition laplace highway wrote beside the highway, and its ID checked */
     char tp[4300]; snprintf(tp, sizeof tp, "%s.nodes", lp_highway_path()); FILE *f = fopen(tp, "r");
       if (!f) { fprintf(stderr, "cannot read highway contents %s\n", tp); return 1; }
-      double t = now(); tier0_open(t0p); if (threads <= 0) threads = omp_get_num_procs(); omp_set_num_threads(threads); table_init(); ctx_open(threads); char *line = NULL; size_t cap = 0; uint64_t n = 0, wrong = 0, types = 0, unknown = 0; const lp_highway *h = lp_highway_map(NULL); if (!h) { fclose(f); fprintf(stderr, "cannot map the independently generated highway\n"); return 1; }
+      double t = now(); tier0_open(t0p); if (threads <= 0) threads = omp_get_max_threads(); omp_set_num_threads(threads); table_init(); ctx_open(threads); char *line = NULL; size_t cap = 0; uint64_t n = 0, wrong = 0, types = 0, unknown = 0; const lp_highway *h = lp_highway_map(NULL); if (!h) { fclose(f); fprintf(stderr, "cannot map the independently generated highway\n"); return 1; }
         Ref *ch = NULL; size_t cch = 0;
         while (getline(&line, &cap, f) > 0) { if (line[0] == '#') continue; char *save = NULL, *kind = strtok_r(line, "\t\n", &save); if (!kind) continue;
             if (!strcmp(kind, "N")) { char *hid = strtok_r(NULL, "\t\n", &save), *tr = strtok_r(NULL, "\t\n", &save), *nv = strtok_r(NULL, "\t\n", &save), *c; if (!hid || !tr || !nv) { wrong++; continue; }
@@ -358,7 +358,7 @@ int cmd_ingest(int argc, char **argv){
       for (int k = 0; k < ns; k++) stop += recipes_broken(rec, nrec, seen[k]);
       if (direct) stop += recipes_broken(rec, nrec, NULL);
       if (stop) return 2; }
-    if (threads <= 0) threads = omp_get_num_procs();
+    if (threads <= 0) threads = omp_get_max_threads();
     omp_set_num_threads(threads); omp_set_max_active_levels(1);
     setlocale(LC_NUMERIC, "en_US.UTF-8");
     double T = now(), t;

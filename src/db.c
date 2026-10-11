@@ -584,7 +584,7 @@ int cmd_merge(int argc, char **argv){
     const char *conninfo = laplace_db(); int threads = 0;
     for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a]; else if (!strcmp(argv[a], "-j") && a + 1 < argc) threads = atoi(argv[++a]);
                                      else { fprintf(stderr, "usage: laplace merge [-d conninfo] [-j connections]\n"); return 2; } }
-    if (threads <= 0) threads = omp_get_num_procs();
+    if (threads <= 0) threads = omp_get_max_threads();
     printf("laplace merge   %d connections\n", threads);
     return merge(conninfo, threads);
 }
