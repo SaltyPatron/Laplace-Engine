@@ -74,13 +74,15 @@ static int stage_open(PGconn *pg){
       int made = PQresultStatus(q) == PGRES_TUPLES_OK && PQntuples(q) && PQgetvalue(q, 0, 0)[0] == 't'; PQclear(q);
       if (made) return stage_ready = stage_emptied(pg); }
     const char *sql =
-        "CREATE SCHEMA IF NOT EXISTS stage;"
         "DO $$ DECLARE r record; BEGIN"
+        "  IF NOT EXISTS (SELECT FROM pg_namespace WHERE nspname = 'stage') THEN CREATE SCHEMA stage; END IF;"
         "  FOR r IN SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace"
         "           WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relispartition"
         "             AND c.relname ~ '^(entity|physicality|consensus)_' LOOP"
-        "    EXECUTE format('CREATE UNLOGGED TABLE IF NOT EXISTS stage.%I (LIKE public.%I INCLUDING DEFAULTS)', r.relname, r.relname);"
-        "    IF r.relname LIKE 'consensus%' THEN EXECUTE format('CREATE UNIQUE INDEX IF NOT EXISTS %I ON stage.%I (claim)', r.relname || '_claim', r.relname);"
+        "    IF to_regclass(format('stage.%I', r.relname)) IS NULL THEN"
+        "      EXECUTE format('CREATE UNLOGGED TABLE stage.%I (LIKE public.%I INCLUDING DEFAULTS)', r.relname, r.relname); END IF;"
+        "    IF r.relname LIKE 'consensus%' AND to_regclass(format('stage.%I', r.relname || '_claim')) IS NULL THEN"
+        "      EXECUTE format('CREATE UNIQUE INDEX %I ON stage.%I (claim)', r.relname || '_claim', r.relname);"
         "    END IF;"
         "  END LOOP; END $$";
     PGresult *r = PQexec(pg, sql); int ok = PQresultStatus(r) == PGRES_COMMAND_OK;
@@ -582,7 +584,7 @@ int cmd_merge(int argc, char **argv){
     const char *conninfo = laplace_db(); int threads = 0;
     for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[++a]; else if (!strcmp(argv[a], "-j") && a + 1 < argc) threads = atoi(argv[++a]);
                                      else { fprintf(stderr, "usage: laplace merge [-d conninfo] [-j connections]\n"); return 2; } }
-    if (threads <= 0) threads = omp_get_num_procs();
+    if (threads <= 0) threads = omp_get_max_threads();
     printf("laplace merge   %d connections\n", threads);
     return merge(conninfo, threads);
 }

@@ -54,7 +54,7 @@ void db_connect_many(const char *conninfo, int n, PGconn **out){
 }
 static PGconn *connect_one(const char *conninfo){
     PGconn *pg = PQconnectdb(conninfo);
-    if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "%s (LAPLACE_CONNINFO: %s)\n", PQerrorMessage(pg), conninfo); exit(1); }
+    if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "Database connection failed: %s", PQerrorMessage(pg)); exit(1); }
     PQclear(PQexec(pg, "SET client_min_messages = warning"));
     /* A named leaf keeps parallel_workers at 0, so a one-partition lookup stays one process.
      * A statement on the parent is many leaves: Gather uses the workers setup.sh already sized.
