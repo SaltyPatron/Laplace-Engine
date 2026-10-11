@@ -485,7 +485,7 @@ static int merge_leaf(PGconn *w, PGconn *rd, const MLeaf *L, uint64_t *rows){
      * lookup reads a pending list through (in a rewritten leaf this too is written without WAL) */
     if (!bad && L->table == M_PHYS) {
         const char *v[1] = { L->name };
-        PGresult *q = PQexecParams(w, "SELECT gin_clean_pending_list(i.indexrelid::regclass) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am a ON a.oid = c.relam "
+        PGresult *q = PQexecParams(w, "SELECT public.laplace_clean_pending_list(i.indexrelid::regclass) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am a ON a.oid = c.relam "
                                       "WHERE i.indrelid = ('public.' || quote_ident($1))::regclass AND a.amname = 'gin'", 1, NULL, v, NULL, NULL, 0);
         if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "merge %s, container index: %s", L->name, PQerrorMessage(w)); bad = 1; } PQclear(q); }
     /* The reference a path makes to its entity, checked as one set over what this leaf took (the stage still holds it),
