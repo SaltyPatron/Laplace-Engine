@@ -28,6 +28,7 @@ jobs:
           export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
           export TMPDIR=${RUNNER_TEMP:?}
           bash Laplace-Engine/tests/highway-admission.sh "$L"
+          bash Laplace-Engine/tests/layout-counted.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/data-root.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/workspace-code.sh "$L"
           python3 Laplace-Engine/tools/parity/test_diff.py

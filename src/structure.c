@@ -102,7 +102,15 @@ int layout_says(Layout *l, const char *path, char *tok){
     if (!strcmp(tok, "note")) { char *p = strtok(NULL, " \t\r\n"), *is = strtok(NULL, " \t\r\n"); if (!p) { fprintf(stderr, "%s: note PREFIX [IS]\n", path); return -1; }
         t->notelen = sep_read(p, t->note, sizeof t->note); t->islen = is ? sep_read(is, t->note_is, sizeof t->note_is) : 0; return 1; }
     if (!strcmp(tok, "comment")) { char *p = strtok(NULL, " \t\r\n"); if (!p) { fprintf(stderr, "%s: comment PREFIX\n", path); return -1; } t->commentlen = sep_read(p, t->comment, sizeof t->comment); return 1; }
-    if (!strcmp(tok, "remark")) { char *p = strtok(NULL, " \t\r\n"), b[8]; if (!p || !sep_read(p, b, sizeof b)) { fprintf(stderr, "%s: remark CHAR\n", path); return -1; } t->remark = b[0]; return 1; }
+    if (!strcmp(tok, "remark")) { char *p = strtok(NULL, " \t\r\n"), *kept = strtok(NULL, " \t\r\n"), b[8]; if (!p || !sep_read(p, b, sizeof b)) { fprintf(stderr, "%s: remark CHAR [KEPT]\n", path); return -1; }
+        t->remark = b[0]; if (kept) snprintf(t->remark_kept, sizeof t->remark_kept, "%s", kept); return 1; }
+    if (!strcmp(tok, "counted")) { char *f = strtok(NULL, " \t\r\n"), *w = strtok(NULL, " \t\r\n"); int radix = 10;
+        if (w && !strcmp(w, "radix")) { char *v = strtok(NULL, " \t\r\n"); radix = v ? atoi(v) : 0; w = strtok(NULL, " \t\r\n"); }
+        if (!f || !w || radix < 2 || radix > 36 || t->ncount == 4) { fprintf(stderr, "%s: counted NAME [radix N] GROUP MEMBER... (radix 2 to 36; at most 4 to a tier)\n", path); return -1; }
+        int c = t->ncount; snprintf(t->count[c].field, sizeof t->count[c].field, "%s", f); snprintf(t->count[c].group, sizeof t->count[c].group, "%s", w); t->count[c].radix = radix; t->count[c].nmember = 0;
+        char *m; while ((m = strtok(NULL, " \t\r\n")) && t->count[c].nmember < 8) snprintf(t->count[c].member[t->count[c].nmember++], 32, "%s", m);
+        if (!t->count[c].nmember) { fprintf(stderr, "%s: counted %s %s: a group is parts, named MEMBER...\n", path, f, w); return -1; }
+        t->ncount++; return 1; }
     if (!strcmp(tok, "escaped")) { char *p = strtok(NULL, " \t\r\n"); if (!p) { fprintf(stderr, "%s: escaped CHAR\n", path); return -1; } t->escaped = p[0]; return 1; }
     return 0;
 }
@@ -208,10 +216,30 @@ static void parts_of(STree *t, int32_t x, const Layout *l){
             if (q >= e) break; p = q + sp->seplen; }
         return; }
 }
+/* A count a part writes (counted NAME [radix N] ...): its digits in the radix, or 0 where it writes anything else. */
+static long count_of(const SNode *v, int radix){
+    if (!v->vlen || v->vlen > 18) return 0; long n = 0;
+    for (uint32_t i = 0; i < v->vlen; i++) { int c = v->val[i], d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'z' ? c - 'a' + 10 : c >= 'A' && c <= 'Z' ? c - 'A' + 10 : 99;
+        if (d >= radix) return 0; n = n * radix + d; }
+    return n;
+}
+/* What follows a part's remark, where the layout keeps it (remark CHAR KEPT): one text of the part, named KEPT. */
+/* Where a part's parts end before its remark: where the remark is kept, the white space before it is the layout's. */
+static size_t remark_at(const STier *tr, const uint8_t *s, size_t i, size_t r){
+    if (tr->remark_kept[0]) while (r > i && (s[r - 1] == ' ' || s[r - 1] == '\t')) r--;
+    return r;
+}
+static void remark_keep(STree *t, const STier *tr, int32_t g, const uint8_t *s, size_t r, size_t e, uint8_t tier){
+    if (!tr->remark_kept[0] || r >= e) return;
+    const uint8_t *m = memchr(s + r, tr->remark, e - r); if (!m) return; r = (size_t)(m - s);
+    size_t n = e - r - 1; const uint8_t *p = trimmed(s + r + 1, &n); if (!n) return;
+    int32_t x = node(t, S_VALUE, tier, g, (uint64_t)(p - s)); t->n[x].name = (const uint8_t *)tr->remark_kept; t->n[x].nlen = (uint32_t)strlen(tr->remark_kept); t->n[x].val = p; t->n[x].vlen = (uint32_t)n;
+}
 /* One part of tier k, between lo and hi, under a node: the parts of the tier below it, or its text. */
 static void tier_read(STree *t, const Layout *l, int k, int32_t in, const uint8_t *s, size_t lo, size_t hi){
     if (k + 1 >= l->ntier) return;
     const STier *me = &l->tier[k], *t1 = &l->tier[k + 1]; int pos = 0, innermost = k + 2 >= l->ntier;
+    long groups = 0; int cs = -1, member = 0; int32_t grp = -1;                 /* counted: the groups still to come, of which count, the member next, the group being read */
     for (size_t i = lo; i < hi || (i == hi && pos && innermost && hi > lo && !memcmp(s + hi - t1->seplen, t1->sep, (size_t)t1->seplen)); ) {
         size_t next, e = i < hi ? part_end(l, k + 1, s, i, hi, &next) : hi; if (i >= hi) next = hi + 1;
         size_t len = e - i;
@@ -224,14 +252,22 @@ static void tier_read(STree *t, const Layout *l, int k, int32_t in, const uint8_
                 else { t->n[x].val = lp; t->n[x].vlen = (uint32_t)ln; }
                 i = next; continue; }
             if (!len || (len == 1 && s[i] == '\r')) { i = next; continue; }
-            size_t stop = e; if (t1->remark) { const uint8_t *r = memchr(s + i, t1->remark, len); if (r) stop = (size_t)(r - s); }
+            size_t stop = e; if (t1->remark) { const uint8_t *r = memchr(s + i, t1->remark, len); if (r) stop = remark_at(t1, s, i, (size_t)(r - s)); }
             int32_t g = node(t, S_GROUP, (uint8_t)(k + 1), in, i); t->n[g].name = (const uint8_t *)t1->name; t->n[g].nlen = (uint32_t)strlen(t1->name);
             tier_read(t, l, k + 1, g, s, i, stop);
+            if (stop < e) remark_keep(t, t1, g, s, stop, e, (uint8_t)(k + 2));
         } else {
             size_t stop = e; if (me->remark && i < hi) { const uint8_t *r = memchr(s + i, me->remark, len); if (r) stop = (size_t)(r - s); }
             if (t1->continued && stop > i && (s[i] == ' ' || s[i] == '\t') && t->n[in].last >= 0 && t->n[t->n[in].last].kind != S_GROUP) {    /* it goes on with the part before, joined by one space */
                 SNode *v = &t->n[t->n[in].last]; size_t cn = stop - i; const uint8_t *cp = trimmed(s + i, &cn); uint8_t *o = own(t, v->vlen + cn + 1);
                 memcpy(o, v->val, v->vlen); size_t j = v->vlen; if (j && cn) o[j++] = ' '; memcpy(o + j, cp, cn); v = &t->n[t->n[in].last]; v->val = o; v->vlen = (uint32_t)(j + cn);
+                i = next; continue; }
+            if (groups > 0 && stop > i) {                                      /* a member of a counted group: the group's, not a position's */
+                if (!member) { grp = node(t, S_GROUP, (uint8_t)(k + 1), in, i); t->n[grp].name = (const uint8_t *)me->count[cs].group; t->n[grp].nlen = (uint32_t)strlen(me->count[cs].group); }
+                int32_t x = node(t, S_VALUE, (uint8_t)(k + 1), grp, i); t->n[x].name = (const uint8_t *)me->count[cs].member[member]; t->n[x].nlen = (uint32_t)strlen(me->count[cs].member[member]);
+                text_put(t, x, l, k + 1, s + i, stop - i); if (l->npart) parts_of(t, x, l);
+                if (++member == me->count[cs].nmember) { member = 0; groups--; }
+                if (stop < e) { i = hi; break; }
                 i = next; continue; }
             const uint8_t *is = t1->kvlen && stop > i ? memmem(s + i, stop - i, t1->kv, (size_t)t1->kvlen) : NULL;
             int np = pos < me->nnames ? pos : me->rest && me->nnames ? me->nnames - 1 : -1;     /* the name this position has, if any */
@@ -240,6 +276,7 @@ static void tier_read(STree *t, const Layout *l, int k, int32_t in, const uint8_
                 t->n[x].name = kp; t->n[x].nlen = (uint32_t)kn; t->n[x].val = vp; t->n[x].vlen = (uint32_t)vn; (void)(kp + t1->kvlen); if (l->npart) parts_of(t, x, l); pos++; i = next; continue; }
             if (np >= 0) { t->n[x].name = (const uint8_t *)me->names[np]; t->n[x].nlen = (uint32_t)strlen(me->names[np]); }
             text_put(t, x, l, k + 1, s + i, stop - i); if (l->npart && t->n[x].nlen) parts_of(t, x, l);
+            if (np >= 0) for (int c = 0; c < me->ncount; c++) if (!strcmp(me->count[c].field, me->names[np])) { groups = count_of(&t->n[x], me->count[c].radix); cs = c; member = 0; break; }
             if (stop < e) { i = hi; pos++; break; }
         }
         pos++; i = next;
@@ -270,10 +307,10 @@ uint64_t s_decompose(const Layout *l, const uint8_t *s, size_t n, s_unit_fn fn, 
         while (len && (s[i] == '\n' || s[i] == '\r') && l->tier[0].seplen > 1) { i++; len--; }          /* line ends left over between records */
         if (!len || (len == 1 && s[i] == '\r')) { i = next; continue; }
         if (t0->commentlen && len >= (size_t)t0->commentlen && !memcmp(s + i, t0->comment, (size_t)t0->commentlen)) { i = next; continue; }
-        size_t stop = e; if (t0->remark && l->ntier > 1) { const uint8_t *r = memchr(s + i, t0->remark, len); if (r) stop = (size_t)(r - s); }
+        size_t stop = e; if (t0->remark && l->ntier > 1) { const uint8_t *r = memchr(s + i, t0->remark, len); if (r) stop = remark_at(t0, s, i, (size_t)(r - s)); }
         tree_reset(&t); int32_t g = node(&t, S_GROUP, 0, -1, i); t.n[g].name = (const uint8_t *)t0->name; t.n[g].nlen = (uint32_t)strlen(t0->name);
         if (l->ntier == 1) { t.n[g].kind = S_TEXT; text_put(&t, g, l, 0, s + i, len); }
-        else tier_read(&t, l, 0, g, s, i, stop);
+        else { tier_read(&t, l, 0, g, s, i, stop); if (stop < e) remark_keep(&t, t0, g, s, stop, e, 1); }
         if (t0->numbered[0] && t.n[g].kind == S_GROUP && t.n[g].nkids) {          /* its line in the file, under the name the recipe gives it */
             char d[24]; int dn = snprintf(d, sizeof d, "%llu", (unsigned long long)line); uint8_t *o = own(&t, (size_t)dn); memcpy(o, d, (size_t)dn);
             int32_t x = node(&t, S_VALUE, 1, g, i); t.n[x].name = (const uint8_t *)t0->numbered; t.n[x].nlen = (uint32_t)strlen(t0->numbered); t.n[x].val = o; t.n[x].vlen = (uint32_t)dn; }

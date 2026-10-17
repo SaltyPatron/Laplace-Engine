@@ -168,8 +168,8 @@ static void walk_dir(const char *dir){ ig_reset(); nftw(dir, walk_cb, 64, FTW_PH
 static void source_walk(const Source *sc){
     if (!sc->nfiles) { walk_dir(sc->found); return; }
     for (int z = 0; z < sc->nfiles; z++) { glob_t g; if (glob(sc->files[z], 0, NULL, &g)) continue;
-        for (size_t y = 0; y < g.gl_pathc; y++) { struct stat st;
-            if (!stat(g.gl_pathv[y], &st) && S_ISDIR(st.st_mode)) walk_dir(g.gl_pathv[y]); else add_path(g.gl_pathv[y]); }
+        for (size_t y = 0; y < g.gl_pathc; y++) {
+            if (os_is_dir(g.gl_pathv[y])) walk_dir(g.gl_pathv[y]); else add_path(g.gl_pathv[y]); }
         globfree(&g); }
 }
 
