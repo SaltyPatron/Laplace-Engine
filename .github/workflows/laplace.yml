@@ -6,12 +6,45 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Every night main's parity runs whatever changed: what the monorepo's CLI and Laplace-Native do moves the comparison
+  # too, and neither is a path here.
+  schedule:
+    - cron: "17 9 * * *"
+permissions:
+  contents: read
+  pull-requests: read
+# A pull request's newer push supersedes its older run, which then holds the one runner for nothing. A push to main is
+# its own group, so every merge still builds and dispatches its deployment.
+concurrency:
+  group: laplace-engine-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   engine:
     runs-on: [self-hosted, laplace, Laplace-Engine]
+    outputs:
+      parity: ${{ steps.changes.outputs.parity }}
     steps:
       - uses: actions/checkout@v4
         with: { path: Laplace-Engine }
+      # Whether this change can move what an ingest records (tools/ci/parity-needed.sh says which paths can); the parity
+      # job runs only then. A change that cannot be listed runs it.
+      - name: changes
+        id: changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          case "$EVENT" in
+            pull_request) files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename') || files='*' ;;
+            push) if [[ -z $BEFORE || $BEFORE =~ ^0+$ ]]; then files='*'
+                  else files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq 'if (.files | length) >= 300 then "*" else .files[].filename end') || files='*'; fi ;;
+            *) files='*' ;;
+          esac
+          parity=$(printf '%s\n' "$files" | bash Laplace-Engine/tools/ci/parity-needed.sh)
+          echo "parity=$parity" >> "$GITHUB_OUTPUT"
+          echo "parity: $parity ($EVENT)" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Native", path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
@@ -43,6 +76,7 @@ jobs:
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/data-root.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/workspace-code.sh "$L"
           python3 Laplace-Engine/tools/parity/test_diff.py
+          bash Laplace-Engine/tests/parity-needed.sh
           python3 Laplace-Engine/tools/parity/test_claims.py
       - name: Verify ingestion staging under a scoped database identity
         run: |
@@ -79,8 +113,11 @@ jobs:
   # The parity harness (Laplace#1885 step 1): iso-639 ingested by the monorepo's published CLI and by this build, each
   # into a scratch database (laplace_parity_*, dropped after), and what each recorded compared. Its differences are
   # findings, written to the job summary; the job fails only when the harness cannot run. Its own job, as plan is.
+  # It runs when the change can move what an ingest records (the engine job's changes step), every night, and on a
+  # dispatch; after plan, so the short job does not wait out the long one on the one runner.
   parity:
-    needs: engine
+    needs: [engine, plan]
+    if: ${{ !cancelled() && needs.engine.result == 'success' && needs.engine.outputs.parity == 'true' }}
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
       - uses: actions/checkout@v4
