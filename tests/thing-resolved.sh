@@ -1,10 +1,11 @@
 #!/bin/bash
 # A thing named by several parts together, resolved: the path of those of them that resolve (Laplace-Engine#32, BRIEF: a
 # mapping row is a path over the resolved highway nodes). A part the source leaves empty is in no path and is owed
-# nothing; a key no list of the highway holds is left out of the path and is an unresolved obligation, so the row is
-# still one thing and what is said of it is still said: no row is lost. A key is counted once for the part it is
-# written in, however many of the recipe's lines read it. Read through the PredicateMatrix recipe, whose rows are such
-# paths, on a fixture whose node keys are none any version of the resources writes (pb:nosuch.99).
+# nothing. A key written as the node's own text (type ... node: a PropBank roleset, a FrameNet frame) is that node
+# though no list holds it: content in the path, counted once. A pointer no list holds (a VerbNet class number) is left
+# out of the path and is an unresolved obligation. Either way the row is still one thing and what is said of it is
+# still said: no row is lost. Read through the PredicateMatrix recipe on a fixture whose keys are none any version of
+# the resources writes (pb:nosuch.99).
 #   tests/thing-resolved.sh path/to/laplace
 set -euo pipefail
 L=${1:?usage: tests/thing-resolved.sh path/to/laplace}; here=$(cd "$(dirname "$0")" && pwd)
@@ -18,15 +19,16 @@ count(){ grep -c -- "$1" <<<"$out" || true; }
 for p in first second third; do
   [ "$(count "the predicate, id:$p.1.default\]")" = 1 ] || fail "row $p: its predicate is not said of it (the row was lost): $out"; done
 # the path holds what resolves, in the recipe's order; neither an unresolved key nor an empty part is in it
-grep -qF '[[vn:Agent, fn:Agent, pb:0], the predicate, id:first.1.default]' <<<"$out" || fail "row first: not the path of its resolved parts: $out"
-grep -qF '[[vn:Theme, fn:Agent, pb:1], the predicate, id:second.1.default]' <<<"$out" || fail "row second: not the path of its resolved parts: $out"
-! grep -E '^\[.*(nosuch|No_such_frame).*\]$' <<<"$out" | grep -q . || fail "an unresolved key is in a claim, taken for text: $out"
-# each unresolved key an obligation, once for its part: two rolesets, a class, a frame; the NULLs owe nothing
-grep -q '== unresolved obligations: 4 ' <<<"$out" || fail "not four unresolved obligations: $out"
-grep -Eq 'left out of the path: 16_PB_ROLESET +2$' <<<"$out" || fail "the two rolesets not owed once each: $out"
-grep -Eq 'left out of the path: 5_VN_CLASS +1$' <<<"$out" || fail "the class not owed once: $out"
-grep -Eq 'left out of the path: 13_FN_FRAME +1$' <<<"$out" || fail "the frame not owed once: $out"
-! grep -q 'left out of the path: 7_VN_SUBCLASS' <<<"$out" || fail "an empty part (vn:NULL) is owed: $out"
-# the keys no list holds: counted once each, though a type line and a maps line both read them
-grep -q 'predicate-matrix: 4 keys in .* name a type no list of the highway holds' <<<"$out" || fail "the unknown keys are not counted once each: $out"
+grep -qF '[[nosuch.99, vn:Agent, fn:Agent, pb:0], the predicate, id:first.1.default]' <<<"$out" || fail "row first: the roleset no list holds is not its own node in the path: $out"
+grep -qF '[[vn:Theme, fn:Agent, pb:1], the predicate, id:second.1.default]' <<<"$out" || fail "row second: the class number no list holds is in the path: $out"
+grep -qF '[[No_such_frame, nosuch.98, vn:Patient, fn:Agent, pb:2], the predicate, id:third.1.default]' <<<"$out" || fail "row third: the frame and roleset no list holds are not their own nodes in the path: $out"
+! grep -q 'nosuch-0.0' <<<"$(grep '^\[' <<<"$out")" || fail "a class number no list holds is in a claim, a made-up key: $out"
+# the pointer no list holds is the one obligation, once; the NULLs owe nothing
+grep -q '== unresolved obligations: 1 ' <<<"$out" || fail "not one unresolved obligation: $out"
+grep -Eq 'left out of the path: 5_VN_CLASS +1$' <<<"$out" || fail "the class number not owed once: $out"
+! grep -q 'left out of the path: 7_VN_SUBCLASS\|left out of the path: 16_PB\|left out of the path: 13_FN' <<<"$out" || fail "an empty part or a node is owed: $out"
+# the nodes no list holds: counted once each as said without a slot, though a type line and a maps line both read them
+grep -Eq 'predicate-matrix +pbroleset +16_PB_ROLESET +2$' <<<"$out" || fail "the two rolesets not counted once each: $out"
+grep -Eq 'predicate-matrix +fnframe +13_FN_FRAME +1$' <<<"$out" || fail "the frame not counted once: $out"
+grep -q 'predicate-matrix: 1 keys in .* name a type no list of the highway holds' <<<"$out" || fail "the class number is not counted once: $out"
 echo "thing-resolved: ok"

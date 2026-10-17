@@ -17,22 +17,24 @@ type 5_VN_CLASS vnclass matching ^vn:(.*)$
 type 7_VN_SUBCLASS vnclass matching ^vn:(.*)$
 type 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$
 type 23_MCR_BLC ili matching ^mcr:ili-30-([0-9]+-[a-z])$
-type 13_FN_FRAME fnframe matching ^fn:(.*)$
-type 16_PB_ROLESET pbroleset matching ^pb:(.*)$
+type 13_FN_FRAME fnframe matching ^fn:(.*)$ node
+type 16_PB_ROLESET pbroleset matching ^pb:(.*)$ node
 type 11_WN_SENSE ili matching ^wn:(.*)$
-omit 6_VN_CLASS_NUMBER 8_VN_SUBCLASS_NUMBER 24_WN_SENSEFREC 25_WN_SYNSET_REL_NUM
+omit 6_VN_CLASS_NUMBER 8_VN_SUBCLASS_NUMBER 25_WN_SYNSET_REL_NUM
 content *
 # A row is the one correspondence it states (BRIEF: a mapping row is one interchange, a path over the resolved highway
 # nodes, never split into a claim per column). README: "Each row of this Predicate Matrix represents the mapping of a
 # role over the different resources and includes all the aligned knowledge about its corresponding verb sense." The
 # strand is that mapping: the nodes the row aligns (the ILI concept, the VerbNet class and subclass, the FrameNet frame,
 # the PropBank roleset) and the role in each (the VerbNet thematic-role, the FrameNet frame element, the PropBank
-# argument), in the matrix's order: the path of those that resolve. What the matrix leaves NULL (mcr:ili-30-NULL-v, the
-# NULL of an offset) is in no strand; a key the highway's list does not hold is left out of it and owed. PredicateMatrix
-# v1.3 aligns VerbNet 3.2, FrameNet 1.5 and PropBank before its unification; the highway holds VerbNet 3.4, FrameNet 1.7
-# and the unified rolesets, and no source of the data root maps the one to the other (PropBank says a roleset was
-# reframed only in its notes, and not one for one), so a key of the older versions is owed, never guessed at. A column's
-# header is in no claim.
+# argument), in the matrix's order. What the matrix leaves NULL (mcr:ili-30-NULL-v, the NULL of an offset) is in no
+# strand. PredicateMatrix v1.3 aligns VerbNet 3.2, FrameNet 1.5 and PropBank before its unification; the highway holds
+# VerbNet 3.4, FrameNet 1.7 and the unified rolesets, and no source of the data root maps the one to the other. A
+# roleset (leave.01) and a frame (Adorning) are written as the node's own text, so one the highway's list does not hold
+# is still that node, content in the strand (type ... node; BRIEF: a highway node is content). The matrix writes a
+# VerbNet class by its number (vn:45.6), a pointer to the class whose own text is NAME-45.6: a number no list holds
+# names no node the data root has (VerbNet 3.2 is not in it), so it is left out of the strand and owed, never recorded
+# as a made-up key (BRIEF). A column's header is in no claim.
 thing row 12_MCR_iliOffset 5_VN_CLASS 7_VN_SUBCLASS 13_FN_FRAME 16_PB_ROLESET 10_VN_ROLE 15_FN_FRAME_ELEMENT 17_PB_ARG resolved
 itself row
 # The aligned knowledge said of the mapping, each as README words its column ("this column contains the information of ..."):
@@ -62,11 +64,14 @@ relation "the MCR Top Ontology in the MCR3.0" 21_MCR_TO
 relation "the MCR Lexicographical file name" 22_MCR_LEXNAME
 # README: "23_MCR_BLC: this column contains the information of the Base Level Concept of the WordNet verb sense in the MCR3.0."
 relation "the Base Level Concept of the WordNet verb sense in the MCR3.0" 23_MCR_BLC
+# README: "24_WN_SENSEFREC: this column contains the information of the frecuency of the WordNet 3.0 verb sense." A
+# number the source states is content (BRIEF), worded as the README spells it.
+relation "the frecuency of the WordNet 3.0 verb sense" 24_WN_SENSEFREC
 # README: "26_ESO_CLASS: this column contains the information of the class of the ESO ontology."
 relation "the class of the ESO ontology" 26_ESO_CLASS
 # README: "27_ESO_ROLE: this column contains the information of the role of the ESO ontology."
 relation "the role of the ESO ontology" 27_ESO_ROLE
-attest row 1_ID_LANG 2_ID_POS 3_ID_PRED 4_ID_ROLE 9_VN_LEMA 11_WN_SENSE 14_FN_LE 18_MCR_BC 19_MCR_DOMAIN 20_MCR_SUMO 21_MCR_TO 22_MCR_LEXNAME 23_MCR_BLC 26_ESO_CLASS 27_ESO_ROLE
+attest row 1_ID_LANG 2_ID_POS 3_ID_PRED 4_ID_ROLE 9_VN_LEMA 11_WN_SENSE 14_FN_LE 18_MCR_BC 19_MCR_DOMAIN 20_MCR_SUMO 21_MCR_TO 22_MCR_LEXNAME 23_MCR_BLC 24_WN_SENSEFREC 26_ESO_CLASS 27_ESO_ROLE
 maps row 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$ to 5_VN_CLASS vnclass matching ^vn:(.*)$
 maps row 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$ to 13_FN_FRAME fnframe matching ^fn:(.*)$
 maps row 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$ to 16_PB_ROLESET pbroleset matching ^pb:(.*)$

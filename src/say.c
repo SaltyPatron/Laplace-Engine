@@ -21,7 +21,11 @@
  *   content NAME...            the part is content, the text it is, the same entity wherever that text stands
  *   key TIER NAME              the part is the file's key for a TIER: it resolves to the TIER's thing; written nowhere
  *   refer NAME TIER            the part's text is a key of a TIER: it is read as that TIER's thing
- *   type NAME LIST             the part's text is the source's key of a type in the highway's LIST: read as that type
+ *   type NAME LIST             the part's text is the source's key of a type in the highway's LIST: read as that type.
+ *     [node]                   the key, as the lists write it, is the node's own text (a PropBank roleset abandon.01, a
+ *                              FrameNet frame), so it is content whether or not a list holds it (BRIEF: a highway node is
+ *                              content): where none does, it is that node, recorded as its text and counted; never for
+ *                              a source's own pointer to a node (vn:51.3.1, mcr:ili-30-01976841-v), which only resolves
  *   metadata NAME...           the part is said of the file itself: it goes in the file's metadata tree
  *   omit NAME...               the part is the file's bookkeeping: read by nothing
  *   perfcache                  a part named as a property the perf-cache's flags hold (tier0.flags, its layout) is read
@@ -65,7 +69,7 @@
 enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, D_RANGE, D_OWN };
 /* A key as a resource writes it, matched by a pattern and written as a template (\1: the pattern's first part) where it
  * writes it otherwise than those it points at write it (vn:51.2 for 51.2): the highway's lines, and a type's key. */
-typedef struct { char list[32], path[160], as[64]; regex_t re; int has_re; } KSpec;
+typedef struct { char list[32], path[160], as[64]; regex_t re; int has_re, node; } KSpec;     /* node: the key, as the lists write it, is the node's own text */
 typedef struct { char name[64]; int what; char arg[64]; KSpec k; uint32_t when;
                  struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; const char *text; } Dis;   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse); text: what a relation line words it as */
 typedef struct { char tier[32], name[64]; } Pair;
@@ -201,6 +205,7 @@ int say_says(Recipe *r, const char *path, char *tok){
         if (tok[0] == 't') { char more[160]; while (name_next(&at, more, sizeof more)) {     /* type NAME LIST... [matching PATTERN] [as TEMPLATE]: the first list that knows it, by the key as those lists write it */
                 if (!strcmp(more, "matching")) { if (!name_next(&at, more, sizeof more) || regcomp(&ks.re, more, REG_EXTENDED)) { fprintf(stderr, "%s: type NAME LIST... matching PATTERN (it must compile)\n", path); return -1; } ks.has_re = 1; continue; }
                 if (!strcmp(more, "as")) { if (!name_next(&at, ks.as, sizeof ks.as)) { fprintf(stderr, "%s: type NAME LIST... as TEMPLATE\n", path); return -1; } continue; }
+                if (!strcmp(more, "node")) { ks.node = 1; continue; }
                 size_t l = strlen(a2); snprintf(a2 + l, sizeof a2 - l, " %s", more); }
             int rv = dis_add(s, path, nm, D_TYPE, a2); if (rv > 0) s->dis[s->ndis - 1].k = ks; return rv; }
         else { char more[64], targets[64]; snprintf(targets, sizeof targets, "%s", a2);       /* refer NAME TIER [within] [TIER [within]]...: the first that holds the key; within: the thing that TIER is inside */
@@ -497,8 +502,9 @@ static void unknown_mark(Sink *k, const STree *t, int32_t c, UnkMark *m){
 static void unknown_back(Sink *k, const STree *t, const UnkMark *m){
     k->unknown = m->unknown; k->nunk = m->nunk;
     for (int i = 0; i < 2; i++) if (!m->had[i] && k->tc_tree == t && k->uk && m->at[i] >= 0 && (uint32_t)m->at[i] < k->tc_n) __atomic_store_n(&k->uk[m->at[i]], 0, __ATOMIC_RELEASE); }
+static int once_for(Sink *k, const STree *t, int32_t c){ return !(k->tc_tree == t && k->uk && (uint32_t)c < k->tc_n && __atomic_exchange_n(&k->uk[c], 1, __ATOMIC_ACQ_REL)); }
 static void unknown_key(Sink *k, const STree *t, int32_t c, const SNode *x){
-    if (k->tc_tree == t && k->uk && (uint32_t)c < k->tc_n && __atomic_exchange_n(&k->uk[c], 1, __ATOMIC_ACQ_REL)) return;
+    if (!once_for(k, t, c)) return;
     k->unknown++; if (k->nunk < 8) snprintf(k->unknm[k->nunk++], 96, "%.*s %.*s", (int)(x->nlen < 40 ? x->nlen : 40), x->name, (int)(x->vlen < 48 ? x->vlen : 48), x->val); }
 static Ref text_of(const uint8_t *p, size_t n){ return n > 256 ? text_ref(CTX[omp_get_thread_num()], p, n) : string_ref(p, n); }
 static int thing_of(Sink *k, const STree *t, int32_t g, Ref *out, int depth);
@@ -538,6 +544,7 @@ static int value_of(Sink *k, const STree *t, int32_t c, Ref *out, int depth){
         Ref v = string_ref(kp, kn);
         for (char *ln = strtok_r(lists, " ", &save); ln; ln = strtok_r(NULL, " ", &save)) { int has = 0; *out = highway_typed(ln, kp, kn, &has); if (has) return 1;
             const lp_list *L = HW ? lp_highway_list(HW, ln) : NULL; if (L && lp_highway_slot(HW, L, &v.id) >= 0) { *out = v; return 1; } }
+        if (d->k.node) { if (once_for(k, t, c)) owed(k, 'm', d->arg, x->name, x->nlen, NULL, 0); *out = v; return 1; }     /* the node's own text: that node, though no list holds it; counted once, never dropped */
         unknown_key(k, t, c, x);     /* a key no list of the highway holds: said, never taken for text */
         return 0; }
     if (d->what == D_CODEPOINTS || d->what == D_RANGE) {
