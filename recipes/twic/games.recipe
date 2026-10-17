@@ -1,0 +1,4 @@
+name twic-games
+match twic*.pgn
+# Read as chess-com's games are (chess.c, grammar pgn, records played): a game with variations or NAGs is said as a study.
+like chess-com-games
