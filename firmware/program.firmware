@@ -33,11 +33,12 @@
 #   take segment               the rest of the branch the prompt is a run of, followed along what was observed
 #   take attestations N        the N strongest strands of the prompt itself
 #   take constituents N        the N strongest strands of each of its constituents
-#   up RELATION...             for translate: the relations from a word up to its concept, followed back down in
-#                              another language
-#   language HELD SAYS         for translate: the language of what stands below the concept, read from what holds it
-#                              under HELD and what that says under SAYS
-#   gloss RELATION             for translate: what is shown of a concept
+#   lexicalization RECIPE THING LANGUAGE CONCEPT
+#                              for translate: a word's lexicalizations as RECIPE declares them: the relation it
+#                              declares of THING, from a word to its lexicalization, and the parts it names a THING by
+#                              that are its LANGUAGE and its CONCEPT; up to the concept, and back down in another language
+#   gloss RECIPE NAME          for translate: what is shown of a concept: the relation RECIPE declares of NAME, said of
+#                              what has the concept as its value
 #   take chain N RELATION...   from each of the N words that pull hardest, the relations followed in order, each by its
 #                              witness's order then its standing: where the chain ends is the answer. Chains
 #                              parted by | are tried in turn until one reaches its end (a form through its lemma)
@@ -69,12 +70,12 @@ for search
 
 for translate
   fan 4096
-  # a word up to its concept along the claims the wordnets make, as WN-LMF names them: its sense, the sense's
-  # synset, the synset's interlingual concept; and back down in another language. A synset's language is its
-  # lexicon's; what is shown of a concept is its synset's definition. Another firmware may go up another way.
-  up Sense synset ili
-  language Synset language
-  gloss Definition
+  # a word up to its concept through its senses, as the WN-LMF recipe declares them: a sense is the lexicalization
+  # [lemma, language, ILI], its language its lexicon's, its concept its synset's ILI; and back down to the senses of
+  # that ILI in another language, and their words. What is shown of a concept is its synset's definition. Each name is
+  # the recipe's, resolved from its declarations, so the two cannot drift. Another firmware may go up another way.
+  lexicalization wn-lmf Sense language ili
+  gloss wn-lmf Definition
 
 for pull
   fan 4096

@@ -168,24 +168,72 @@ static void walk_dir(const char *dir){ ig_reset(); nftw(dir, walk_cb, 64, FTW_PH
 static void source_walk(const Source *sc){
     if (!sc->nfiles) { walk_dir(sc->found); return; }
     for (int z = 0; z < sc->nfiles; z++) { glob_t g; if (glob(sc->files[z], 0, NULL, &g)) continue;
-        for (size_t y = 0; y < g.gl_pathc; y++) { struct stat st;
-            if (!stat(g.gl_pathv[y], &st) && S_ISDIR(st.st_mode)) walk_dir(g.gl_pathv[y]); else add_path(g.gl_pathv[y]); }
+        for (size_t y = 0; y < g.gl_pathc; y++) {
+            if (os_is_dir(g.gl_pathv[y])) walk_dir(g.gl_pathv[y]); else add_path(g.gl_pathv[y]); }
         globfree(&g); }
 }
 
-/* A claim or a tuple as text: its parts between brackets, a part that is itself a tuple the same way. */
-static void show_tuple(const lp_id *id){
-    Node *c = table_find(id); if (!c) { Buf o = { 0 }; expand(id, &o); fwrite(o.b, 1, o.n, stdout); free(o.b); return; }
-    int first = 1; putchar('[');
+/* A claim or a tuple as text: its parts between brackets, a part that is itself a tuple the same way. A type of the
+ * highway has no text: it is its list (<ili>), or, written for a machine (--claims-tsv), its list and its key (ili:i35545),
+ * the first key beside the highway naming its slot, or its slot (ili:#12) when none does. */
+static int tsv_claims;                                                        /* --claims-tsv: a claim a line, its parts between tabs */
+static char **slot_key;                                                       /* the first key beside the highway of each of its records */
+static void slot_keys(void){
+    if (slot_key || !HW) return;
+    slot_key = calloc(HW->nrec + 1, sizeof *slot_key);
+    char p[4200]; snprintf(p, sizeof p, "%s.keys", HW->path); FILE *f = fopen(p, "rb"); if (!f) return;
+    static char line[1 << 16];
+    while (fgets(line, sizeof line, f)) { if (line[0] == '#') continue;
+        char *k = strchr(line, '\t'), *sl = k ? strrchr(k + 1, '\t') : NULL; if (!sl) continue; *k++ = 0; *sl++ = 0;
+        const lp_list *l = lp_highway_list(HW, line); char *end; unsigned long at = strtoul(sl, &end, 10);
+        if (l && end != sl && at < l->count && l->first + at < HW->nrec && !slot_key[l->first + at]) slot_key[l->first + at] = strdup(k); }
+    fclose(f);
+}
+static void put(Buf *o, const void *s, size_t n){ if (o->n + n > o->cap) { o->cap = (o->n + n) * 2 + 16; o->b = xrealloc(o->b, o->cap); } memcpy(o->b + o->n, s, n); o->n += n; }
+static void part_text(const lp_id *id, Buf *o){
+    Buf t = { 0 }; expand(id, &t);
+    if (t.n || !HW) { if (t.n) put(o, t.b, t.n); free(t.b); return; }
+    free(t.b);
+    int64_t at = lp_highway_slot(HW, NULL, id); const char *ln = "type";
+    if (at >= 0) for (size_t i = 0; i < HW->nlists; i++) if ((size_t)at >= HW->list[i].first && (size_t)at < (size_t)HW->list[i].first + HW->list[i].count) ln = HW->list[i].name;
+    if (!tsv_claims) { put(o, "<", 1); put(o, ln, strlen(ln)); put(o, ">", 1); return; }
+    slot_keys(); const char *k = at >= 0 && slot_key ? slot_key[at] : NULL;
+    put(o, ln, strlen(ln)); put(o, ":", 1);
+    if (k) put(o, k, strlen(k));
+    else { char h[32]; int hn = snprintf(h, sizeof h, "#%lld", (long long)(at >= 0 ? at - (int64_t)lp_highway_list(HW, ln)->first : -1)); put(o, h, (size_t)hn); }
+}
+static void tuple_text(const lp_id *id, Buf *o){
+    Node *c = table_find(id); if (!c) { expand(id, o); return; }
+    int first = 1; put(o, "[", 1);
     for (uint32_t v = 0; v < c->nv; v++) for (uint32_t r = 0; r < VRUN(VTX[c->voff + v].m); r++) {
-        if (!first) printf(", "); first = 0;
-        if (VSAID(VTX[c->voff + v].m) == LP_SAID_TUPLE && table_find(&VTX[c->voff + v].id)) show_tuple(&VTX[c->voff + v].id);
-        else { Buf o = { 0 }; expand(&VTX[c->voff + v].id, &o);
-               if (!o.n && HW) { int64_t at = lp_highway_slot(HW, NULL, &VTX[c->voff + v].id); const char *ln = "type";
-                   if (at >= 0) for (size_t i = 0; i < HW->nlists; i++) if ((size_t)at >= HW->list[i].first && (size_t)at < (size_t)HW->list[i].first + HW->list[i].count) ln = HW->list[i].name;
-                   printf("<%s>", ln); }
-               else fwrite(o.b, 1, o.n, stdout); free(o.b); } }
-    putchar(']');
+        if (!first) put(o, ", ", 2); first = 0;
+        if (VSAID(VTX[c->voff + v].m) == LP_SAID_TUPLE && table_find(&VTX[c->voff + v].id)) tuple_text(&VTX[c->voff + v].id, o);
+        else part_text(&VTX[c->voff + v].id, o); }
+    put(o, "]", 1);
+}
+static void show_tuple(const lp_id *id){ Buf o = { 0 }; tuple_text(id, &o); fwrite(o.b, 1, o.n, stdout); free(o.b); }
+/* --claims-tsv: one line a claim (claim) or a tuple a record holds besides (held): kind, position, score, then each part as
+ * text (a tuple part bracketed as above); a tab, a line end or a backslash in a part is written \t, \n, \r, \\. Every
+ * line of this kind begins with its kind and a tab; whatever else is said (what was read, what is left open) does not. */
+static void tsv_escaped(const uint8_t *b, size_t n){
+    for (size_t i = 0; i < n; i++) switch (b[i]) { case '\t': fputs("\\t", stdout); break; case '\n': fputs("\\n", stdout); break;
+        case '\r': fputs("\\r", stdout); break; case '\\': fputs("\\\\", stdout); break; default: putchar(b[i]); }
+}
+static void tsv_tuple(const char *kind, const lp_id *id, unsigned position, double score){
+    Node *c = table_find(id); if (!c) return;
+    printf("%s\t%u\t%.6g", kind, position, score);
+    for (uint32_t v = 0; v < c->nv; v++) for (uint32_t r = 0; r < VRUN(VTX[c->voff + v].m); r++) {
+        Buf o = { 0 };
+        if (VSAID(VTX[c->voff + v].m) == LP_SAID_TUPLE && table_find(&VTX[c->voff + v].id)) tuple_text(&VTX[c->voff + v].id, &o);
+        else part_text(&VTX[c->voff + v].id, &o);
+        putchar('\t'); tsv_escaped(o.b, o.n); free(o.b); }
+    putchar('\n');
+}
+static void tsv_held(const lp_id *id, int depth){
+    Node *c = table_find(id); if (!c || depth > 6) return;
+    for (uint32_t v = 0; v < c->nv; v++) { uint64_t said = VSAID(VTX[c->voff + v].m);
+        if (said == LP_SAID_TUPLE) tsv_tuple("held", &VTX[c->voff + v].id, 0, 1.0);
+        else if (said == LP_SAID_RECORD) tsv_held(&VTX[c->voff + v].id, depth + 1); }
 }
 /* What a record holds besides its claims: the things and specifics said with them, and the records inside it. */
 static void show_held(const lp_id *id, int depth){
@@ -253,7 +301,7 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
     { char cmd[4200]; snprintf(cmd, sizeof cmd, "%s", dir); for (char *c = cmd + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(cmd, 0775); *c = '/'; } mkdir(cmd, 0775); }
     setlocale(LC_NUMERIC, "en_US.UTF-8");
     const char *conninfo = laplace_db(); int loads = 1, plans = 0;
-    for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[a + 1]; if (!strcmp(argv[a], "--no-load") || !strcmp(argv[a], "--plan") || !strcmp(argv[a], "--claims")) loads = 0; if (!strcmp(argv[a], "--plan")) plans = 1; }
+    for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[a + 1]; if (!strcmp(argv[a], "--no-load") || !strcmp(argv[a], "--plan") || !strcmp(argv[a], "--claims") || !strcmp(argv[a], "--claims-tsv")) loads = 0; if (!strcmp(argv[a], "--plan")) plans = 1; }
     /* What a source takes is not its bytes times a ratio: content is recorded once, so what an earlier source measured
      * (bytes the database grew over bytes its files hold, room.tsv) falls as what is recorded covers more of what is read.
      * A source is not begun only when the volume is already left with less than a tenth of itself, and that is said. */
@@ -409,15 +457,17 @@ int cmd_ingest(int argc, char **argv){
         { "--whole", 'b', &load_whole },                                          /* after a run that was cut off: every node is looked for */
         { "--no-load", 'v', &do_load, 0 }, { "--plan", 'v', &do_load, -1 },
         { "--claims", 'b', &show_claims },                                        /* what the recipes attest, as text; nothing is loaded */
+        { "--claims-tsv", 'b', &tsv_claims },                                     /* --claims for a machine: a claim a line, its parts between tabs */
         { "--entities", 'b', &entities },                                         /* what the recipes would record, entities and claims; nothing is loaded */
         { NULL } });
     if (highway) {
-        if (a < argc || of || show_claims || entities || do_load < 0) { fprintf(stderr, "--highway admits only the existing highway contents; use -d, -t, -j or --no-load\n"); return 2; }
+        if (a < argc || of || show_claims || tsv_claims || entities || do_load < 0) { fprintf(stderr, "--highway admits only the existing highway contents; use -d, -t, -j or --no-load\n"); return 2; }
         return ingest_highway(conninfo, t0p, threads, do_load);
     }
-    if (entities) show_claims = 1;
+    if (tsv_claims && entities) { fprintf(stderr, "--claims-tsv writes claims, not entities\n"); return 2; }
+    if (entities || tsv_claims) show_claims = 1;
     if (show_claims) do_load = 0;
-    if (a < argc && argv[a][0] == '-') { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] [--entities] file...\n"); return 2; }
+    if (a < argc && argv[a][0] == '-') { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] [--claims-tsv] [--entities] file...\n"); return 2; }
     /* what a recipe would say is shown of files: of nothing named it is no ingest of every source, and --entities, which
      * asks the database of every composition, is of files only, never a source by its name */
     if (show_claims && a >= argc) { fprintf(stderr, "--claims and --entities show what files would record: name the files\n"); return 2; }
@@ -516,6 +566,7 @@ int cmd_ingest(int argc, char **argv){
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
         size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
     #define SHOW(F) do { if (show_claims) for (uint64_t e = 0; e < (F)->ev.n; e++) { const Event *x_ = &(F)->ev.e[e]; \
+        if (tsv_claims) { if (x_->kind == EV_RECORD) tsv_held(&x_->witnessed, 0); else tsv_tuple("claim", &x_->claim, x_->position, (double)x_->score); continue; } \
         if (x_->kind == EV_RECORD) { printf("-- record %u", x_->position); if (x_->own_witness) { printf("   by "); show_tuple(&x_->witness); } putchar('\n'); show_held(&x_->witnessed, 0); continue; } \
         if (!table_find(&x_->claim)) continue; \
         show_tuple(&x_->claim); \
