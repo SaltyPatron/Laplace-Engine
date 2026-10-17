@@ -157,7 +157,8 @@ typedef struct {
     int broken; char file[512];                       /* it did not load: it stops the source it belongs to, and no other */
     int curated;                                      /* it attests: a curated source, mined for what it says, not kept byte for byte */
     void *say;                                        /* the file's layout and the disposition of its parts, as the recipe configures them (say.c) */
-    void *chess;                                      /* grammar pgn: what the file's records are (chess.c) */
+    const struct NativeGrammar *native;               /* the grammar the recipe names, when it is a reading of the engine's own, not tree-sitter's */
+    void *native_recipe;                              /* what that grammar's own lines said */
 } Recipe;
 /* A source: a body of content with one identity, however many files it comes in. Its recipes say how each kind of
  * its files reads; the source says who the witness is, where the source is kept, and which sources it comes after. */
@@ -173,6 +174,7 @@ typedef struct {
     char files[8][512]; int nfiles;                   /* the files it is, by pattern, when it is not everything under a root */
     char reads[8][64]; int nreads;                    /* formats its files are read as (recipes that belong to no source) */
     char found[1024];                                 /* where it is */
+    char unset[64];                                   /* a variable its root or files name that the environment does not set: it is nowhere until it is */
 } Source;
 int     recipes_load(const char *dir, Recipe **out);
 Source *sources_loaded(int *n);                                       /* in the order they go in */
@@ -228,10 +230,15 @@ void highway_file(Ctx *, File *, Hw *);                                         
 int  source_files(const Source *, Recipe *rec, int nrec, char ***paths, Recipe ***of);   /* a source's files its recipes read, in the order they are read (ingest.c) */
 void decompose_file(Ctx *, File *);
 void decompose_bytes(Ctx *, File *, uint8_t *src, size_t n, int first);     /* a stretch of a file that is read a stretch at a time */
-/* ---- chess (chess.c): a recipe that says "grammar pgn" has its files read as PGN, each game a record over its line */
-int  chess_says(Recipe *, const char *path, char *tok);                     /* a PGN recipe's own line: 1; 0 when the recipe is no PGN recipe; -1 written wrong */
-int  chess_recipe(Recipe *, const char *path);                             /* a PGN recipe, read to its end */
-void chess_read(const Recipe *, File *, const uint8_t *src, size_t n);    /* a PGN file: its records, what they attest, its trunk */
+/* ---- a grammar that is no tree-sitter grammar: a reading the engine holds of its own, found by the name a recipe's
+ * grammar line gives (grammars.c lists them). The recipe names it as it names any grammar; recipe.c names none. */
+typedef struct NativeGrammar {
+    const char *name;                                                        /* what a recipe's grammar line says */
+    int  (*says)(Recipe *, const char *path, char *tok);                     /* a line of a recipe of this grammar: 1 said, -1 written wrong */
+    int  (*done)(Recipe *, const char *path);                                /* the recipe, read to its end: 1 it loads */
+    void (*read)(const Recipe *, File *, const uint8_t *src, size_t n);    /* a file: its records, what they attest, its trunk */
+} NativeGrammar;
+const NativeGrammar *native_grammar(const char *name);                       /* the native grammar of that name, or NULL */
 int  reads_in_stretches(const Recipe *, char *boundary);                    /* whether a file of this recipe can be: 1 at a line's end, 2 at an empty line */
 void table_reset(void);                                                      /* what was decomposed is recorded: the table is emptied for what comes next */
 Ref  string_ref(const uint8_t *s, size_t n);                          /* text as its entity, remembered per thread */

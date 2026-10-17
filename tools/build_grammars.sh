@@ -2,7 +2,9 @@
 # Compile every tree-sitter grammar under $1 into $2/libtree-sitter-<name>.so (.dll on Windows, from MSYS2's shell in
 # the oneAPI dev shell), exporting tree_sitter_<name>.
 # A grammar directory holds src/parser.c (and optionally src/scanner.c), directly or one level down (xml/, tsv/, ...).
-SRC=${1:-/vault/Data/TreeSitter}; OUT=${2:-/repos/build/grammars}; mkdir -p "$OUT"
+# Without arguments, the machine's own declaration (Laplace-Operations laplace.env): LAPLACE_GRAMMAR_SRC and LAPLACE_GRAMMARS.
+SRC=${1:-${LAPLACE_GRAMMAR_SRC:?LAPLACE_GRAMMAR_SRC is not set: source Laplace-Operations/laplace.env, or name the sources}}
+OUT=${2:-${LAPLACE_GRAMMARS:?LAPLACE_GRAMMARS is not set: source Laplace-Operations/laplace.env, or name the output}}; mkdir -p "$OUT"
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) win=1; ext=dll; CC=${CC:-icx-cc} ;; *) win=; ext=so; CC=${CC:-icx} ;; esac
 find "$SRC" -path '*/src/parser.c' -not -path '*/node_modules/*' | while read -r p; do
   d=$(dirname "$(dirname "$p")")

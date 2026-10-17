@@ -75,18 +75,21 @@ static const TSLanguage *grammar_load(const char *name){
     const TSLanguage *(*f)(void) = (const TSLanguage *(*)(void))os_dl_sym(h, sym);
     return f ? f() : NULL;
 }
-/* A path with $NAME read from the environment. */
-static void path_expand(const char *in, char *out, size_t cap){
-    size_t k = 0;
+/* A path with $NAME read from the environment. Where the data is kept is the machine's to say (Laplace-Operations'
+ * laplace.env: LAPLACE_DATA, LAPLACE_MODELS), never the code's: a variable the environment does not set, or sets
+ * empty, resolves to nothing, and its name is given back (unset) so what needs the path can say so and stop. */
+static int path_expand(const char *in, char *out, size_t cap, char *unset, size_t ucap){
+    size_t k = 0; int ok = 1;
     for (const char *c = in; *c && k + 1 < cap; ) {
         if (*c != '$') { out[k++] = *c++; continue; }
         char name[64]; size_t l = 0; c++; while ((*c == '_' || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9')) && l + 1 < sizeof name) name[l++] = *c++; name[l] = 0;
-        const char *v = getenv(name); if (!v && !strcmp(name, "LAPLACE_DATA")) v = "/vault/Data";
-        if (!v && !strcmp(name, "LAPLACE_MODELS")) v = "/vault/models";
-        if (v) k += (size_t)snprintf(out + k, cap - k, "%s", v);
+        const char *v = getenv(name);
+        if (!v || !*v) { if (ok && unset) snprintf(unset, ucap, "%s", name); ok = 0; continue; }
+        k += (size_t)snprintf(out + k, cap - k, "%s", v);
     }
     out[k < cap ? k : cap - 1] = 0;
     os_slashes(out);                                                       /* one separator, whatever the environment wrote */
+    return ok;
 }
 /* A recipe's comment: # where a line begins or after a space, outside a name written between double quotes ("#ISO"). */
 void comment_off(char *line){
@@ -101,20 +104,20 @@ static int recipe_parse(const char *path, Recipe *r){
         char *tok = strtok(line, " \t\r\n"); if (!tok) continue;
         if (!strcmp(tok, "name")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->name, sizeof r->name, "%s", tok); }
         else if (!strcmp(tok, "match")) while ((tok = strtok(NULL, " \t\r\n")) && r->nmatch < 16) snprintf(r->match[r->nmatch++], 128, "%s", tok);
-        else if (!strcmp(tok, "grammar")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->grammar, sizeof r->grammar, "%s", tok); }
+        else if (!strcmp(tok, "grammar")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->grammar, sizeof r->grammar, "%s", tok); r->native = native_grammar(r->grammar); }
         else if (!strcmp(tok, "class")) r->trust = class_trust(path, strtok(NULL, " \t\r\n"));
         else if (!strcmp(tok, "trust") || !strcmp(tok, "deviation")) trust_by_number(path, tok);
         else if (!strcmp(tok, "like")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->like, sizeof r->like, "%s", tok); }
         else if (!strcmp(tok, "witness")) rest_of(r->witness, sizeof r->witness);
         else if (!strcmp(tok, "lineage")) rest_of(r->lineage, sizeof r->lineage);
-        else { int sv = chess_says(r, path, tok);                           /* a PGN recipe's own lines (chess.c) */
-            if (!sv) sv = say_says(r, path, tok);                           /* the file's layout and the disposition of its parts */
+        else { int sv = r->native ? r->native->says(r, path, tok)           /* a line of the native grammar the recipe names */
+                              : say_says(r, path, tok);                     /* the file's layout and the disposition of its parts */
             if (!sv) fprintf(stderr, "%s: \"%s\" is not something a recipe says\n", path, tok);
             if (sv <= 0) { fclose(f); return 0; } }
     }
     fclose(f);
     if (r->like[0]) return 1;
-    if (!strcmp(r->grammar, "pgn")) return chess_recipe(r, path);          /* PGN: its games read by chess.c */
+    if (r->native) return r->native->done(r, path);                          /* a native grammar reads its files itself */
     if (say_lays(r)) {                                                       /* configured: a grammar named gives the tree, else the layout's tiers do */
         if (r->grammar[0] && strcmp(r->grammar, "layout")) { r->lang = grammar_load(r->grammar); if (!r->lang) return 0; } else snprintf(r->grammar, sizeof r->grammar, "layout");
         r->curated = 1; return 1; }
@@ -135,8 +138,8 @@ static int source_parse(const char *path, Source *s){
         else if (!strcmp(tok, "lineage")) rest_of(s->lineage, sizeof s->lineage);
         else if (!strcmp(tok, "class")) s->trust = class_trust(path, strtok(NULL, " \t\r\n"));
         else if (!strcmp(tok, "trust") || !strcmp(tok, "deviation")) trust_by_number(path, tok);
-        else if (!strcmp(tok, "root")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nroot < 8) path_expand(tok, s->root[s->nroot++], 512); }
-        else if (!strcmp(tok, "files")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nfiles < 8) path_expand(tok, s->files[s->nfiles++], 512); }
+        else if (!strcmp(tok, "root")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nroot < 8 && !path_expand(tok, s->root[s->nroot++], 512, s->unset, sizeof s->unset)) s->nroot--; }
+        else if (!strcmp(tok, "files")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nfiles < 8 && !path_expand(tok, s->files[s->nfiles++], 512, s->unset, sizeof s->unset)) s->nfiles--; }
         else if (!strcmp(tok, "room")) { tok = strtok(NULL, " \t\r\n"); if (tok) s->room = atof(tok); }
         else if (!strcmp(tok, "tier0")) s->tier0 = 1;                       /* it records every codepoint, tier 0, as its ingest's first act */
         else if (!strcmp(tok, "called")) { char *v = strtok(NULL, "\r\n"); while (v && (*v == ' ' || *v == '\t')) v++; if (v) snprintf(s->called, sizeof s->called, "%s", v); }
@@ -146,6 +149,7 @@ static int source_parse(const char *path, Source *s){
         else { fprintf(stderr, "%s: \"%s\" is not something a source says\n", path, tok); fclose(f); return 0; }
     }
     fclose(f);
+    if (s->unset[0]) { s->nroot = s->nfiles = 0; return s->name[0] != 0; }   /* a root it names is not set: it is at none, and says why (source_unset) */
     if (s->nfiles) { os_list g; os_glob(s->files[0], &g); if (g.n) snprintf(s->found, sizeof s->found, "%s", s->files[0]); os_list_free(&g); }
     /* the first root that is there; of a pattern, the newest directory: an archive or a checksum kept beside the
      * directory it was opened into matches the pattern too, and is not where the source is */
@@ -723,7 +727,7 @@ void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
             char w[512], l[512]; named_for(r->witness[0] ? r->witness : r->name, f->path, src, n, w, sizeof w); named_for(r->lineage, f->path, src, n, l, sizeof l);
             f->witness = text_ref(c, (const uint8_t *)w, strlen(w)); f->trunk = f->witness;
             if (l[0]) { f->lineage = text_ref(c, (const uint8_t *)l, strlen(l)); f->has_lineage = 1; } }
-        if (r->chess) { chess_read(r, f, src, n); return; }                 /* PGN (chess.c) */
+        if (r->native) { r->native->read(r, f, src, n); return; }           /* the native grammar the recipe names */
         attest_layout(r, f, src, n); return; }
     if (r && (!strcmp(r->grammar, "csv") || !strcmp(r->grammar, "tsv") || !strcmp(r->grammar, "psv"))) {
         f->trunk = text_ref(c, src, n);
