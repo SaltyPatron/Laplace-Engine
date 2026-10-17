@@ -87,6 +87,11 @@ jobs:
           . Laplace-Operations/laplace.env
           export LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native
           python3 Laplace-Engine/tests/staging-role.py
+      - name: a working tree's whole reading supersedes the readings before it
+        run: |
+          . Laplace-Operations/laplace.env
+          export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
+          bash Laplace-Engine/tests/supersede.sh "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace"
       - name: translate goes through the lexicalization, read from the recipe (dog en en, dog en fr)
         run: |
           . Laplace-Operations/laplace.env

@@ -182,27 +182,12 @@ int cmd_sweep(int argc, char **argv){
     return 0;
 }
 
-int cmd_forget(int argc, char **argv){
-    const char *conninfo = laplace_db(); int npg = 0, except = 0, trunk = 0;
-    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-j", 'i', &npg }, { "--except", 'b', &except }, { "--trunk", 'b', &trunk }, { NULL } });
-    if (a >= argc && !except) { fprintf(stderr, "usage: laplace forget [-d conninfo] [-j connections] [--trunk] witness...\n       laplace forget --except witness...   (every witness but these)\n"); return 2; }
-    if (npg <= 0) npg = omp_get_num_procs();
-    setlocale(LC_NUMERIC, "en_US.UTF-8");
-    double T = now(), t; tier0_open(NULL); Ctx *c = lp_text_new(T0);
-    PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) pg[i] = db_connect(conninfo);
-    /* A witness is a source's trunk, [its record, its files' trunks]: named by its ID (--trunk), or by its record, the
-     * source's name, which every trunk of that source begins with. */
-    Set *named = set_new(), *going = set_new();
-    for (int i = a; i < argc; i++) { lp_id id; if (trunk) { if (!id_parse(argv[i], &id)) { fprintf(stderr, "%s: not an ID\n", argv[i]); return 2; } }
-        else id = lp_text_decompose(c, (const uint8_t *)argv[i], strlen(argv[i]), NULL, NULL).id; set_add(named, &id); }
-    { PGresult *r = ask_once(pg[0], "SELECT id FROM witness", NULL); Reader *rd = reader_new(pg[0]);
-      for (int j = 0; j < PQntuples(r); j++) { const lp_id *w = col_id(r, j, 0); lp_id first[2]; size_t m = reader_parts(rd, w, first, 2);
-          int is = set_has(named, w) || (!trunk && m && set_has(named, &first[0]));
-          if (is != except) set_add(going, w); }
-      PQclear(r); reader_free(rd); }
+/* The witnesses of going, and what they alone held, taken out; the standings they touched played again. 1: none. */
+static int forget_going(PGconn **pg, int npg, Set *going){
+    double t;
     uint64_t ng = lp_idmap_count(going); const lp_id *gid = lp_idmap_keys(going);
     printf("laplace forget   %s   %llu witness%s\n", PQdb(pg[0]), (unsigned long long)ng, ng == 1 ? "" : "es");
-    if (!ng) { printf("  nothing to forget: no witness's trunk is named so\n"); return 1; }
+    if (!ng) return 1;
     { Reader *rd = reader_new(pg[0]); for (uint64_t i = 0; i < ng; i++) { char hx[33]; id_text(&gid[i], hx); lp_id first[2]; size_t m = reader_parts(rd, &gid[i], first, 2);
           char *tx = m ? reader_text(rd, &first[0], 80) : strdup("?"); printf("  %s   %s\n", hx, tx); free(tx); } reader_free(rd); }
 
@@ -218,8 +203,46 @@ int cmd_forget(int argc, char **argv){
     /* the standings they touched, played again from the witnesses that still hold each, in the order the sources go in */
     t = now(); uint64_t played = 0, orphaned = 0; standings_replay(pg[0], touched.v, touched.n, &played, &orphaned);
     printf("\n  %-52s %'12llu   series played again; %'llu claims no witness holds now, without a standing   (%.1f s)\n", "standings they touched", (unsigned long long)played, (unsigned long long)orphaned, now() - t);
-    printf("\n== total %.1f s\n", now() - T);
     lp_vec_free(&touched); lp_idmap_free(tset);
+    return 0;
+}
+
+int cmd_forget(int argc, char **argv){
+    const char *conninfo = laplace_db(); int npg = 0, except = 0, trunk = 0;
+    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-j", 'i', &npg }, { "--except", 'b', &except }, { "--trunk", 'b', &trunk }, { NULL } });
+    if (a >= argc && !except) { fprintf(stderr, "usage: laplace forget [-d conninfo] [-j connections] [--trunk] witness...\n       laplace forget --except witness...   (every witness but these)\n"); return 2; }
+    if (npg <= 0) npg = omp_get_num_procs();
+    setlocale(LC_NUMERIC, "en_US.UTF-8");
+    double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0);
+    PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) pg[i] = db_connect(conninfo);
+    /* A witness is a source's trunk, [its record, its files' trunks]: named by its ID (--trunk), or by its record, the
+     * source's name, which every trunk of that source begins with. */
+    Set *named = set_new(), *going = set_new();
+    for (int i = a; i < argc; i++) { lp_id id; if (trunk) { if (!id_parse(argv[i], &id)) { fprintf(stderr, "%s: not an ID\n", argv[i]); return 2; } }
+        else id = lp_text_decompose(c, (const uint8_t *)argv[i], strlen(argv[i]), NULL, NULL).id; set_add(named, &id); }
+    { PGresult *r = ask_once(pg[0], "SELECT id FROM witness", NULL); Reader *rd = reader_new(pg[0]);
+      for (int j = 0; j < PQntuples(r); j++) { const lp_id *w = col_id(r, j, 0); lp_id first[2]; size_t m = reader_parts(rd, w, first, 2);
+          int is = set_has(named, w) || (!trunk && m && set_has(named, &first[0]));
+          if (is != except) set_add(going, w); }
+      PQclear(r); reader_free(rd); }
+    if (forget_going(pg, npg, going)) { printf("  nothing to forget: no witness's trunk is named so\n"); return 1; }
+    printf("\n== total %.1f s\n", now() - T);
     for (int i = 0; i < npg; i++) PQfinish(pg[i]);
+    return 0;
+}
+
+int forget_superseded(const char *conninfo, int npg, const lp_id *trunk){
+    if (npg <= 0) npg = omp_get_num_procs();
+    PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) pg[i] = db_connect(conninfo);
+    Set *going = set_new(); Reader *rd = reader_new(pg[0]); lp_id mine[2]; size_t mm = reader_parts(rd, trunk, mine, 2);
+    if (mm) { PGresult *r = ask_once(pg[0], "SELECT id FROM witness", NULL);
+        for (int j = 0; j < PQntuples(r); j++) { const lp_id *w = col_id(r, j, 0); if (!memcmp(w, trunk, sizeof *trunk)) continue;
+            lp_id first[2]; size_t m = reader_parts(rd, w, first, 2); if (m && !memcmp(&first[0], &mine[0], sizeof mine[0])) set_add(going, w); }
+        PQclear(r); }
+    reader_free(rd);
+    int none = !lp_idmap_count(going);
+    if (none) printf("  %-44s none\n", "the source's earlier readings");
+    else { printf("\nthe source's earlier readings, superseded: "); fflush(stdout); forget_going(pg, npg, going); }
+    lp_idmap_free(going); for (int i = 0; i < npg; i++) PQfinish(pg[i]); free(pg);
     return 0;
 }

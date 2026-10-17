@@ -146,6 +146,7 @@ static int source_parse(const char *path, Source *s){
         else if (!strcmp(tok, "root")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nroot < 8 && !path_expand(tok, s->root[s->nroot++], 512, s->unset, sizeof s->unset)) s->nroot--; }
         else if (!strcmp(tok, "files")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nfiles < 16 && !path_expand(tok, s->files[s->nfiles++], 512, s->unset, sizeof s->unset)) s->nfiles--; }
         else if (!strcmp(tok, "room")) { tok = strtok(NULL, " \t\r\n"); if (tok) s->room = atof(tok); }
+        else if (!strcmp(tok, "supersede")) s->supersede = 1;               /* its newest whole reading is what it says: the earlier ones go */
         else if (!strcmp(tok, "tier0")) s->tier0 = 1;                       /* it records every codepoint, tier 0, as its ingest's first act */
         else if (!strcmp(tok, "held")) rest_of(s->held, sizeof s->held);
         else if (!strcmp(tok, "called")) { char *v = strtok(NULL, "\r\n"); while (v && (*v == ' ' || *v == '\t')) v++; if (v) snprintf(s->called, sizeof s->called, "%s", v); }
