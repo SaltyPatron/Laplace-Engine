@@ -82,12 +82,13 @@ Firmware firmware_for(const char *path, int op){
             if (what == FW_TAKE_CHAIN) { char *nm; fw.nalt = 1; memset(fw.nchain, 0, sizeof fw.nchain);                 /* RELATION... | RELATION...: the first chain that reaches its end */
                 while ((nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') { if (!strcmp(nm, "|")) { if (fw.nalt < FW_ALTS) fw.nalt++; continue; } int a_ = fw.nalt - 1; if (fw.nchain[a_] < FW_CHAIN) snprintf(fw.chain[a_][fw.nchain[a_]++], 96, "%s", nm); }
                 if (!fw.nchain[0]) { fprintf(stderr, "%s:%d: take chain N RELATION...\n", fw.path, line); exit(2); } } }
-        else if (!strcmp(tok, "up") && in == FW_TRANSLATE) { char *nm; fw.nup = 0;               /* up RELATION...: from a word to its concept, in order */
-            while ((nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') { if (fw.nup >= FW_CHAIN) { fprintf(stderr, "%s:%d: more steps than a chain holds (%d)\n", fw.path, line, FW_CHAIN); exit(2); } snprintf(fw.up[fw.nup++], 96, "%s", nm); }
-            if (!fw.nup) { fprintf(stderr, "%s:%d: up RELATION...\n", fw.path, line); exit(2); } }
-        else if (!strcmp(tok, "language") && in == FW_TRANSLATE) { char *a_ = strtok(NULL, " \t\r\n"), *b_ = strtok(NULL, " \t\r\n");
-            if (!a_ || !b_) { fprintf(stderr, "%s:%d: language HELD-BY SAYS\n", fw.path, line); exit(2); } snprintf(fw.language[0], 96, "%s", a_); snprintf(fw.language[1], 96, "%s", b_); }
-        else if (!strcmp(tok, "gloss") && in == FW_TRANSLATE) { v = strtok(NULL, " \t\r\n"); if (!v) { fprintf(stderr, "%s:%d: gloss RELATION\n", fw.path, line); exit(2); } snprintf(fw.gloss, sizeof fw.gloss, "%s", v); }
+        else if (!strcmp(tok, "lexicalization") && in == FW_TRANSLATE) { int k_ = 0; char *nm;       /* lexicalization RECIPE THING LANGUAGE CONCEPT: read from that recipe's declarations (pull.c) */
+            while (k_ < 4 && (nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') snprintf(fw.lexical[k_++], 96, "%s", nm);
+            if (k_ != 4) { fprintf(stderr, "%s:%d: lexicalization RECIPE THING LANGUAGE CONCEPT\n", fw.path, line); exit(2); } }
+        else if (!strcmp(tok, "gloss") && in == FW_TRANSLATE) { char *a_ = strtok(NULL, " \t\r\n"), *b_ = strtok(NULL, " \t\r\n");
+            if (!a_ || !b_ || a_[0] == '#' || b_[0] == '#') { fprintf(stderr, "%s:%d: gloss RECIPE NAME\n", fw.path, line); exit(2); } snprintf(fw.gloss[0], 96, "%s", a_); snprintf(fw.gloss[1], 96, "%s", b_); }
+        else if ((!strcmp(tok, "up") || !strcmp(tok, "language")) && in == FW_TRANSLATE) {      /* the relations' names, written a second time here, drifted from the recipe's (Laplace-Engine#32) */
+            fprintf(stderr, "%s:%d: %s: translate reads its way from the recipe's own declarations: lexicalization RECIPE THING LANGUAGE CONCEPT\n", fw.path, line, tok); exit(2); }
         else { fprintf(stderr, "%s:%d: %s is not a decision a firmware makes\n", fw.path, line, tok); exit(2); }
         #undef NUMBER
     }
@@ -106,9 +107,6 @@ const Firmware *firmware_ids(Firmware *fw){
     if (fw->role_by[0]) fw->id.role_by = NAMED(fw->role_by);
     for (int i = 0; i < fw->nrole; i++) fw->id.role[i] = NAMED(fw->role_name[i]);
     for (int a = 0; a < fw->nalt; a++) for (int i = 0; i < fw->nchain[a]; i++) fw->id.chain[a][i] = NAMED(fw->chain[a][i]);
-    for (int i = 0; i < fw->nup; i++) fw->id.up[i] = NAMED(fw->up[i]);
-    for (int i = 0; i < 2; i++) if (fw->language[i][0]) fw->id.language[i] = NAMED(fw->language[i]);
-    if (fw->gloss[0]) fw->id.gloss = NAMED(fw->gloss);
     #undef NAMED
     lp_text_free(c); fw->id.ready = 1;
     return fw;
