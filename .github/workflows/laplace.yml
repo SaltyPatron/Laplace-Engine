@@ -39,6 +39,8 @@ jobs:
           export TMPDIR=${RUNNER_TEMP:?}
           bash Laplace-Engine/tests/highway-admission.sh "$L"
           bash Laplace-Engine/tests/layout-counted.sh "$L"
+          bash Laplace-Engine/tests/left-open.sh "$L"
+          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/wordnet-recipes.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/claims-tsv.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/data-root.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/workspace-code.sh "$L"

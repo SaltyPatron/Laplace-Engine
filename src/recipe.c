@@ -104,7 +104,7 @@ static int recipe_parse(const char *path, Recipe *r){
     FILE *f = fopen(path, "r"); if (!f) return 0;
     memset(r, 0, sizeof *r); char line[4096];
     while (fgets(line, sizeof line, f)) {
-        comment_off(line);
+        comment_off(line); char whole[4096]; snprintf(whole, sizeof whole, "%s", line);
         char *tok = strtok(line, " \t\r\n"); if (!tok) continue;
         if (!strcmp(tok, "name")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->name, sizeof r->name, "%s", tok); }
         else if (!strcmp(tok, "match")) while ((tok = strtok(NULL, " \t\r\n")) && r->nmatch < 16) snprintf(r->match[r->nmatch++], 128, "%s", tok);
@@ -116,6 +116,7 @@ static int recipe_parse(const char *path, Recipe *r){
         else if (!strcmp(tok, "lineage")) rest_of(r->lineage, sizeof r->lineage);
         else { int sv = r->native ? r->native->says(r, path, tok)           /* a line of the native grammar the recipe names */
                               : say_says(r, path, tok);                     /* the file's layout and the disposition of its parts */
+            if (sv > 0 && !r->native) say_mentions(r, whole);              /* its words: a part named in none is left open */
             if (!sv) fprintf(stderr, "%s: \"%s\" is not something a recipe says\n", path, tok);
             if (sv <= 0) { fclose(f); return 0; } }
     }
