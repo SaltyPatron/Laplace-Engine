@@ -87,6 +87,9 @@ int cmd_tree(int argc, char **argv);
 int cmd_deploy(int argc, char **argv);
 int cmd_index(int argc, char **argv);
 int cmd_forget(int argc, char **argv);
+/* What a source's earlier readings alone held, taken out once a whole new reading is its witness: every witness that
+ * begins with the trunk's record (the source's name) but the trunk itself is forgotten as `laplace forget --trunk`. */
+int forget_superseded(const char *conninfo, int npg, const lp_id *trunk);
 int cmd_sweep(int argc, char **argv);
 int cmd_status(int argc, char **argv);
 int cmd_sources(int argc, char **argv);
@@ -173,6 +176,7 @@ typedef struct {
     char after[16][64]; int nafter;                   /* the sources it comes after */
     char except[8][128]; int nexcept;                 /* files of its roots that are not the source */
     char files[16][512]; int nfiles;                  /* the files it is, by pattern, when it is not everything under a root; a directory is every file under it */
+    int supersede;                                    /* supersede: a whole reading of it replaces the readings before it (a working tree, not an edition) */
     char ignore[64];                                  /* ignore NAME: files of that name, found while walking, say in gitignore's notation which files under them are not the source */
     char reads[32][64]; int nreads;                   /* formats its files are read as (recipes that belong to no source) */
     char found[1024];                                 /* where it is */
