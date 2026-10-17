@@ -1189,38 +1189,38 @@ int file_os(const Recipe *r, const File *f, Ref *out){
 /* The file, read: every part of its outermost tier on every core, joined in the file's order; then its trunk, over
  * its metadata tree and its content tree. */
 static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw *hw){
-    Say s = *(const Say *)r->say;
+    Say *sy = xrealloc(NULL, sizeof *sy); *sy = *(const Say *)r->say;      /* the recipe's sayings, a copy for this file: on the heap, as a Say is larger than a thread's stack holds */
     const char *base = strrchr(f->path, '/'); base = base ? base + 1 : f->path; size_t bl = strlen(base); if (bl > 3 && !strcmp(base + bl - 3, ".gz")) bl -= 3;
-    const char *sb = base; if (s.stemfrom) { const char *f0 = NULL; for (const char *c = base; c < base + bl; c++) if (*c == s.stemfrom) f0 = c; if (f0) sb = f0 + 1; }
-    const char *dot = memchr(sb, s.stem ? s.stem : '.', (size_t)(base + bl - sb)); Ref fname = string_ref((const uint8_t *)base, bl), fstem = string_ref((const uint8_t *)sb, dot ? (size_t)(dot - sb) : (size_t)(base + bl - sb));    /* the file's own name, and the part of it {file} stands for */
+    const char *sb = base; if (sy->stemfrom) { const char *f0 = NULL; for (const char *c = base; c < base + bl; c++) if (*c == sy->stemfrom) f0 = c; if (f0) sb = f0 + 1; }
+    const char *dot = memchr(sb, sy->stem ? sy->stem : '.', (size_t)(base + bl - sb)); Ref fname = string_ref((const uint8_t *)base, bl), fstem = string_ref((const uint8_t *)sb, dot ? (size_t)(dot - sb) : (size_t)(base + bl - sb));    /* the file's own name, and the part of it {file} stands for */
     Ref fabout; int has_fabout = 0; memset(&fabout, 0, sizeof fabout);
-    if (s.has_about) for (size_t c = 0; c < n && !has_fabout; ) {           /* what the page is about: the first line that names it */
+    if (sy->has_about) for (size_t c = 0; c < n && !has_fabout; ) {           /* what the page is about: the first line that names it */
         const uint8_t *nl = memchr(src + c, '\n', n - c); size_t e = nl ? (size_t)(nl - src) : n, len = e - c; if (len && src[e - 1] == '\r') len--;
         if (len && len < 4096) { char ln[4096]; memcpy(ln, src + c, len); ln[len] = 0; regmatch_t m[2];
-            if (!regexec(&s.about_re, ln, 2, m, 0) && m[1].rm_so >= 0 && m[1].rm_eo > m[1].rm_so) { fabout = string_ref((const uint8_t *)ln + m[1].rm_so, (size_t)(m[1].rm_eo - m[1].rm_so)); has_fabout = 1; } }
+            if (!regexec(&sy->about_re, ln, 2, m, 0) && m[1].rm_so >= 0 && m[1].rm_eo > m[1].rm_so) { fabout = string_ref((const uint8_t *)ln + m[1].rm_so, (size_t)(m[1].rm_eo - m[1].rm_so)); has_fabout = 1; } }
         c = nl ? e + 1 : n; }
     float er = 1500.0f, ed = 0.0f;                                           /* a claim enters at the rating of the unrated, with the deviation its witness's trust plays with */
     size_t nc = 1, *cut = malloc(sizeof(size_t) * 2); Sink *part;
-    if (s.lay.g.n && r->lang && s.lay.ntier) {                               /* parts of the file, each a tree the grammar gives (a JSON value on every line): on every core */
+    if (sy->lay.g.n && r->lang && sy->lay.ntier) {                               /* parts of the file, each a tree the grammar gives (a JSON value on every line): on every core */
         size_t want = n / (2u << 20) + 1; cut = xrealloc(cut, sizeof(size_t) * (want + 2)); cut[0] = 0;
-        for (size_t i = 1; i < want; i++) { size_t c = s_boundary(&s.lay, src, n, n / want * i); if (c > cut[nc - 1] && c < n) cut[nc++] = c; }
-        cut[nc] = n; part = calloc(nc, sizeof(Sink)); const STier *t0 = &s.lay.tier[0];
+        for (size_t i = 1; i < want; i++) { size_t c = s_boundary(&sy->lay, src, n, n / want * i); if (c > cut[nc - 1] && c < n) cut[nc++] = c; }
+        cut[nc] = n; part = calloc(nc, sizeof(Sink)); const STier *t0 = &sy->lay.tier[0];
         #pragma omp taskloop grainsize(1)
-        for (size_t i = 0; i < nc; i++) { Sink *k = &part[i]; k->r = r; k->s = &s; k->er = er; k->ed = ed; k->fw = f->witness; k->fname = fname; k->fstem = fstem; k->hw = hw; k->kr.file = f->order; k->kr.at = f->at + cut[i];
+        for (size_t i = 0; i < nc; i++) { Sink *k = &part[i]; k->r = r; k->s = sy; k->er = er; k->ed = ed; k->fw = f->witness; k->fname = fname; k->fstem = fstem; k->hw = hw; k->kr.file = f->order; k->kr.at = f->at + cut[i];
             TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang);
             for (size_t a = cut[i]; a < cut[i + 1]; ) { const uint8_t *e0 = memmem(src + a, cut[i + 1] - a, t0->sep, (size_t)t0->seplen); size_t e = e0 ? (size_t)(e0 - src) : cut[i + 1];
                 size_t b = a; while (b < e && (src[b] == ' ' || src[b] == '\t' || src[b] == '\r')) b++;
                 if (b < e) { TSTree *tt = ts_parser_parse_string(ps, NULL, (const char *)src + a, (uint32_t)(e - a)); TSNode root = ts_tree_root_node(tt);
-                    if (ts_node_has_error(root)) k->open[1]++; else s_grammar(&s.lay, &root, src + a, e - a, unit, k); ts_tree_delete(tt); }
+                    if (ts_node_has_error(root)) k->open[1]++; else s_grammar(&sy->lay, &root, src + a, e - a, unit, k); ts_tree_delete(tt); }
                 a = e0 ? e + (size_t)t0->seplen : cut[i + 1]; }
             ts_parser_delete(ps); }
         uint64_t bad = 0; for (size_t i = 0; i < nc; i++) bad += part[i].open[1];
         if (bad) { fprintf(stderr, "\n  %s: %llu parts of %s do not parse by the grammar and are not read\n", r->name, (unsigned long long)bad, f->path); f->incomplete += bad; }
-    } else if (s.lay.g.n && r->lang && s.nsplit && n > (8u << 20)) {
+    } else if (sy->lay.g.n && r->lang && sy->nsplit && n > (8u << 20)) {
         /* a long file of records, each an element on lines of its own (split ELEMENT...): parted before lines that
          * begin one, each part parsed as a document of its own on every core; what stands around them is read once */
         #define BEGINS(c) ({ size_t b_ = (c); while (b_ < n && (src[b_] == ' ' || src[b_] == '\t')) b_++; int y_ = 0; \
-            if (b_ < n && src[b_] == '<') for (int q_ = 0; q_ < s.nsplit && !y_; q_++) { size_t l_ = strlen(s.split[q_]); y_ = b_ + 1 + l_ < n && !memcmp(src + b_ + 1, s.split[q_], l_) && (src[b_ + 1 + l_] == ' ' || src[b_ + 1 + l_] == '>' || src[b_ + 1 + l_] == '/'); } y_; })
+            if (b_ < n && src[b_] == '<') for (int q_ = 0; q_ < sy->nsplit && !y_; q_++) { size_t l_ = strlen(sy->split[q_]); y_ = b_ + 1 + l_ < n && !memcmp(src + b_ + 1, sy->split[q_], l_) && (src[b_ + 1 + l_] == ' ' || src[b_ + 1 + l_] == '>' || src[b_ + 1 + l_] == '/'); } y_; })
         /* every record, from the line that begins it to where its element closes; every other line stands around them */
         typedef struct { size_t a, b; } Span; size_t nrs = 0, crs = 4096; Span *rs = malloc(sizeof(Span) * crs);
         for (size_t c = 0; c < n; ) {
@@ -1237,27 +1237,27 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         /* parsed a part at a time on every core, read as the one tree the whole file is (s_grammar_split) */
         #undef BEGINS
         size_t *ra = malloc(sizeof(size_t) * (nrs + 1)), *rb = malloc(sizeof(size_t) * (nrs + 1)); for (size_t i = 0; i < nrs; i++) { ra[i] = rs[i].a; rb[i] = rs[i].b; }
-        part = calloc(1, sizeof(Sink)); part[0].kr.file = f->order; part[0].kr.at = f->at; part[0].r = r; part[0].s = &s; part[0].er = er; part[0].ed = ed; part[0].fw = f->witness; part[0].fname = fname; part[0].fstem = fstem; part[0].hw = hw;
-        uint64_t bad = s_grammar_split(&s.lay, r->lang, src, n, ra, rb, nrs, unit, &part[0]); nc = 1;
+        part = calloc(1, sizeof(Sink)); part[0].kr.file = f->order; part[0].kr.at = f->at; part[0].r = r; part[0].s = sy; part[0].er = er; part[0].ed = ed; part[0].fw = f->witness; part[0].fname = fname; part[0].fstem = fstem; part[0].hw = hw;
+        uint64_t bad = s_grammar_split(&sy->lay, r->lang, src, n, ra, rb, nrs, unit, &part[0]); nc = 1;
         free(ra); free(rb); free(rs);
         if (bad) { fprintf(stderr, "\n  %s: %llu parts of %s do not parse whole by the grammar; what parses is read\n", r->name, (unsigned long long)bad, f->path); f->incomplete += bad; }
-    } else if (s.lay.g.n && r->lang) {                                       /* the grammar gives the tree: the file parsed once, its tree read by the same dispositions */
-        part = calloc(1, sizeof(Sink)); part[0].kr.file = f->order; part[0].kr.at = f->at; part[0].r = r; part[0].s = &s; part[0].er = er; part[0].ed = ed; part[0].fw = f->witness; part[0].fname = fname; part[0].fstem = fstem; part[0].hw = hw;
+    } else if (sy->lay.g.n && r->lang) {                                       /* the grammar gives the tree: the file parsed once, its tree read by the same dispositions */
+        part = calloc(1, sizeof(Sink)); part[0].kr.file = f->order; part[0].kr.at = f->at; part[0].r = r; part[0].s = sy; part[0].er = er; part[0].ed = ed; part[0].fw = f->witness; part[0].fname = fname; part[0].fstem = fstem; part[0].hw = hw;
         TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang); TSTree *tt = ts_parser_parse_string(ps, NULL, (const char *)src, (uint32_t)n);
         TSNode root = ts_tree_root_node(tt); if (ts_node_has_error(root)) { fprintf(stderr, "\n  %s: %s does not parse whole by its grammar; what parses is read\n", r->name, f->path); f->incomplete++; }
-        s_grammar(&s.lay, &root, src, n, unit, &part[0]); ts_tree_delete(tt); ts_parser_delete(ps);
+        s_grammar(&sy->lay, &root, src, n, unit, &part[0]); ts_tree_delete(tt); ts_parser_delete(ps);
     } else {
-        size_t at = (s.lay.ntier && s.lay.tier[0].header && f->at > 0) ? 0 : s_head(&s.lay, src, n); /* a header's names are this file's */
-        if (s.lay.ntier && s.lay.tier[0].header && f->at == 0) {
+        size_t at = (sy->lay.ntier && sy->lay.tier[0].header && f->at > 0) ? 0 : s_head(&sy->lay, src, n); /* a header's names are this file's */
+        if (sy->lay.ntier && sy->lay.tier[0].header && f->at == 0) {
             Say *orig = (Say *)r->say;
-            orig->lay.tier[0].nnames = s.lay.tier[0].nnames;
-            memcpy(orig->lay.tier[0].names, s.lay.tier[0].names, sizeof s.lay.tier[0].names);
+            orig->lay.tier[0].nnames = sy->lay.tier[0].nnames;
+            memcpy(orig->lay.tier[0].names, sy->lay.tier[0].names, sizeof sy->lay.tier[0].names);
         }
         size_t want = (n - at) / (2u << 20) + 1; cut = xrealloc(cut, sizeof(size_t) * (want + 2)); cut[0] = at;
-        for (size_t i = 1; i < want; i++) { size_t c = s_boundary(&s.lay, src, n, at + (n - at) / want * i); if (c > cut[nc - 1] && c < n) cut[nc++] = c; }
+        for (size_t i = 1; i < want; i++) { size_t c = s_boundary(&sy->lay, src, n, at + (n - at) / want * i); if (c > cut[nc - 1] && c < n) cut[nc++] = c; }
         cut[nc] = n; part = calloc(nc, sizeof(Sink));
         #pragma omp taskloop grainsize(1)
-        for (size_t i = 0; i < nc; i++) { part[i].kr.file = f->order; part[i].kr.at = f->at + cut[i]; part[i].r = r; part[i].s = &s; part[i].er = er; part[i].ed = ed; part[i].fw = f->witness; part[i].fname = fname; part[i].fstem = fstem; part[i].hw = hw; part[i].fabout = fabout; part[i].has_fabout = has_fabout; s_decompose(&s.lay, src + cut[i], cut[i + 1] - cut[i], unit, &part[i]); }
+        for (size_t i = 0; i < nc; i++) { part[i].kr.file = f->order; part[i].kr.at = f->at + cut[i]; part[i].r = r; part[i].s = sy; part[i].er = er; part[i].ed = ed; part[i].fw = f->witness; part[i].fname = fname; part[i].fstem = fstem; part[i].hw = hw; part[i].fabout = fabout; part[i].has_fabout = has_fabout; s_decompose(&sy->lay, src + cut[i], cut[i + 1] - cut[i], unit, &part[i]); }
     }
     Refs things = { 0 }, meta = { 0 }; uint64_t open = 0;
     for (size_t i = 0; i < nc; i++) {
@@ -1274,14 +1274,14 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
       if (unk) { fprintf(stderr, "\n  %s: %llu keys in %s name a type no list of the highway holds, and say nothing; for instance:", r->name, (unsigned long long)unk, f->path);
           for (size_t i = 0, shown = 0; i < nc && shown < 3; i++) for (int j = 0; j < part[i].nunk && shown < 3; j++, shown++) fprintf(stderr, " [%s]", part[i].unknm[j]); fputc('\n', stderr); } }
     if (hw) {                                                                /* for the highway: what the file says of its types, in the file's order */
-        for (size_t i = 0; i < nc; i++) { for (size_t j = 0; j < part[i].nhr; j++) { HwRec *x = &part[i].hr[j]; const HwLine *h = &s.hw[x->line];
+        for (size_t i = 0; i < nc; i++) { for (size_t j = 0; j < part[i].nhr; j++) { HwRec *x = &part[i].hr[j]; const HwLine *h = &sy->hw[x->line];
                 if (x->what == 1) hw_type(hw, h->a.list, h->say, x->thing);
                 else if (x->what == 2) hw_key(hw, h->a.list, x->thing, x->a);
                 else if (x->what == 3) hw_alias(hw, h->a.list, x->a, x->b);
                 else hw_edge(hw, h->a.list, x->a, h->b.list, x->b);
                 free(x->a); free(x->b); }
             free(part[i].hr); }
-        free(things.c); free(meta.c); free(part); free(cut); return; }
+        free(things.c); free(meta.c); free(part); free(cut); free(sy); return; }
     /* the trunk: [metadata, content]. The metadata tree: the file's name, and what its parts say of the file itself.
      * The content tree: the things of its outermost tier, in the file's order. */
     /* A file read a stretch at a time gathers what each stretch held, and its trunk is made when the last is read. */
@@ -1289,7 +1289,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     { uint64_t need = f->nsaid + things.n + meta.n; if (need > f->csaid) { f->csaid = need * 2 + 1024; f->said = xrealloc(f->said, f->csaid * sizeof(Ref)); }
       for (size_t j = 0; j < meta.n; j++) { Ref x = meta.c[j]; x.said = LP_SAID_METADATA; f->said[f->nsaid++] = x; }
       for (size_t j = 0; j < things.n; j++) { Ref x = things.c[j]; if (x.said == LP_SAID_METADATA) x.said = 0; f->said[f->nsaid++] = x; } }
-    if (f->partial) { free(things.c); free(meta.c); free(part); free(cut); return; }
+    if (f->partial) { free(things.c); free(meta.c); free(part); free(cut); free(sy); return; }
     things.n = meta.n = 0;
     for (uint64_t j = 0; j < f->nsaid; j++) { Ref x = f->said[j]; if (x.said == LP_SAID_METADATA) { x.said = LP_SAID_TUPLE; push(&meta, &x); } else push(&things, &x); }
     free(f->said); f->said = NULL; f->nsaid = f->csaid = 0;
@@ -1301,7 +1301,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         if (nm) { f->file.said = 0; f->file.outcome = 0; f->file.position = 0; f->file.spare = 0; }   /* a file with no metadata is its content: it says in its source's trunk what its content is (records, or a record) */
         f->has_file = 1; f->trunk = content; }
     else if (f->ev.n && nm) { Ref two[1] = { said_metadata(metadata) }; f->file = two[0]; f->file.said = 0; f->has_file = 0; }
-    free(things.c); free(meta.c); free(part); free(cut);
+    free(things.c); free(meta.c); free(part); free(cut); free(sy);
 }
 void attest_layout(const Recipe *r, File *f, const uint8_t *src, size_t n){ read_laid(r, f, src, n, NULL); }
 void say_highway(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw *hw){ read_laid(r, f, src, n, hw); }
