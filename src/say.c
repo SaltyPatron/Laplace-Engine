@@ -5,7 +5,11 @@
  * attests. There is no code here for a format or for a source: only for what a recipe can say.
  *
  *   thing TIER NAME...         a TIER is the thing its part NAME names (a row is its word; a record is its text); named
- *                              by several parts together, it is the path of them
+ *                              by several parts together, it is the path of them. resolved: the path of those of them
+ *                              that resolve, in the recipe's order (a mapping row over the nodes it aligns): a part the
+ *                              source leaves empty is in no path; a key no list of the highway holds is left out and is
+ *                              an unresolved obligation, said, never dropped silently; one none of whose parts resolves
+ *                              names nothing
  *   pair TIER NAME...          of a TIER's thing, a part the file writes beside it with nothing between: [thing, value]
  *   score TIER NAME [from A to B]
  *                              the score the TIER gives what it attests, on the scale the source writes it on
@@ -17,7 +21,11 @@
  *   content NAME...            the part is content, the text it is, the same entity wherever that text stands
  *   key TIER NAME              the part is the file's key for a TIER: it resolves to the TIER's thing; written nowhere
  *   refer NAME TIER            the part's text is a key of a TIER: it is read as that TIER's thing
- *   type NAME LIST             the part's text is the source's key of a type in the highway's LIST: read as that type
+ *   type NAME LIST             the part's text is the source's key of a type in the highway's LIST: read as that type.
+ *     [node]                   the key, as the lists write it, is the node's own text (a PropBank roleset abandon.01, a
+ *                              FrameNet frame), so it is content whether or not a list holds it (BRIEF: a highway node is
+ *                              content): where none does, it is that node, recorded as its text and counted; never for
+ *                              a source's own pointer to a node (vn:51.3.1, mcr:ili-30-01976841-v), which only resolves
  *   metadata NAME...           the part is said of the file itself: it goes in the file's metadata tree
  *   omit NAME...               the part is the file's bookkeeping: read by nothing
  *   perfcache                  a part named as a property the perf-cache's flags hold (tier0.flags, its layout) is read
@@ -61,13 +69,13 @@
 enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, D_RANGE, D_OWN };
 /* A key as a resource writes it, matched by a pattern and written as a template (\1: the pattern's first part) where it
  * writes it otherwise than those it points at write it (vn:51.2 for 51.2): the highway's lines, and a type's key. */
-typedef struct { char list[32], path[160], as[64]; regex_t re; int has_re; } KSpec;
+typedef struct { char list[32], path[160], as[64]; regex_t re; int has_re, node; } KSpec;     /* node: the key, as the lists write it, is the node's own text */
 typedef struct { char name[64]; int what; char arg[64]; KSpec k; uint32_t when;
                  struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; const char *text; } Dis;   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse); text: what a relation line words it as */
 typedef struct { char tier[32], name[64]; } Pair;
 typedef struct { char tier[32]; char name[64][64]; int n; uint32_t when; char by[64], of[64]; int file; } Att;      /* when: the conditions it is said under, by their places in where[]; by: the part that names who says it; of: the part it is said of; file: a witness stands within the file */
 typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char by[64]; int alone; } Rel;     /* alone: where what it is to names nothing, the relation alone */
-typedef struct { char tier[32], name[8][160]; int n, within, infile, span, inclusive, of; } Thing;    /* of: the path of the things of its parts of these names, in order (a sentence of its words) */   /* within: its name stands only within the thing it is inside: the pair of that thing and it; infile: only within the file; span: the stretch of a text name[2] between the characters name[0] and name[1] */
+typedef struct { char tier[32], name[8][160]; int n, within, infile, span, inclusive, of, resolved; } Thing;    /* of: the path of the things of its parts of these names, in order (a sentence of its words) */   /* within: its name stands only within the thing it is inside: the pair of that thing and it; infile: only within the file; span: the stretch of a text name[2] between the characters name[0] and name[1] */
 typedef struct { char tier[32], name[64]; double from, to; int mapped; } Score;
 typedef struct { char name[64]; int op; char val[128]; regex_t re; } Where;
 typedef struct { int what; char tier[32], say[64]; KSpec a, b; uint32_t when; } HwLine;       /* what: 1 types, 2 keyed, 3 alias, 4 maps */
@@ -128,9 +136,9 @@ int say_says(Recipe *r, const char *path, char *tok){
             if (!strcmp(t2, "grammar")) { char *g = strtok(NULL, " \t\r\n"); if (g) snprintf(r->grammar, sizeof r->grammar, "%s", g); continue; }
             int sv = say_says(r, fp, t2); if (sv <= 0) { if (!sv) fprintf(stderr, "%s: \"%s\" is not something a format says\n", fp, t2); fclose(f); return -1; } }
         fclose(f); return 1; }
-    if (!strcmp(tok, "thing")) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->nthing == 32) { fprintf(stderr, "%s: thing TIER NAME... [within]\n", path); return -1; }
-        Thing *p = &s->thing[s->nthing++]; snprintf(p->tier, sizeof p->tier, "%s", a2); while (p->n < 8 && name_next(&at, nm, sizeof nm)) { if (!strcmp(nm, "within")) { p->within = 1; continue; } if (!strcmp(nm, "within-file")) { p->infile = 1; continue; }
-            if (!strcmp(nm, "span")) { p->span = 1; continue; } if (!strcmp(nm, "inclusive")) { p->inclusive = 1; continue; } if (!strcmp(nm, "of")) { p->of = 1; continue; } snprintf(p->name[p->n++], sizeof p->name[0], "%s", nm); }
+    if (!strcmp(tok, "thing")) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->nthing == 32) { fprintf(stderr, "%s: thing TIER NAME... [within] [resolved]\n", path); return -1; }
+        Thing *p = &s->thing[s->nthing++]; snprintf(p->tier, sizeof p->tier, "%s", a2); while (name_next(&at, nm, sizeof nm)) { if (!strcmp(nm, "within")) { p->within = 1; continue; } if (!strcmp(nm, "within-file")) { p->infile = 1; continue; }
+            if (!strcmp(nm, "span")) { p->span = 1; continue; } if (!strcmp(nm, "inclusive")) { p->inclusive = 1; continue; } if (!strcmp(nm, "of")) { p->of = 1; continue; } if (!strcmp(nm, "resolved")) { p->resolved = 1; continue; } if (p->n < 8) snprintf(p->name[p->n++], sizeof p->name[0], "%s", nm); }     /* a modifier is read after the eighth name; a ninth name, as ever, is not */
         if (p->span && p->n != 3) { fprintf(stderr, "%s: thing TIER span START END TEXT [inclusive]\n", path); return -1; }
         if (!p->n) { fprintf(stderr, "%s: thing TIER NAME... [within]\n", path); return -1; } return 1; }
     if ((!strcmp(tok, "voices") || !strcmp(tok, "together")) && LAID) { int v = tok[0] == 'v'; at = strtok(NULL, "\r\n");
@@ -197,6 +205,7 @@ int say_says(Recipe *r, const char *path, char *tok){
         if (tok[0] == 't') { char more[160]; while (name_next(&at, more, sizeof more)) {     /* type NAME LIST... [matching PATTERN] [as TEMPLATE]: the first list that knows it, by the key as those lists write it */
                 if (!strcmp(more, "matching")) { if (!name_next(&at, more, sizeof more) || regcomp(&ks.re, more, REG_EXTENDED)) { fprintf(stderr, "%s: type NAME LIST... matching PATTERN (it must compile)\n", path); return -1; } ks.has_re = 1; continue; }
                 if (!strcmp(more, "as")) { if (!name_next(&at, ks.as, sizeof ks.as)) { fprintf(stderr, "%s: type NAME LIST... as TEMPLATE\n", path); return -1; } continue; }
+                if (!strcmp(more, "node")) { ks.node = 1; continue; }
                 size_t l = strlen(a2); snprintf(a2 + l, sizeof a2 - l, " %s", more); }
             int rv = dis_add(s, path, nm, D_TYPE, a2); if (rv > 0) s->dis[s->ndis - 1].k = ks; return rv; }
         else { char more[64], targets[64]; snprintf(targets, sizeof targets, "%s", a2);       /* refer NAME TIER [within] [TIER [within]]...: the first that holds the key; within: the thing that TIER is inside */
@@ -305,7 +314,7 @@ typedef struct { Ref *c; size_t n, cap; } Refs;
 static void push(Refs *a, const Ref *x){ if (a->n == a->cap) { a->cap = a->cap ? a->cap * 2 : 256; a->c = xrealloc(a->c, sizeof(Ref) * a->cap); } a->c[a->n++] = *x; }   /* by address: a copy per call, in a loop, is stack that is never given back */
 typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; uint64_t open[256]; float er, ed, score; uint64_t ordinal; Ref fw, voice; int voiced; char opennm[16][64]; int nopen; uint64_t unknown; char unknm[8][96]; int nunk; Refs grp; Ref fname, fstem;
                  const STree *ix_tree; uint32_t ix_count; lp_strmap *ix; lp_buf ix_key;      /* the key index of the tree being read */
-                 const STree *tc_tree; uint32_t tc_n, tc_cap; Ref *tc; uint8_t *ts;
+                 const STree *tc_tree; uint32_t tc_n, tc_cap; Ref *tc; uint8_t *ts, *uk;
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
                  Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int32_t wide_of; KeyRank kr; int16_t *dm; uint32_t dm_cap;
@@ -482,6 +491,21 @@ static int32_t keyed(Sink *k, const STree *t, const char *tier, const uint8_t *v
     const int32_t *at = lp_strmap_lookup(k->ix, kb, k->ix_key.n); return at ? *at : -1;
 }
 static int left_empty(const Say *s, const SNode *x){ return s_empty(&s->lay, x->val, x->vlen); }
+/* A key no list (or no target) holds, counted once for the node it is written in, however many of the recipe's lines read
+ * it (a type line and a maps line read the same part): the tree's own, shared by the threads reading it. */
+/* What a reading has counted of unknown keys, and the once-flags of a part and the text it holds: a reading that is
+ * not this part's own (a sense reading its synset's ili) puts both back, so the part's own reading counts the key. */
+typedef struct { uint64_t unknown; int nunk; int32_t at[2]; uint8_t had[2]; } UnkMark;
+static void unknown_mark(Sink *k, const STree *t, int32_t c, UnkMark *m){
+    m->unknown = k->unknown; m->nunk = k->nunk; m->at[0] = c; m->at[1] = c >= 0 && t->n[c].kind == S_GROUP ? t->n[c].first : -1;
+    for (int i = 0; i < 2; i++) m->had[i] = k->tc_tree == t && k->uk && m->at[i] >= 0 && (uint32_t)m->at[i] < k->tc_n ? __atomic_load_n(&k->uk[m->at[i]], __ATOMIC_ACQUIRE) : 1; }
+static void unknown_back(Sink *k, const STree *t, const UnkMark *m){
+    k->unknown = m->unknown; k->nunk = m->nunk;
+    for (int i = 0; i < 2; i++) if (!m->had[i] && k->tc_tree == t && k->uk && m->at[i] >= 0 && (uint32_t)m->at[i] < k->tc_n) __atomic_store_n(&k->uk[m->at[i]], 0, __ATOMIC_RELEASE); }
+static int once_for(Sink *k, const STree *t, int32_t c){ return !(k->tc_tree == t && k->uk && (uint32_t)c < k->tc_n && __atomic_exchange_n(&k->uk[c], 1, __ATOMIC_ACQ_REL)); }
+static void unknown_key(Sink *k, const STree *t, int32_t c, const SNode *x){
+    if (!once_for(k, t, c)) return;
+    k->unknown++; if (k->nunk < 8) snprintf(k->unknm[k->nunk++], 96, "%.*s %.*s", (int)(x->nlen < 40 ? x->nlen : 40), x->name, (int)(x->vlen < 48 ? x->vlen : 48), x->val); }
 static Ref text_of(const uint8_t *p, size_t n){ return n > 256 ? text_ref(CTX[omp_get_thread_num()], p, n) : string_ref(p, n); }
 static int thing_of(Sink *k, const STree *t, int32_t g, Ref *out, int depth);
 static int thing_compose(Sink *k, const STree *t, int32_t g, Ref *out, int depth);
@@ -520,7 +544,8 @@ static int value_of(Sink *k, const STree *t, int32_t c, Ref *out, int depth){
         Ref v = string_ref(kp, kn);
         for (char *ln = strtok_r(lists, " ", &save); ln; ln = strtok_r(NULL, " ", &save)) { int has = 0; *out = highway_typed(ln, kp, kn, &has); if (has) return 1;
             const lp_list *L = HW ? lp_highway_list(HW, ln) : NULL; if (L && lp_highway_slot(HW, L, &v.id) >= 0) { *out = v; return 1; } }
-        k->unknown++; if (k->nunk < 8) snprintf(k->unknm[k->nunk++], 96, "%.*s %.*s", (int)(x->nlen < 40 ? x->nlen : 40), x->name, (int)(x->vlen < 48 ? x->vlen : 48), x->val);     /* a key no list of the highway holds: said, never taken for text */
+        if (d->k.node) { if (once_for(k, t, c)) owed(k, 'm', d->arg, x->name, x->nlen, NULL, 0); *out = v; return 1; }     /* the node's own text: that node, though no list holds it; counted once, never dropped */
+        unknown_key(k, t, c, x);     /* a key no list of the highway holds: said, never taken for text */
         return 0; }
     if (d->what == D_CODEPOINTS || d->what == D_RANGE) {
         self_cp = k->selfcp; self_mark = s->selfmark;
@@ -538,7 +563,7 @@ static int value_of(Sink *k, const STree *t, int32_t c, Ref *out, int depth){
             int32_t g = keyed(k, t, tg, x->val, x->vlen); if (g < 0) continue;                            /* in the same tree: by the index */
             if (within) { for (int32_t up = t->n[g].parent; up >= 0; up = t->n[up].parent) if (thing_of(k, t, up, out, depth + 1)) return 1; continue; }   /* the thing what holds the key is inside */
             if (thing_of(k, t, g, out, depth + 1)) return 1; }
-        k->unknown++; if (k->nunk < 8) snprintf(k->unknm[k->nunk++], 96, "%.*s %.*s", (int)(x->nlen < 40 ? x->nlen : 40), x->name, (int)(x->vlen < 48 ? x->vlen : 48), x->val);
+        unknown_key(k, t, c, x);
         return 0; }
     return 0;
 }
@@ -594,9 +619,21 @@ static int one_thing(Sink *k, const STree *t, int32_t g, const Thing *th, Ref *o
                 uint8_t c = tn->val[i]; i += c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4; }
             if (!have || bhi <= blo || bhi > tn->vlen) return 0;
             *out = text_of(tn->val + blo, bhi - blo); out->said = 0; return 1; }
+        if (th->resolved) {                                                  /* the path of those of its parts that resolve, in the recipe's order */
+            uint32_t np = 0;
+            for (int z = 0; z < th->n; z++) { int ref = th->name[z][0] == '>'; int32_t c = ref ? referred_path(k, t, g, th->name[z] + 1) : child_path(t, g, th->name[z]); if (c < 0) continue;
+                const SNode *cn = &t->n[c]; if (cn->kind == S_GROUP && cn->first >= 0 && t->n[cn->first].next < 0 && t->n[cn->first].kind == S_TEXT) cn = &t->n[cn->first];
+                if (left_empty(k->s, cn) || (cn->kind != S_GROUP && !cn->vlen)) continue;            /* what the source leaves empty: in no path, and owed nothing */
+                if (ref) { UnkMark um; unknown_mark(k, t, c, &um); if (value_of(k, t, c, &p[np], depth)) { p[np].said = 0; np++; } else unknown_back(k, t, &um); continue; }     /* what another part says: its own reading owes what it leaves unsaid */
+                if (value_of(k, t, c, &p[np], depth)) { p[np].said = 0; np++; continue; }
+                owed(k, 'o', "a key no list of the highway holds, left out of the path:", (const uint8_t *)th->name[z], strlen(th->name[z]), NULL, 0); }     /* said, never dropped */
+            if (!np) return 0;
+            Ref X = np == 1 ? p[0] : said_tuple(compose(p, np, ref_above(p, np)));
+            if (th->infile) { Ref two[2] = { k->fname, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, ref_above(two, 2))); }
+            *out = X; return 1; }
         for (int z = 0; z < th->n; z++) { int32_t c = th->name[z][0] == '>' ? referred_path(k, t, g, th->name[z] + 1) : child_path(t, g, th->name[z]); if (c < 0) return 0;
             if (th->name[z][0] == '>') {                                     /* what another part says (a synset's ili): its own reading counts what it leaves unsaid, not this one */
-                uint64_t u0 = k->unknown; int n0 = k->nunk; if (!value_of(k, t, c, &p[z], depth)) { k->unknown = u0; k->nunk = n0; return 0; }
+                UnkMark um; unknown_mark(k, t, c, &um); if (!value_of(k, t, c, &p[z], depth)) { unknown_back(k, t, &um); return 0; }
                 p[z].said = 0; continue; }
             if (t->n[c].kind == S_GROUP && t->n[c].first >= 0 && t->n[t->n[c].first].next >= 0) {      /* a part that is several pieces: the path of what each is, in order */
                 Ref pc[256]; uint32_t np = 0; for (int32_t q = t->n[c].first; q >= 0 && np < 256; q = t->n[q].next) if (value_of(k, t, q, &pc[np], depth)) { pc[np].said = 0; np++; }
@@ -1089,8 +1126,8 @@ static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
     Sink *k = sink; const Say *s = k->s; k->kr.unit = ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f; TT = t;
     k->cs_epoch++; k->cs_n = 0; k->rec = root;                               /* a new part: none of its claims made yet, its own record */
     if (k->dm_cap < t->count) { k->dm_cap = t->count * 2; k->dm = xrealloc(k->dm, sizeof(int16_t) * k->dm_cap); } memset(k->dm, 0, sizeof(int16_t) * t->count); DM = k->dm;
-    if (k->tc_cap < t->count) { k->tc_cap = t->count * 2; k->tc = xrealloc(k->tc, sizeof(Ref) * k->tc_cap); k->ts = xrealloc(k->ts, k->tc_cap); }
-    k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); k->ix_tree = NULL;      /* a new tree: nothing of the last is known of it */
+    if (k->tc_cap < t->count) { k->tc_cap = t->count * 2; k->tc = xrealloc(k->tc, sizeof(Ref) * k->tc_cap); k->ts = xrealloc(k->ts, k->tc_cap); k->uk = xrealloc(k->uk, k->tc_cap); }
+    k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); memset(k->uk, 0, t->count); k->ix_tree = NULL;      /* a new tree: nothing of the last is known of it */
     if (k->hw) { unit_highway(k, t, root); keep_keys(k, t, root); return; }     /* read for the highway: its types, not what it attests */
     if (s->nline && t->n[root].kind == S_TEXT) {                             /* a line of a page: where it matches a pattern, it says the pattern's parts */
         const SNode *x = &t->n[root]; char stack[4096], *ln = x->vlen < sizeof stack ? stack : malloc(x->vlen + 1); memcpy(ln, x->val, x->vlen); ln[x->vlen] = 0;
@@ -1268,7 +1305,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         for (size_t j = 0; j < part[i].things.n; j++) push(&things, &part[i].things.c[j]);
         for (size_t j = 0; j < part[i].meta.n; j++) push(&meta, &part[i].meta.c[j]);
         open += part[i].open[0]; owed_keep(r->name, &part[i]); free(part[i].ev.e); free(part[i].things.c); free(part[i].meta.c);
-        free(part[i].tc); free(part[i].ts); free(part[i].dm); if (part[i].ix) lp_strmap_free(part[i].ix); lp_buf_free(&part[i].ix_key); free(part[i].grp.c); }
+        free(part[i].tc); free(part[i].ts); free(part[i].uk); free(part[i].dm); if (part[i].ix) lp_strmap_free(part[i].ix); lp_buf_free(&part[i].ix_key); free(part[i].grp.c); }
     if (open) { fprintf(stderr, "\n  %s: %llu named parts of %s have no disposition in the recipe: they are left open, not read:", r->name, (unsigned long long)open, f->path);
         char seen[64][64]; int ns = 0;
         for (size_t i = 0; i < nc; i++) for (int j = 0; j < part[i].nopen; j++) { int dup = 0; for (int z = 0; z < ns && !dup; z++) dup = !strcmp(seen[z], part[i].opennm[j]); if (dup || ns == 64) continue; snprintf(seen[ns++], 64, "%s", part[i].opennm[j]); fprintf(stderr, " %s", part[i].opennm[j]); }
