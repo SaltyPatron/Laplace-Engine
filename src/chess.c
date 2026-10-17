@@ -384,18 +384,17 @@ static int has_study_marks(const Line *L){
 /* ---- the recipe: grammar pgn, and what its records are */
 enum { K_PLAYED = 0, K_STUDY, K_PUZZLE };
 typedef struct { int records; } ChessRecipe;
-int chess_says(Recipe *r, const char *path, char *tok){
-    if (strcmp(r->grammar, "pgn")) return 0;
-    if (!r->chess) r->chess = calloc(1, sizeof(ChessRecipe));
-    ChessRecipe *c = r->chess;
+static int chess_says(Recipe *r, const char *path, char *tok){
+    if (!r->native_recipe) r->native_recipe = calloc(1, sizeof(ChessRecipe));
+    ChessRecipe *c = r->native_recipe;
     if (!strcmp(tok, "records")) { char *v = strtok(NULL, " \t\r\n");
         if (v && !strcmp(v, "played")) c->records = K_PLAYED; else if (v && !strcmp(v, "study")) c->records = K_STUDY; else if (v && !strcmp(v, "puzzle")) c->records = K_PUZZLE;
         else { fprintf(stderr, "%s: records played | study | puzzle\n", path); return -1; }
         return 1; }
     fprintf(stderr, "%s: \"%s\" is not something a PGN recipe says (records)\n", path, tok); return -1;
 }
-int chess_recipe(Recipe *r, const char *path){
-    (void)path; if (!r->chess) r->chess = calloc(1, sizeof(ChessRecipe));
+static int chess_recipe(Recipe *r, const char *path){
+    (void)path; if (!r->native_recipe) r->native_recipe = calloc(1, sizeof(ChessRecipe));
     r->curated = 1; r->lang = NULL; return 1;
 }
 
@@ -415,8 +414,8 @@ static void member(File *f, Ref rec, Ref *part, int n, uint32_t *pos){
     Event e = { c.id, rec.id, 1.0f, 1500.0f, 0.0f, ++*pos, EV_MEMBER, 0, { { 0 } }, 0 }; ev_push(&f->ev, &e);
 }
 /* A PGN file, read: every game a record, in the file's order; its trunk [the OS's record, its records]. */
-void chess_read(const Recipe *rcp, File *f, const uint8_t *src, size_t n){
-    const ChessRecipe *cr = rcp->chess; RefCache *rc = calloc(1, sizeof(RefCache)); Rd rd = { rc, { 0 }, 0, "", 0, 0 };
+static void chess_read(const Recipe *rcp, File *f, const uint8_t *src, size_t n){
+    const ChessRecipe *cr = rcp->native_recipe; RefCache *rc = calloc(1, sizeof(RefCache)); Rd rd = { rc, { 0 }, 0, "", 0, 0 };
     RV recs = { 0 }; size_t at = 0; uint64_t games = 0, played = 0, study = 0, puzzle = 0, unread = 0, unfinished = 0, c960 = 0, zero = 0, nomarker = 0, mismatch = 0;
     Game g; uint32_t ordinal = 0;
     while (pgn_game((const char *)src, n, &at, &g)) {
@@ -469,6 +468,9 @@ void chess_read(const Recipe *rcp, File *f, const uint8_t *src, size_t n){
             (unsigned long long)zero, (unsigned long long)c960, (unsigned long long)rd.plies, (unsigned long long)rd.castles, (unsigned long long)nomarker, (unsigned long long)mismatch, hex);
     free(recs.c); free(rd.nags.c); free(rc);
 }
+
+/* PGN as a grammar a recipe names (grammar pgn), listed in grammars.c */
+const NativeGrammar chess_pgn = { "pgn", chess_says, chess_recipe, chess_read };
 
 /* ---- laplace pgn: the read edge. Everything under the IDs named, fetched a level at a time, then written as PGN */
 typedef struct { lp_id id; uint32_t first, n; uint8_t mask0, got; } DNode;            /* got: 1 fetched, 2 not recorded */
