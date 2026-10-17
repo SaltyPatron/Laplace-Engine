@@ -41,6 +41,9 @@
 #                              what has the concept as its value
 #   equivalent RECIPE NAME...  for translate: the relations RECIPE declares of each NAME between a language's code and
 #                              its equivalent in another code set; a language asked is every code they join
+#   usages RECIPE NAME         for translate: a word's senses ordered by observed usages, the number the relation RECIPE
+#                              declares of NAME states of each sense (most first), then by the witness's order, then
+#                              by standing; a sense no number is stated of comes after those observed
 #   take chain N RELATION...   from each of the N words that pull hardest, the relations followed in order, each by its
 #                              witness's order then its standing: where the chain ends is the answer. Chains
 #                              parted by | are tried in turn until one reaches its end (a form through its lemma)
@@ -80,6 +83,10 @@ for translate
   gloss wn-lmf Definition
   # a language as every code set writes it: the codes ISO 639-3's table states are one language's (en, eng)
   equivalent iso-639-3 Part1 Part2b Part2t
+  # a word's senses by how often each is observed (Laplace-Wiki Sequence/Web.md 15.6: "ordered by observed usages, then
+  # the witness's sense order, then standing"): the number of times a semantic concordance tags the sense, which
+  # WordNet's cntlist states of the lexicalization [lemma, language, ILI] its sense key is
+  usages wordnet-cntlist tag_cnt
 
 for pull
   fan 4096

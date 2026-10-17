@@ -254,7 +254,7 @@ Working examples to copy from, all under `recipes/`:
 | table with a header row, every column said of one column's value | `iso-639/iso-639-3.recipe` (`attest *`) |
 | table without a header, predicate in the file's name | `princeton-wordnet/exceptions.recipe` |
 | table whose pointer column other files point at | `tatoeba/sentences.recipe` (`key`), `tatoeba/links.recipe` (`refer`) |
-| table whose column is a source's key that `type` resolves to a highway node | `verbatlas/frame-info.recipe` (`type "prototypical synset" ili`; as built the frame's `va:0001f` is `key` and the frame is its name; the target is the frame as its node `va:0001f`, its name `TOLERATE` a label), `princeton-wordnet/cntlist.recipe` (as built, `type sense_key ili`; the target resolves a sense key to its lexicalization strand) |
+| table whose column is a source's key that `type` resolves to a highway node | `verbatlas/frame-info.recipe` (`type "prototypical synset" ili`; as built the frame's `va:0001f` is `key` and the frame is its name; the target is the frame as its node `va:0001f`, its name `TOLERATE` a label), `princeton-wordnet/cntlist.recipe` (as built, the row is the lexicalization strand `[lemma, en, ILI]`: `thing row sense_key matching ^([^%]+)% space _ literal en sense_key` with `type sense_key ili`, the sense key's lemma, the language WordNet's documentation names, and the ILI its synset resolves to; translate orders a word's senses by its count) |
 | table of pairs (nothing written between the two) | `unicode/aliases.recipe` (`pair`) |
 | table whose row is one record, said together | use `together` in the claims block |
 | records of rows (a sentence, a row per word, a tree by heads) | `universal-dependencies/conllu.recipe` |
