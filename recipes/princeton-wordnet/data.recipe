@@ -55,7 +55,8 @@ attest row gloss
 # the synset it points to, as the synset's own offset and type are; "source/target ... 0000 means that pointer_symbol
 # represents a semantic relation between the current (source) synset and the target synset indicated by
 # synset_offset". A lexical pointer (source/target not 0000: "the word number in the current (source) synset ... and
-# the word number in the target synset") is between two words, an unresolved obligation (Laplace-Engine#70).
+# the word number in the target synset") is between two words, which no part of the recipe can name yet: its target is
+# attested with no meaning, an unresolved obligation counted and said, never passed over (Laplace-Engine#70).
 content pointer_symbol
 value - pointer_symbol
 type target ili as \0-{pos} as \0-s
@@ -63,9 +64,23 @@ omit pos
 when source_target is 0000
 relate pointer pointer_symbol to target
 always
-# A verb synset's frames: wndb.5, "f_num: Two digit decimal integer frame number" of frames.vrb's generic sentence frames,
-# and "w_num: ... the word in the synset that the frame applies to ... 00 ... all words in the synset": f_num is
-# frames.vrb's key, which the frames recipe (Laplace-Engine#70, next) keys; until it does, f_num and w_num stay
-# unresolved obligations, as a lexical pointer's source/target does.
+when source_target is-not 0000
+attest pointer target
+always
+# A verb synset's frames: wndb.5, "a list of numbers corresponding to the generic verb sentence frames for words in the
+# synset"; "f_num is a two digit decimal integer frame number, and w_num is a two digit hexadecimal integer indicating
+# the word in the synset that the frame applies to. As with pointers, if this number is 00, f_num applies to all words
+# in the synset. If non-zero, it is applicable only to the word indicated." f_num is the key frames.recipe keys each
+# frame by in the highway's wnframe list, written there without its leading zero (08 is frames.vrb's 8). A frame for
+# all the words is said of the synset's concept; one for a single word, which no part of the recipe can name yet, means
+# nothing here: attested, it is an unresolved obligation, counted and said, as a lexical pointer is (Laplace-Engine#70).
+type f_num wnframe matching ^0?([0-9]+)$ as \1
+when w_num is 00
+relation "generic verb sentence frames for words in the synset" f_num
+attest frame f_num
+always
+when w_num is-not 00
+attest frame f_num
+always
 # the counts are how many groups follow: the file's layout, read by nothing
 omit w_cnt p_cnt f_cnt plus

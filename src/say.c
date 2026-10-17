@@ -83,6 +83,7 @@ typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thi
                  char selfmark;                                              /* what the source writes, in a value, for the code point the part is (UCD: #) */
                  regex_t about_re; int has_about;                            /* a page's lines: the first that matches names what the page is about */
                  struct { regex_t re; int mode; char pred[64]; } line[8]; int nline;    /* a line that matches says its parts: 0 of what the page is about, 1 the claim itself, 2 a pair, 3 under a name */
+                 char *said; size_t nsaid; int laid_line;                                  /* every word the recipe's lines write, each between spaces: a part named nowhere in them is left open (unmentioned); laid_line: the line just said lays the file out, which names its parts and reads none */
                  Dis val[256]; int nval;                                     /* value LIST NAME...: what a part means in a claim; arg: its road class's list, "" for none the highway holds */
                  Score score[4]; int nscore; Where where[16]; int nwhere; uint32_t whole, now; Pair voice;   /* whole: the conditions on the outermost part (where); now: the ones the lines being read are said under (when) */
                  /* a record's layers down its rows and its tree by head, where the recipe gives them (layers, tree): parts of the
@@ -119,16 +120,27 @@ static int dis_add(Say *s, const char *path, const char *name, int what, const c
     Dis *d = &s->dis[s->ndis++]; snprintf(d->name, sizeof d->name, "%s", name); dis_parse(d); d->what = what; snprintf(d->arg, sizeof d->arg, "%s", arg ? arg : ""); return 1;
 }
 /* A recipe's line, if it lays the file out or disposes of a part: 1, or 0 for something else, or -1 when written wrong. */
+/* A recipe's line, its comment off, as written: each word of it kept, so that a part the recipe names nowhere is known to be
+ * left open rather than read past (unmentioned). A word: what lies between spaces, quotes, and the marks a path, a key's
+ * template or a list's name is written with (^ / : { } , ( ) = ). */
+void say_mentions(Recipe *r, const char *line){
+    Say *s = r->say; if (!s || !line) return; if (s->laid_line) { s->laid_line = 0; return; }   /* a layout's names are not a reading */
+    for (const char *c = line; *c; ) {
+        while (*c && strchr(" \t\r\n\"/:{},()=^", *c)) c++; const char *b = c; while (*c && !strchr(" \t\r\n\"/:{},()=^", *c)) c++;
+        if (c == b) continue; size_t l = (size_t)(c - b);
+        s->said = xrealloc(s->said, s->nsaid + l + 3); if (!s->nsaid) s->said[s->nsaid++] = ' ';
+        memcpy(s->said + s->nsaid, b, l); s->nsaid += l; s->said[s->nsaid++] = ' '; s->said[s->nsaid] = 0; }
+}
 int say_says(Recipe *r, const char *path, char *tok){
-    Say *s = r->say; if (!s) s = r->say = calloc(1, sizeof(Say));
+    Say *s = r->say; if (!s) s = r->say = calloc(1, sizeof(Say)); s->laid_line = 0;
     char nm[160], a2[64], *at;
     #define LAID (s->lay.ntier || s->lay.g.n)
     if (!strcmp(tok, "format")) {                                            /* the format's own lines, kept once for every recipe of that format: recipes/formats/NAME.format */
         char *fn = strtok(NULL, " \t\r\n"), fp[4400], line[2048]; if (!fn) { fprintf(stderr, "%s: format NAME\n", path); return -1; }
         snprintf(fp, sizeof fp, "%s/formats/%s.format", laplace_recipes(), fn); FILE *f = fopen(fp, "r"); if (!f) { perror(fp); return -1; }
-        while (fgets(line, sizeof line, f)) { comment_off(line); char *t2 = strtok(line, " \t\r\n"); if (!t2) continue;
+        while (fgets(line, sizeof line, f)) { comment_off(line); char whole[2048]; snprintf(whole, sizeof whole, "%s", line); char *t2 = strtok(line, " \t\r\n"); if (!t2) continue;
             if (!strcmp(t2, "grammar")) { char *g = strtok(NULL, " \t\r\n"); if (g) snprintf(r->grammar, sizeof r->grammar, "%s", g); continue; }
-            int sv = say_says(r, fp, t2); if (sv <= 0) { if (!sv) fprintf(stderr, "%s: \"%s\" is not something a format says\n", fp, t2); fclose(f); return -1; } }
+            int sv = say_says(r, fp, t2); if (sv > 0) say_mentions(r, whole); if (sv <= 0) { if (!sv) fprintf(stderr, "%s: \"%s\" is not something a format says\n", fp, t2); fclose(f); return -1; } }
         fclose(f); return 1; }
     if (!strcmp(tok, "thing")) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->nthing == 32) { fprintf(stderr, "%s: thing TIER NAME... [within]\n", path); return -1; }
         Thing *p = &s->thing[s->nthing++]; snprintf(p->tier, sizeof p->tier, "%s", a2); while (p->n < 8 && name_next(&at, nm, sizeof nm)) { if (!strcmp(nm, "within")) { p->within = 1; continue; } if (!strcmp(nm, "within-file")) { p->infile = 1; continue; }
@@ -277,7 +289,7 @@ int say_says(Recipe *r, const char *path, char *tok){
         char w1[8], w2[64]; while (name_next(&at, w1, sizeof w1)) { if (!strcmp(w1, "alone")) { x->alone = 1; continue; }
             if (strcmp(w1, "by") || !name_next(&at, w2, sizeof w2)) { fprintf(stderr, "%s: relate TIER NAME to NAME [alone] [by NAME]\n", path); return -1; } snprintf(x->by, sizeof x->by, "%s", w2); }
         return 1; }
-    return layout_says(&s->lay, path, tok);
+    s->laid_line = 1; return layout_says(&s->lay, path, tok);
 }
 int say_lays(const Recipe *r){ const Say *s = r->say; return s && (s->lay.ntier > 0 || s->lay.g.n > 0); }
 /* Whether a file this recipe lays out can be read a stretch at a time: its outermost parts are lines (1) or end at an
@@ -312,7 +324,9 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
                  Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int32_t wide_of; KeyRank kr; int16_t *dm; uint32_t dm_cap;
                  struct CSeen *cs; uint64_t cs_cap, cs_n, cs_epoch; int32_t rec;
-                 struct Obl { char name[160]; uint64_t n; char what; } obl[256]; int nobl; uint64_t obl_more; } Sink;   /* obl: the obligations the reading left (no meaning: no claim), and values outside the road class named, by name */        /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
+                 struct Obl { char name[160]; uint64_t n; char what; } obl[256]; int nobl; uint64_t obl_more;
+                 struct { char name[64]; int named; } heard[32]; int nheard; uint8_t *lo; uint32_t lo_cap; const STree *lo_tree;     /* the parts' names asked of the recipe's words, and whether it writes them (unmentioned); lo: the parts of the tree being read already left open, each counted once */
+                 } Sink;   /* obl: the obligations the reading left (no meaning: no claim), and values outside the road class named, by name */        /* cs: the claims the part being read has made, each once (claim) */          /* reading for the highway (laplace highway): what the part says of its types, in order */
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a, size_t al, const char *b, size_t bl){
     if (k->nhr == k->chr) { k->chr = k->chr ? k->chr * 2 : 1024; k->hr = xrealloc(k->hr, sizeof(HwRec) * k->chr); }
@@ -321,8 +335,19 @@ static void hw_rec(Sink *k, int what, int line, const Ref *thing, const char *a,
 }                   /* the things of the tree being read, each composed once */   /* fname: the file's name; fstem: its name up to its first dot */   /* grp: the claims the part being read has made */   /* fw: the file's witness; voice: who says the part being read, when the file names one; opennm: the names left open */
 /* A named part the recipe gives no disposition: counted, and its name kept to be said. */
 static void left_open(Sink *k, const SNode *x){
+    const STree *lt = k->lo_tree; if (lt && k->lo && x >= lt->n && x < lt->n + lt->count) { size_t i = (size_t)(x - lt->n); if (k->lo[i]) return; k->lo[i] = 1; }     /* a part is left open once, however often it is asked */
     k->open[0]++; for (int i = 0; i < k->nopen; i++) if (strlen(k->opennm[i]) == x->nlen && !memcmp(k->opennm[i], x->name, x->nlen)) return;
     if (k->nopen < 16) snprintf(k->opennm[k->nopen++], 64, "%.*s", (int)(x->nlen < 63 ? x->nlen : 63), x->name);
+}
+/* A named value of a part the recipe speaks of that it neither disposes of nor writes the name of anywhere (a field of a
+ * counted group no line reads, a column no line names): left open, counted and said like a part with no disposition,
+ * never read past in silence. The name's answer is kept for the parts after. */
+static int unmentioned(Sink *k, const Say *s, const SNode *x){
+    if (!s->said || !x->nlen || x->nlen > 62) return 0;
+    for (int i = 0; i < k->nheard; i++) if (strlen(k->heard[i].name) == x->nlen && !memcmp(k->heard[i].name, x->name, x->nlen)) return !k->heard[i].named;
+    char w[66]; snprintf(w, sizeof w, " %.*s ", (int)x->nlen, x->name); int named = strstr(s->said, w) != NULL;
+    if (k->nheard < 32) { snprintf(k->heard[k->nheard].name, 64, "%.*s", (int)x->nlen, x->name); k->heard[k->nheard++].named = named; }
+    return !named;
 }
 /* An unresolved obligation (what 'o'): a part a claim would name that the recipe gives no meaning (value), so no claim is
  * made of it; or (what 'm') a value of a road class the highway holds that its list does not, said as written. Counted by
@@ -1086,6 +1111,7 @@ static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
     Sink *k = sink; const Say *s = k->s; k->kr.unit = ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f; TT = t;
     k->cs_epoch++; k->cs_n = 0; k->rec = root;                               /* a new part: none of its claims made yet, its own record */
     if (k->dm_cap < t->count) { k->dm_cap = t->count * 2; k->dm = xrealloc(k->dm, sizeof(int16_t) * k->dm_cap); } memset(k->dm, 0, sizeof(int16_t) * t->count); DM = k->dm;
+    if (k->lo_cap < t->count) { k->lo_cap = t->count * 2; k->lo = xrealloc(k->lo, k->lo_cap); } memset(k->lo, 0, t->count); k->lo_tree = t;
     if (k->tc_cap < t->count) { k->tc_cap = t->count * 2; k->tc = xrealloc(k->tc, sizeof(Ref) * k->tc_cap); k->ts = xrealloc(k->ts, k->tc_cap); }
     k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); k->ix_tree = NULL;      /* a new tree: nothing of the last is known of it */
     if (k->hw) { unit_highway(k, t, root); keep_keys(k, t, root); return; }     /* read for the highway: its types, not what it attests */
@@ -1103,6 +1129,10 @@ static void unit(void *sink, const STree *t, int32_t root, uint64_t ordinal){
     int speaks = spoken_of(s, t, root, s->whole);
     Pend pend[64]; int np_ = 0;      /* the parts whose claims are said together, still open */
     unit_range(k, t, 0, t->count, speaks, pend, &np_);
+    if (speaks) for (uint32_t i = 0; i < t->count; i++) { const SNode *x = &t->n[i];          /* what no line of the recipe reads is said to be left open */
+        if (x->kind != S_VALUE || !x->nlen || dis_of(s, x) || !unmentioned(k, s, x)) continue;
+        int32_t u = x->parent; while (u >= 0 && !dis_of(s, &t->n[u])) u = t->n[u].parent;          /* a part of a part the recipe reads is read with it (r1's A0 of A0>Agent) */
+        if (u < 0) left_open(k, x); }
     while (np_) { np_--; together(k, pend[np_].e0, pend[np_].has ? &pend[np_].about : NULL); }
     keep_keys(k, t, root);
     /* the part itself, whole, with what it says, into the file's content tree as its record (records_of). A part the
@@ -1265,7 +1295,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         for (size_t j = 0; j < part[i].things.n; j++) push(&things, &part[i].things.c[j]);
         for (size_t j = 0; j < part[i].meta.n; j++) push(&meta, &part[i].meta.c[j]);
         open += part[i].open[0]; owed_keep(r->name, &part[i]); free(part[i].ev.e); free(part[i].things.c); free(part[i].meta.c);
-        free(part[i].tc); free(part[i].ts); free(part[i].dm); if (part[i].ix) lp_strmap_free(part[i].ix); lp_buf_free(&part[i].ix_key); free(part[i].grp.c); }
+        free(part[i].tc); free(part[i].ts); free(part[i].dm); free(part[i].lo); if (part[i].ix) lp_strmap_free(part[i].ix); lp_buf_free(&part[i].ix_key); free(part[i].grp.c); }
     if (open) { fprintf(stderr, "\n  %s: %llu named parts of %s have no disposition in the recipe: they are left open, not read:", r->name, (unsigned long long)open, f->path);
         char seen[64][64]; int ns = 0;
         for (size_t i = 0; i < nc; i++) for (int j = 0; j < part[i].nopen; j++) { int dup = 0; for (int z = 0; z < ns && !dup; z++) dup = !strcmp(seen[z], part[i].opennm[j]); if (dup || ns == 64) continue; snprintf(seen[ns++], 64, "%s", part[i].opennm[j]); fprintf(stderr, " %s", part[i].opennm[j]); }
