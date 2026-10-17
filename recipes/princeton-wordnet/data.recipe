@@ -65,7 +65,8 @@ relate pointer pointer_symbol to target
 always
 # A verb synset's frames: wndb.5, "f_num: Two digit decimal integer frame number" of frames.vrb's generic sentence frames,
 # and "w_num: ... the word in the synset that the frame applies to ... 00 ... all words in the synset": f_num is
-# frames.vrb's key, which the frames recipe (Laplace-Engine#70, next) keys; until it does, f_num and w_num stay
-# unresolved obligations, as a lexical pointer's source/target does.
+# frames.vrb's key, which the frames recipe (Laplace-Engine#70, next) keys; until it does, f_num and w_num are left
+# open, and said to be when data.verb is read. A lexical pointer (source/target not 0000, between two words) says
+# nothing yet: the pointer's relation is said only under 'when source_target is 0000' below (Laplace-Engine#70).
 # the counts are how many groups follow: the file's layout, read by nothing
 omit w_cnt p_cnt f_cnt plus
