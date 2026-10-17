@@ -11,7 +11,7 @@ match PredicateMatrix.v*.txt
 tier row by \n
 header
 tier field by \t
-empty id:NULL vn:NULL wn:NULL mcr:NULL fn:NULL pb:NULL eso:NULL
+empty id:NULL vn:NULL wn:NULL mcr:NULL fn:NULL pb:NULL eso:NULL mcr:ili-30-NULL-v
 
 type 5_VN_CLASS vnclass matching ^vn:(.*)$
 type 7_VN_SUBCLASS vnclass matching ^vn:(.*)$
@@ -27,8 +27,13 @@ content *
 # role over the different resources and includes all the aligned knowledge about its corresponding verb sense." The
 # strand is that mapping: the nodes the row aligns (the ILI concept, the VerbNet class and subclass, the FrameNet frame,
 # the PropBank roleset) and the role in each (the VerbNet thematic-role, the FrameNet frame element, the PropBank
-# argument), in the matrix's order; what the matrix leaves NULL is in no strand. A column's header is in no claim.
-thing row 12_MCR_iliOffset 5_VN_CLASS 7_VN_SUBCLASS 13_FN_FRAME 16_PB_ROLESET 10_VN_ROLE 15_FN_FRAME_ELEMENT 17_PB_ARG
+# argument), in the matrix's order: the path of those that resolve. What the matrix leaves NULL (mcr:ili-30-NULL-v, the
+# NULL of an offset) is in no strand; a key the highway's list does not hold is left out of it and owed. PredicateMatrix
+# v1.3 aligns VerbNet 3.2, FrameNet 1.5 and PropBank before its unification; the highway holds VerbNet 3.4, FrameNet 1.7
+# and the unified rolesets, and no source of the data root maps the one to the other (PropBank says a roleset was
+# reframed only in its notes, and not one for one), so a key of the older versions is owed, never guessed at. A column's
+# header is in no claim.
+thing row 12_MCR_iliOffset 5_VN_CLASS 7_VN_SUBCLASS 13_FN_FRAME 16_PB_ROLESET 10_VN_ROLE 15_FN_FRAME_ELEMENT 17_PB_ARG resolved
 itself row
 # The aligned knowledge said of the mapping, each as README words its column ("this column contains the information of ..."):
 # README: "1_ID_LANG: this column contains the language of the predicate."
