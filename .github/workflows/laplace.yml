@@ -33,6 +33,7 @@ jobs:
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/data-root.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/workspace-code.sh "$L"
           python3 Laplace-Engine/tools/parity/test_diff.py
+          python3 Laplace-Engine/tools/parity/test_claims.py
       - name: Verify ingestion staging under a scoped database identity
         run: |
           . Laplace-Operations/laplace.env
