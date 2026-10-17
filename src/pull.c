@@ -270,13 +270,17 @@ int cmd_hop(int argc, char **argv){
     return 0;
 }
 
-/* ---- translation through the concepts: a word bubbles up to its concepts and down into other languages, along the
- * relations the firmware names (for translate: up, language, gloss), never along a resource's names written here:
- *   up R1 R2 ... Rn        from a word, [word, R1, x1], [x1, R2, x2], ... [x(n-1), Rn, concept]; and back down from the
- *                          concept, in the other direction, to the words of another language
- *   language HELD SAYS     the language of x(n-1): what holds it under HELD, [h, HELD, x(n-1)], and what h says
- *                          under SAYS, [h, SAYS, code]
- *   gloss R                what is shown of a concept: [x(n-1), R, text]
+/* ---- translation through the concepts: a word goes up to its concepts and down into other languages through its
+ * lexicalizations, read as the recipe that reads the wordnets declares them (for translate: lexicalization, gloss), never
+ * along a resource's names written here (Laplace-Engine#32):
+ *   lexicalization RECIPE THING LANGUAGE CONCEPT
+ *                          the relation RECIPE declares of THING (relation "TEXT" THING), [word, TEXT, lexicalization],
+ *                          and the places of LANGUAGE and CONCEPT among the parts RECIPE names a THING by (thing THING
+ *                          ...): the lexicalization [lemma, language, ILI] (recipes/BRIEF.md). Up: the word's
+ *                          lexicalizations in the language asked, and their concepts; down: what holds each concept in
+ *                          that place with a language asked in its place, and the word it is a lexicalization of
+ *   gloss RECIPE NAME      what is shown of a concept: what holds it as a pair [x, concept] (a value said of x), and
+ *                          [x, TEXT, text], TEXT the relation RECIPE declares of NAME
  *   laplace translate [-d conninfo] [-n N] [--firmware FILE] word from to...        laplace translate dog en de fr ja */
 /* Every step is one set: the whole frontier is asked at once, its claims read from every leaf together (holds_above,
  * one statement a leaf), never one entity at a time. A step no claim carries is the structure's (Recipes: a thing named
@@ -319,21 +323,33 @@ static Run *parts_each(PGconn *pg, const lp_id *keys, int nk){
         if (i >= 0 && i < nk && !out[i].id) out[i] = run_of((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1)); }
     PQclear(q); free(ab); return out;
 }
-/* The language each entity is in, one set a step: [h, HELD, x], then [h, SAYS, code]; code[i] for keys[i] ("" none). */
-static char (*language_each(Reader *rd, const lp_id *keys, int nk, const lp_id *held, const lp_id *says))[24] {
-    char (*code)[24] = calloc((size_t)(nk ? nk : 1), 24); int nh, ns;
-    Step *h = open_each(keys, nk, held, 1, 1, 8, &nh); int *hold = malloc(sizeof(int) * (size_t)(nk ? nk : 1)); for (int i = 0; i < nk; i++) hold[i] = -1;
-    lp_idmap *m = lp_idmap_new(); lp_id *hs = malloc(sizeof(lp_id) * (size_t)(nh ? nh : 1)); int nu = 0;
-    for (int j = 0; j < nh; j++) if (hold[h[j].from] < 0) { bool fresh; size_t at = lp_idmap_put(m, &h[j].to, &fresh); if (fresh) hs[nu++] = h[j].to; hold[h[j].from] = (int)at; }
-    Step *sy = open_each(hs, nu, says, 0, 1, 1, &ns); char (*hc)[24] = calloc((size_t)(nu ? nu : 1), 24);
-    for (int j = 0; j < ns; j++) reader_want(rd, &sy[j].to);
-    for (int j = 0; j < ns; j++) if (!hc[sy[j].from][0]) { char *t = reader_text(rd, &sy[j].to, 20); snprintf(hc[sy[j].from], 24, "%s", t); free(t); }
-    for (int i = 0; i < nk; i++) if (hold[i] >= 0) memcpy(code[i], hc[hold[i]], 24);
-    free(h); free(hold); free(hs); free(sy); free(hc); lp_idmap_free(m); return code;
-}
 static Claim *one_open_claims(PGconn *pg, const lp_id *first, const lp_id *rel, int fan, int *n){
     lp_id p[3] = { *first, *rel, *first }; int h[3] = { 2, 2, 0 }, capped; return claims_like(pg, p, h, fan, read_k, n, &capped);
 }
+/* A word's lexicalizations as the recipe that reads the wordnets declares them: the relation that says a word has one,
+ * and which of its parts are its language and its concept. Read from that recipe, never from a second copy of its
+ * names, so a recipe that renames them fails here, at once, rather than leaving every translation empty. */
+typedef struct { lp_id sense, gloss; int np, lang, concept, has_gloss; } Lexicalization;
+static int lexicalization_of(Ctx *c, const Firmware *fw, Lexicalization *x){
+    memset(x, 0, sizeof *x);
+    if (!fw->lexical[0][0]) { fprintf(stderr, "%s: for translate, the firmware names no lexicalization (lexicalization RECIPE THING LANGUAGE CONCEPT)\n", fw->path); return 0; }
+    Recipe *R; int nr = recipes_load(laplace_recipes(), &R); const Recipe *w = NULL, *g = NULL;
+    for (int i = 0; i < nr; i++) if (!R[i].broken) { if (!strcmp(R[i].name, fw->lexical[0])) w = &R[i]; if (fw->gloss[0][0] && !strcmp(R[i].name, fw->gloss[0])) g = &R[i]; }
+    if (!w) { fprintf(stderr, "%s: for translate, lexicalization names the recipe %s, which is not a recipe of %s that loads\n", fw->path, fw->lexical[0], laplace_recipes()); return 0; }
+    const char *rel = say_relation(w, fw->lexical[1]);
+    if (!rel) { fprintf(stderr, "%s: for translate, the recipe %s declares no relation of %s (relation \"TEXT\" %s)\n", fw->path, fw->lexical[0], fw->lexical[1], fw->lexical[1]); return 0; }
+    x->np = say_thing_parts(w, fw->lexical[1], fw->lexical[2], fw->lexical[3], &x->lang, &x->concept);
+    if (x->np < 0) { fprintf(stderr, "%s: for translate, the recipe %s names no %s by parts that are its %s and its %s (thing %s ...)\n", fw->path, fw->lexical[0], fw->lexical[1], fw->lexical[2], fw->lexical[3], fw->lexical[1]); return 0; }
+    x->sense = entity_named(c, rel, NULL, 0, NULL).id;
+    if (fw->gloss[0][0]) { const char *gr = g ? say_relation(g, fw->gloss[1]) : NULL;
+        if (!gr) { fprintf(stderr, "%s: for translate, gloss: the recipe %s %s\n", fw->path, fw->gloss[0], g ? "declares no relation of that name" : "is not a recipe that loads"); return 0; }
+        x->gloss = entity_named(c, gr, NULL, 0, NULL).id; x->has_gloss = 1; }
+    return 1;
+}
+typedef struct { lp_id *id; int *of, n, cap; } Found;                      /* entities found, each with what it is found for */
+static void found_put(Found *f, const lp_id *id, int of){
+    if (f->n == f->cap) { f->cap = f->cap ? f->cap * 2 : 64; f->id = xrealloc(f->id, sizeof(lp_id) * (size_t)f->cap); f->of = xrealloc(f->of, sizeof(int) * (size_t)f->cap); }
+    f->id[f->n] = *id; f->of[f->n++] = of; }
 int cmd_translate(int argc, char **argv){
     const char *conninfo = laplace_db(), *fwp = NULL; int limit = 4, a = 1;
     for (; a < argc - 1 && argv[a][0] == '-' && argv[a][1]; a++) {
@@ -343,74 +359,50 @@ int cmd_translate(int argc, char **argv){
     }
     Firmware fw = firmware_for(fwp, FW_TRANSLATE); int fan = fw.fan; read_k = fw.k;
     if (argc - a < 3) { fprintf(stderr, "usage: laplace translate [-d conninfo] [-n concepts] word from to...\n       languages as the resources write them: en de fr ja\n"); return 2; }
-    if (fw.nup < 2 || !fw.language[0][0]) { fprintf(stderr, "%s: for translate, the firmware names no way up to a concept and back down (up RELATION..., language HELD SAYS)\n", fw.path); return 2; }
-    double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0); PGconn *pg = db_read(conninfo); Reader *rd = reader_new(pg);
-    const lp_id word = entity_named(c, argv[a], NULL, 0, NULL).id; const char *from = argv[a + 1]; int last = fw.nup - 1, steps = 0;
-    lp_id up[FW_CHAIN], held = entity_named(c, fw.language[0], NULL, 0, NULL).id, says = entity_named(c, fw.language[1], NULL, 0, NULL).id, gloss = { { 0 } };
-    for (int s = 0; s <= last; s++) up[s] = entity_named(c, fw.up[s], NULL, 0, NULL).id; if (fw.gloss[0]) gloss = entity_named(c, fw.gloss, NULL, 0, NULL).id;
+    double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0);
+    Lexicalization lx; if (!lexicalization_of(c, &fw, &lx)) return 2;
+    PGconn *pg = db_read(conninfo); Reader *rd = reader_new(pg);
+    const lp_id word = entity_named(c, argv[a], NULL, 0, NULL).id, from = entity_named(c, argv[a + 1], NULL, 0, NULL).id;
+    int nto = argc - a - 2 < 64 ? argc - a - 2 : 64, steps = 0; lp_id to[64];
+    for (int g = 0; g < nto; g++) to[g] = entity_named(c, argv[a + 2 + g], NULL, 0, NULL).id;
 
-    /* up: the word's first step in its witness's order, then every further step for the whole frontier at once */
-    int n; Claim *first = one_open_claims(pg, &word, &up[0], fan, &n); steps++; positions_of(pg, first, n); qsort(first, (size_t)n, sizeof(Claim), claim_by_position);
-    int nf = n; lp_id *fr = malloc(sizeof(lp_id) * (size_t)(nf ? nf : 1)); int *orig = malloc(sizeof(int) * (size_t)(nf ? nf : 1));
-    for (int i = 0; i < n; i++) { fr[i] = first[i].part[first[i].np - 1]; orig[i] = i; }
-    lp_id *syn = calloc((size_t)(n ? n : 1), sizeof(lp_id)); lp_id *concept = calloc((size_t)(n ? n : 1), sizeof(lp_id)); lp_rating *cr = calloc((size_t)(n ? n : 1), sizeof(lp_rating)); uint8_t *got = calloc((size_t)(n ? n : 1), 1);
-    for (int s = 1; s <= last && nf; s++) {
-        int ns; Step *st = open_each(fr, nf, &up[s], 0, 1, s == last ? 1 : 8, &ns); steps++;
-        uint8_t *had = calloc((size_t)nf, 1); for (int j = 0; j < ns; j++) had[st[j].from] = 1;
-        if (s == last) { for (int j = 0; j < ns; j++) { int o = orig[st[j].from]; if (got[o]) continue; got[o] = 1; syn[o] = fr[st[j].from]; concept[o] = st[j].to; cr[o] = st[j].r; } free(had); free(st); break; }
-        int nn = 0, cap = ns + 1; lp_id *nx = malloc(sizeof(lp_id) * (size_t)cap); int *no = malloc(sizeof(int) * (size_t)cap);
-        #define PUSH(id, o) do { if (nn == cap) { cap *= 2; nx = xrealloc(nx, sizeof(lp_id) * (size_t)cap); no = xrealloc(no, sizeof(int) * (size_t)cap); } nx[nn] = (id); no[nn++] = (o); } while (0)
-        for (int j = 0; j < ns; j++) PUSH(st[j].to, orig[st[j].from]);
-        int nb = 0; lp_id *bare = malloc(sizeof(lp_id) * (size_t)nf); int *bo = malloc(sizeof(int) * (size_t)nf);
-        for (int i = 0; i < nf; i++) if (!had[i]) { bare[nb] = fr[i]; bo[nb++] = orig[i]; }
-        Run *pr = parts_each(pg, bare, nb); steps += nb > 0;                 /* no claim carries the step: the constituents, never back to the word */
-        for (int i = 0; i < nb; i++) { int other = 0; for (int p = 0; p < pr[i].n; p++) if (memcmp(&pr[i].id[p], &word, 16)) { PUSH(pr[i].id[p], bo[i]); other = 1; }
-            if (!other && pr[i].n) PUSH(word, bo[i]); free(pr[i].id); }     /* [dog, dog]: a synset of the word alone is the word */
-        free(pr); free(bare); free(bo); free(had); free(st); free(fr); free(orig); fr = nx; orig = no; nf = nn;
-        #undef PUSH
-    }
-    free(fr); free(orig);
-    /* the concepts reached from synsets in the language asked for, each once, in the word's order */
-    char (*lang)[24] = language_each(rd, syn, n, &held, &says); steps += 2;
-    int nc = 0; int *pick = malloc(sizeof(int) * (size_t)(n ? n : 1));
-    for (int i = 0; i < n && nc < limit; i++) { if (!got[i] || strcmp(lang[i], from)) continue; int dup = 0; for (int z = 0; z < nc; z++) dup |= !memcmp(&concept[pick[z]], &concept[i], 16); if (!dup) pick[nc++] = i; }
-    free(lang);
-    if (!nc) { printf("%s: no concept of it is attested in a language written %s\n", argv[a], from); }
-    /* down: every concept's synsets in one set, their languages in one, then each step back down for all of them */
-    lp_id *cs = malloc(sizeof(lp_id) * (size_t)(nc ? nc : 1)), *ss = malloc(sizeof(lp_id) * (size_t)(nc ? nc : 1)); for (int z = 0; z < nc; z++) { cs[z] = concept[pick[z]]; ss[z] = syn[pick[z]]; }
-    int ng = 0; Step *gl = fw.gloss[0] ? open_each(ss, nc, &gloss, 0, 1, 1, &ng) : NULL; steps += fw.gloss[0] != 0;
-    int nd; Step *dn = open_each(cs, nc, &up[last], 1, 1, fan, &nd); steps++;
-    lp_id *ys = malloc(sizeof(lp_id) * (size_t)(nd ? nd : 1)); for (int j = 0; j < nd; j++) ys[j] = dn[j].to;
-    char (*yl)[24] = language_each(rd, ys, nd, &held, &says); steps += 2;
-    int nf2 = 0; lp_id *f2 = malloc(sizeof(lp_id) * (size_t)(nd ? nd : 1)); int *o2 = malloc(sizeof(int) * (size_t)(nd ? nd : 1));   /* o2: concept * 64 + target language */
-    for (int j = 0; j < nd; j++) for (int g = a + 2; g < argc && g - a - 2 < 64; g++) if (!strcmp(yl[j], argv[g])) { f2[nf2] = ys[j]; o2[nf2++] = dn[j].from * 64 + (g - a - 2); }
-    free(yl); free(ys);
-    for (int s = last - 1; s >= 0 && nf2; s--) {
-        int ns; Step *st = open_each(f2, nf2, &up[s], 1, 1, fan, &ns); steps++;
-        uint8_t *had = calloc((size_t)nf2, 1); for (int j = 0; j < ns; j++) had[st[j].from] = 1;
-        int nn = 0, cap = ns + 1; lp_id *nx = malloc(sizeof(lp_id) * (size_t)cap); int *no = malloc(sizeof(int) * (size_t)cap);
-        #define PUSH(id, o) do { if (nn == cap) { cap *= 2; nx = xrealloc(nx, sizeof(lp_id) * (size_t)cap); no = xrealloc(no, sizeof(int) * (size_t)cap); } nx[nn] = (id); no[nn++] = (o); } while (0)
-        for (int j = 0; j < ns; j++) PUSH(st[j].to, o2[st[j].from]);
-        if (s > 0) { int nb = 0; lp_id *bare = malloc(sizeof(lp_id) * (size_t)nf2); int *bo = malloc(sizeof(int) * (size_t)nf2);
-            for (int i = 0; i < nf2; i++) if (!had[i]) { bare[nb] = f2[i]; bo[nb++] = o2[i]; }
-            int nh; Step *hs = nb ? open_each(bare, nb, NULL, 0, 0, fan, &nh) : NULL; steps += nb > 0;     /* no claim carries the step: what holds it */
-            for (int j = 0; nb && j < nh; j++) PUSH(hs[j].to, bo[hs[j].from]); free(hs); free(bare); free(bo); }
-        free(had); free(st); free(f2); free(o2); f2 = nx; o2 = no; nf2 = nn;
-        #undef PUSH
-    }
-    for (int j = 0; j < nf2; j++) reader_want(rd, &f2[j]); for (int z = 0; z < nc; z++) reader_want(rd, &cs[z]); for (int j = 0; j < ng; j++) reader_want(rd, &gl[j].to);
+    /* up: the word's lexicalizations, in its witness's order, and of each its language and its concept */
+    int n; Claim *first = one_open_claims(pg, &word, &lx.sense, fan, &n); steps++; positions_of(pg, first, n); qsort(first, (size_t)n, sizeof(Claim), claim_by_position);
+    lp_id *ls = malloc(sizeof(lp_id) * (size_t)(n ? n : 1)); for (int i = 0; i < n; i++) ls[i] = first[i].part[first[i].np - 1];
+    Run *pr = parts_each(pg, ls, n); steps += n > 0;
+    lp_id *cs = malloc(sizeof(lp_id) * (size_t)(n ? n : 1)); lp_rating *cr = malloc(sizeof(lp_rating) * (size_t)(n ? n : 1)); int nc = 0;
+    for (int i = 0; i < n; i++) {
+        if (nc < limit && pr[i].n == lx.np && !memcmp(&pr[i].id[lx.lang], &from, 16)) { const lp_id *k = &pr[i].id[lx.concept]; int dup = 0;
+            for (int z = 0; z < nc; z++) dup |= !memcmp(&cs[z], k, 16); if (!dup) { cs[nc] = *k; cr[nc++] = first[i].r; } }
+        free(pr[i].id); }
+    free(pr); free(ls);
+    if (!nc) printf("%s: no lexicalization of it is attested in a language written %s\n", argv[a], argv[a + 1]);
+
+    /* down: what holds each concept, one set: its lexicalizations in the languages asked, and what has it as its value
+     * (a synset, whose definition is shown); then each lexicalization back to its word, along the same relation */
+    int nh = 0; Hold *h = nc ? holds_any(cs, nc, &nh) : NULL; steps += nc > 0;
+    lp_idmap *cm = lp_idmap_new(); for (int z = 0; z < nc; z++) { bool fresh; lp_idmap_put(cm, &cs[z], &fresh); }
+    Found lex = { 0 }, val = { 0 }; lp_id *p = malloc(sizeof(lp_id) * 4096);
+    for (int j = 0; j < nh; j++) { size_t np = lp_path_ids(h[j].path, (size_t)h[j].path_len, p, 4096); if (np > 4096) continue;
+        if ((int)np == lx.np) { int64_t z = lp_idmap_find(cm, &p[lx.concept]); if (z < 0) continue;
+            for (int g = 0; g < nto; g++) if (!memcmp(&p[lx.lang], &to[g], 16)) { found_put(&lex, &h[j].entity, (int)z * 64 + g); break; } }
+        else if (np == 2 && lx.has_gloss) { int64_t z = lp_idmap_find(cm, &p[1]); if (z >= 0) found_put(&val, &p[0], (int)z); } }
+    free(p); holds_free(h, nh); lp_idmap_free(cm);
+    int nd = 0; Step *dn = open_each(lex.id, lex.n, &lx.sense, 1, 1, fan, &nd); steps += lex.n > 0;
+    int ng = 0; Step *gl = val.n ? open_each(val.id, val.n, &lx.gloss, 0, 1, 1, &ng) : NULL; steps += val.n > 0;
+    for (int j = 0; j < nd; j++) reader_want(rd, &dn[j].to); for (int z = 0; z < nc; z++) reader_want(rd, &cs[z]); for (int j = 0; j < ng; j++) reader_want(rd, &gl[j].to);
     for (int z = 0; z < nc; z++) {
-        int i = pick[z]; char *it = reader_text(rd, &cs[z], 60), *dt = NULL;
-        for (int j = 0; j < ng && !dt; j++) if (gl[j].from == z) dt = reader_text(rd, &gl[j].to, 100);
-        printf("\n  %4.0f \xC2\xB1 %-3.0f  %s\n            %s\n", cr[i].rating, cr[i].deviation, it, dt ? dt : ""); free(it); free(dt);
-        for (int g = a + 2; g < argc && g - a - 2 < 64; g++) {
-            printf("    %-6s", argv[g]); int any = 0; lp_idmap *shown = lp_idmap_new();
-            for (int j = 0; j < nf2 && any < 8; j++) { if (o2[j] != z * 64 + (g - a - 2)) continue; bool fresh; lp_idmap_put(shown, &f2[j], &fresh); if (!fresh) continue;
-                char *tx = reader_text(rd, &f2[j], 40); printf("%s%s", any ? ", " : " ", tx); free(tx); any++; }
+        char *it = reader_text(rd, &cs[z], 60), *dt = NULL;
+        for (int j = 0; j < ng && !dt; j++) if (val.of[gl[j].from] == z) dt = reader_text(rd, &gl[j].to, 100);
+        printf("\n  %4.0f \xC2\xB1 %-3.0f  %s\n            %s\n", cr[z].rating, cr[z].deviation, it, dt ? dt : ""); free(it); free(dt);
+        for (int g = 0; g < nto; g++) {
+            printf("    %-6s", argv[a + 2 + g]); int any = 0; lp_idmap *shown = lp_idmap_new();
+            for (int j = 0; j < nd && any < 8; j++) { if (lex.of[dn[j].from] != z * 64 + g) continue; bool fresh; lp_idmap_put(shown, &dn[j].to, &fresh); if (!fresh) continue;
+                char *tx = reader_text(rd, &dn[j].to, 40); printf("%s%s", any ? ", " : " ", tx); free(tx); any++; }
             lp_idmap_free(shown); if (!any) printf(" (nothing attested)"); printf("\n"); }
     }
     printf("\n%d steps, each one set   total %.1f ms\n", steps, (now() - T) * 1000);
-    free(first); free(syn); free(concept); free(cr); free(got); free(pick); free(cs); free(ss); free(gl); free(dn); free(f2); free(o2); reader_free(rd); PQfinish(pg);
+    free(first); free(cs); free(cr); free(lex.id); free(lex.of); free(val.id); free(val.of); free(dn); free(gl); reader_free(rd); PQfinish(pg);
     return 0;
 }
 

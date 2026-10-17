@@ -2,7 +2,8 @@ name wn-lmf
 # A wordnet in WN-LMF (globalwordnet.github.io/schemas, WN-LMF-1.3.dtd). Read for each wordnet that is written in it
 # (Open English WordNet, the Open Multilingual Wordnet's lexicons), each recipe naming its own witness.
 #   A lexicon is its label. A lexical entry is its lemma's written form. A synset is the words it lists, in the order
-#   listed (so every wordnet listing the same members lands on one entity); a sense is the word with its synset.
+#   listed (so every wordnet listing the same members lands on one entity); a sense is the lexicalization
+#   [lemma, language, ILI], or, where its synset names no concept the highway holds, the word with its synset.
 #   A syntactic behaviour is its frame, as written.
 #   ids are the wordnet's keys: how it points at its things. Each resolves to the thing; members, synset, target and
 #   senses are such keys. An ili is CILI's key of a concept, read as the concept; a lexfile is read as the lexicographer
@@ -19,6 +20,16 @@ key Synset id
 key SyntacticBehaviour id
 thing Lexicon label
 thing LexicalEntry Lemma/writtenForm
+# a sense is the lexicalization [lemma, language, ILI] (recipes/BRIEF.md: "A word in a language is the lexicalization
+# [lemma, language, ILI], the language (an ISO 639 highway node) a part of it, never a context column or a mask bit;
+# another language is the same ILI with another language part"): the lemma of the entry it is inside, the language its
+# lexicon states (Lexicon language, the format page: "language: Please follow BCP-47"; as written, en, which is ISO
+# 639-3's Part1 of English, so the node ISO 639 attests), and the ILI of the synset it refers to (type ili ili, below:
+# the node the highway's interlingual index holds). Another wordnet's sense of the same concept in another language is
+# the same ILI with another language part (Laplace-Engine#20, #32).
+thing Sense ^LexicalEntry/Lemma/writtenForm ^Lexicon/language >synset/ili
+# a sense whose synset names no concept the highway holds (ili="in", a concept CILI has not numbered yet) is given no
+# stand-in identity: it is the word with its synset, and its synset links by collision when CILI states its ILI
 thing Sense synset within
 thing Synset members
 # a synset that lists no members (a concept the language does not lexicalize, lexicalized="false") is the concept
@@ -84,8 +95,8 @@ relation "other form" Form
 relation "lexical sense" Sense
 # a sense's synset: the format page, "Senses are ontolex:LexicalSense, they must have a ontolex:reference"; OntoLex,
 # "The reference property relates a lexical sense to an ontological predicate that represents the denotation of the
-# corresponding lexical entry". The synset is part of what the sense is ([entry, synset]), so it is said already and no
-# claim is made of it again; the sense as the lexicalization [lemma, language, ILI] is Laplace-Engine#20.
+# corresponding lexical entry". A sense that is the lexicalization holds its synset's ILI, and refers to its synset:
+# [sense, reference, synset]. A sense named by its synset holds it as a part, so no claim is made of it again.
 relation "reference" synset
 # a sense's subcat: the format page, "Syntactic behaviour can also be given as part of the lexicon and referred to with
 # the subcat property"; OntoLex, "The syntactic behavior property relates a lexical entry to one of its syntactic
@@ -106,8 +117,9 @@ relation "definition of the synset" Definition
 relation "standard definition of the synset in the ILI" ILIDefinition
 relation "example usage" Example
 # What stays an unresolved obligation, each with its reason:
-#   language (of a Lexicon): the format page, "language: Please follow BCP-47"; the language is a part of each
-#     lexicalization [lemma, language, ILI], not a claim on the lexicon's label (Laplace-Engine#20).
+#   language (of a Lexicon): the format page, "language: Please follow BCP-47": what the lexicon states, recorded where
+#     it means something, as the language part of each of its lexicalizations (thing Sense, above), never as a claim on
+#     the lexicon's label, which would be a field's name as its relation (Laplace-Engine#20, #32).
 #   ref (of a Requires): "the required wordnet should be loaded as well": a dependence between two sources' trunks, the
 #     corpus as the witness (Laplace-Engine#28).
 #   lexicalized: the DTD's (true|false) "true", which the format's documentation words nowhere (the GWA's schemas#43

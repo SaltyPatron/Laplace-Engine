@@ -76,27 +76,45 @@ fi
 unset LAPLACE_INGEST_ONE
 
 stamp "monorepo side: $db_m"
-"$psql" -XqAt -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE \"$db_m\""
 # The monorepo's extensions are the published install's, found through the database's own settings (as laplace-mono's
-# database has them): its library and control directories, and laplace_substrate preloaded.
+# database has them): its library and control directories, and laplace_substrate preloaded. A template does not carry
+# a database's settings, so they are set on every database made here.
 prefix=${LAPLACE_INSTALL_PREFIX:-/opt/laplace}
 pgmajor=$(( $("$psql" -XqAt -d postgres -c 'SHOW server_version_num') / 10000 ))
-"$psql" -XqAt -v ON_ERROR_STOP=1 -d postgres \
-  -c "ALTER DATABASE \"$db_m\" SET dynamic_library_path = '$prefix/lib/postgresql/$pgmajor:\$libdir'" \
-  -c "ALTER DATABASE \"$db_m\" SET extension_control_path = '$prefix/share/postgresql/$pgmajor:\$system'" \
-  -c "ALTER DATABASE \"$db_m\" SET session_preload_libraries = 'laplace_substrate'"
-"$psql" -XqAt -v ON_ERROR_STOP=1 -d "$db_m" -c 'CREATE EXTENSION IF NOT EXISTS postgis' \
-  -c 'CREATE EXTENSION IF NOT EXISTS laplace_geom' -c 'CREATE EXTENSION IF NOT EXISTS laplace_substrate'
+settings() { "$psql" -XqAt -v ON_ERROR_STOP=1 -d postgres \
+  -c "ALTER DATABASE \"$1\" SET dynamic_library_path = '$prefix/lib/postgresql/$pgmajor:\$libdir'" \
+  -c "ALTER DATABASE \"$1\" SET extension_control_path = '$prefix/share/postgresql/$pgmajor:\$system'" \
+  -c "ALTER DATABASE \"$1\" SET session_preload_libraries = 'laplace_substrate'"; }
+# What goes in first (--after) is the same on every run with the same published CLI: the monorepo's unicode alone is
+# about 17 minutes under the host lock, which holds a deployment off. It is kept as a template database
+# (laplace_parity_tmpl_mono_KEY, KEY of the CLI's bytes and the afters) and each run starts from a copy of it; a
+# template of another key is dropped when a new one is made.
+key=$({ sha256sum "$mono_dir/Laplace.Cli.dll" "$mono_dir"/*.so 2>/dev/null | cut -d' ' -f1; printf '%s\n' "${afters[@]}"; } | sha256sum | cut -c1-12)
+tmpl=laplace_parity_tmpl_mono_$key
+has_db() { [[ $("$psql" -XqAt -d postgres -c "SELECT 1 FROM pg_database WHERE datname = '$1'") == 1 ]]; }
 export LAPLACE_DB="Host=$PGHOST;Username=$PGUSER;Database=$db_m;Command Timeout=0"
 export LD_LIBRARY_PATH="$mono_dir:${LAPLACE_INSTALL_PREFIX:-/opt/laplace}/lib:${LD_LIBRARY_PATH:-}"
 export LAPLACE_OPS_LOG_DIR=$out/logs/mono-ops LAPLACE_INGEST_CONSOLE=ci; mkdir -p "$LAPLACE_OPS_LOG_DIR"
 # The published CLI is replaced under the host deployment lock; hold it shared while it runs, as ingest-source.sh does.
 lock=${LAPLACE_HOST_LOCK:-${LAPLACE_LOCKS:-/run/lock/laplace}/host-resource.lock}
-if [[ -w "$lock" ]]; then exec {lease}>>"$lock"; flock -s "$lease"; fi
+lease=""; if [[ -w "$lock" ]]; then exec {lease}>>"$lock"; flock -s "$lease"; fi
 mono() { (cd "$mono_dir" && dotnet "$mono_dir/Laplace.Cli.dll" ingest "$@"); }
-for pair in "${afters[@]}"; do timed "$out/logs/mono-ingest-${pair#*=}.log" mono "${pair#*=}"; done
+if [[ ${#afters[@]} -gt 0 ]] && has_db "$tmpl"; then
+  stamp "  from the template $tmpl"
+  "$psql" -XqAt -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE \"$db_m\" TEMPLATE \"$tmpl\" STRATEGY FILE_COPY"; settings "$db_m"
+else
+  "$psql" -XqAt -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE \"$db_m\""; settings "$db_m"
+  "$psql" -XqAt -v ON_ERROR_STOP=1 -d "$db_m" -c 'CREATE EXTENSION IF NOT EXISTS postgis' \
+    -c 'CREATE EXTENSION IF NOT EXISTS laplace_geom' -c 'CREATE EXTENSION IF NOT EXISTS laplace_substrate'
+  for pair in "${afters[@]}"; do timed "$out/logs/mono-ingest-${pair#*=}.log" mono "${pair#*=}"; done
+  if [[ ${#afters[@]} -gt 0 ]]; then
+    for old in $("$psql" -XqAt -d postgres -c "SELECT datname FROM pg_database WHERE datname LIKE 'laplace\\_parity\\_tmpl\\_mono\\_%'"); do drop "$old"; done
+    "$psql" -XqAt -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE \"$tmpl\" TEMPLATE \"$db_m\" STRATEGY FILE_COPY" && stamp "  kept as the template $tmpl"
+  fi
+fi
 bash "$here/export.sh" mono "$db_m" "$out/mono/before"
 timed "$out/logs/mono-ingest-$src_m.log" mono "$src_m"
+[[ -n "$lease" ]] && exec {lease}>&-    # the CLI is done: the deployment lock is let go before the reading that is left
 bash "$here/export.sh" mono "$db_m" "$out/mono/after"
 
 stamp "compare"
@@ -107,6 +125,9 @@ python3 "$here/diff.py" "$out/mono" "$out/engine" --names "laplace-mono,engine" 
 # The Engine's provenance is containment: a source that adds claims has its witness's trunk say them (laplace replay,
 # the walk down from the trunk). A harness run where it says none is the walk's defect, not a difference.
 lines() { wc -l < "$1"; }
+if [[ $forget == 1 ]] && (( $(lines "$out/engine/forgotten/entities.tsv") != $(lines "$out/engine/before/entities.tsv") )); then
+  echo "parity.sh: forgetting $src_e left $(( $(lines "$out/engine/forgotten/entities.tsv") - $(lines "$out/engine/before/entities.tsv") )) entities more or fewer than before it went in" >&2; exit 1
+fi
 if (( $(lines "$out/engine/after/claims.tsv") > $(lines "$out/engine/before/claims.tsv") )) \
    && (( $(lines "$out/engine/after/testimony.tsv") <= $(lines "$out/engine/before/testimony.tsv") )); then
   echo "parity.sh: $src_e added claims but its witness's trunk says none of them (laplace replay finds no testimony)" >&2; exit 1
