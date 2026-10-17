@@ -18,6 +18,8 @@
  *   key TIER NAME              the part is the file's key for a TIER: it resolves to the TIER's thing; written nowhere
  *   refer NAME TIER            the part's text is a key of a TIER: it is read as that TIER's thing
  *   type NAME LIST             the part's text is the source's key of a type in the highway's LIST: read as that type
+ *                              ([matching PATTERN] [as TEMPLATE...]: the key as the lists write it; {NAME} in a template
+ *                              is the part NAME beside it, and each template is tried in turn: key_form)
  *   metadata NAME...           the part is said of the file itself: it goes in the file's metadata tree
  *   omit NAME...               the part is the file's bookkeeping: read by nothing
  *   perfcache                  a part named as a property the perf-cache's flags hold (tier0.flags, its layout) is read
@@ -61,7 +63,7 @@
 enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, D_RANGE, D_OWN };
 /* A key as a resource writes it, matched by a pattern and written as a template (\1: the pattern's first part) where it
  * writes it otherwise than those it points at write it (vn:51.2 for 51.2): the highway's lines, and a type's key. */
-typedef struct { char list[32], path[160], as[64]; regex_t re; int has_re; } KSpec;
+typedef struct { char list[32], path[160], as[4][64]; int nas; regex_t re; int has_re; } KSpec;     /* as: the templates, tried in order */
 typedef struct { char name[64]; int what; char arg[64]; KSpec k; uint32_t when;
                  struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; const char *text; } Dis;   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse); text: what a relation line words it as */
 typedef struct { char tier[32], name[64]; } Pair;
@@ -196,7 +198,7 @@ int say_says(Recipe *r, const char *path, char *tok){
         KSpec ks; memset(&ks, 0, sizeof ks);
         if (tok[0] == 't') { char more[160]; while (name_next(&at, more, sizeof more)) {     /* type NAME LIST... [matching PATTERN] [as TEMPLATE]: the first list that knows it, by the key as those lists write it */
                 if (!strcmp(more, "matching")) { if (!name_next(&at, more, sizeof more) || regcomp(&ks.re, more, REG_EXTENDED)) { fprintf(stderr, "%s: type NAME LIST... matching PATTERN (it must compile)\n", path); return -1; } ks.has_re = 1; continue; }
-                if (!strcmp(more, "as")) { if (!name_next(&at, ks.as, sizeof ks.as)) { fprintf(stderr, "%s: type NAME LIST... as TEMPLATE\n", path); return -1; } continue; }
+                if (!strcmp(more, "as")) { if (ks.nas == 4 || !name_next(&at, ks.as[ks.nas], sizeof ks.as[0])) { fprintf(stderr, "%s: type NAME LIST... as TEMPLATE... (at most 4)\n", path); return -1; } ks.nas++; continue; }
                 size_t l = strlen(a2); snprintf(a2 + l, sizeof a2 - l, " %s", more); }
             int rv = dis_add(s, path, nm, D_TYPE, a2); if (rv > 0) s->dis[s->ndis - 1].k = ks; return rv; }
         else { char more[64], targets[64]; snprintf(targets, sizeof targets, "%s", a2);       /* refer NAME TIER [within] [TIER [within]]...: the first that holds the key; within: the thing that TIER is inside */
@@ -263,7 +265,7 @@ int say_says(Recipe *r, const char *path, char *tok){
         KSpec *k = &x->a; int to = 0;
         while (ok && name_next(&at, w, sizeof w)) {
             if (!strcmp(w, "matching")) { ok = name_next(&at, w, sizeof w) && !regcomp(&k->re, w, REG_EXTENDED); k->has_re = ok; }
-            else if (!strcmp(w, "as")) ok = NEXT(k->as);
+            else if (!strcmp(w, "as")) { ok = k->nas < 4 && name_next(&at, w, sizeof w); if (ok) snprintf(k->as[k->nas++], sizeof k->as[0], "%s", w); }
             else if (!strcmp(w, "to") && what >= 3 && !to) { to = 1; k = &x->b; if (what == 3) snprintf(k->list, sizeof k->list, "%s", x->a.list); ok = NEXT(k->path) && (what == 3 || NEXT(k->list)); }
             else ok = 0; }
         #undef NEXT
@@ -487,7 +489,7 @@ static int thing_of(Sink *k, const STree *t, int32_t g, Ref *out, int depth);
 static int thing_compose(Sink *k, const STree *t, int32_t g, Ref *out, int depth);
 /* What a part is, by its disposition: content, the type it is a key of, the thing it is a key of; or nothing. */
 typedef struct { char k[16][160]; int n; } Keys;
-static void key_form(const KSpec *ks, const uint8_t *v, size_t n, Keys *out);
+static void key_form(const KSpec *ks, const uint8_t *v, size_t n, Keys *out, const STree *t, int32_t at);
 static int value_of(Sink *k, const STree *t, int32_t c, Ref *out, int depth){
     const SNode *x = &t->n[c]; const Say *s = k->s; const Dis *d = dis_of(s, x);
     if (x->kind == S_GROUP && x->join == S_PIECES && x->first >= 0 && t->n[x->first].next >= 0) {      /* a list of values: the tuple of what each is ([display text, target]) */
@@ -516,10 +518,12 @@ static int value_of(Sink *k, const STree *t, int32_t c, Ref *out, int depth){
         for (int more = 1; more; ) { more = 0;                                /* white space around it, a no-break space (U+00A0) among it */
             if (kn && (*kp == ' ' || *kp == '\t')) { kp++; kn--; more = 1; } else if (kn >= 2 && kp[0] == 0xC2 && kp[1] == 0xA0) { kp += 2; kn -= 2; more = 1; }
             if (kn && (kp[kn - 1] == ' ' || kp[kn - 1] == '\t' || kp[kn - 1] == '\r')) { kn--; more = 1; } else if (kn >= 2 && kp[kn - 2] == 0xC2 && kp[kn - 1] == 0xA0) { kn -= 2; more = 1; } }
-        Keys kf; if (d->k.has_re || d->k.as[0]) { kf.n = 0; key_form(&d->k, kp, kn, &kf); if (!kf.n) return 0; kp = (const uint8_t *)kf.k[0]; kn = strlen(kf.k[0]); }     /* the key as the lists write it; a key the pattern does not match is no key of theirs */
-        Ref v = string_ref(kp, kn);
-        for (char *ln = strtok_r(lists, " ", &save); ln; ln = strtok_r(NULL, " ", &save)) { int has = 0; *out = highway_typed(ln, kp, kn, &has); if (has) return 1;
-            const lp_list *L = HW ? lp_highway_list(HW, ln) : NULL; if (L && lp_highway_slot(HW, L, &v.id) >= 0) { *out = v; return 1; } }
+        Keys kf; kf.n = 0; if (d->k.has_re || d->k.nas) { key_form(&d->k, kp, kn, &kf, t, c); if (!kf.n) return 0; }     /* the key as the lists write it; a key the pattern does not match is no key of theirs */
+        int nk = kf.n ? kf.n : 1;                                              /* with no template, the key as written, once */
+        for (int j = 0; j < nk; j++) { if (kf.n) { kp = (const uint8_t *)kf.k[j]; kn = strlen(kf.k[j]); } Ref v = string_ref(kp, kn);     /* each template's key in turn: the first a list knows */
+            snprintf(lists, sizeof lists, "%s", d->arg); save = NULL;
+            for (char *ln = strtok_r(lists, " ", &save); ln; ln = strtok_r(NULL, " ", &save)) { int has = 0; *out = highway_typed(ln, kp, kn, &has); if (has) return 1;
+                const lp_list *L = HW ? lp_highway_list(HW, ln) : NULL; if (L && lp_highway_slot(HW, L, &v.id) >= 0) { *out = v; return 1; } } }
         k->unknown++; if (k->nunk < 8) snprintf(k->unknm[k->nunk++], 96, "%.*s %.*s", (int)(x->nlen < 40 ? x->nlen : 40), x->name, (int)(x->vlen < 48 ? x->vlen : 48), x->val);     /* a key no list of the highway holds: said, never taken for text */
         return 0; }
     if (d->what == D_CODEPOINTS || d->what == D_RANGE) {
@@ -727,23 +731,32 @@ static float score_of(const Say *s, const STree *t, int32_t g){
     return 1.0f;
 }
 /* A key as the highway keeps it: the text as written, or, where the line gives a pattern, what it matches written as
- * the template says (\0 the whole, \1 to \9 its parts; with no template, its first part, or the whole). */
-static void key_form(const KSpec *ks, const uint8_t *v, size_t n, Keys *out){
-    if (out->n == 16 || !n || n >= 160) return; char z[160]; memcpy(z, v, n); z[n] = 0;
+ * the template says (\0 the whole, \1 to \9 its parts; with no template, its first part, or the whole). {NAME} in a
+ * template is the text of the part NAME beside it, in what holds both (wndb.5: a pointer's synset_offset is a synset
+ * only with its pos: \0-{pos}); where there is no such part, that template makes no key. Several templates are each a
+ * key, in order (as \0-{pos} as \0-s: the first a list knows). */
+static void key_form(const KSpec *ks, const uint8_t *v, size_t n, Keys *out, const STree *t, int32_t at){
+    if (!n || n >= 160) return; char z[160]; memcpy(z, v, n); z[n] = 0;
     regmatch_t m[10]; for (int i = 0; i < 10; i++) m[i].rm_so = m[i].rm_eo = -1; m[0].rm_so = 0; m[0].rm_eo = (regoff_t)n;
     if (ks->has_re && regexec(&ks->re, z, 10, m, 0)) return;
-    const char *tp = ks->as[0] ? ks->as : ks->has_re && m[1].rm_so >= 0 ? "\\1" : "\\0"; char *o = out->k[out->n]; size_t k = 0;
-    for (const char *c = tp; *c && k + 1 < 160; c++) {
-        if (*c == '\\' && c[1] >= '0' && c[1] <= '9') { int d = c[1] - '0'; c++; if (m[d].rm_so < 0) continue; size_t l = (size_t)(m[d].rm_eo - m[d].rm_so); if (k + l >= 160) return; memcpy(o + k, z + m[d].rm_so, l); k += l; }
-        else o[k++] = *c; }
-    o[k] = 0; if (k) out->n++;
+    int nt = ks->nas ? ks->nas : 1;
+    for (int ti = 0; ti < nt && out->n < 16; ti++) {
+        const char *tp = ks->nas ? ks->as[ti] : ks->has_re && m[1].rm_so >= 0 ? "\\1" : "\\0"; char *o = out->k[out->n]; size_t k = 0; int ok = 1;
+        for (const char *c = tp; *c && k + 1 < 160 && ok; c++) {
+            if (*c == '\\' && c[1] >= '0' && c[1] <= '9') { int d = c[1] - '0'; c++; if (m[d].rm_so < 0) continue; size_t l = (size_t)(m[d].rm_eo - m[d].rm_so); if (k + l >= 160) { ok = 0; break; } memcpy(o + k, z + m[d].rm_so, l); k += l; }
+            else if (*c == '{' && strchr(c, '}')) { const char *e = strchr(c, '}'); char nm[64]; size_t nl = (size_t)(e - c - 1); if (nl >= sizeof nm) { ok = 0; break; } memcpy(nm, c + 1, nl); nm[nl] = 0;
+                int32_t up = t && at >= 0 ? t->n[at].parent : -1, sib = up >= 0 ? s_child(t, up, nm, -1) : -1;
+                if (sib < 0 || !t->n[sib].vlen || k + t->n[sib].vlen >= 160) { ok = 0; break; }
+                memcpy(o + k, t->n[sib].val, t->n[sib].vlen); k += t->n[sib].vlen; c = e; }
+            else o[k++] = *c; }
+        o[k] = 0; if (ok && k) out->n++; }
 }
 /* Every key a part names at a path: each value there, and each piece of a value written in pieces. */
 static void keys_at(const Say *s, const STree *t, int32_t g, const KSpec *ks, Keys *out){
     out->n = 0; int32_t at[WHO]; int na = all_path(t, g, ks->path, at, WHO);
     for (int i = 0; i < na; i++) { const SNode *x = &t->n[at[i]];
-        if (x->kind != S_GROUP) { if (!left_empty(s, x)) key_form(ks, x->val, x->vlen, out); continue; }
-        for (int32_t q = x->first; q >= 0; q = t->n[q].next) if (t->n[q].kind != S_GROUP && !left_empty(s, &t->n[q])) key_form(ks, t->n[q].val, t->n[q].vlen, out); }
+        if (x->kind != S_GROUP) { if (!left_empty(s, x)) key_form(ks, x->val, x->vlen, out, t, at[i]); continue; }
+        for (int32_t q = x->first; q >= 0; q = t->n[q].next) if (t->n[q].kind != S_GROUP && !left_empty(s, &t->n[q])) key_form(ks, t->n[q].val, t->n[q].vlen, out, t, q); }
 }
 /* The file's key for every part of the unit named the key's tier, wherever it is in the unit (an instance of a sentence
  * of an XML document read as one tree, or a row that is the unit itself), kept for the source's other files that point
