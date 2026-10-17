@@ -87,6 +87,9 @@ Firmware firmware_for(const char *path, int op){
             if (k_ != 4) { fprintf(stderr, "%s:%d: lexicalization RECIPE THING LANGUAGE CONCEPT\n", fw.path, line); exit(2); } }
         else if (!strcmp(tok, "gloss") && in == FW_TRANSLATE) { char *a_ = strtok(NULL, " \t\r\n"), *b_ = strtok(NULL, " \t\r\n");
             if (!a_ || !b_ || a_[0] == '#' || b_[0] == '#') { fprintf(stderr, "%s:%d: gloss RECIPE NAME\n", fw.path, line); exit(2); } snprintf(fw.gloss[0], 96, "%s", a_); snprintf(fw.gloss[1], 96, "%s", b_); }
+        else if (!strcmp(tok, "equivalent") && in == FW_TRANSLATE) { char *nm; int k_ = 0;           /* equivalent RECIPE NAME...: the relations RECIPE declares between a language's codes (pull.c) */
+            while (k_ < 5 && (nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') snprintf(fw.equiv[k_++], 96, "%s", nm);
+            if (k_ < 2) { fprintf(stderr, "%s:%d: equivalent RECIPE NAME...\n", fw.path, line); exit(2); } fw.nequiv = k_ - 1; }
         else if ((!strcmp(tok, "up") || !strcmp(tok, "language")) && in == FW_TRANSLATE) {      /* the relations' names, written a second time here, drifted from the recipe's (Laplace-Engine#32) */
             fprintf(stderr, "%s:%d: %s: translate reads its way from the recipe's own declarations: lexicalization RECIPE THING LANGUAGE CONCEPT\n", fw.path, line, tok); exit(2); }
         else { fprintf(stderr, "%s:%d: %s is not a decision a firmware makes\n", fw.path, line, tok); exit(2); }

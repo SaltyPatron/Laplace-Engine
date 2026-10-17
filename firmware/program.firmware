@@ -39,6 +39,8 @@
 #                              that are its LANGUAGE and its CONCEPT; up to the concept, and back down in another language
 #   gloss RECIPE NAME          for translate: what is shown of a concept: the relation RECIPE declares of NAME, said of
 #                              what has the concept as its value
+#   equivalent RECIPE NAME...  for translate: the relations RECIPE declares of each NAME between a language's code and
+#                              its equivalent in another code set; a language asked is every code they join
 #   take chain N RELATION...   from each of the N words that pull hardest, the relations followed in order, each by its
 #                              witness's order then its standing: where the chain ends is the answer. Chains
 #                              parted by | are tried in turn until one reaches its end (a form through its lemma)
@@ -76,6 +78,8 @@ for translate
   # the recipe's, resolved from its declarations, so the two cannot drift. Another firmware may go up another way.
   lexicalization wn-lmf Sense language ili
   gloss wn-lmf Definition
+  # a language as every code set writes it: the codes ISO 639-3's table states are one language's (en, eng)
+  equivalent iso-639-3 Part1 Part2b Part2t
 
 for pull
   fan 4096
