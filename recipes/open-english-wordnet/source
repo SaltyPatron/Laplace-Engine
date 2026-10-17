@@ -1,7 +1,6 @@
 name open-english-wordnet
-# Open English WordNet. The witness is named as the lexicon names itself.
-witness {first label}
-called Open English WordNet
+# Open English WordNet: one source trunk and one witness (Laplace-Engine#28).
+witness Open English WordNet
 lineage WordNet
 class AcademicCurated
 root $LAPLACE_DATA/OpenEnglishWordNet-*

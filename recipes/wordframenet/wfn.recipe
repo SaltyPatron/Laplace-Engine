@@ -1,0 +1,13 @@
+name wordframenet-wfn
+# WFN/WordFrameNet: FrameNet frames aligned to WordNet words, parts of speech, synset offsets, and glosses.
+match WordFrameNet
+witness WordFrameNet
+class AcademicCurated
+tier block by \n\n
+names frame row...
+tier line by \n
+part frame by space pieces 2
+content frame row
+thing block frame/2
+attest block row
+value - row

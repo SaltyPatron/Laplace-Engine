@@ -1,6 +1,9 @@
 name project-gutenberg
+witness Project Gutenberg
 called Project Gutenberg
-# Books from Project Gutenberg, as plain text. Ordinary content: it is observed, and attests nothing.
+class UserCuratedResource
+# Books and reference works from Project Gutenberg. Reference works (dictionary, thesaurus, encyclopedia) attest
+# curated entries and definitions; ordinary books are observed as plain text.
 root $LAPLACE_DATA/ProjectGutenberg/text
 # Measured when it was loaded: 2,791,039 compositions from 208 MB, at 750 bytes each with their indexes and standings.
 room 11

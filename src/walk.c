@@ -79,6 +79,32 @@ void witnesses_known(PGconn *pg, Root *r, size_t n){
 /* Who said these claims: one row a claim and the trunk above it, with what the records under it said of the claim. */
 Attested *attested(PGconn *pg, const lp_id *claims, int n, int *nout, uint64_t *rows){
     *nout = 0; if (n <= 0) return NULL;
+    static int has_pg_attested = -1;
+    if (has_pg_attested < 0) {
+        PGresult *pr = ask_once(pg, "SELECT to_regprocedure('laplace_attested(blake3[])') IS NOT NULL", NULL);
+        has_pg_attested = (PQntuples(pr) > 0 && PQgetvalue(pr, 0, 0)[0] == 't') ? 1 : 0;
+        PQclear(pr);
+    }
+    if (has_pg_attested) {
+        Args q = { 0 }; arg_ids(&q, claims, (size_t)n);
+        PGresult *r = ask_once(pg, "SELECT claim, trunk, games, tokens, score, \"position\", trust, witness FROM laplace_attested($1::blake3[])", &q);
+        args_free(&q);
+        int nr = PQntuples(r); if (rows) *rows += (uint64_t)nr;
+        Attested *out = calloc((size_t)(nr ? nr : 1), sizeof(Attested));
+        for (int i = 0; i < nr; i++) {
+            out[i].claim    = *col_id(r, i, 0);
+            out[i].trunk    = *col_id(r, i, 1);
+            out[i].games    = col_f64(r, i, 2);
+            out[i].tokens   = col_f64(r, i, 3);
+            out[i].score    = col_f64(r, i, 4);
+            out[i].position = (uint32_t)col_int(r, i, 5);
+            out[i].trust    = col_f64(r, i, 6);
+            out[i].witness  = PQgetvalue(r, i, 7)[0] != 0;
+        }
+        PQclear(r);
+        *nout = nr;
+        return out;
+    }
     Dag d = { 0 }; uint64_t rd_rows = 0; walk_up(&d, claims, (size_t)n, &rd_rows); if (rows) *rows += rd_rows;
     lp_vec(Root) roots = { 0 }; lp_vec(size_t) at = { 0 };
     for (size_t i = (size_t)n; i < d.nn; i++) if (!d.n[i].nparents) { lp_push(&roots, (Root){ d.n[i].id, 0, 0, 0 }); lp_push(&at, i); }
@@ -118,7 +144,7 @@ int walk_down(PGconn *pg, const lp_id *top, Dag *d, uint64_t *rows){
                 size_t nv = lp_path_vertices((const uint8_t *)PQgetvalue(r, j, 1), (size_t)PQgetlength(r, j, 1), NULL, 0); lp_vec_reserve(&vx, nv ? nv : 1);
                 lp_path_vertices((const uint8_t *)PQgetvalue(r, j, 1), (size_t)PQgetlength(r, j, 1), vx.v, nv);
                 int meta = nv && vx.v[0].said == LP_SAID_METADATA; d->n[ei].metadata = (uint8_t)meta;
-                if (cls == C_SRC && meta) cls = C_FILE;                       /* a source of one file: the file is its content */
+                if ((cls == C_TOP || cls == C_SRC) && meta) cls = C_FILE;     /* a single file witness or a source of one file: the file is its content */
                 if (cls == C_FILE && !meta) cls = C_BLOCK;                    /* a file with no metadata is its content */
                 if (cls == C_REC) {
                     int has = 0; for (size_t v = 0; v < nv && !has; v++) has = vx.v[v].said == LP_SAID_CLAIM;

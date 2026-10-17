@@ -218,6 +218,39 @@ static void sources_order(void){
     for (int i = 0; i < nrecipes_now; i++) if (recipes_now[i].source >= 0) recipes_now[i].source = at[recipes_now[i].source];
     free(at);
 }
+static const struct { const char *name, *grammar, *match[8]; } generic_specs[] = {
+    { "csv",        "csv",        { "*.csv", NULL } },
+    { "tsv",        "tsv",        { "*.tsv", "*.tab", NULL } },
+    { "psv",        "psv",        { "*.psv", NULL } },
+    { "html",       "html",       { "*.html", "*.htm", NULL } },
+    { "c",          "c",          { "*.c", "*.h", NULL } },
+    { "cpp",        "cpp",        { "*.cpp", "*.cc", "*.cxx", "*.hpp", "*.hh", "*.hxx", NULL } },
+    { "c_sharp",    "c_sharp",    { "*.cs", NULL } },
+    { "python",     "python",     { "*.py", "*.pyi", NULL } },
+    { "javascript", "javascript", { "*.js", "*.mjs", "*.cjs", "*.jsx", NULL } },
+    { "typescript", "typescript", { "*.ts", "*.mts", "*.cts", NULL } },
+    { "tsx",        "tsx",        { "*.tsx", NULL } },
+    { "rust",       "rust",       { "*.rs", NULL } },
+    { "go",         "go",         { "*.go", NULL } },
+    { "java",       "java",       { "*.java", NULL } },
+    { "kotlin",     "kotlin",     { "*.kt", "*.kts", NULL } },
+    { "ruby",       "ruby",       { "*.rb", NULL } },
+    { "php",        "php",        { "*.php", NULL } },
+    { "bash",       "bash",       { "*.sh", "*.bash", "*.zsh", NULL } },
+    { "cmake",      "cmake",      { "*.cmake", "CMakeLists.txt", NULL } },
+    { "cuda",       "cuda",       { "*.cu", "*.cuh", NULL } },
+    { "fortran",    "fortran",    { "*.f", "*.f90", "*.f95", "*.for", NULL } },
+    { "glsl",       "glsl",       { "*.glsl", "*.vert", "*.frag", "*.comp", NULL } },
+    { "hlsl",       "hlsl",       { "*.hlsl", "*.fx", NULL } },
+    { "ispc",       "ispc",       { "*.ispc", NULL } },
+    { "julia",      "julia",      { "*.jl", NULL } },
+    { "llvm",       "llvm",       { "*.ll", NULL } },
+    { "mlir",       "mlir",       { "*.mlir", NULL } },
+    { "nasm",       "nasm",       { "*.nasm", "*.asm", "*.s", NULL } },
+    { "wgsl",       "wgsl",       { "*.wgsl", NULL } },
+    { "zig",        "zig",        { "*.zig", NULL } },
+    { "dtd",        "dtd",        { "*.dtd", NULL } },
+};
 Recipe *recipes_now; int nrecipes_now;
 int recipes_load(const char *dir, Recipe **out){
     if (recipes_now) { *out = recipes_now; return nrecipes_now; }
@@ -229,20 +262,59 @@ int recipes_load(const char *dir, Recipe **out){
         snprintf(r[i].name, sizeof r[i].name, "%s", me.name); memcpy(r[i].match, me.match, sizeof me.match); r[i].nmatch = me.nmatch; r[i].source = me.source;
         memcpy(r[i].witness, me.witness, sizeof me.witness); memcpy(r[i].lineage, me.lineage, sizeof me.lineage); r[i].trust = me.trust; r[i].like[0] = 0;
     }
+    size_t ngen = sizeof(generic_specs) / sizeof(generic_specs[0]);
+    for (size_t g = 0; g < ngen; g++) {
+        int exists = 0; for (int i = 0; i < n && !exists; i++) if (r[i].source < 0 && !strcmp(r[i].name, generic_specs[g].name)) exists = 1;
+        if (exists) continue;
+        r = xrealloc(r, sizeof(Recipe) * (size_t)(n + 1)); Recipe *x = &r[n++]; memset(x, 0, sizeof *x);
+        snprintf(x->name, sizeof x->name, "%s", generic_specs[g].name);
+        snprintf(x->file, sizeof x->file, "<generic:%s>", generic_specs[g].name);
+        snprintf(x->grammar, sizeof x->grammar, "%s", generic_specs[g].grammar);
+        for (int m = 0; generic_specs[g].match[m] && x->nmatch < 16; m++) snprintf(x->match[x->nmatch++], 256, "%s", generic_specs[g].match[m]);
+        x->source = -1; x->trust = 0.60; x->curated = 0; x->lang = NULL;
+    }
+    for (int i = 0; i < n; i++) if (r[i].source < 0 && r[i].trust == 0.0) r[i].trust = 0.60;
     recipes_now = r; nrecipes_now = n; snprintf(order_dir, sizeof order_dir, "%s", dir); sources_order();
     *out = r; return n;
 }
 Source *sources_loaded(int *n){ *n = nsources; return sources; }
 static int reads(const Source *s, const Recipe *r){ for (int i = 0; i < s->nreads; i++) if (!strcmp(s->reads[i], r->name)) return 1; return 0; }
+static int under_source_root(const Source *s, const char *path){
+    if (!s->found[0]) return 0;
+    size_t fl = strlen(s->found);
+    if (strncmp(path, s->found, fl) != 0) return 0;
+    return path[fl] == 0 || path[fl] == '/' || path[fl] == '\\';
+}
+static Recipe *by_recipe_name(Recipe *r, int n, const char *name){
+    for (int i = 0; i < n; i++) if (r[i].source < 0 && !r[i].broken && !strcmp(r[i].name, name)) return &r[i];
+    return NULL;
+}
+static Recipe *sniff_generic_recipe(Recipe *r, int n, const char *path){
+    FILE *fp = fopen(path, "rb"); if (!fp) return NULL;
+    uint8_t buf[4096]; size_t m = fread(buf, 1, sizeof buf, fp); fclose(fp);
+    if (!m) return by_recipe_name(r, n, "text");
+    for (size_t i = 0; i < m; i++) if (buf[i] == 0) return NULL;             /* binary file with NUL bytes */
+    size_t i = 0; if (m >= 3 && buf[0] == 0xEF && buf[1] == 0xBB && buf[2] == 0xBF) i = 3;
+    while (i < m && (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\r' || buf[i] == '\n')) i++;
+    if (i < m) {
+        if (buf[i] == '{' || buf[i] == '[') return by_recipe_name(r, n, "json");
+        if (m - i >= 5 && !strncasecmp((const char *)buf + i, "<?xml", 5)) return by_recipe_name(r, n, "xml");
+        if (m - i >= 9 && !strncasecmp((const char *)buf + i, "<!doctype", 9)) return by_recipe_name(r, n, "html");
+        if (m - i >= 5 && !strncasecmp((const char *)buf + i, "<html", 5)) return by_recipe_name(r, n, "html");
+    }
+    return by_recipe_name(r, n, "text");
+}
 Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of){
     const char *b0 = strrchr(path, '/'); b0 = b0 ? b0 + 1 : path;
     char base[1024]; snprintf(base, sizeof base, "%s", b0);
     size_t bl = strlen(base); if (bl > 3 && !strcmp(base + bl - 3, ".gz")) base[bl - 3] = 0;   /* matched by what it holds */
+    if (!of) for (int s = 0; s < nsources; s++) if (under_source_root(&sources[s], path)) { of = &sources[s]; break; }
     Recipe *best = NULL; size_t best_lit = 0;                              /* the most specific pattern wins */
     for (int i = 0; of && i < of->nexcept; i++) if (!os_fnmatch(of->except[i], path)) return NULL;
     for (int i = 0; i < n; i++) {
         if (r[i].broken) continue;
-        if (of && !(r[i].source >= 0 && &sources[r[i].source] == of) && !(r[i].source < 0 && reads(of, &r[i]))) continue;
+        if (of) { if (!(r[i].source >= 0 && &sources[r[i].source] == of) && !(r[i].source < 0 && reads(of, &r[i]))) continue; }
+        else if (r[i].source >= 0) continue;                               /* user file outside any seeded corpus root: generic recipes only */
         for (int j = 0; j < r[i].nmatch; j++) {
             if (strchr(r[i].match[j], '/')) {                               /* a pattern with a directory in it: matched against the end of the path */
                 char pat[300], whole[1024]; snprintf(pat, sizeof pat, "*/%s", r[i].match[j]); snprintf(whole, sizeof whole, "%s", path);
@@ -253,6 +325,10 @@ Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of){
             if (!best || lit > best_lit) { best = &r[i]; best_lit = lit; }
         }
     }
+    if (!best && !of) best = sniff_generic_recipe(r, n, path);
+    if (best && !best->curated && best->grammar[0] && strcmp(best->grammar, "text") != 0 && !best->lang)
+        if (strcmp(best->grammar, "csv") != 0 && strcmp(best->grammar, "tsv") != 0 && strcmp(best->grammar, "psv") != 0)
+            best->lang = grammar_load(best->grammar);
     return best;
 }
 
@@ -406,6 +482,239 @@ void decompose_file(Ctx *c, File *f){
     size_t n; uint8_t *src0 = read_all(f->path, &n); if (!src0) { f->skipped = 1; return; }
     f->bytes = n; decompose_bytes(c, f, src0, n, 1); free(src0);
 }
+/* ---- Generic structural attestation extraction for user uploads & non-curated files ---- */
+typedef struct { Ref *claims; size_t n, cap; } GenRec;
+static void gen_claim_add(GenRec *gr, File *f, const Ref *parts, size_t np){
+    if (np < 2) return;
+    Ref p[8]; if (np > 8) np = 8;
+    for (size_t i = 0; i < np; i++) { if (!parts[i].tier) return; p[i] = parts[i]; p[i].said = 0; }
+    uint32_t pos = gr->n < 254 ? (uint32_t)(gr->n + 1) : 255;
+    Ref cl = compose(p, (uint32_t)np, ref_above(p, np));
+    Event ev = { .claim = cl.id, .witnessed = cl.id, .score = 1.0f, .kind = EV_CLAIM, .run = 1, .position = pos };
+    ev_push(&f->ev, &ev);
+    cl.said = LP_SAID_CLAIM; cl.outcome = (uint8_t)lp_outcome_of(1.0, &cl.spare); cl.position = pos;
+    if (gr->n == gr->cap) { gr->cap = gr->cap ? gr->cap * 2 : 16; gr->claims = xrealloc(gr->claims, gr->cap * sizeof(Ref)); }
+    gr->claims[gr->n++] = cl;
+}
+static void gen_record_flush(GenRec *gr, File *f){
+    if (!gr->n) return;
+    Ref rec = gr->n == 1 ? gr->claims[0] : compose(gr->claims, (uint32_t)gr->n, ref_above(gr->claims, gr->n));
+    rec.said = LP_SAID_RECORD; if (gr->n > 1) { rec.outcome = 0; rec.position = 0; rec.spare = 0; }
+    if (f->nsaid == f->csaid) { f->csaid = f->csaid ? f->csaid * 2 : 64; f->said = xrealloc(f->said, f->csaid * sizeof(Ref)); }
+    f->said[f->nsaid++] = rec;
+    f->records++;
+    gr->n = 0;
+}
+static Ref span_trim_ref(const uint8_t *s, size_t len, int strip_quotes){
+    while (len > 0 && (s[0] == ' ' || s[0] == '\t' || s[0] == '\r' || s[0] == '\n')) { s++; len--; }
+    while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t' || s[len - 1] == '\r' || s[len - 1] == '\n')) len--;
+    if (strip_quotes && len >= 2 && ((s[0] == '"' && s[len - 1] == '"') || (s[0] == '\'' && s[len - 1] == '\''))) { s++; len -= 2; }
+    if (!len) return (Ref){0};
+    return string_ref(s, len);
+}
+static int is_id_key(const uint8_t *s, size_t n){
+    if (n >= 2 && ((s[0] == '"' && s[n - 1] == '"') || (s[0] == '\'' && s[n - 1] == '\''))) { s++; n -= 2; }
+    return (n == 2 && !strncasecmp((const char *)s, "id", 2)) ||
+           (n == 3 && (!strncasecmp((const char *)s, "key", 3) || !strncasecmp((const char *)s, "uri", 3) || !strncasecmp((const char *)s, "uid", 3))) ||
+           (n == 4 && (!strncasecmp((const char *)s, "name", 4) || !strncasecmp((const char *)s, "code", 4) || !strncasecmp((const char *)s, "slug", 4) || !strncasecmp((const char *)s, "uuid", 4))) ||
+           (n == 5 && (!strncasecmp((const char *)s, "title", 5) || !strncasecmp((const char *)s, "label", 5) || !strncasecmp((const char *)s, "about", 5))) ||
+           (n == 7 && !strncasecmp((const char *)s, "subject", 7));
+}
+static int json_scalar_ref(TSNode v, const uint8_t *src, Ref *out){
+    if (ts_node_is_null(v)) return 0;
+    const char *tp = ts_node_type(v);
+    if (!strcmp(tp, "string") || !strcmp(tp, "number") || !strcmp(tp, "true") || !strcmp(tp, "false")) {
+        uint32_t a = ts_node_start_byte(v), b = ts_node_end_byte(v);
+        *out = span_trim_ref(src + a, b - a, 1);
+        return out->tier != 0;
+    }
+    return 0;
+}
+static void attest_json_node(TSNode nd, const uint8_t *src, File *f, GenRec *gr){
+    const char *tp = ts_node_type(nd);
+    if (!strcmp(tp, "object")) {
+        uint32_t nc = ts_node_named_child_count(nd);
+        Ref subj = {0}; int has_subj = 0;
+        for (uint32_t i = 0; i < nc && !has_subj; i++) {
+            TSNode ch = ts_node_named_child(nd, i);
+            if (strcmp(ts_node_type(ch), "pair")) continue;
+            TSNode k = ts_node_child_by_field_name(ch, "key", 3);
+            TSNode v = ts_node_child_by_field_name(ch, "value", 5);
+            if (ts_node_is_null(k) || ts_node_is_null(v)) continue;
+            uint32_t ka = ts_node_start_byte(k), kb = ts_node_end_byte(k);
+            if (is_id_key(src + ka, kb - ka) && json_scalar_ref(v, src, &subj)) has_subj = 1;
+        }
+        gr->n = 0;
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode ch = ts_node_named_child(nd, i);
+            if (strcmp(ts_node_type(ch), "pair")) continue;
+            TSNode k = ts_node_child_by_field_name(ch, "key", 3);
+            TSNode v = ts_node_child_by_field_name(ch, "value", 5);
+            if (ts_node_is_null(k) || ts_node_is_null(v)) continue;
+            Ref kr = span_trim_ref(src + ts_node_start_byte(k), ts_node_end_byte(k) - ts_node_start_byte(k), 1);
+            Ref vr = {0};
+            if (json_scalar_ref(v, src, &vr)) {
+                if (has_subj && !lp_id_eq(&subj.id, &vr.id)) gen_claim_add(gr, f, (Ref[]){ subj, kr, vr }, 3);
+                else gen_claim_add(gr, f, (Ref[]){ kr, vr }, 2);
+            } else if (!strcmp(ts_node_type(v), "array")) {
+                uint32_t ac = ts_node_named_child_count(v);
+                for (uint32_t j = 0; j < ac; j++) {
+                    Ref avr = {0};
+                    if (json_scalar_ref(ts_node_named_child(v, j), src, &avr)) {
+                        if (has_subj) gen_claim_add(gr, f, (Ref[]){ subj, kr, avr }, 3);
+                        else gen_claim_add(gr, f, (Ref[]){ kr, avr }, 2);
+                    }
+                }
+            }
+        }
+        gen_record_flush(gr, f);
+    }
+    uint32_t nc = ts_node_named_child_count(nd);
+    for (uint32_t i = 0; i < nc; i++) attest_json_node(ts_node_named_child(nd, i), src, f, gr);
+}
+static void attest_xml_node(TSNode nd, const uint8_t *src, File *f, GenRec *gr, Ref parent_subj){
+    const char *tp = ts_node_type(nd);
+    Ref next_subj = parent_subj;
+    if (!strcmp(tp, "element")) {
+        uint32_t nc = ts_node_named_child_count(nd);
+        TSNode tag_parent = {0}; Ref tag_ref = {0}, subj_ref = {0}; int has_subj = 0;
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode ch = ts_node_named_child(nd, i); const char *ctp = ts_node_type(ch);
+            if (!strcmp(ctp, "STag") || !strcmp(ctp, "EmptyElemTag") || !strcmp(ctp, "start_tag") || !strcmp(ctp, "self_closing_tag")) { tag_parent = ch; break; }
+        }
+        if (!ts_node_is_null(tag_parent)) {
+            uint32_t tc = ts_node_named_child_count(tag_parent);
+            for (uint32_t i = 0; i < tc; i++) {
+                TSNode ch = ts_node_named_child(tag_parent, i); const char *ctp = ts_node_type(ch);
+                if (!tag_ref.tier && (!strcmp(ctp, "Name") || !strcmp(ctp, "tag_name")))
+                    tag_ref = span_trim_ref(src + ts_node_start_byte(ch), ts_node_end_byte(ch) - ts_node_start_byte(ch), 0);
+                else if (!strcmp(ctp, "Attribute") || !strcmp(ctp, "attribute")) {
+                    uint32_t ac = ts_node_named_child_count(ch);
+                    if (ac >= 2) {
+                        TSNode ak = ts_node_named_child(ch, 0), av = ts_node_named_child(ch, 1);
+                        uint32_t ka = ts_node_start_byte(ak), kb = ts_node_end_byte(ak);
+                        if (!has_subj && is_id_key(src + ka, kb - ka)) {
+                            subj_ref = span_trim_ref(src + ts_node_start_byte(av), ts_node_end_byte(av) - ts_node_start_byte(av), 1);
+                            if (subj_ref.tier) has_subj = 1;
+                        }
+                    }
+                }
+            }
+            if (has_subj) next_subj = subj_ref;
+            gr->n = 0;
+            Ref head = has_subj ? subj_ref : tag_ref;
+            for (uint32_t i = 0; i < tc; i++) {
+                TSNode ch = ts_node_named_child(tag_parent, i); const char *ctp = ts_node_type(ch);
+                if (!strcmp(ctp, "Attribute") || !strcmp(ctp, "attribute")) {
+                    uint32_t ac = ts_node_named_child_count(ch);
+                    if (ac >= 2) {
+                        TSNode ak = ts_node_named_child(ch, 0), av = ts_node_named_child(ch, 1);
+                        Ref kr = span_trim_ref(src + ts_node_start_byte(ak), ts_node_end_byte(ak) - ts_node_start_byte(ak), 0);
+                        Ref vr = span_trim_ref(src + ts_node_start_byte(av), ts_node_end_byte(av) - ts_node_start_byte(av), 1);
+                        if (head.tier && kr.tier && vr.tier) {
+                            if (has_subj && lp_id_eq(&head.id, &vr.id)) gen_claim_add(gr, f, (Ref[]){ kr, vr }, 2);
+                            else gen_claim_add(gr, f, (Ref[]){ head, kr, vr }, 3);
+                        }
+                    }
+                }
+            }
+            Ref owner = has_subj ? subj_ref : parent_subj;
+            for (uint32_t i = 0; i < nc; i++) {
+                TSNode ch = ts_node_named_child(nd, i); const char *ctp = ts_node_type(ch);
+                if (!strcmp(ctp, "content")) {
+                    uint32_t cc = ts_node_named_child_count(ch);
+                    for (uint32_t j = 0; j < cc; j++) {
+                        TSNode cch = ts_node_named_child(ch, j);
+                        if (!strcmp(ts_node_type(cch), "CharData")) {
+                            Ref tr = span_trim_ref(src + ts_node_start_byte(cch), ts_node_end_byte(cch) - ts_node_start_byte(cch), 0);
+                            if (tr.tier && tag_ref.tier) {
+                                if (owner.tier) gen_claim_add(gr, f, (Ref[]){ owner, tag_ref, tr }, 3);
+                                else gen_claim_add(gr, f, (Ref[]){ tag_ref, tr }, 2);
+                            }
+                        }
+                    }
+                } else if (!strcmp(ctp, "text")) {
+                    Ref tr = span_trim_ref(src + ts_node_start_byte(ch), ts_node_end_byte(ch) - ts_node_start_byte(ch), 0);
+                    if (tr.tier && tag_ref.tier) {
+                        if (owner.tier) gen_claim_add(gr, f, (Ref[]){ owner, tag_ref, tr }, 3);
+                        else gen_claim_add(gr, f, (Ref[]){ tag_ref, tr }, 2);
+                    }
+                }
+            }
+            gen_record_flush(gr, f);
+        }
+    }
+    uint32_t nc = ts_node_named_child_count(nd);
+    for (uint32_t i = 0; i < nc; i++) attest_xml_node(ts_node_named_child(nd, i), src, f, gr, next_subj);
+}
+static TSNode find_ident(TSNode nd, int depth){
+    if (ts_node_is_null(nd) || depth > 4) return (TSNode){0};
+    const char *tp = ts_node_type(nd);
+    if (!strcmp(tp, "identifier") || !strcmp(tp, "type_identifier") || !strcmp(tp, "field_identifier") || !strcmp(tp, "property_identifier"))
+        return nd;
+    TSNode nm = ts_node_child_by_field_name(nd, "name", 4);
+    if (!ts_node_is_null(nm)) { TSNode r = find_ident(nm, depth + 1); if (!ts_node_is_null(r)) return r; }
+    TSNode dc = ts_node_child_by_field_name(nd, "declarator", 10);
+    if (!ts_node_is_null(dc)) { TSNode r = find_ident(dc, depth + 1); if (!ts_node_is_null(r)) return r; }
+    return (TSNode){0};
+}
+static void attest_code_node(TSNode nd, const uint8_t *src, File *f, GenRec *gr){
+    const char *tp = ts_node_type(nd);
+    if (strstr(tp, "definition") || strstr(tp, "declaration") || strstr(tp, "specifier") || strstr(tp, "item") || !strcmp(tp, "method_declaration") || !strcmp(tp, "class_declaration") || !strcmp(tp, "interface_declaration") || !strcmp(tp, "struct_specifier") || !strcmp(tp, "function_item") || !strcmp(tp, "struct_item") || !strcmp(tp, "enum_item") || !strcmp(tp, "trait_item")) {
+        TSNode id = find_ident(nd, 0);
+        if (!ts_node_is_null(id)) {
+            Ref kind_ref = string_ref((const uint8_t *)tp, strlen(tp));
+            Ref sym_ref = span_trim_ref(src + ts_node_start_byte(id), ts_node_end_byte(id) - ts_node_start_byte(id), 0);
+            if (kind_ref.tier && sym_ref.tier) gen_claim_add(gr, f, (Ref[]){ kind_ref, sym_ref }, 2);
+        }
+    }
+    uint32_t nc = ts_node_named_child_count(nd);
+    for (uint32_t i = 0; i < nc; i++) attest_code_node(ts_node_named_child(nd, i), src, f, gr);
+}
+static void attest_delimited(File *f, const uint8_t *src, size_t n, char sep){
+    size_t pos = 0; if (n >= 3 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF) pos = 3;
+    Ref hdr[256]; int nhdr = 0, first_row = 1;
+    GenRec gr = {0};
+    while (pos < n) {
+        size_t line_end = pos; while (line_end < n && src[line_end] != '\n') line_end++;
+        size_t le = line_end; if (le > pos && src[le - 1] == '\r') le--;
+        if (le > pos && src[pos] != '#') {
+            Ref cells[256]; int nc = 0;
+            size_t c = pos;
+            while (c <= le && nc < 256) {
+                size_t cs = c, ce = c;
+                if (c < le && src[c] == '"') {
+                    cs = ++c;
+                    while (c < le) { if (src[c] == '"') { if (c + 1 < le && src[c + 1] == '"') { c += 2; continue; } break; } c++; }
+                    ce = c; while (c < le && src[c] != sep) c++;
+                } else {
+                    while (c < le && src[c] != sep) c++;
+                    ce = c;
+                }
+                cells[nc++] = span_trim_ref(src + cs, ce - cs, 1);
+                if (c == le) break;
+                c++;
+            }
+            if (first_row) {
+                first_row = 0; nhdr = nc;
+                for (int i = 0; i < nc; i++) hdr[i] = cells[i];
+            } else if (nc > 0) {
+                gr.n = 0;
+                Ref subj = cells[0];
+                for (int i = 0; i < nc; i++) {
+                    if (!cells[i].tier) continue;
+                    Ref col = (i < nhdr && hdr[i].tier) ? hdr[i] : (Ref){0};
+                    if (subj.tier && i > 0 && col.tier) gen_claim_add(&gr, f, (Ref[]){ subj, col, cells[i] }, 3);
+                    else if (col.tier) gen_claim_add(&gr, f, (Ref[]){ col, cells[i] }, 2);
+                    else if (subj.tier && i > 0) gen_claim_add(&gr, f, (Ref[]){ subj, cells[i] }, 2);
+                }
+                gen_record_flush(&gr, f);
+            }
+        }
+        pos = line_end + 1;
+    }
+    free(gr.claims);
+}
 void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
     const Recipe *r = f->recipe;
     if (r && r->curated) {
@@ -416,10 +725,49 @@ void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
             if (l[0]) { f->lineage = text_ref(c, (const uint8_t *)l, strlen(l)); f->has_lineage = 1; } }
         if (r->chess) { chess_read(r, f, src, n); return; }                 /* PGN (chess.c) */
         attest_layout(r, f, src, n); return; }
+    if (r && (!strcmp(r->grammar, "csv") || !strcmp(r->grammar, "tsv") || !strcmp(r->grammar, "psv"))) {
+        f->trunk = text_ref(c, src, n);
+        char sep = !strcmp(r->grammar, "tsv") ? '\t' : (!strcmp(r->grammar, "psv") ? '|' : ',');
+        attest_delimited(f, src, n, sep);
+        return;
+    }
     if (!r || !r->lang) { f->trunk = text_ref(c, src, n); return; }        /* text: UAX #29 */
     TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang);     /* content: the file as its syntax tree, byte for byte */
     TSTree *t = ts_parser_parse_string(ps, NULL, (const char *)src, (uint32_t)n);
-    f->trunk = ast_node(ts_tree_root_node(t), src, 0, (uint32_t)n, 0);
+    TSNode root = ts_tree_root_node(t);
+    f->trunk = ast_node(root, src, 0, (uint32_t)n, 0);
+    GenRec gr = {0};
+    if (!strcmp(r->grammar, "json")) attest_json_node(root, src, f, &gr);
+    else if (!strcmp(r->grammar, "xml") || !strcmp(r->grammar, "html")) attest_xml_node(root, src, f, &gr, (Ref){0});
+    else if (!strcmp(r->grammar, "turtle")) {
+        uint32_t nc = ts_node_named_child_count(root);
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode st = ts_node_named_child(root, i);
+            if (strcmp(ts_node_type(st), "statement")) continue;
+            TSNode tr = ts_node_named_child(st, 0);
+            if (ts_node_is_null(tr) || strcmp(ts_node_type(tr), "triples")) continue;
+            TSNode s_nd = ts_node_named_child(tr, 0), pol = ts_node_named_child(tr, 1);
+            if (ts_node_is_null(s_nd) || ts_node_is_null(pol)) continue;
+            Ref sr = span_trim_ref(src + ts_node_start_byte(s_nd), ts_node_end_byte(s_nd) - ts_node_start_byte(s_nd), 1);
+            gr.n = 0;
+            uint32_t pc = ts_node_named_child_count(pol);
+            for (uint32_t j = 0; j + 1 < pc; j += 2) {
+                TSNode vb = ts_node_named_child(pol, j), ol = ts_node_named_child(pol, j + 1);
+                Ref vr = span_trim_ref(src + ts_node_start_byte(vb), ts_node_end_byte(vb) - ts_node_start_byte(vb), 1);
+                uint32_t oc = ts_node_named_child_count(ol);
+                for (uint32_t k = 0; k < oc; k++) {
+                    TSNode ob = ts_node_named_child(ol, k);
+                    Ref or_ref = span_trim_ref(src + ts_node_start_byte(ob), ts_node_end_byte(ob) - ts_node_start_byte(ob), 1);
+                    if (sr.tier && vr.tier && or_ref.tier) gen_claim_add(&gr, f, (Ref[]){ sr, vr, or_ref }, 3);
+                }
+            }
+            gen_record_flush(&gr, f);
+        }
+    } else {
+        attest_code_node(root, src, f, &gr);
+        gen_record_flush(&gr, f);
+    }
+    free(gr.claims);
     ts_tree_delete(t); ts_parser_delete(ps);
 }
 

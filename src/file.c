@@ -20,12 +20,25 @@
 #include <string.h>
 
 
-/* The file is whole: its trunk, over its metadata and its content. */
+static Ref recs_of(Ref *r, size_t n){
+    if (n == 1) return r[0];
+    if (n <= 64) { Ref x = compose(r, (uint32_t)n, ref_above(r, n)); x.said = LP_SAID_HOLDS; return x; }
+    size_t m = (n + 63) / 64; Ref *up = malloc(m * sizeof *up);
+    for (size_t i = 0; i < m; i++) { size_t a = i * 64, k = n - a < 64 ? n - a : 64; up[i] = recs_of(r + a, k); }
+    Ref out = recs_of(up, m); free(up); return out;
+}
+
+/* The file is whole: its trunk, over its metadata, its content, and any records its structure attests. */
 void file_close(File *f){
     if (f->laid) return;                                                   /* its trees came from the recipe's layout */
-    Ref os; if (!file_os(f->recipe, f, &os)) { f->file = f->trunk; f->file.said = 0; f->has_file = 1; return; }   /* the OS's record of it, one node (say.c) */
-    Ref part[2] = { said_metadata(os), f->trunk }; part[1].said = 0;
-    f->file = compose(part, 2, ref_above(part, 2)); f->file.said = 0; f->has_file = 1;
+    Ref os; int has_os = file_os(f->recipe, f, &os);                       /* the OS's record of it, one node (say.c) */
+    if (!has_os && !f->nsaid) { f->file = f->trunk; f->file.said = 0; f->has_file = 1; return; }
+    Ref part[3]; uint32_t np = 0;
+    if (has_os) part[np++] = said_metadata(os);
+    part[np] = f->trunk; part[np++].said = 0;
+    if (f->nsaid) { part[np++] = recs_of(f->said, f->nsaid); free(f->said); f->said = NULL; f->nsaid = 0; }
+    f->file = compose(part, np, ref_above(part, np)); f->file.said = 0; f->has_file = 1;
+    if (!f->source) f->witness = f->file;
 }
 
 /* A source's trunk: [its record, its files' trunks in the order of their paths]. The record is the source file's

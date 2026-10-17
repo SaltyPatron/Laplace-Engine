@@ -1,4 +1,6 @@
 name turtle
+match *.ttl *.nt *.n3
+class UserCuratedResource
 # Turtle. Every statement is recorded as written: [subject, predicate, object]. An identifier between angle brackets
 # is recorded without them, in whichever of the three places it stands; a quoted text without its quotes and with its
 # escapes resolved; a name written with a prefix keeps it; "a" is recorded as the "a" the file writes.

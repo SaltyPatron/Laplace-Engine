@@ -47,7 +47,11 @@ relation "the key word or phrase" focus_words
 relation "the corresponding lemma" focus_lemma
 # The README, of template_placeholders.csv: "the tokens that the placeholders in the case templates are replaced with"
 relation "case templates" case_templ
-# ref_case_id: an obligation. The README gives it two relations, chosen by the case's gold label: of a hateful case
-# "the simpler hateful case which was perturbed to generate them", of a non-hateful one "the hateful case which is
-# contrasted"; a relation cannot yet be chosen by a condition on another field (Laplace-Engine#32).
+# "**ref_case_id**" "For hateful cases, where applicable, the ID of the simpler hateful case which was perturbed to
+# generate them." "For non-hateful cases, where applicable, the ID of the hateful case which is contrasted."
+when label_gold is hateful
+relation "the simpler hateful case which was perturbed to generate them" ref_case_id
+when label_gold is non-hateful
+relation "the hateful case which is contrasted" ref_case_id
+always
 attest row functionality label_gold target_ident direction focus_words focus_lemma ref_case_id case_templ

@@ -67,11 +67,14 @@ So:
   templates, who edited a row) is not testimony: name it with `omit`, or leave the column out of `attest`. Never
   `attest *`.
 - **A source's identifiers are of two kinds: highway nodes, which are content, and its own pointers, which resolve.**
-  - **A highway node is content.** An ILI (`i46360`), a PropBank roleset (`abandon.01`), a VerbNet class (`leave-51.2`), a
-    FrameNet frame, frame element or lexical unit, a VerbAtlas frame (`va:0001f`), a language code: a vocabulary many
+  - **A highway node is content (`highway.bin` Perf-Cache Law).** An ILI (`i46360`), an OEWN synset (`oewn-00001740-n`), a PropBank roleset (`abandon.01`), a VerbNet class (`leave-51.2`), a
+    FrameNet frame, frame element or lexical unit, a VerbAtlas frame (`va:0001f`), a language code (`eng`): a vocabulary many
     sources share, the road classes whose lists `laplace highway` holds. Its own text is the node, an entity whose ID is BLAKE3 of
-    its content: `i46360` is `[i,4,6,3,6,0]` exactly as `3.14159` is `[3,.,1,4,1,5,9]`, so every source that cites it
-    lands on the same node. A source that writes a highway node its own way (`vn:51.3.1` for a VerbNet class) or
+    its canonical Tier-0 composition: `i46360` is `[i,4,6,3,6,0]` exactly as `3.14159` is `[3,.,1,4,1,5,9]`, so every source that cites it
+    lands on the same node.
+    - **Self-Contained Perf-Cache Invariant:** Requiring the full raw corpus suite on disk just to build or admit `highway.bin`, or dumping a `.nodes` sidecar of raw corpus trees (`highway.bin.nodes`), defeats the purpose of the highway perf-cache. Because every highway node is the Tier-0 composition of its canonical identifier string (deterministic from `tier0.bin` alone), `highway.bin` is a compact, self-contained binary ROM of canonical identifier IDs, fixed-width bit-banger masks (`upos`, `lexfile`, `deprel`, `vnrole`, `kind`), and crosswalk edges.
+    - **No Corpus Glosses as Highway Node Identity:** Never use a corpus's prose definition (`skos:definition` in `cili/ili.recipe`, roleset `descr` in `propbank/frames.recipe`, or frame description/name in `verbatlas/frame-info.recipe`) as `key ... node` for a highway identifier. What a highway node *means* (its gloss, definition, examples, relations) is attested as claims about that identifier node during corpus ingestion (**Proof 3**).
+    - A source that writes a highway node its own way (`vn:51.3.1` for a VerbNet class) or
     points at one with its own pointer (`mcr:ili-30-01976841-v` is prefix, scheme, release 30, offset and type: a
     pointer, decomposed by that notation, to the ILI node whose own text is `i46360`) names the column with
     `type COLUMN LIST`, which resolves it to that node; the written form is not the node's content and is not recorded.
@@ -80,6 +83,7 @@ So:
     node for a player, as an ILI is for a concept, and the player's names in every language and script are its
     lexicalizations. An identifier is decomposed by its notation (`va:0001f`: namespace `va`, number, kind), and a name
     such as `TOLERATE` is a label attested of the node, used only to realize it: never ask which text "is" the node.
+
   - **A pointer resolves, and is recorded nowhere.** A WordNet synset offset, a synset or sense id, a FrameNet numeric
     `ID`, a UD token number or `sent_id`, a Tatoeba sentence number, a geonameid, a data set's row or case id, a line
     number: how a source addresses its own records (or another release's). It is packaging. A WordNet 3.0 offset is
@@ -307,3 +311,19 @@ identity of its own, and attestations are of entities only. The target is proven
 trunk, with standing stored in one table keyed by the claim (Laplace-Engine#22); the per-claim, per-witness attestation
 rows stay until a working prototype on real data shows containment answers everything they answer with nothing lost. A
 recipe is written the same for both.
+
+## Bidirectional Tier Traversal, Whole-File Staging & The Three Proofs
+
+1. **Bidirectional Tier Traversal + Perf-Cache (`tier0.bin` + `highway.bin`)**:
+   - **Leaf $\rightarrow$ Trunk (Client-Side Creation & In-RAM Deduplication)**: Content is composed bottom-up from the mmap'd `tier0.bin` and `highway.bin` perf-caches through canonical tier boundaries (UAX #29 for text: `codepoint` $\rightarrow$ `grapheme` $\rightarrow$ `word` $\rightarrow$ `phrase/sentence`; grammar AST rules for structured records/files). Every repeated character, word, phrase, or record collapses in $O(1)$ in the client's in-RAM `NODE[]` / `staged_set` table before any socket I/O occurs.
+   - **Trunk $\rightarrow$ Leaf (Top-Down Self-Reducing Subtree Pruning Against PostgreSQL)**: Deduplication against PostgreSQL proceeds top-down from the highest logical roots (File Trunk $\rightarrow$ Section/Record Trunks $\rightarrow$ Sentences $\rightarrow$ Words), skipping synthetic binary-tree (`blocks_of`) spine nodes. If a node at tier $T$ already exists in PostgreSQL (or in the perf-cache / `staged_set`), its entire descendant subtree is already recorded and is immediately amputated on the client (`keep = recorded`).
+2. **Grammar-Bounded Streaming $\rightarrow$ Whole-File Staging (`stage.*`) $\rightarrow$ Unified Set-Based Merge**:
+   - **$O(1)$ Pre-Check**: Probe the file trunk / OS metadata before reading or decomposing file bytes; never read or decompose a file twice (`read_file_twice` / `pass == 0` then `pass == 1` is forbidden).
+   - **Grammar-Bounded Section Streaming**: Stream large files in a single pass, sectioning strictly on top-level grammar/record boundaries (XML element, Turtle statement block, JSONL object, CoNLL-U sentence block, PGN game, TSV row)—never split at arbitrary byte offsets.
+   - **Whole-File `UNLOGGED` Staging (`stage.*`)**: Stream novel nodes from each section via binary `COPY` into `UNLOGGED` `stage.*` tables with bounded connection concurrency. Never commit partial sections directly into live `public.*` tables while a file is mid-stream, and never pull `consensus` rows back to the client (`SELECT ... FROM consensus_<h>` + `DELETE` + `COPY`).
+   - **Unified Database-Side Merge**: Once the entire file (or source) and its trunk are in `stage.*`, run one set-based SQL + native C merge (`stage.*` $\rightarrow$ `public.*` in Hilbert order, `laplace_attest_series` inside PostgreSQL, GIN pending-list cleanup, and atomic `witness` registration).
+3. **The Three Proofs (Execution Sequence)**:
+   - **Proof 1 (`db-roundtrip`)**: Decompose real multi-domain inputs into `entity` + `physicality` and recompose 100% byte-for-byte from PostgreSQL alone while verifying all structural invariants.
+   - **Proof 2 (`Linguistic Super Highway`)**: Self-contained `highway.bin` perf-cache (bit-banger masks + cross-source identifier indexing, filtering, and hops) built from canonical identifier strings and crosswalks without requiring raw corpus definitions or `.nodes` sidecar dumps.
+   - **Proof 3 (`Full Corpus Ingestion`)**: Full multi-corpus ingestion (`recipes/order`) on top of Proofs 1 and 2, where cross-source claims collide on the deterministic highway identifier nodes and fold via `laplace_attest_series`.
+

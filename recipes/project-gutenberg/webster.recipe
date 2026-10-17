@@ -1,0 +1,14 @@
+name gutenberg-webster
+# Webster's Unabridged Dictionary (1913 edition, Project Gutenberg eBook #29765).
+# Paragraphs separated by an empty line: Defn: paragraphs and numbered sense definitions.
+match webster-unabridged-dictionary-1913.txt
+witness Webster's Unabridged Dictionary
+lineage Project Gutenberg
+class UserCuratedResource
+tier entry by \n\n
+names head line...
+tier line by \n
+where head matches ^(Defn:|1\.|[A-Z][A-Z0-9 ';()-]+$)
+content head line
+thing entry head
+pair entry line

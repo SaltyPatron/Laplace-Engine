@@ -70,6 +70,8 @@ char *strndup(const char *s, size_t n);
 typedef long long ssize_t;
 ssize_t getline(char **line, size_t *cap, FILE *f);
 #define strtok_r strtok_s
+#define strncasecmp _strnicmp
+#define strcasecmp _stricmp
 #define CLOCK_MONOTONIC 1
 #include <direct.h>
 #define mkdir(path, mode) _mkdir(path)
@@ -113,6 +115,7 @@ int os_printf(const char *fmt, ...);
 #define printf os_printf
 #else
 #include <pthread.h>
+#include <strings.h>
 #endif
 
 #endif

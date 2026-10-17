@@ -3,16 +3,16 @@ name cili
 #   <i1>	a	<Concept> ;
 #   	skos:definition	"(usually followed by `to') having the necessary means or skill ..."@en ;
 #   	dc:source	pwn30:00001740-a .
-# A concept is its definition, the content CILI gives it: its number (i1) is CILI's key of it, and the WordNet 3.0
-# synset it was made from (dc:source, pwn30:00001740-a) is WordNet's key of it, both recorded nowhere. The concepts
-# are the highway's interlingual index, by both keys. What a concept is said to be (a Concept, an Instance) is said of
-# it, and so is the language its definition is written in.
+# A concept is its canonical identifier (i1), the node the highway's interlingual index lists; the WordNet 3.0 synset it
+# was made from (dc:source, pwn30:00001740-a) is WordNet's key of it. What a concept is said to be (a Concept, an
+# Instance) and its skos:definition are attested on it, and so is the language its definition is written in.
 match ili.ttl
 format turtle
 tier statement by \n\n
+where triple/subject matches ^i[0-9]+$
 
-thing triple property[predicate=skos:definition]/object_list/rdf_literal/value
-omit subject
+thing triple subject
+thing rdf_literal value
 content *
 
 # A Turtle predicate is an RDF property, of the source's own relation inventory (RDF 1.1 Turtle, 2.4: "The token 'a'
@@ -20,7 +20,7 @@ content *
 # The relation is kept as the file writes it, a; that it is rdf:type, and the prefixed names' IRIs, are the notation
 # Laplace-Engine#20 resolves.
 value - predicate
-when predicate is a
+when predicate matches ^(a|skos:definition)$
 relate property predicate to object_list
 always
 pair rdf_literal lang_tag
