@@ -1,0 +1,11 @@
+name lumbras-gigabase
+# LumbrasGigaBase (lumbrasgigabase.com): games played online and over the board, one PGN file a period, opened from the
+# 7z archives beside them into online/ and otb/ (Laplace-Operations data.tsv). pgn/export_ELO2400.pgn is the
+# OTB_ELITE_ELO2400 selection, games otb/ holds already, and is not read. A corpus witnessing its records, as
+# chess-com's archive is.
+witness LumbrasGigaBase
+class StructuredCorpus
+root $LAPLACE_DATA/Games/Chess/Lumbras
+files $LAPLACE_DATA/Games/Chess/Lumbras/online/*.pgn
+files $LAPLACE_DATA/Games/Chess/Lumbras/otb/*.pgn
+after unicode

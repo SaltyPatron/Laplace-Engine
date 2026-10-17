@@ -9,6 +9,9 @@ witness Chess.com
 # StructuredCorpus: the class Sequence 9 (the estate) gives the game collections
 class StructuredCorpus
 root $LAPLACE_DATA/Games/Chess
+# A player's archive is kept at the set's top (hart-server) or in Initial-Corpus (HART-DESKTOP); the books, openings,
+# FIDE, Lumbras and TWIC sets beside them are their own, or not games.
+files $LAPLACE_DATA/Games/Chess/*.pgn
 files $LAPLACE_DATA/Games/Chess/Initial-Corpus/*.pgn
 files $LAPLACE_DATA/Games/Chess/later-corpus/*.pgn
 after unicode
