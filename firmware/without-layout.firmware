@@ -16,9 +16,8 @@ for search
 
 for translate
   fan 4096
-  up Sense synset ili
-  language Synset language
-  gloss Definition
+  lexicalization wn-lmf Sense language ili
+  gloss wn-lmf Definition
 
 for pull
   fan 4096

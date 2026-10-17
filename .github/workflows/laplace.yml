@@ -16,28 +16,45 @@ jobs:
         with: { repository: "${{ github.repository_owner }}/Laplace-Native", path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
+      # Every job runs the binary its own run built (tests/ci-own-binary.py): the build directory is the runner's, shared
+      # by every run, so a job after this one reads the binary this job hands over, never the directory.
+      - name: workflow contract
+        run: python3 Laplace-Engine/tests/ci-own-binary.py Laplace-Engine/.github/workflows/laplace.yml
       - name: build
         run: |
           . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
           export LAPLACE_SRC=$GITHUB_WORKSPACE LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native OMP_NUM_THREADS=$(nproc) MKL_NUM_THREADS=$(nproc)
           cmake -S Laplace-Engine -B "$LAPLACE_BUILD/Laplace-Engine/icx-release" -G Ninja -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=RelWithDebInfo
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
+          mkdir -p "$RUNNER_TEMP/engine" && cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace" "$RUNNER_TEMP/engine/laplace"
+          sha256sum "$RUNNER_TEMP/engine/laplace" | tee "$RUNNER_TEMP/engine/laplace.sha256"
+      # The run's binary, for its plan and parity jobs: a later run's build cannot replace it (one name per run; a job run
+      # again replaces it with its own build).
+      - uses: actions/upload-artifact@v4
+        with: { name: laplace-engine, path: "${{ runner.temp }}/engine/", retention-days: 1, overwrite: true, if-no-files-found: error }
       - name: checks
         run: |
-          L=$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace
+          L=$RUNNER_TEMP/engine/laplace
           export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
           export TMPDIR=${RUNNER_TEMP:?}
           bash Laplace-Engine/tests/highway-admission.sh "$L"
           bash Laplace-Engine/tests/layout-counted.sh "$L"
+          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/claims-tsv.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/thing-resolved.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/data-root.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/workspace-code.sh "$L"
           python3 Laplace-Engine/tools/parity/test_diff.py
+          python3 Laplace-Engine/tools/parity/test_claims.py
       - name: Verify ingestion staging under a scoped database identity
         run: |
           . Laplace-Operations/laplace.env
           export LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native
           python3 Laplace-Engine/tests/staging-role.py
+      - name: translate goes through the lexicalization, read from the recipe (dog en en, dog en fr)
+        run: |
+          . Laplace-Operations/laplace.env
+          export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
+          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/translate.sh "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace"
   # Every source in recipes/order is where its recipe says, on the data host (Laplace-Engine#60): the plan walks each
   # source's root and matches its files to recipes, without the database, and fails on a source whose root is unset, at
   # none of its roots or holding no files. Its own job: what it finds is the data's, and does not hold the deploy.
@@ -49,13 +66,17 @@ jobs:
         with: { path: Laplace-Engine }
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
+      - uses: actions/download-artifact@v4
+        with: { name: laplace-engine, path: "${{ runner.temp }}/engine" }
+      - name: the run's own binary
+        run: chmod +x "$RUNNER_TEMP/engine/laplace" && (cd "$RUNNER_TEMP/engine" && sed "s#  .*#  laplace#" laplace.sha256 | sha256sum -c -)
       - name: ingest --plan, every source
         shell: bash
         run: |
           . Laplace-Operations/laplace.env
           export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes LAPLACE_WORK=${RUNNER_TEMP:?}
           export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
-          "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace" ingest --plan | tee -a "$GITHUB_STEP_SUMMARY"
+          "$RUNNER_TEMP/engine/laplace" ingest --plan | tee -a "$GITHUB_STEP_SUMMARY"
   # The parity harness (Laplace#1885 step 1): iso-639 ingested by the monorepo's published CLI and by this build, each
   # into a scratch database (laplace_parity_*, dropped after), and what each recorded compared. Its differences are
   # findings, written to the job summary; the job fails only when the harness cannot run. Its own job, as plan is.
@@ -67,13 +88,17 @@ jobs:
         with: { path: Laplace-Engine }
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
+      - uses: actions/download-artifact@v4
+        with: { name: laplace-engine, path: "${{ runner.temp }}/engine" }
+      - name: the run's own binary
+        run: chmod +x "$RUNNER_TEMP/engine/laplace" && (cd "$RUNNER_TEMP/engine" && sed "s#  .*#  laplace#" laplace.sha256 | sha256sum -c -)
       - name: iso-639, laplace-mono against the Engine
         shell: bash
         run: |
           . Laplace-Operations/laplace.env
           export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes LAPLACE_WORK=${RUNNER_TEMP:?}/work TMPDIR=${RUNNER_TEMP:?}
           export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
-          export LAPLACE_ENGINE_BIN=$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace PSQL=$(dirname "$PG_CONFIG")/psql
+          export LAPLACE_ENGINE_BIN=$RUNNER_TEMP/engine/laplace PSQL=$(dirname "$PG_CONFIG")/psql
           mkdir -p "$LAPLACE_WORK"
           rc=0; bash Laplace-Engine/tools/parity/parity.sh --out "$RUNNER_TEMP/parity" --after unicode=unicode iso-639=iso639 || rc=$?
           [[ -f "$RUNNER_TEMP/parity/report.md" ]] && cat "$RUNNER_TEMP/parity/report.md" >> "$GITHUB_STEP_SUMMARY"

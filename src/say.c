@@ -488,6 +488,15 @@ static int32_t keyed(Sink *k, const STree *t, const char *tier, const uint8_t *v
 static int left_empty(const Say *s, const SNode *x){ return s_empty(&s->lay, x->val, x->vlen); }
 /* A key no list (or no target) holds, counted once for the node it is written in, however many of the recipe's lines read
  * it (a type line and a maps line read the same part): the tree's own, shared by the threads reading it. */
+/* What a reading has counted of unknown keys, and the once-flags of a part and the text it holds: a reading that is
+ * not this part's own (a sense reading its synset's ili) puts both back, so the part's own reading counts the key. */
+typedef struct { uint64_t unknown; int nunk; int32_t at[2]; uint8_t had[2]; } UnkMark;
+static void unknown_mark(Sink *k, const STree *t, int32_t c, UnkMark *m){
+    m->unknown = k->unknown; m->nunk = k->nunk; m->at[0] = c; m->at[1] = c >= 0 && t->n[c].kind == S_GROUP ? t->n[c].first : -1;
+    for (int i = 0; i < 2; i++) m->had[i] = k->tc_tree == t && k->uk && m->at[i] >= 0 && (uint32_t)m->at[i] < k->tc_n ? __atomic_load_n(&k->uk[m->at[i]], __ATOMIC_ACQUIRE) : 1; }
+static void unknown_back(Sink *k, const STree *t, const UnkMark *m){
+    k->unknown = m->unknown; k->nunk = m->nunk;
+    for (int i = 0; i < 2; i++) if (!m->had[i] && k->tc_tree == t && k->uk && m->at[i] >= 0 && (uint32_t)m->at[i] < k->tc_n) __atomic_store_n(&k->uk[m->at[i]], 0, __ATOMIC_RELEASE); }
 static void unknown_key(Sink *k, const STree *t, int32_t c, const SNode *x){
     if (k->tc_tree == t && k->uk && (uint32_t)c < k->tc_n && __atomic_exchange_n(&k->uk[c], 1, __ATOMIC_ACQ_REL)) return;
     k->unknown++; if (k->nunk < 8) snprintf(k->unknm[k->nunk++], 96, "%.*s %.*s", (int)(x->nlen < 40 ? x->nlen : 40), x->name, (int)(x->vlen < 48 ? x->vlen : 48), x->val); }
@@ -569,6 +578,19 @@ static int thing_of(Sink *k, const STree *t, int32_t g, Ref *out, int depth){
     if (memo) { if (r) k->tc[g] = *out; __atomic_store_n(&k->ts[g], (uint8_t)(r ? (r < 250 ? r + 2 : 252) : 2), __ATOMIC_RELEASE); }
     return r;
 }
+/* >REF/PATH: the PATH of the part of the same tree that the part REF refers to (refer REF TIER: the TIER whose key REF is
+ * written as; a sense's synset, and the synset's ili); -1 where it names nothing here. */
+static int32_t referred_path(Sink *k, const STree *t, int32_t g, const char *name){
+    char ref[160]; const char *sl = strchr(name, '/'); size_t l = sl ? (size_t)(sl - name) : strlen(name); if (!l || l >= sizeof ref) return -1;
+    memcpy(ref, name, l); ref[l] = 0; int32_t c = child_path(t, g, ref); if (c < 0) return -1;
+    const Dis *d = dis_of(k->s, &t->n[c]); const SNode *x = &t->n[c];
+    if (x->kind == S_GROUP && x->first >= 0 && t->n[x->first].next < 0 && t->n[x->first].kind == S_TEXT) x = &t->n[x->first];     /* a part that holds only its text */
+    if (!d || d->what != D_REFER || !x->vlen) return -1;
+    char targets[64], *save = NULL; snprintf(targets, sizeof targets, "%s", d->arg);
+    for (char *tg = strtok_r(targets, " ", &save); tg; tg = strtok_r(NULL, " ", &save)) { if (*tg == '^' || !is_local(k->s, tg)) continue;     /* the part itself, of this tree */
+        int32_t r = keyed(k, t, tg, x->val, x->vlen); if (r < 0) continue; return sl ? child_path(t, r, sl + 1) : r; }
+    return -1;
+}
 /* A part as one way its kind is named: 0 when it is not named that way. */
 static int one_thing(Sink *k, const STree *t, int32_t g, const Thing *th, Ref *out, int depth){
     const SNode *x = &t->n[g]; Ref p[8]; {
@@ -592,16 +614,20 @@ static int one_thing(Sink *k, const STree *t, int32_t g, const Thing *th, Ref *o
             *out = text_of(tn->val + blo, bhi - blo); out->said = 0; return 1; }
         if (th->resolved) {                                                  /* the path of those of its parts that resolve, in the recipe's order */
             uint32_t np = 0;
-            for (int z = 0; z < th->n; z++) { int32_t c = child_path(t, g, th->name[z]); if (c < 0) continue;
+            for (int z = 0; z < th->n; z++) { int ref = th->name[z][0] == '>'; int32_t c = ref ? referred_path(k, t, g, th->name[z] + 1) : child_path(t, g, th->name[z]); if (c < 0) continue;
                 const SNode *cn = &t->n[c]; if (cn->kind == S_GROUP && cn->first >= 0 && t->n[cn->first].next < 0 && t->n[cn->first].kind == S_TEXT) cn = &t->n[cn->first];
                 if (left_empty(k->s, cn) || (cn->kind != S_GROUP && !cn->vlen)) continue;            /* what the source leaves empty: in no path, and owed nothing */
+                if (ref) { UnkMark um; unknown_mark(k, t, c, &um); if (value_of(k, t, c, &p[np], depth)) { p[np].said = 0; np++; } else unknown_back(k, t, &um); continue; }     /* what another part says: its own reading owes what it leaves unsaid */
                 if (value_of(k, t, c, &p[np], depth)) { p[np].said = 0; np++; continue; }
                 owed(k, 'o', "a key no list of the highway holds, left out of the path:", (const uint8_t *)th->name[z], strlen(th->name[z]), NULL, 0); }     /* said, never dropped */
             if (!np) return 0;
             Ref X = np == 1 ? p[0] : said_tuple(compose(p, np, ref_above(p, np)));
             if (th->infile) { Ref two[2] = { k->fname, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, ref_above(two, 2))); }
             *out = X; return 1; }
-        for (int z = 0; z < th->n; z++) { int32_t c = child_path(t, g, th->name[z]); if (c < 0) return 0;
+        for (int z = 0; z < th->n; z++) { int32_t c = th->name[z][0] == '>' ? referred_path(k, t, g, th->name[z] + 1) : child_path(t, g, th->name[z]); if (c < 0) return 0;
+            if (th->name[z][0] == '>') {                                     /* what another part says (a synset's ili): its own reading counts what it leaves unsaid, not this one */
+                UnkMark um; unknown_mark(k, t, c, &um); if (!value_of(k, t, c, &p[z], depth)) { unknown_back(k, t, &um); return 0; }
+                p[z].said = 0; continue; }
             if (t->n[c].kind == S_GROUP && t->n[c].first >= 0 && t->n[t->n[c].first].next >= 0) {      /* a part that is several pieces: the path of what each is, in order */
                 Ref pc[256]; uint32_t np = 0; for (int32_t q = t->n[c].first; q >= 0 && np < 256; q = t->n[q].next) if (value_of(k, t, q, &pc[np], depth)) { pc[np].said = 0; np++; }
                 if (!np) return 0; p[z] = np == 1 ? pc[0] : compose(pc, np, ref_above(pc, np)); }
@@ -1321,4 +1347,21 @@ void say_highway_lists(const Recipe *r, Hw *hw){
         else if (h->what == 2 || h->what == 3) hw_list(hw, h->a.list, NULL);
         else if (h->what == 4) { hw_list(hw, h->a.list, NULL); hw_list(hw, h->b.list, NULL); }
     }
+}
+/* What the recipe says a part states (relation "TEXT" NAME): TEXT, or NULL where it declares no relation of it. */
+const char *say_relation(const Recipe *r, const char *name){
+    const Say *s = r ? r->say : NULL; if (!s) return NULL;
+    for (int i = 0; i < s->nval; i++) if (s->val[i].what == 1 && !strcmp(s->val[i].name, name)) return s->val[i].text;
+    return NULL;
+}
+/* The first way the recipe names a TIER by parts of which two are A and B (each part by the last step of its path): how
+ * many parts it names it by, and where A and B stand among them; -1 where no way does. */
+int say_thing_parts(const Recipe *r, const char *tier, const char *a, const char *b, int *ia, int *ib){
+    const Say *s = r ? r->say : NULL; if (!s) return -1;
+    for (int i = 0; i < s->nthing; i++) { const Thing *th = &s->thing[i]; if (strcmp(th->tier, tier) || th->of || th->span || th->within || th->infile) continue;
+        int x = -1, y = -1;
+        for (int z = 0; z < th->n; z++) { const char *nm = th->name[z], *sl = strrchr(nm, '/'), *last = sl ? sl + 1 : nm + (*nm == '>' || *nm == '^');
+            if (x < 0 && !strcmp(last, a)) x = z; else if (y < 0 && !strcmp(last, b)) y = z; }
+        if (x >= 0 && y >= 0) { *ia = x; *ib = y; return th->n; } }
+    return -1;
 }
