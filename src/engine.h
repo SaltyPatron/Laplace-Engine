@@ -166,6 +166,7 @@ typedef struct {
     char name[64];
     char witness[128], lineage[128]; double trust;
     char called[128];                                 /* what the source is, where its witness is named file by file (called NAME) */
+    char held[256];                                   /* held REASON: a source not here yet, by its keeper's choice; absent, it is said so with the reason and fails no plan */
     char root[8][512]; int nroot;                     /* where it may be kept: the first that exists, newest of a pattern */
     double room;                                      /* what it takes in the database, in times what its files hold, as measured (0: not measured) */
     int tier0;                                        /* it records every codepoint, tier 0 (its source file says tier0): the Unicode source, first */
@@ -174,6 +175,7 @@ typedef struct {
     char files[8][512]; int nfiles;                   /* the files it is, by pattern, when it is not everything under a root */
     char reads[8][64]; int nreads;                    /* formats its files are read as (recipes that belong to no source) */
     char found[1024];                                 /* where it is */
+    int nfound;                                       /* how many directories its root matched: found is the last of them by name */
     char unset[64];                                   /* a variable its root or files name that the environment does not set: it is nowhere until it is */
 } Source;
 int     recipes_load(const char *dir, Recipe **out);

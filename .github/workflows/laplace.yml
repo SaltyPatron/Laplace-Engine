@@ -34,6 +34,24 @@ jobs:
           . Laplace-Operations/laplace.env
           export LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native
           python3 Laplace-Engine/tests/staging-role.py
+  # Every source in recipes/order is where its recipe says, on the data host (Laplace-Engine#60): the plan walks each
+  # source's root and matches its files to recipes, without the database, and fails on a source whose root is unset, at
+  # none of its roots or holding no files. Its own job: what it finds is the data's, and does not hold the deploy.
+  plan:
+    needs: engine
+    runs-on: [self-hosted, laplace, Laplace-Engine]
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: Laplace-Engine }
+      - uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
+      - name: ingest --plan, every source
+        shell: bash
+        run: |
+          . Laplace-Operations/laplace.env
+          export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes LAPLACE_WORK=${RUNNER_TEMP:?}
+          export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
+          "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace" ingest --plan | tee -a "$GITHUB_STEP_SUMMARY"
   # Every merge to main that passes deploys hart-server: Laplace-Operations' deployment runs with every repository at its
   # main (its laplace.yml, on a repository_dispatch main-merged; the token is the secret LAPLACE_CHECKOUT, agents.sh's).
   deploy:

@@ -8,6 +8,7 @@
  *   class NAME                    the witness's trust class, one the registry declares (Laplace-Native's
  *                                 manifest/trust_classes.toml): its prior is the trust the witness's claims play at.
  *                                 A trust written as a number is refused
+ *   held REASON                   a source its keeper has not supplied yet: when it is absent, a plan says so, with the reason, and does not fail
  *   root PATH                     where the source is kept ($NAME from the environment; * for the newest of several).
  *                                 Several roots may be given: the first that exists is the source
  *   files PATTERN                 the files it is, when it is not everything under a root (several may be given)
@@ -142,6 +143,7 @@ static int source_parse(const char *path, Source *s){
         else if (!strcmp(tok, "files")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nfiles < 8 && !path_expand(tok, s->files[s->nfiles++], 512, s->unset, sizeof s->unset)) s->nfiles--; }
         else if (!strcmp(tok, "room")) { tok = strtok(NULL, " \t\r\n"); if (tok) s->room = atof(tok); }
         else if (!strcmp(tok, "tier0")) s->tier0 = 1;                       /* it records every codepoint, tier 0, as its ingest's first act */
+        else if (!strcmp(tok, "held")) rest_of(s->held, sizeof s->held);
         else if (!strcmp(tok, "called")) { char *v = strtok(NULL, "\r\n"); while (v && (*v == ' ' || *v == '\t')) v++; if (v) snprintf(s->called, sizeof s->called, "%s", v); }
         else if (!strcmp(tok, "after")) while ((tok = strtok(NULL, " \t\r\n")) && s->nafter < 16) snprintf(s->after[s->nafter++], 64, "%s", tok);
         else if (!strcmp(tok, "except")) while ((tok = strtok(NULL, " \t\r\n")) && s->nexcept < 8) snprintf(s->except[s->nexcept++], 128, "%s", tok);
@@ -155,7 +157,7 @@ static int source_parse(const char *path, Source *s){
      * directory it was opened into matches the pattern too, and is not where the source is */
     for (int i = 0; i < s->nroot && !s->found[0]; i++) {
         os_list g; os_glob(s->root[i], &g);
-        for (size_t j = g.n; j > 0 && !s->found[0]; j--) if (os_is_dir(g.item[j - 1])) snprintf(s->found, sizeof s->found, "%s", g.item[j - 1]);
+        for (size_t j = g.n; j > 0; j--) if (os_is_dir(g.item[j - 1]) && !s->nfound++) snprintf(s->found, sizeof s->found, "%s", g.item[j - 1]);
         os_list_free(&g);
     }
     return s->name[0] != 0;
