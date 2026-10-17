@@ -139,7 +139,8 @@ int cmd_sources(int argc, char **argv){
         for (int k = 0; k < nrec; k++) mine += rec[k].source == i;
         const char *called = source_called(&s[i]);
         if (called) { lp_id w = lp_text_decompose(tx, (const uint8_t *)called, strlen(called), NULL, NULL).id; in = lp_idmap_find(records, &w) >= 0; }
-        printf("%-4d %-28s %-8d %-9s %s\n", i + 1, s[i].name, mine, in ? "yes" : "no", s[i].found[0] ? s[i].found : "(not at any of its roots)");
+        char where[1200]; if (s[i].unset[0]) snprintf(where, sizeof where, "($%s is not set)", s[i].unset); else snprintf(where, sizeof where, "%s", s[i].found[0] ? s[i].found : "(not at any of its roots)");
+        printf("%-4d %-28s %-8d %-9s %s\n", i + 1, s[i].name, mine, in ? "yes" : "no", where);
         if (s[i].nafter) { printf("     %-28s after", ""); for (int a = 0; a < s[i].nafter; a++) printf(" %s", s[i].after[a]); printf("\n"); }
     }
     lp_idmap_free(records); PQfinish(pg);

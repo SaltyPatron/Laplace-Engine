@@ -171,6 +171,9 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
      * A source is not begun only when the volume is already left with less than a tenth of itself, and that is said. */
     int short_of_room = 0, short_of_order = 0;
     char roomf[4200]; snprintf(roomf, sizeof roomf, "%s/room.tsv", work && *work ? work : ".");
+    { int unset = 0;                                                        /* where a source is kept is the environment's to say: nothing begins until it says it */
+      for (int i = 0; i < nsrc; i++) if ((!want || want[i]) && src[i].unset[0]) { fprintf(stderr, "source %s: its root names $%s, which the environment does not set (Laplace-Operations laplace.env)\n", src[i].name, src[i].unset); unset++; }
+      if (unset) { return 2; } }
     int *wentin = calloc((size_t)nsrc, sizeof(int));                       /* 1: it went in in this run, or has nothing to go in */
     printf("laplace ingest   %s, in order   logs in %s\n\n", want ? "the sources named" : "every source", dir);
     printf("%-4s %-38s %-10s %10s   %s\n", "", "source", "", "seconds", "");
@@ -339,6 +342,7 @@ int cmd_ingest(int argc, char **argv){
     for (int i = a; i < argc; i++) {                                         /* a source by its name, or files and directories */
         struct stat st; int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++;
         if (k < nsrc && stat(argv[i], &st)) {
+            if (src[k].unset[0]) { fprintf(stderr, "source %s: its root names $%s, which the environment does not set (Laplace-Operations laplace.env)\n", src[k].name, src[k].unset); return 2; }
             if (!src[k].found[0]) { fprintf(stderr, "source %s is not at any of its roots\n", src[k].name); return 1; }
             const Source *was = walking; walking = &src[k];
             if (src[k].nfiles) for (int z = 0; z < src[k].nfiles; z++) { glob_t g; if (!glob(src[k].files[z], 0, NULL, &g)) for (size_t y = 0; y < g.gl_pathc; y++) add_path(g.gl_pathv[y]); globfree(&g); }

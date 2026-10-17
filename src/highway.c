@@ -223,6 +223,7 @@ int cmd_highway(int argc, char **argv){
         int says = 0; for (int k = 0; k < nrc; k++) says |= rc[k].source == i && !rc[k].broken && say_has_highway(&rc[k]);
         if (!says) continue;
         for (int k = 0; k < nrc; k++) if (rc[k].source == i && !rc[k].broken && say_has_highway(&rc[k])) say_highway_lists(&rc[k], &hw);
+        if (src[i].unset[0]) { fprintf(stderr, "source %s: its root names $%s, which the environment does not set (Laplace-Operations laplace.env)\n", src[i].name, src[i].unset); return 2; }
         if (!src[i].found[0]) { any_absent = 1; printf("  %-28s not at any of its roots: frozen slots reconstructed from manifest/slots\n", src[i].name); fflush(stdout); continue; }
         if (recipes_broken(rc, nrc, &src[i])) return 2;
         char **paths; Recipe **of; int np = source_files(&src[i], rc, nrc, &paths, &of); size_t types0 = 0, keys0 = lp_strmap_count(hw.keys), al0 = hw.a.n, e0 = hw.e.n; for (int l = 0; l < hw.nl; l++) types0 += hw.l[l].n;
