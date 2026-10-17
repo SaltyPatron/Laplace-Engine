@@ -329,12 +329,19 @@ static Claim *one_open_claims(PGconn *pg, const lp_id *first, const lp_id *rel, 
 /* A word's lexicalizations as the recipe that reads the wordnets declares them: the relation that says a word has one,
  * and which of its parts are its language and its concept. Read from that recipe, never from a second copy of its
  * names, so a recipe that renames them fails here, at once, rather than leaving every translation empty. */
-typedef struct { lp_id sense, gloss; int np, lang, concept, has_gloss; } Lexicalization;
+typedef struct { lp_id sense, gloss, eq[4]; int np, lang, concept, has_gloss, neq; } Lexicalization;
 static int lexicalization_of(Ctx *c, const Firmware *fw, Lexicalization *x){
     memset(x, 0, sizeof *x);
     if (!fw->lexical[0][0]) { fprintf(stderr, "%s: for translate, the firmware names no lexicalization (lexicalization RECIPE THING LANGUAGE CONCEPT)\n", fw->path); return 0; }
-    Recipe *R; int nr = recipes_load(laplace_recipes(), &R); const Recipe *w = NULL, *g = NULL;
-    for (int i = 0; i < nr; i++) if (!R[i].broken) { if (!strcmp(R[i].name, fw->lexical[0])) w = &R[i]; if (fw->gloss[0][0] && !strcmp(R[i].name, fw->gloss[0])) g = &R[i]; }
+    Recipe *R; int nr = recipes_load(laplace_recipes(), &R); const Recipe *w = NULL, *g = NULL, *e = NULL;
+    for (int i = 0; i < nr; i++) if (!R[i].broken) { if (!strcmp(R[i].name, fw->lexical[0])) w = &R[i]; if (fw->gloss[0][0] && !strcmp(R[i].name, fw->gloss[0])) g = &R[i];
+        if (fw->nequiv && !strcmp(R[i].name, fw->equiv[0])) e = &R[i]; }
+    /* the codes of one language: the relations the recipe that reads a code table declares between a code and its
+     * equivalents in the other code sets (ISO 639-3's Part1, Part2b, Part2t), read from it so they cannot drift */
+    if (fw->nequiv && !e) { fprintf(stderr, "%s: for translate, equivalent names the recipe %s, which is not a recipe of %s that loads\n", fw->path, fw->equiv[0], laplace_recipes()); return 0; }
+    for (int k = 0; k < fw->nequiv && k < 4; k++) { const char *er = say_relation(e, fw->equiv[k + 1]);
+        if (!er) { fprintf(stderr, "%s: for translate, the recipe %s declares no relation of %s (relation \"TEXT\" %s)\n", fw->path, fw->equiv[0], fw->equiv[k + 1], fw->equiv[k + 1]); return 0; }
+        x->eq[x->neq++] = entity_named(c, er, NULL, 0, NULL).id; }
     if (!w) { fprintf(stderr, "%s: for translate, lexicalization names the recipe %s, which is not a recipe of %s that loads\n", fw->path, fw->lexical[0], laplace_recipes()); return 0; }
     const char *rel = say_relation(w, fw->lexical[1]);
     if (!rel) { fprintf(stderr, "%s: for translate, the recipe %s declares no relation of %s (relation \"TEXT\" %s)\n", fw->path, fw->lexical[0], fw->lexical[1], fw->lexical[1]); return 0; }
@@ -345,6 +352,20 @@ static int lexicalization_of(Ctx *c, const Firmware *fw, Lexicalization *x){
         if (!gr) { fprintf(stderr, "%s: for translate, gloss: the recipe %s %s\n", fw->path, fw->gloss[0], g ? "declares no relation of that name" : "is not a recipe that loads"); return 0; }
         x->gloss = entity_named(c, gr, NULL, 0, NULL).id; x->has_gloss = 1; }
     return 1;
+}
+/* A language as every code set writes it: the code asked, and each code a code table states is its equivalent, either
+ * way ([eng, Equivalent 639-1 identifier, en] joins en and eng), and theirs in turn: one language's codes. */
+typedef struct { lp_id id[16]; int n; } Codes;
+static int codes_has(const Codes *s, const lp_id *x){ for (int i = 0; i < s->n; i++) if (!memcmp(&s->id[i], x, 16)) return 1; return 0; }
+static void codes_of(PGconn *pg, const Lexicalization *lx, const lp_id *code, Codes *s, int *steps){
+    s->n = 0; s->id[s->n++] = *code;
+    for (int from = 0, round = 0; round < 2 && from < s->n; round++) { int to = s->n;
+        for (int i = from; i < to; i++) for (int k = 0; k < lx->neq; k++) for (int side = 0; side < 2; side++) {
+            lp_id p[3] = { s->id[i], lx->eq[k], s->id[i] }; int have[3] = { side ? 0 : 2, 2, side ? 2 : 0 }, n, capped;
+            Claim *cl = claims_like(pg, p, have, 64, read_k, &n, &capped); (*steps)++;
+            for (int j = 0; j < n; j++) { const lp_id *o = side ? &cl[j].part[0] : &cl[j].part[cl[j].np - 1]; if (s->n < 16 && !codes_has(s, o)) s->id[s->n++] = *o; }
+            free(cl); }
+        from = to; }
 }
 typedef struct { lp_id *id; int *of, n, cap; } Found;                      /* entities found, each with what it is found for */
 static void found_put(Found *f, const lp_id *id, int of){
@@ -365,6 +386,7 @@ int cmd_translate(int argc, char **argv){
     const lp_id word = entity_named(c, argv[a], NULL, 0, NULL).id, from = entity_named(c, argv[a + 1], NULL, 0, NULL).id;
     int nto = argc - a - 2 < 64 ? argc - a - 2 : 64, steps = 0; lp_id to[64];
     for (int g = 0; g < nto; g++) to[g] = entity_named(c, argv[a + 2 + g], NULL, 0, NULL).id;
+    Codes fromc, *toc = malloc(sizeof(Codes) * (size_t)nto); codes_of(pg, &lx, &from, &fromc, &steps); for (int g = 0; g < nto; g++) codes_of(pg, &lx, &to[g], &toc[g], &steps);
 
     /* up: the word's lexicalizations, in its witness's order, and of each its language and its concept */
     int n; Claim *first = one_open_claims(pg, &word, &lx.sense, fan, &n); steps++; positions_of(pg, first, n); qsort(first, (size_t)n, sizeof(Claim), claim_by_position);
@@ -372,7 +394,7 @@ int cmd_translate(int argc, char **argv){
     Run *pr = parts_each(pg, ls, n); steps += n > 0;
     lp_id *cs = malloc(sizeof(lp_id) * (size_t)(n ? n : 1)); lp_rating *cr = malloc(sizeof(lp_rating) * (size_t)(n ? n : 1)); int nc = 0;
     for (int i = 0; i < n; i++) {
-        if (nc < limit && pr[i].n == lx.np && !memcmp(&pr[i].id[lx.lang], &from, 16)) { const lp_id *k = &pr[i].id[lx.concept]; int dup = 0;
+        if (nc < limit && pr[i].n == lx.np && codes_has(&fromc, &pr[i].id[lx.lang])) { const lp_id *k = &pr[i].id[lx.concept]; int dup = 0;
             for (int z = 0; z < nc; z++) dup |= !memcmp(&cs[z], k, 16); if (!dup) { cs[nc] = *k; cr[nc++] = first[i].r; } }
         free(pr[i].id); }
     free(pr); free(ls);
@@ -385,7 +407,7 @@ int cmd_translate(int argc, char **argv){
     Found lex = { 0 }, val = { 0 }; lp_id *p = malloc(sizeof(lp_id) * 4096);
     for (int j = 0; j < nh; j++) { size_t np = lp_path_ids(h[j].path, (size_t)h[j].path_len, p, 4096); if (np > 4096) continue;
         if ((int)np == lx.np) { int64_t z = lp_idmap_find(cm, &p[lx.concept]); if (z < 0) continue;
-            for (int g = 0; g < nto; g++) if (!memcmp(&p[lx.lang], &to[g], 16)) { found_put(&lex, &h[j].entity, (int)z * 64 + g); break; } }
+            for (int g = 0; g < nto; g++) if (codes_has(&toc[g], &p[lx.lang])) { found_put(&lex, &h[j].entity, (int)z * 64 + g); break; } }
         else if (np == 2 && lx.has_gloss) { int64_t z = lp_idmap_find(cm, &p[1]); if (z >= 0) found_put(&val, &p[0], (int)z); } }
     free(p); holds_free(h, nh); lp_idmap_free(cm);
     int nd = 0; Step *dn = open_each(lex.id, lex.n, &lx.sense, 1, 1, fan, &nd); steps += lex.n > 0;
@@ -402,7 +424,7 @@ int cmd_translate(int argc, char **argv){
             lp_idmap_free(shown); if (!any) printf(" (nothing attested)"); printf("\n"); }
     }
     printf("\n%d steps, each one set   total %.1f ms\n", steps, (now() - T) * 1000);
-    free(first); free(cs); free(cr); free(lex.id); free(lex.of); free(val.id); free(val.of); free(dn); free(gl); reader_free(rd); PQfinish(pg);
+    free(toc); free(first); free(cs); free(cr); free(lex.id); free(lex.of); free(val.id); free(val.of); free(dn); free(gl); reader_free(rd); PQfinish(pg);
     return 0;
 }
 
