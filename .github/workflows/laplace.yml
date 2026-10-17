@@ -37,6 +37,11 @@ jobs:
           . Laplace-Operations/laplace.env
           export LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native
           python3 Laplace-Engine/tests/staging-role.py
+      - name: translate goes through the lexicalization, read from the recipe (dog en en, dog en fr)
+        run: |
+          . Laplace-Operations/laplace.env
+          export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
+          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/translate.sh "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace"
   # Every source in recipes/order is where its recipe says, on the data host (Laplace-Engine#60): the plan walks each
   # source's root and matches its files to recipes, without the database, and fails on a source whose root is unset, at
   # none of its roots or holding no files. Its own job: what it finds is the data's, and does not hold the deploy.
