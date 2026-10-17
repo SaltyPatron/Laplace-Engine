@@ -120,7 +120,8 @@ Attested *attested(PGconn *pg, const lp_id *claims, int n, int *nout, uint64_t *
 }
 
 /* ---- down: from a trunk to every claim its records say. What a node is follows from how it was reached:
- *   trunk     [its record (metadata), its content]: the content, or one file
+ *   trunk     [its record (metadata), its content]: the content, or one file. A source's trunk is exactly these two, its
+ *             content its files' trunks (source_trunk) and said nothing: walked as the source. A file's has its records too.
  *   content   the source's files, each a trunk [metadata, content]
  *   file      [metadata, content]: the content where it holds records (or is one), else nothing that says anything
  *   block     the blocks and records it holds
@@ -144,6 +145,7 @@ int walk_down(PGconn *pg, const lp_id *top, Dag *d, uint64_t *rows){
                 size_t nv = lp_path_vertices((const uint8_t *)PQgetvalue(r, j, 1), (size_t)PQgetlength(r, j, 1), NULL, 0); lp_vec_reserve(&vx, nv ? nv : 1);
                 lp_path_vertices((const uint8_t *)PQgetvalue(r, j, 1), (size_t)PQgetlength(r, j, 1), vx.v, nv);
                 int meta = nv && vx.v[0].said == LP_SAID_METADATA; d->n[ei].metadata = (uint8_t)meta;
+                if (cls == C_TOP && meta && nv == 2 && !vx.v[1].said) { child(d, ei, &vx.v[1], C_SRC, &next); continue; }   /* a source's trunk, [its record, its files' trunks] (source_trunk): the files are its content */
                 if ((cls == C_TOP || cls == C_SRC) && meta) cls = C_FILE;     /* a single file witness or a source of one file: the file is its content */
                 if (cls == C_FILE && !meta) cls = C_BLOCK;                    /* a file with no metadata is its content */
                 if (cls == C_REC) {
