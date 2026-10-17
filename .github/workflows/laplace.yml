@@ -30,6 +30,7 @@ jobs:
           bash Laplace-Engine/tests/highway-admission.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/data-root.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/workspace-code.sh "$L"
+          python3 Laplace-Engine/tools/parity/test_diff.py
       - name: Verify ingestion staging under a scoped database identity
         run: |
           . Laplace-Operations/laplace.env
@@ -53,6 +54,31 @@ jobs:
           export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes LAPLACE_WORK=${RUNNER_TEMP:?}
           export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
           "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace" ingest --plan | tee -a "$GITHUB_STEP_SUMMARY"
+  # The parity harness (Laplace#1885 step 1): iso-639 ingested by the monorepo's published CLI and by this build, each
+  # into a scratch database (laplace_parity_*, dropped after), and what each recorded compared. Its differences are
+  # findings, written to the job summary; the job fails only when the harness cannot run. Its own job, as plan is.
+  parity:
+    needs: engine
+    runs-on: [self-hosted, laplace, Laplace-Engine]
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: Laplace-Engine }
+      - uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
+      - name: iso-639, laplace-mono against the Engine
+        shell: bash
+        run: |
+          . Laplace-Operations/laplace.env
+          export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes LAPLACE_WORK=${RUNNER_TEMP:?}/work TMPDIR=${RUNNER_TEMP:?}
+          export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
+          export LAPLACE_ENGINE_BIN=$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace PSQL=$(dirname "$PG_CONFIG")/psql
+          mkdir -p "$LAPLACE_WORK"
+          rc=0; bash Laplace-Engine/tools/parity/parity.sh --out "$RUNNER_TEMP/parity" --after unicode=unicode iso-639=iso639 || rc=$?
+          [[ -f "$RUNNER_TEMP/parity/report.md" ]] && cat "$RUNNER_TEMP/parity/report.md" >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: parity-iso-639, path: "${{ runner.temp }}/parity/*.md\n${{ runner.temp }}/parity/*.json\n${{ runner.temp }}/parity/logs\n${{ runner.temp }}/parity/*/*/replay.log", if-no-files-found: ignore }
   # Every merge to main that passes deploys hart-server: Laplace-Operations' deployment runs with every repository at its
   # main (its laplace.yml, on a repository_dispatch main-merged; the token is the secret LAPLACE_CHECKOUT, agents.sh's).
   deploy:
