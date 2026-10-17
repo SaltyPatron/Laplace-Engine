@@ -174,6 +174,7 @@ typedef struct {
     char files[8][512]; int nfiles;                   /* the files it is, by pattern, when it is not everything under a root */
     char reads[8][64]; int nreads;                    /* formats its files are read as (recipes that belong to no source) */
     char found[1024];                                 /* where it is */
+    int nfound;                                       /* how many directories its root matched: found is the last of them by name */
     char unset[64];                                   /* a variable its root or files name that the environment does not set: it is nowhere until it is */
 } Source;
 int     recipes_load(const char *dir, Recipe **out);

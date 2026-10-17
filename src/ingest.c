@@ -164,8 +164,8 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
     const char *work = getenv("LAPLACE_WORK"); char dir[4096]; snprintf(dir, sizeof dir, "%s/logs/ingest", work && *work ? work : "."); 
     { char cmd[4200]; snprintf(cmd, sizeof cmd, "%s", dir); for (char *c = cmd + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(cmd, 0775); *c = '/'; } mkdir(cmd, 0775); }
     setlocale(LC_NUMERIC, "en_US.UTF-8");
-    const char *conninfo = laplace_db(); int loads = 1;
-    for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[a + 1]; if (!strcmp(argv[a], "--no-load") || !strcmp(argv[a], "--plan") || !strcmp(argv[a], "--claims")) loads = 0; }
+    const char *conninfo = laplace_db(); int loads = 1, plans = 0;
+    for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[a + 1]; if (!strcmp(argv[a], "--no-load") || !strcmp(argv[a], "--plan") || !strcmp(argv[a], "--claims")) loads = 0; if (!strcmp(argv[a], "--plan")) plans = 1; }
     /* What a source takes is not its bytes times a ratio: content is recorded once, so what an earlier source measured
      * (bytes the database grew over bytes its files hold, room.tsv) falls as what is recorded covers more of what is read.
      * A source is not begun only when the volume is already left with less than a tenth of itself, and that is said. */
@@ -219,14 +219,17 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
 #endif
         char last[256] = ""; { FILE *f = fopen(log, "r"); char line[4096]; while (f && fgets(line, sizeof line, f)) { char *cr = strrchr(line, '\r'); const char *c = cr && cr[1] && cr[1] != '\n' ? cr + 1 : line; while (*c == ' ') c++;
               if (strstr(c, "attestations") || strstr(c, "already recorded") || (code && *c && *c != '\n')) { snprintf(last, sizeof last, "%.200s", c); char *nl = strchr(last, '\n'); if (nl) *nl = 0; } } if (f) fclose(f); }
-        printf("%-10s %'10.1f   %s\n", code ? "FAILED" : "in", now() - t, last); fflush(stdout);
+        printf("%-10s %'10.1f   %s\n", code ? "FAILED" : "in", now() - t, last);
+        if (src[i].nfound > 1) printf("%-4s %-38s %-10s %10s   its root matches %d directories: it takes the last by name, %s\n", "", "", "", "", src[i].nfound, src[i].found);
+        fflush(stdout);
         if (code) { failed = 1; fprintf(stderr, "\n%s did not go in (exit %d); what it said is in %s\n", src[i].name, code, log); } else { went++; wentin[i] = 1; }
         if (!code && loads && before >= 0 && bytes_in > 0) { double after = db_bytes(conninfo); if (after > before) room_keep(roomf, src[i].name, (after - before) / bytes_in); }     /* what it took, for the next run's check */
     }
     printf("\n%d sources in, %d absent, %d without a recipe, %d not begun for want of room, %d not begun because what they come after is not in%s   %'.1f s\n", went, absent, empty, short_of_room, short_of_order, failed ? ", and one that failed: the run stops there" : "", now() - T);
     /* each source that went in merged its own stage as it ended (cmd_ingest); one that failed left its stage, and its
      * next run takes up from it (what is staged is looked for as what is recorded is) */
-    free(wentin); return failed || short_of_order;
+    /* a plan is the check that every source is where its recipe says (Laplace-Engine#60): one that is not fails it */
+    free(wentin); return failed || short_of_order || (plans && absent);
 }
 static const uint64_t *by_size_of;                                    /* the batch's files, longest first, ties in the order given */
 static int by_size(const void *a, const void *b){ int i = *(const int *)a, j = *(const int *)b; uint64_t x = by_size_of[i], y = by_size_of[j]; return x < y ? 1 : x > y ? -1 : i - j; }
