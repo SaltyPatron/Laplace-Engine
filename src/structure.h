@@ -21,9 +21,10 @@
  *                               order, and the names after NAME go on after the last GROUP (wndb.5: w_cnt, "two digit
  *                               hexadecimal integer indicating the number of words in the synset", then that many
  *                               word lex_id). A count the file does not write as a number in its radix counts nothing
- *   part PATH by SEP [is IS] [pieces N] [space CHAR]
+ *   part PATH by SEP [is IS] [pieces N] [space CHAR] [padded]
  *                               a named part is itself parts, parted by SEP; with IS, each is KEY IS VALUE; with pieces,
- *                               at most N, the last of them the rest as written; with space, CHAR in it stands for a space.
+ *                               at most N, the last of them the rest as written; with space, CHAR in it stands for a space;
+ *                               with padded, each piece is without the white space around it (frames.vrb aligns its texts).
  *                               SEP object: the part is a JSON value, read into the tree (each member under its key)
  *   empty TEXT                  what the file writes where it leaves a part empty
  * The tree is observed structure: what each node becomes is said by the recipe's dispositions, not here. */
@@ -58,7 +59,7 @@ typedef struct {
     char numbered[32];                                    /* numbered NAME: each part also holds NAME, its line in the file (empty lines counted), so files written line for line join by it */
     char names[S_NAMES][64]; int nnames, rest;            /* the names of the parts of the tier below, by position; rest: the last (written NAME...) names every further part too */
 } STier;
-typedef struct { char path[64], sep[8], is[8]; int seplen, islen, pieces; char space; } SPart;     /* pieces: at most so many, the last the rest as written; space: the character the file writes for a space in it */
+typedef struct { char path[64], sep[8], is[8]; int seplen, islen, pieces, padded; char space; } SPart;     /* pieces: at most so many, the last the rest as written; space: the character the file writes for a space in it; padded: each piece without the white space around it */
 /* A file whose tree a grammar gives (the recipe names it: grammar NAME, loaded at run time): what each kind of the
  * grammar's nodes is in the file's tree, as the recipe (or the format file it names) writes it:
  *   node TYPE group [name PATH...] [list] it holds nodes; its name is the text at the first PATH there is (A/B: the B in its A);

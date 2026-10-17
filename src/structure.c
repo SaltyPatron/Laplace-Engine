@@ -59,13 +59,13 @@ int layout_says(Layout *l, const char *path, char *tok){
         t = &l->tier[l->ntier++]; memset(t, 0, sizeof *t); snprintf(t->name, sizeof t->name, "%s", nm); t->seplen = sep_read(sp, t->sep, sizeof t->sep);
         if (!t->seplen) { fprintf(stderr, "%s: tier %s is parted by nothing\n", path, nm); return -1; } return 1; }
     if (!strcmp(tok, "part")) { char *pa = strtok(NULL, " \t\r\n"), *by = strtok(NULL, " \t\r\n"), *sp = strtok(NULL, " \t\r\n"), *w;
-        if (!pa || !by || strcmp(by, "by") || !sp || l->npart == 32) { fprintf(stderr, "%s: part NAME by SEPARATOR [is IS] [pieces N] [space CHAR]\n", path); return -1; }
+        if (!pa || !by || strcmp(by, "by") || !sp || l->npart == 32) { fprintf(stderr, "%s: part NAME by SEPARATOR [is IS] [pieces N] [space CHAR] [padded]\n", path); return -1; }
         SPart *p = &l->part[l->npart++]; memset(p, 0, sizeof *p); snprintf(p->path, sizeof p->path, "%s", pa); p->seplen = sep_read(sp, p->sep, sizeof p->sep);
-        while ((w = strtok(NULL, " \t\r\n"))) { char *v = strtok(NULL, " \t\r\n"), b[8];
+        while ((w = strtok(NULL, " \t\r\n"))) { if (!strcmp(w, "padded")) { p->padded = 1; continue; } char *v = strtok(NULL, " \t\r\n"), b[8];
             if (v && !strcmp(w, "is")) p->islen = sep_read(v, p->is, sizeof p->is);
             else if (v && !strcmp(w, "pieces") && atoi(v) > 0) p->pieces = atoi(v);
             else if (v && !strcmp(w, "space") && sep_read(v, b, sizeof b)) p->space = b[0];
-            else { fprintf(stderr, "%s: part NAME by SEPARATOR [is IS] [pieces N] [space CHAR]\n", path); return -1; } }
+            else { fprintf(stderr, "%s: part NAME by SEPARATOR [is IS] [pieces N] [space CHAR] [padded]\n", path); return -1; } }
         return 1; }
     if (!strcmp(tok, "trim")) { l->g.trim = 1; return 1; }
     if (!strcmp(tok, "levels")) { char *v; while ((v = strtok(NULL, " \t\r\n")) && l->nlevels < 8) snprintf(l->levels[l->nlevels++], 32, "%s", v);
@@ -212,6 +212,8 @@ static void parts_of(STree *t, int32_t x, const Layout *l){
                 int32_t c = node(t, is ? S_VALUE : S_TEXT, t->n[x].tier, x, at + (uint64_t)(p - t->n[x].val)); made++;
                 if (is) { t->n[c].name = p; t->n[c].nlen = (uint32_t)(is - p); t->n[c].val = is + sp->islen; t->n[c].vlen = (uint32_t)(q - is - sp->islen); }
                 else { t->n[c].val = p; t->n[c].vlen = (uint32_t)(q - p); t->n[c].name = t->n[x].name; t->n[c].nlen = t->n[x].nlen; }      /* a piece of a part is read as the part is */
+                if (sp->padded) { size_t vn = t->n[c].vlen; t->n[c].val = trimmed(t->n[c].val, &vn); t->n[c].vlen = (uint32_t)vn;      /* the spaces the file aligns its pieces with are not theirs */
+                    if (is) { size_t kn = t->n[c].nlen; t->n[c].name = trimmed(t->n[c].name, &kn); t->n[c].nlen = (uint32_t)kn; } }
                 if (sp->space && memchr(t->n[c].val, sp->space, t->n[c].vlen)) { uint8_t *o = own(t, t->n[c].vlen); for (uint32_t i = 0; i < t->n[c].vlen; i++) o[i] = t->n[c].val[i] == (uint8_t)sp->space ? ' ' : t->n[c].val[i]; t->n[c].val = o; } }
             if (q >= e) break; p = q + sp->seplen; }
         return; }
