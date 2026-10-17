@@ -77,6 +77,14 @@ unset LAPLACE_INGEST_ONE
 
 stamp "monorepo side: $db_m"
 "$psql" -XqAt -v ON_ERROR_STOP=1 -d postgres -c "CREATE DATABASE \"$db_m\""
+# The monorepo's extensions are the published install's, found through the database's own settings (as laplace-mono's
+# database has them): its library and control directories, and laplace_substrate preloaded.
+prefix=${LAPLACE_INSTALL_PREFIX:-/opt/laplace}
+pgmajor=$(( $("$psql" -XqAt -d postgres -c 'SHOW server_version_num') / 10000 ))
+"$psql" -XqAt -v ON_ERROR_STOP=1 -d postgres \
+  -c "ALTER DATABASE \"$db_m\" SET dynamic_library_path = '$prefix/lib/postgresql/$pgmajor:\$libdir'" \
+  -c "ALTER DATABASE \"$db_m\" SET extension_control_path = '$prefix/share/postgresql/$pgmajor:\$system'" \
+  -c "ALTER DATABASE \"$db_m\" SET session_preload_libraries = 'laplace_substrate'"
 "$psql" -XqAt -v ON_ERROR_STOP=1 -d "$db_m" -c 'CREATE EXTENSION IF NOT EXISTS postgis' \
   -c 'CREATE EXTENSION IF NOT EXISTS laplace_geom' -c 'CREATE EXTENSION IF NOT EXISTS laplace_substrate'
 export LAPLACE_DB="Host=$PGHOST;Username=$PGUSER;Database=$db_m;Command Timeout=0"

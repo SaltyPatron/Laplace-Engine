@@ -26,6 +26,7 @@ case "$kind" in
     : "${LAPLACE_ENGINE_BIN:?the engine (laplace) to read the engine side testimony}"
     "$LAPLACE_ENGINE_BIN" replay -d "host=$PGHOST user=$PGUSER dbname=$db" --tsv "$out/replay.raw" > "$out/replay.log" 2>&1 \
       || { tail -20 "$out/replay.log" >&2; exit 1; }
+    tail -3 "$out/replay.log" | sed 's/^/    replay: /'
     cut -f1-3 "$out/replay.raw" > "$out/testimony.raw" ;;
   mono)
     q "\\copy (SELECT encode(id, 'hex'), tier FROM laplace.entities) TO '$out/entities.raw'"

@@ -78,7 +78,7 @@ jobs:
           exit $rc
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: parity-iso-639, path: "${{ runner.temp }}/parity", if-no-files-found: ignore }
+        with: { name: parity-iso-639, path: "${{ runner.temp }}/parity/*.md\n${{ runner.temp }}/parity/*.json\n${{ runner.temp }}/parity/logs\n${{ runner.temp }}/parity/*/*/replay.log", if-no-files-found: ignore }
   # Every merge to main that passes deploys hart-server: Laplace-Operations' deployment runs with every repository at its
   # main (its laplace.yml, on a repository_dispatch main-merged; the token is the secret LAPLACE_CHECKOUT, agents.sh's).
   deploy:
