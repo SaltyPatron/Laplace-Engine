@@ -76,7 +76,7 @@ enum { G_GROUP = 1, G_VALUE, G_TEXT, G_MEMBER, G_SKIP };
 enum { G_XML = 1, G_JSON, G_TURTLE };
 typedef struct { char type[48]; int what, raw, join, list, kind; char name[4][64]; int nname; char text[64]; } GRule;     /* join: texts side by side are one text; list: a group of values, in order, each named by it; kind: named by its type */
 typedef struct { GRule rule[48]; int n, resolve, trim; } GMap;                 /* trim: the white space a text begins and ends with is how the file is laid out, not the text's */
-typedef struct { STier tier[S_TIERS]; int ntier; SPart part[32]; int npart; char empty[16][16]; int emptylen[16], nempty; char levels[8][32]; int nlevels; GMap g; } Layout;    /* empty: what the file writes where it leaves a part empty (several: empty _ None); levels: the names of the members of objects at each depth, whose keys are what the file says (levels roleset class) */
+typedef struct { STier tier[S_TIERS]; int ntier; SPart part[32]; int npart; char empty[16][32]; int emptylen[16], nempty; char levels[8][32]; int nlevels; GMap g; } Layout;    /* empty: what the file writes where it leaves a part empty (several: empty _ None); levels: the names of the members of objects at each depth, whose keys are what the file says (levels roleset class) */
 static inline int s_empty(const Layout *l, const uint8_t *v, uint32_t n){ if (!n) return 1; for (int i = 0; i < l->nempty; i++) if (n == (uint32_t)l->emptylen[i] && !__builtin_memcmp(v, l->empty[i], n)) return 1; return 0; }
 /* The tree of a file a grammar parsed: root is the grammar's own tree (a TSNode), given by address. The whole file
  * is one part: handed over once. */

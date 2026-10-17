@@ -42,6 +42,7 @@ jobs:
           bash Laplace-Engine/tests/left-open.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/wordnet-recipes.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/claims-tsv.sh "$L"
+          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/thing-resolved.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/data-root.sh "$L"
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/workspace-code.sh "$L"
           python3 Laplace-Engine/tools/parity/test_diff.py
