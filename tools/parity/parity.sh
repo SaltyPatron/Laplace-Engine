@@ -103,3 +103,11 @@ stamp "compare"
 scope="Source: \`$src_e\` (Engine) / \`$src_m\` (monorepo)${afters:+, after ${afters[*]}}: each side's contribution is its database after the source less before it."
 python3 "$here/diff.py" "$out/mono" "$out/engine" --names "laplace-mono,engine" --scope "$scope" \
   --report "$out/report.md" --json "$out/summary.json" ${accept:+--accept "$accept"} $require
+
+# The Engine's provenance is containment: a source that adds claims has its witness's trunk say them (laplace replay,
+# the walk down from the trunk). A harness run where it says none is the walk's defect, not a difference.
+lines() { wc -l < "$1"; }
+if (( $(lines "$out/engine/after/claims.tsv") > $(lines "$out/engine/before/claims.tsv") )) \
+   && (( $(lines "$out/engine/after/testimony.tsv") <= $(lines "$out/engine/before/testimony.tsv") )); then
+  echo "parity.sh: $src_e added claims but its witness's trunk says none of them (laplace replay finds no testimony)" >&2; exit 1
+fi
