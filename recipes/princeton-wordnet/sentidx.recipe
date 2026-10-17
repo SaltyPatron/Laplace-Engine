@@ -1,0 +1,18 @@
+name wordnet-sentidx
+# wndb.5, "Verb Example Sentences": "Each line of the file sentidx.vrb contains a sense_key followed by a space and a
+# comma separated list of example sentence template numbers, in decimal" ("abash%2:37:00:: 126,127"); "the sentence
+# template(s) listed is retrieved from sents.vrb, and the %s is replaced with the verb".
+# A sense key is the highway's key of the concept its synset is (index-sense.recipe); each number is sents.vrb's key
+# of a template, said of the concept. No sense key and no number is content.
+match sentidx.vrb
+
+tier line by \n
+names sense_key templates
+tier field by space
+part templates by ,
+
+type sense_key ili
+thing line sense_key
+type templates wnsentence
+relation "example sentences illustrating the use of the verb sense" templates
+attest line templates

@@ -13,7 +13,7 @@ thing example text
 type class vnclass fnframe
 content id lemma name pos descr f n resource rolelink alias type text arg rel slots slot head dep
 # bookkeeping, read by nothing: which releases a roleset is in use in, a link's version, confidence and how it was made
-omit usagenotes version confidence src start end relloc note
+omit usagenotes inuse version confidence src start end relloc note
 
 # What each part a claim is made of means (Laplace-Engine#32), in the words of PropBank's frameset.dtd, never an
 # element's or an attribute's name:
