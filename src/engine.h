@@ -48,7 +48,7 @@ typedef struct {
     char weigh_name[FW_WEIGHS][96]; double weigh[FW_WEIGHS]; int nweigh;
     char role_by[96], role_name[FW_WEIGHS][96]; double role[FW_WEIGHS]; int nrole;      /* how hard a word pulls, by what is attested of it under role_by (its part of speech) */
     char chain[FW_ALTS][FW_CHAIN][96]; int nchain[FW_ALTS], nalt;                                             /* the relations a pull follows from the word that pulls hardest, in order */
-    char lexical[4][96], gloss[2][96], equiv[5][96]; int nequiv;                                                                         /* translation: the recipe, the thing it names a lexicalization, and its parts that are the language and the concept; the recipe and the part whose relation says what is shown of a concept (pull.c) */
+    char lexical[4][96], gloss[2][96], equiv[5][96], usages[2][96]; int nequiv;                                                                         /* translation: the recipe, the thing it names a lexicalization, and its parts that are the language and the concept; the recipe and the part whose relation says what is shown of a concept; the recipe and the part whose relation states how often a sense is observed (usages, pull.c) */
     struct { int ready; lp_id refuse[FW_NAMES], refuse_witness[FW_NAMES], weigh[FW_WEIGHS], role_by, role[FW_WEIGHS], chain[FW_ALTS][FW_CHAIN]; } id;
 } Firmware;                                           /* id: every name above as the entity it is, computed once a pass (firmware_ids) */
 /* ---- the lookups the forward pass is made of (pull.c) */

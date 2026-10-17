@@ -10,6 +10,10 @@
  *                              source leaves empty is in no path; a key no list of the highway holds is left out and is
  *                              an unresolved obligation, said, never dropped silently; one none of whose parts resolves
  *                              names nothing
+ *                              A part may be written
+ *                              NAME matching PATTERN (the pattern's first group of NAME's text, as the source's
+ *                              notation parts it), NAME space CHAR (CHAR in it stands for a space), or literal TEXT (a
+ *                              text the recipe writes, quoted from the source's own documentation in a comment)
  *   pair TIER NAME...          of a TIER's thing, a part the file writes beside it with nothing between: [thing, value]
  *   score TIER NAME [from A to B]
  *                              the score the TIER gives what it attests, on the scale the source writes it on
@@ -77,7 +81,7 @@ typedef struct { char name[64]; int what; char arg[64]; KSpec k; uint32_t when;
 typedef struct { char tier[32], name[64]; } Pair;
 typedef struct { char tier[32]; char name[64][64]; int n; uint32_t when; char by[64], of[64]; int file; } Att;      /* when: the conditions it is said under, by their places in where[]; by: the part that names who says it; of: the part it is said of; file: a witness stands within the file */
 typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char by[64]; int alone; } Rel;     /* alone: where what it is to names nothing, the relation alone */
-typedef struct { char tier[32], name[8][160]; int n, within, infile, span, inclusive, of, resolved; } Thing;    /* of: the path of the things of its parts of these names, in order (a sentence of its words) */   /* within: its name stands only within the thing it is inside: the pair of that thing and it; infile: only within the file; span: the stretch of a text name[2] between the characters name[0] and name[1] */
+typedef struct { char tier[32], name[8][160]; int n, within, infile, span, inclusive, of, resolved; char lit[8], space[8]; KSpec form[8]; } Thing;    /* of: the path of the things of its parts of these names, in order (a sentence of its words) */   /* within: its name stands only within the thing it is inside: the pair of that thing and it; infile: only within the file; span: the stretch of a text name[2] between the characters name[0] and name[1] */
 typedef struct { char tier[32], name[64]; double from, to; int mapped; } Score;
 typedef struct { char name[64]; int op; char val[128]; regex_t re; } Where;
 typedef struct { int what; char tier[32], say[64]; KSpec a, b; uint32_t when; } HwLine;       /* what: 1 types, 2 keyed, 3 alias, 4 maps */
@@ -152,7 +156,16 @@ int say_says(Recipe *r, const char *path, char *tok){
         fclose(f); return 1; }
     if (!strcmp(tok, "thing")) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->nthing == 32) { fprintf(stderr, "%s: thing TIER NAME... [within] [resolved]\n", path); return -1; }
         Thing *p = &s->thing[s->nthing++]; snprintf(p->tier, sizeof p->tier, "%s", a2); while (name_next(&at, nm, sizeof nm)) { if (!strcmp(nm, "within")) { p->within = 1; continue; } if (!strcmp(nm, "within-file")) { p->infile = 1; continue; }
-            if (!strcmp(nm, "span")) { p->span = 1; continue; } if (!strcmp(nm, "inclusive")) { p->inclusive = 1; continue; } if (!strcmp(nm, "of")) { p->of = 1; continue; } if (!strcmp(nm, "resolved")) { p->resolved = 1; continue; } if (p->n < 8) snprintf(p->name[p->n++], sizeof p->name[0], "%s", nm); }     /* a modifier is read after the eighth name; a ninth name, as ever, is not */
+            /* literal TEXT: a part the recipe writes, as the source's own documentation words it (a source that writes
+             * the language of its words nowhere but in its README); NAME matching PATTERN: the part is the pattern's
+             * first group of NAME's text, as the source's notation parts it (a sense key's lemma, lemma%...); NAME space
+             * CHAR: CHAR in its text stands for a space (senseidx.5: collocations "joining individual words with an
+             * underscore") */
+            if (!strcmp(nm, "literal")) { if (p->n == 8 || !name_next(&at, nm, sizeof nm)) { fprintf(stderr, "%s: thing TIER ... literal TEXT (at most 8 parts)\n", path); return -1; } p->lit[p->n] = 1; snprintf(p->name[p->n++], sizeof p->name[0], "%s", nm); continue; }
+            if (!strcmp(nm, "matching") && p->n && !p->lit[p->n - 1]) { char pat[160]; KSpec *ks = &p->form[p->n - 1];
+                if (!name_next(&at, pat, sizeof pat) || regcomp(&ks->re, pat, REG_EXTENDED)) { fprintf(stderr, "%s: thing TIER NAME matching PATTERN (it must compile)\n", path); return -1; } ks->has_re = 1; continue; }
+            if (!strcmp(nm, "space") && p->n && !p->lit[p->n - 1]) { char ch[8]; if (!name_next(&at, ch, sizeof ch) || strlen(ch) != 1) { fprintf(stderr, "%s: thing TIER NAME space CHAR\n", path); return -1; } p->space[p->n - 1] = ch[0]; continue; }
+            if (!strcmp(nm, "span")) { p->span = 1; continue; } if (!strcmp(nm, "inclusive")) { p->inclusive = 1; continue; } if (!strcmp(nm, "of")) { p->of = 1; continue; } if (!strcmp(nm, "resolved")) { p->resolved = 1; continue; } if (p->n < 8) snprintf(p->name[p->n++], sizeof p->name[0], "%s", nm); }
         if (p->span && p->n != 3) { fprintf(stderr, "%s: thing TIER span START END TEXT [inclusive]\n", path); return -1; }
         if (!p->n) { fprintf(stderr, "%s: thing TIER NAME... [within]\n", path); return -1; } return 1; }
     if ((!strcmp(tok, "voices") || !strcmp(tok, "together")) && LAID) { int v = tok[0] == 'v'; at = strtok(NULL, "\r\n");
@@ -660,7 +673,15 @@ static int one_thing(Sink *k, const STree *t, int32_t g, const Thing *th, Ref *o
             Ref X = np == 1 ? p[0] : said_tuple(compose(p, np, ref_above(p, np)));
             if (th->infile) { Ref two[2] = { k->fname, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, ref_above(two, 2))); }
             *out = X; return 1; }
-        for (int z = 0; z < th->n; z++) { int32_t c = th->name[z][0] == '>' ? referred_path(k, t, g, th->name[z] + 1) : child_path(t, g, th->name[z]); if (c < 0) return 0;
+        for (int z = 0; z < th->n; z++) {
+            if (th->lit[z]) { p[z] = text_of((const uint8_t *)th->name[z], strlen(th->name[z])); p[z].said = 0; continue; }      /* a text the recipe writes */
+            int32_t c = th->name[z][0] == '>' ? referred_path(k, t, g, th->name[z] + 1) : child_path(t, g, th->name[z]); if (c < 0) return 0;
+            if (th->form[z].has_re || th->space[z]) {                        /* the part's text as the source's notation parts it: what it writes, never what it is disposed as */
+                const SNode *cn = &t->n[c]; if (cn->kind == S_GROUP && cn->first >= 0 && t->n[cn->first].next < 0 && t->n[cn->first].kind == S_TEXT) cn = &t->n[cn->first];
+                if (cn->kind == S_GROUP || left_empty(k->s, cn)) return 0;
+                Keys kf; kf.n = 0; if (th->form[z].has_re) { key_form(&th->form[z], cn->val, cn->vlen, &kf, t, c); if (!kf.n) return 0; } else { if (cn->vlen >= sizeof kf.k[0]) return 0; memcpy(kf.k[0], cn->val, cn->vlen); kf.k[0][cn->vlen] = 0; }
+                char *w = kf.k[0]; if (th->space[z]) for (char *q = w; *q; q++) if (*q == th->space[z]) *q = ' ';
+                p[z] = text_of((const uint8_t *)w, strlen(w)); p[z].said = 0; continue; }
             if (th->name[z][0] == '>') {                                     /* what another part says (a synset's ili): its own reading counts what it leaves unsaid, not this one */
                 UnkMark um; unknown_mark(k, t, c, &um); if (!value_of(k, t, c, &p[z], depth)) { unknown_back(k, t, &um); return 0; }
                 p[z].said = 0; continue; }
@@ -694,7 +715,7 @@ static int thing_compose(Sink *k, const STree *t, int32_t g, Ref *out, int depth
  * does not). */
 static int names_it(Sink *k, const STree *t, int32_t g, const SNode *y){
     Ref X; int r = thing_of(k, t, g, &X, 0); if (!r) return 0; const Thing *th = &k->s->thing[r - 1];
-    for (int z = 0; z < th->n; z++) if (!strchr(th->name[z], '/') && s_named(y, th->name[z], strlen(th->name[z]))) return 1;
+    for (int z = 0; z < th->n; z++) if (!th->lit[z] && !strchr(th->name[z], '/') && s_named(y, th->name[z], strlen(th->name[z]))) return 1;
     return 0;
 }
 /* Whether a part meets the conditions named: the outermost part the recipe speaks of (where ...), or a claim said
@@ -1410,7 +1431,7 @@ int say_thing_parts(const Recipe *r, const char *tier, const char *a, const char
     const Say *s = r ? r->say : NULL; if (!s) return -1;
     for (int i = 0; i < s->nthing; i++) { const Thing *th = &s->thing[i]; if (strcmp(th->tier, tier) || th->of || th->span || th->within || th->infile) continue;
         int x = -1, y = -1;
-        for (int z = 0; z < th->n; z++) { const char *nm = th->name[z], *sl = strrchr(nm, '/'), *last = sl ? sl + 1 : nm + (*nm == '>' || *nm == '^');
+        for (int z = 0; z < th->n; z++) { if (th->lit[z]) continue; const char *nm = th->name[z], *sl = strrchr(nm, '/'), *last = sl ? sl + 1 : nm + (*nm == '>' || *nm == '^');
             if (x < 0 && !strcmp(last, a)) x = z; else if (y < 0 && !strcmp(last, b)) y = z; }
         if (x >= 0 && y >= 0) { *ia = x; *ib = y; return th->n; } }
     return -1;

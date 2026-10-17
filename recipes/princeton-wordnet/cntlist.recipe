@@ -1,21 +1,33 @@
 name wordnet-cntlist
 # cntlist.5: "The fields are separated by one space", and
 #   "Each line in cntlist is of the form:   tag_cnt  sense_key  sense_number"
-# The sense key is WordNet's key of the sense, read as the ILI concept it is mapped to; the sense number is where the
-# sense stands in the lemma's list, a key; the tag count is what the file says of the sense.
+# The sense number is where the sense stands in the lemma's list, a key; the tag count is what the file says of the
+# sense.
+# The sense is the lexicalization [lemma, language, ILI] (recipes/BRIEF.md: "A sense key (dog%1:05:00::) is WordNet's
+# pointer to a lexicalization: it is decomposed for its facts (lemma, type, lexicographer file), resolved through the
+# highway's perf-cache to the lexicalization, and not recorded"; "A word in a language is the lexicalization [lemma,
+# language, ILI]"), made of the sense key's own parts:
+#   lemma: senseidx.5, "A sense_key is represented as: lemma%lex_sense", and "lemma is in lower case, and collocations
+#     are formed by joining individual words with an underscore (_) character": the text before its %, an underscore
+#     standing for the space between two words (domestic_dog%1:05:00:: is domestic dog), its case as WordNet writes it;
+#   language: WordNet writes the language of its words nowhere but in its documentation, which calls them English
+#     (morphy.7: "A transformation to a valid English string"); written en, ISO 639-3's Part1 of English (its table's
+#     row eng: Ref_Name English, Part1 en), the code every WN-LMF wordnet of this lineage writes (the Open English
+#     WordNet's Lexicon language="en"), so the count lands on the very strand that wordnet's sense of it is;
+#   ILI: the concept the sense key names, resolved through the highway (index.sense's sense key to its WordNet 3.0
+#     synset offset, CILI's offset to its ILI: type sense_key ili).
 match cntlist
 
 tier row by \n
 names tag_cnt sense_key sense_number
 tier field by space
 
-thing row sense_key
+thing row sense_key matching ^([^%]+)% space _ literal en sense_key
 type sense_key ili
 key row sense_number
 content tag_cnt
 # cntlist.5: "tag_cnt is the decimal number of times the sense is tagged in the corresponding semantic concordance": a
-# number the file states of the sense, an observation. The sense key is read as the concept its synset is (type
-# sense_key ili), so the claim is said of the concept, not of the lemma's sense: the sense key as the lexicalization
-# [lemma, language, ILI] is Laplace-Engine#20.
+# number the file states of the sense, an observation, said of the lexicalization (translate orders a word's senses by
+# it: Laplace-Wiki Sequence/Web.md 15.6, "ordered by observed usages").
 relation "number of times the sense is tagged" tag_cnt
 attest row tag_cnt

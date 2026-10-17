@@ -87,6 +87,8 @@ Firmware firmware_for(const char *path, int op){
             if (k_ != 4) { fprintf(stderr, "%s:%d: lexicalization RECIPE THING LANGUAGE CONCEPT\n", fw.path, line); exit(2); } }
         else if (!strcmp(tok, "gloss") && in == FW_TRANSLATE) { char *a_ = strtok(NULL, " \t\r\n"), *b_ = strtok(NULL, " \t\r\n");
             if (!a_ || !b_ || a_[0] == '#' || b_[0] == '#') { fprintf(stderr, "%s:%d: gloss RECIPE NAME\n", fw.path, line); exit(2); } snprintf(fw.gloss[0], 96, "%s", a_); snprintf(fw.gloss[1], 96, "%s", b_); }
+        else if (!strcmp(tok, "usages") && in == FW_TRANSLATE) { char *a_ = strtok(NULL, " \t\r\n"), *b_ = strtok(NULL, " \t\r\n");    /* usages RECIPE NAME: the number RECIPE's relation of NAME states of a sense orders a word's senses (pull.c) */
+            if (!a_ || !b_ || a_[0] == '#' || b_[0] == '#') { fprintf(stderr, "%s:%d: usages RECIPE NAME\n", fw.path, line); exit(2); } snprintf(fw.usages[0], 96, "%s", a_); snprintf(fw.usages[1], 96, "%s", b_); }
         else if (!strcmp(tok, "equivalent") && in == FW_TRANSLATE) { char *nm; int k_ = 0;           /* equivalent RECIPE NAME...: the relations RECIPE declares between a language's codes (pull.c) */
             while (k_ < 5 && (nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') snprintf(fw.equiv[k_++], 96, "%s", nm);
             if (k_ < 2) { fprintf(stderr, "%s:%d: equivalent RECIPE NAME...\n", fw.path, line); exit(2); } fw.nequiv = k_ - 1; }
