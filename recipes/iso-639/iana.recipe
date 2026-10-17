@@ -3,9 +3,8 @@ name iana-language-subtag-registry
 # "Field-Name: value", a line that begins with white space continuing the one before. A record is about its Subtag, or
 # its Tag (a grandfathered or redundant tag has a Tag and no Subtag); every other field is said of it as RFC 5646
 # words what the field means. The first record holds only the File-Date: it is said of the file, in its metadata.
-# The file does not name who publishes it; the directory it is kept in is named iana.
 match language-subtag-registry.txt
-witness {dir}
+witness IANA Language Subtag Registry
 
 tier record by \n%%\n
 tier field by \n

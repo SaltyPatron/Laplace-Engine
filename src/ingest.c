@@ -73,7 +73,8 @@ static void show_entities(const char *conninfo, int ask){
 static char **paths; static const Source **path_of; static int npaths, cpaths; static const Source *walking;
 static void add_path(const char *p){
     if (npaths == cpaths) { cpaths = cpaths ? cpaths * 2 : 1024; paths = xrealloc(paths, sizeof(char *) * cpaths); path_of = xrealloc(path_of, sizeof(Source *) * cpaths); }
-    path_of[npaths] = walking; paths[npaths++] = strdup(p);
+    char *s = strdup(p); for (char *q = s; *q; q++) if (*q == '\\') *q = '/';
+    path_of[npaths] = walking; paths[npaths++] = s;
 }
 static int walk_cb(const char *p, const struct stat *st, int type, struct FTW *fw){
     const char *b = p + fw->base;
@@ -183,6 +184,7 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
         if (!mine) { printf("%-4d %-38s %-10s %10s   no recipe reads it yet\n", i + 1, src[i].name, "passed", ""); empty++; wentin[i] = 1; continue; }
         if (!src[i].found[0]) { printf("%-4d %-38s %-10s %10s   it is at none of its roots\n", i + 1, src[i].name, "absent", ""); absent++; continue; }
         double bytes_in = (double)source_bytes(&src[i], rec, nrec), before = loads ? db_bytes(conninfo) : -1;
+        if (bytes_in <= 0) { printf("%-4d %-38s %-10s %10s   its root holds no files\n", i + 1, src[i].name, "absent", ""); absent++; continue; }
         if (loads) { double have = room_left(conninfo); struct statvfs v; double whole = 0;
             { PGconn *pg = PQconnectdb(conninfo); if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SHOW data_directory"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !statvfs(PQgetvalue(r, 0, 0), &v)) whole = (double)v.f_blocks * (double)v.f_frsize / 1e9; PQclear(r); } PQfinish(pg); }
             if (have >= 0 && have < whole / 10) { char why[128]; snprintf(why, sizeof why, "no room: %.0f GB is left of %.0f GB", have, whole);
@@ -456,12 +458,22 @@ int cmd_ingest(int argc, char **argv){
                     #pragma omp parallel
                     #pragma omp single
                     decompose_bytes(CTX[omp_get_thread_num()], f, buf, end, first);
-                    first = 0; f->bytes += end; WHOLE(f); t_dec += now() - td;
+                    int was_first = first; first = 0; f->bytes += end; WHOLE(f); t_dec += now() - td;
                     if (!pass && !last && f->ev.n) {                                   /* a claim it attests not recorded: its trunk is not (a trunk is written after every claim of every stretch), and it is recorded now */
                         uint64_t k = 0, want = f->ev.n < 4096 ? f->ev.n : 4096; lp_id *ids = malloc(sizeof(lp_id) * want); uint8_t *tt = malloc(want);
                         for (uint64_t j = 0; j < f->ev.n && k < want; j++) if (f->ev.e[j].kind != EV_RECORD) { const Node *x = table_find(&f->ev.e[j].claim); if (!x) continue; ids[k] = x->id; tt[k++] = x->tier; }     /* at the tier it is recorded at: the lowest it is composed at */
-                        if (!db_all_recorded(conninfo, ids, tt, k)) unrecorded = 1;
+                        if (!db_all_recorded(conninfo, ids, tt, k)) {
+                            unrecorded = 1;
+                            if (was_first) { fprintf(stderr, "\n  %s: what it holds is not all recorded: it is recorded now\n", f->path); pass = 1; }
+                        }
                         free(ids); free(tt); }
+                    if (!pass && was_first && last && f->has_file) {                   /* single-stretch file: check trunk before discarding */
+                        PGconn *pg = db_connect(conninfo); Args a = { 0 }; arg_ids(&a, &f->file.id, 1);
+                        PGresult *r = ask_once(pg, "SELECT 1 FROM entity WHERE id = ANY($1::blake3[])", &a);
+                        if (PQntuples(r)) { f->known = 1; st.known++; }
+                        else pass = 1;
+                        PQclear(r); args_free(&a); PQfinish(pg);
+                    }
                     if (pass) { bytes += end; nev += f->ev.n; batches++; }
                     fprintf(stderr, "\r  %s: %s  %.1f MB read  %'llu nodes in this stretch   ", f->path, pass ? "recording" : "its trunk", f->bytes / 1e6, (unsigned long long)table_count());
                     if (pass) { SHOW(f); if (do_load) { staged_mark(); fold_events(fold, f, 1); } if (do_load && load(conninfo, threads, f, 1, &st)) return 1; }
@@ -594,6 +606,18 @@ int cmd_ingest(int argc, char **argv){
         PGresult *r = ask_once(pg, "INSERT INTO witness (id, lineage, trust) SELECT ($1::blake3[])[1], ($3::blake3[])[1], $2 WHERE NOT EXISTS (SELECT 1 FROM witness WHERE id = ($1::blake3[])[1])", &a);
         printf("  %-44s trust %.3f%s%s\n", "the witness: the source's trunk", witness_trust, has_witness_lineage ? ", with its lineage" : "", PQcmdTuples(r)[0] == '0' ? " (recorded already)" : "");
         PQclear(r); args_free(&a); PQfinish(pg); }
+    else if (do_load > 0 && !mism && !of && nev) {                            /* user-uploaded files with no single source: each file's trunk witnesses what it says */
+        PGconn *pg = db_connect(conninfo); uint64_t nw = 0;
+        for (int i = 0; i < nfiles; i++) {
+            if (files[i].skipped || files[i].known || files[i].source || !files[i].has_file || !files[i].ev.n) continue;
+            double tr = files[i].trust > 0 ? files[i].trust : 0.5;
+            Args a = { 0 }; arg_ids(&a, &files[i].file.id, 1); arg_f64(&a, tr); arg_ids(&a, &files[i].lineage.id, files[i].has_lineage);
+            PGresult *r = ask_once(pg, "INSERT INTO witness (id, lineage, trust) SELECT ($1::blake3[])[1], ($3::blake3[])[1], $2 WHERE NOT EXISTS (SELECT 1 FROM witness WHERE id = ($1::blake3[])[1])", &a);
+            if (PQcmdTuples(r)[0] != '0') nw++;
+            PQclear(r); args_free(&a);
+        }
+        PQfinish(pg);
+        if (nw) printf("  %-44s %llu file trunk(s) recorded as witness\n", "the witnesses: the files' trunks", (unsigned long long)nw); }
     printf("\n== total %.1f s\n", now() - T);
     return mism ? 1 : 0;
 }

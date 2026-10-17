@@ -1,0 +1,15 @@
+name gutenberg-britannica
+# Encyclopaedia Britannica, 11th Edition (1911, Project Gutenberg slices).
+# Each article paragraph begins with an ALL-CAPS headword followed by a comma or parenthetical and article text.
+match britannica-1911-*.txt
+witness Encyclopaedia Britannica, 11th Edition
+lineage Project Gutenberg
+class UserCuratedResource
+tier entry by \n\n
+names first rest...
+tier line by \n
+part first by , pieces 2
+where first matches ^[A-Z][A-Z0-9 ,.'()-]+, 
+content first rest
+thing entry first/1
+pair entry first/2 rest

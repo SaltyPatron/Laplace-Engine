@@ -1,0 +1,14 @@
+name gutenberg-sloane
+# The Standard Electrical Dictionary by T. O'Connor Sloane (Project Gutenberg eBook #36776).
+# Each entry is a paragraph separated by an empty line: the headword line first, followed by its definition lines.
+match standard-electrical-dictionary-sloane.txt
+witness The Standard Electrical Dictionary
+lineage Project Gutenberg
+class UserCuratedResource
+tier entry by \n\n
+names headword definition...
+tier line by \n
+where headword matches ^[A-Z][A-Za-z0-9 ,.'()-]+\.$
+content headword definition
+thing entry headword
+pair entry definition

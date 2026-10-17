@@ -1,8 +1,7 @@
 name universal-dependencies
 # Universal Dependencies: treebanks of sentences, each with a row for every word and what the treebank says of it.
-# Every treebank is its own witness, named as its directory is named.
-witness {dir}
-called Universal Dependencies
+# One source trunk and one witness; each treebank is a directory of files under it (Laplace-Engine#28).
+witness Universal Dependencies
 class AcademicCurated
 root $LAPLACE_DATA/UD-Treebanks/ud-treebanks-*
 # Measured when it was loaded: 15,632,387 compositions from 501 MB of it, at 750 bytes each with their indexes and standings.

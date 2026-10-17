@@ -484,9 +484,20 @@ static int merge_leaf(PGconn *w, PGconn *rd, const MLeaf *L, uint64_t *rows){
     /* the container index takes what it was handed into its own list: merged here, inside the transaction, so no
      * lookup reads a pending list through (in a rewritten leaf this too is written without WAL) */
     if (!bad && L->table == M_PHYS) {
+        static int has_lp_clean = -1;
+        if (has_lp_clean < 0) {
+            PGresult *chk = PQexec(w, "SELECT to_regprocedure('public.laplace_clean_pending_list(regclass)') IS NOT NULL");
+            int v = (PQresultStatus(chk) == PGRES_TUPLES_OK && PQntuples(chk) > 0 && PQgetvalue(chk, 0, 0)[0] == 't') ? 1 : 0;
+            PQclear(chk);
+            has_lp_clean = v;
+        }
         const char *v[1] = { L->name };
-        PGresult *q = PQexecParams(w, "SELECT public.laplace_clean_pending_list(i.indexrelid::regclass) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am a ON a.oid = c.relam "
-                                      "WHERE i.indrelid = ('public.' || quote_ident($1))::regclass AND a.amname = 'gin'", 1, NULL, v, NULL, NULL, 0);
+        const char *fn = has_lp_clean ? "public.laplace_clean_pending_list" : "gin_clean_pending_list";
+        char qsql[512];
+        snprintf(qsql, sizeof qsql,
+            "SELECT %s(i.indexrelid::regclass) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am a ON a.oid = c.relam "
+            "WHERE i.indrelid = ('public.' || quote_ident($1))::regclass AND a.amname = 'gin'", fn);
+        PGresult *q = PQexecParams(w, qsql, 1, NULL, v, NULL, NULL, 0);
         if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "merge %s, container index: %s", L->name, PQerrorMessage(w)); bad = 1; } PQclear(q); }
     /* The reference a path makes to its entity, checked as one set over what this leaf took (the stage still holds it),
      * not row by row: with the referential triggers out of the writers' transaction, this is what keeps the ordering

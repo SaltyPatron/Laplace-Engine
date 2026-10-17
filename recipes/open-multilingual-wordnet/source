@@ -1,7 +1,6 @@
 name open-multilingual-wordnet
-# Open Multilingual Wordnet 2.0: wordnets of many languages, each its own witness, named as its lexicon names itself.
-witness {first label}
-called Open Multilingual Wordnet
+# Open Multilingual Wordnet 2.0: wordnets of many languages, one source trunk and one witness (Laplace-Engine#28).
+witness Open Multilingual Wordnet
 class AcademicCurated
 root $LAPLACE_DATA/OMW-2.0/omw-*
 # Measured when it was loaded: 29,072,501 compositions from 597 MB, at 750 bytes each with their indexes and standings.
