@@ -90,8 +90,12 @@ cat > "$fr/omw-fr.xml" <<'XML'
 </LexicalResource>
 XML
 
+# ISO 639-3's code table (iso-639-3.tab, SIL), English's and French's rows as it writes them: eng is en in 639-1, fra
+# is fr in 639-1 and fre in 639-2/B, so a language asked by any of its codes is the same language
+mkdir -p "$LAPLACE_DATA/ISO639"
+printf 'Id\tPart2b\tPart2t\tPart1\tScope\tLanguage_Type\tRef_Name\tComment\neng\teng\teng\ten\tI\tL\tEnglish\t\nfra\tfre\tfra\tfr\tI\tL\tFrench\t\n' >"$LAPLACE_DATA/ISO639/iso-639-3.tab"
 "$L" deploy -d "$conn" >"$scratch/deploy.log" 2>&1 || fail "deploy: $(tail -5 "$scratch/deploy.log")"
-for s in open-english-wordnet open-multilingual-wordnet; do
+for s in iso-639 open-english-wordnet open-multilingual-wordnet; do
   LAPLACE_INGEST_ONE=1 "$L" ingest -d "$conn" -j 2 "$s" >"$scratch/$s.run" 2>&1 || fail "ingest $s: $(tail -20 "$scratch/$s.run")"
 done
 fwf=$here/../firmware/program.firmware
@@ -115,6 +119,14 @@ for w in 'chien' 'canis familiaris'; do grep -q "$w" <<<"$l" || fail "dog en fr:
 [[ "$l" != *toutou* ]] || fail "dog en fr: toutou (i46361) is given for i46360: $out"
 grep -q 'nothing attested' <<<"$(line fr "$(block "$man" "$out")")" || fail "dog en fr: i89566 has French words, and the fixture gives none: $out"
 echo "translate: dog en fr: i46360 is chien, canis familiaris; i89566 has nothing in French"
+
+# en and eng, fr, fra and fre are one language's codes, joined by the links ISO 639-3's table states (Sources, tier 1)
+for q in 'dog eng fra' 'dog en fre' 'dog eng fr'; do
+  o=$(tl $q); [[ $(concepts "$o") == $(concepts "$out") ]] || fail "$q: not the concepts of dog en fr: $o"
+  [[ "$(line "${q##* }" "$(block "$dog" "$o")" | grep -o 'chien\|canis familiaris\|toutou' | sort)" == "$(line fr "$(block "$dog" "$out")" | grep -o 'chien\|canis familiaris\|toutou' | sort)" ]] || fail "$q: i46360's French words are not dog en fr's: $o"
+done
+o=$(tl chien fra eng); l=$(line eng "$(block "$dog" "$o")"); grep -q 'domestic dog' <<<"$l" || fail "chien fra eng: i46360 has no domestic dog: $o"
+echo "translate: dog eng fra is dog en fr: a language is asked by any of the codes ISO 639-3 states are its"
 
 out=$(tl chien fr en)
 [[ $(concepts "$out") == 2 ]] || fail "chien fr en: not chien's two concepts (i46360, i46361): $out"

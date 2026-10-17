@@ -18,6 +18,8 @@ for translate
   fan 4096
   lexicalization wn-lmf Sense language ili
   gloss wn-lmf Definition
+  # a language as every code set writes it: the codes ISO 639-3's table states are one language's (en, eng)
+  equivalent iso-639-3 Part1 Part2b Part2t
 
 for pull
   fan 4096
