@@ -5,6 +5,9 @@ witness ConceptNet
 class UserCuratedResource
 root $LAPLACE_DATA/ConceptNet
 # Measured, not loaded: 254,147,905 compositions from 10,157 MB, at 750 bytes each with their indexes and standings.
+# Measured again with the ExternalURL lines not read (2026-10-17): at most 168,648,257 compositions (--no-load, counted
+# stretch by stretch, so a composition two stretches make is counted twice), and a 715,588-edge sample loaded took
+# 1,020 bytes a composition with its indexes and standings: at most about 172 GB.
 room 19
 # It comes after no source it does not need first. BRIEF.md: "Nothing is order-dependent: every node is
 # content-derived, so what two sources say links by entity collision whichever is ingested first, and no placeholder
