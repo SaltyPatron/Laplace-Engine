@@ -11,7 +11,10 @@
  *   held REASON                   a source its keeper has not supplied yet: when it is absent, a plan says so, with the reason, and does not fail
  *   root PATH                     where the source is kept ($NAME from the environment; * for the newest of several).
  *                                 Several roots may be given: the first that exists is the source
- *   files PATTERN                 the files it is, when it is not everything under a root (several may be given)
+ *   files PATTERN                 the files it is, when it is not everything under a root (several may be given); a
+ *                                 directory a pattern names is every file under it
+ *   ignore NAME                   files of this name found under what is walked (.gitignore) say, in gitignore's
+ *                                 notation, which files beside and below them are not the source
  *   except PATTERN...             files under its root that are not the source
  *   room N                        what it takes in the database, in times what its files hold, as it was measured
  *   called NAME                   the source's record, where its witness is named file by file: its trunk is
@@ -140,14 +143,15 @@ static int source_parse(const char *path, Source *s){
         else if (!strcmp(tok, "class")) s->trust = class_trust(path, strtok(NULL, " \t\r\n"));
         else if (!strcmp(tok, "trust") || !strcmp(tok, "deviation")) trust_by_number(path, tok);
         else if (!strcmp(tok, "root")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nroot < 8 && !path_expand(tok, s->root[s->nroot++], 512, s->unset, sizeof s->unset)) s->nroot--; }
-        else if (!strcmp(tok, "files")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nfiles < 8 && !path_expand(tok, s->files[s->nfiles++], 512, s->unset, sizeof s->unset)) s->nfiles--; }
+        else if (!strcmp(tok, "files")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nfiles < 16 && !path_expand(tok, s->files[s->nfiles++], 512, s->unset, sizeof s->unset)) s->nfiles--; }
         else if (!strcmp(tok, "room")) { tok = strtok(NULL, " \t\r\n"); if (tok) s->room = atof(tok); }
         else if (!strcmp(tok, "tier0")) s->tier0 = 1;                       /* it records every codepoint, tier 0, as its ingest's first act */
         else if (!strcmp(tok, "held")) rest_of(s->held, sizeof s->held);
         else if (!strcmp(tok, "called")) { char *v = strtok(NULL, "\r\n"); while (v && (*v == ' ' || *v == '\t')) v++; if (v) snprintf(s->called, sizeof s->called, "%s", v); }
         else if (!strcmp(tok, "after")) while ((tok = strtok(NULL, " \t\r\n")) && s->nafter < 16) snprintf(s->after[s->nafter++], 64, "%s", tok);
         else if (!strcmp(tok, "except")) while ((tok = strtok(NULL, " \t\r\n")) && s->nexcept < 8) snprintf(s->except[s->nexcept++], 128, "%s", tok);
-        else if (!strcmp(tok, "reads")) while ((tok = strtok(NULL, " \t\r\n")) && s->nreads < 8) snprintf(s->reads[s->nreads++], 64, "%s", tok);
+        else if (!strcmp(tok, "ignore")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(s->ignore, sizeof s->ignore, "%s", tok); }
+        else if (!strcmp(tok, "reads")) while ((tok = strtok(NULL, " \t\r\n")) && s->nreads < 32) snprintf(s->reads[s->nreads++], 64, "%s", tok);
         else { fprintf(stderr, "%s: \"%s\" is not something a source says\n", path, tok); fclose(f); return 0; }
     }
     fclose(f);
