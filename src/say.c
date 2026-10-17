@@ -595,6 +595,9 @@ static int one_thing(Sink *k, const STree *t, int32_t g, const Thing *th, Ref *o
             if (!have || bhi <= blo || bhi > tn->vlen) return 0;
             *out = text_of(tn->val + blo, bhi - blo); out->said = 0; return 1; }
         for (int z = 0; z < th->n; z++) { int32_t c = th->name[z][0] == '>' ? referred_path(k, t, g, th->name[z] + 1) : child_path(t, g, th->name[z]); if (c < 0) return 0;
+            if (th->name[z][0] == '>') {                                     /* what another part says (a synset's ili): its own reading counts what it leaves unsaid, not this one */
+                uint64_t u0 = k->unknown; int n0 = k->nunk; if (!value_of(k, t, c, &p[z], depth)) { k->unknown = u0; k->nunk = n0; return 0; }
+                p[z].said = 0; continue; }
             if (t->n[c].kind == S_GROUP && t->n[c].first >= 0 && t->n[t->n[c].first].next >= 0) {      /* a part that is several pieces: the path of what each is, in order */
                 Ref pc[256]; uint32_t np = 0; for (int32_t q = t->n[c].first; q >= 0 && np < 256; q = t->n[q].next) if (value_of(k, t, q, &pc[np], depth)) { pc[np].said = 0; np++; }
                 if (!np) return 0; p[z] = np == 1 ? pc[0] : compose(pc, np, ref_above(pc, np)); }
