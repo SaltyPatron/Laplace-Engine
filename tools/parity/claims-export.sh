@@ -11,6 +11,8 @@
 # (a read-only session); the connection is PGHOST/PGUSER/PGPORT as libpq takes them, the database named. Text is
 # written as COPY writes it: a tab, line end or backslash escaped as \t, \n, \\, the same as --claims-tsv.
 # LAPLACE_ENGINE_BIN is the engine for the engine side (default laplace on PATH).
+# The monorepo side renders the ids in batches of CLAIMS_EXPORT_BATCH (default 50000): one render over every id of a
+# large source (CILI, PredicateMatrix) exceeds the server's 1 GB string limit.
 set -euo pipefail
 kind=${1:?usage: claims-export.sh engine|mono|mono-witnesses ...}; shift
 psql=${PSQL:-psql}
@@ -23,13 +25,15 @@ case "$kind" in
     printf '%s\t%s claims\n' "$src" "$(wc -l < "$out")" ;;
   mono)
     db=${1:?database}; out=${2:?output file}; shift 2; [ $# -gt 0 ] || { echo "claims-export.sh mono: name the witnesses" >&2; exit 2; }
+    batch=${CLAIMS_EXPORT_BATCH:-50000}; [[ "$batch" =~ ^[1-9][0-9]*$ ]] || { echo "claims-export.sh: CLAIMS_EXPORT_BATCH is a count" >&2; exit 2; }
     ids=""
     for w in "$@"; do
       if [[ "$w" =~ ^[0-9a-fA-F]{32}$ ]]; then ids+="${ids:+,}decode('$w','hex')"
       else ids+="${ids:+,}laplace.source_id('${w//\'/\'\'}')"; fi
     done
     sql="WITH a AS (SELECT subject_id s, type_id t, object_id o, sum(observation_count) n FROM laplace.attestations WHERE source_id = ANY (ARRAY[$ids]) GROUP BY 1, 2, 3),
-      ids AS (SELECT array_agg(DISTINCT x) xs FROM a CROSS JOIN LATERAL (VALUES (s), (t), (o)) v(x) WHERE x IS NOT NULL),
+      xu AS (SELECT DISTINCT x FROM a CROSS JOIN LATERAL (VALUES (s), (t), (o)) v(x) WHERE x IS NOT NULL),
+      ids AS (SELECT array_agg(x) xs FROM (SELECT x, (row_number() OVER () - 1) / $batch g FROM xu) b GROUP BY g),
       r AS (SELECT u.x, u.txt FROM ids, LATERAL unnest(ids.xs, realize.render_batch(ids.xs)) u(x, txt)),
       l AS (SELECT d.id x, d.label FROM ids, LATERAL realize.display_label_batch(ids.xs) d),
       nm AS (SELECT r.x, coalesce(nullif(r.txt, ''), l.label, encode(r.x, 'hex')) txt, coalesce(nullif(l.label, ''), r.txt, encode(r.x, 'hex')) label FROM r LEFT JOIN l USING (x))
