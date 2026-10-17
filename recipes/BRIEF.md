@@ -204,9 +204,10 @@ report where a recipe cannot say it.
   apiece), the repeats are the layout's packaging, not repetition. `predicate-matrix/matrix.recipe` reads a row as that
   strand (`thing row ... resolved`): the nodes it aligns and the role it maps in each, and what else the row says is
   said of the strand in the matrix README's words. A key of a version older than the one the highway is built from
-  (VerbNet 3.2, FrameNet 1.5, PropBank before its unification) is never mapped by a guess: a roleset or frame, written
-  as the node's own text, is that node though no list holds it (`type ... node`), content in the path; a VerbNet class
-  number, a pointer to a class no source of the data root has, is left out of the path and owed. No row is lost.
+  (VerbNet 3.2, FrameNet 1.5, PropBank before its unification) is read by its key as the lists write it: a roleset, a frame and a
+  VerbNet class or subclass (the matrix writes a class by its number, `vn:36.4`, the key the highway's `vnclass` list
+  also writes), each the key as the lists write it, is that node though no list holds it (`type ... node`), content in
+  the path; only a pointer no list holds (an offset) is left out of the path and owed. No row is lost.
 - **A declared default attests nothing.** A value that stands only because the source's format declares it the
   default (Unicode's `nv=NaN`; an `scx` that is only `sc` again) is not something the source says of that thing, just
   as its own empty marker is not.

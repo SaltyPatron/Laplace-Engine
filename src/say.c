@@ -25,9 +25,11 @@
  *                              ([matching PATTERN] [as TEMPLATE...]: the key as the lists write it; {NAME} in a template
  *                              is the part NAME beside it, and each template is tried in turn: key_form).
  *     [node]                   the key, as the lists write it, is the node's own text (a PropBank roleset abandon.01, a
- *                              FrameNet frame), so it is content whether or not a list holds it (BRIEF: a highway node is
- *                              content): where none does, it is that node, recorded as its text and counted; never for
- *                              a source's own pointer to a node (vn:51.3.1, mcr:ili-30-01976841-v), which only resolves
+ *                              FrameNet frame, a VerbNet class 36.4 as the vnclass list keys it), so it is content
+ *                              whether or not a list holds it (BRIEF: a highway node is content): where none does, it is
+ *                              that node, its key whole as the one text it is (the composition laplace highway gives a
+ *                              type's key), recorded and counted; never for a source's pointer (an offset,
+ *                              mcr:ili-30-01976841-v), which only resolves
  *   metadata NAME...           the part is said of the file itself: it goes in the file's metadata tree
  *   omit NAME...               the part is the file's bookkeeping: read by nothing
  *   perfcache                  a part named as a property the perf-cache's flags hold (tier0.flags, its layout) is read
