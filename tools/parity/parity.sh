@@ -107,6 +107,9 @@ python3 "$here/diff.py" "$out/mono" "$out/engine" --names "laplace-mono,engine" 
 # The Engine's provenance is containment: a source that adds claims has its witness's trunk say them (laplace replay,
 # the walk down from the trunk). A harness run where it says none is the walk's defect, not a difference.
 lines() { wc -l < "$1"; }
+if [[ $forget == 1 ]] && (( $(lines "$out/engine/forgotten/entities.tsv") != $(lines "$out/engine/before/entities.tsv") )); then
+  echo "parity.sh: forgetting $src_e left $(( $(lines "$out/engine/forgotten/entities.tsv") - $(lines "$out/engine/before/entities.tsv") )) entities more or fewer than before it went in" >&2; exit 1
+fi
 if (( $(lines "$out/engine/after/claims.tsv") > $(lines "$out/engine/before/claims.tsv") )) \
    && (( $(lines "$out/engine/after/testimony.tsv") <= $(lines "$out/engine/before/testimony.tsv") )); then
   echo "parity.sh: $src_e added claims but its witness's trunk says none of them (laplace replay finds no testimony)" >&2; exit 1
