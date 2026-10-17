@@ -416,7 +416,7 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
     if (pg) PQfinish(pg); free(want); free(of); table_reset();              /* what was composed to ask is composed again for the files that are read */
     return found;
 }
-static lp_id witness_trunk, witness_lineage; static double witness_trust; static int has_witness_trunk, has_witness_lineage;   /* the source's trunk, the witness: its trust and lineage keyed by it */
+static lp_id witness_trunk, witness_lineage; static double witness_trust; static int has_witness_trunk, has_witness_lineage, witness_supersedes;   /* the source's trunk, the witness: its trust and lineage keyed by it */
 /* Explicit admission of an existing artifact. Generation and deployment never call this. */
 static int ingest_highway(const char *conninfo, const char *t0p, int threads, int do_load){
     /* the highway's contents as entities: a type's content (a definition, a frame's name, a lemma and a roleset's name)
@@ -735,7 +735,7 @@ int cmd_ingest(int argc, char **argv){
               LoadStats ss = { 0 }; double ts = now(); staged_mark(); if (load(conninfo, threads, &sf, 1, &ss)) return 1;
               printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded");
               { char hx[33]; id_text(&trunk.id, hx); printf("  %-44s %s\n", "its ID, the witness", hx); }
-              witness_trunk = trunk.id; witness_trust = trust; has_witness_trunk = 1;
+              witness_trunk = trunk.id; witness_trust = trust; has_witness_trunk = 1; witness_supersedes = one->supersede;
               for (int i = 0; i < nfiles && !has_witness_lineage; i++) if (!files[i].skipped && files[i].has_lineage) { witness_lineage = files[i].lineage.id; has_witness_lineage = 1; } }
           else printf("  the source's trunk: none, since its source file names no record (witness or called): what it says is held by its files' trunks, and no witness holds them\n");
           table_reset(); }
@@ -750,7 +750,10 @@ int cmd_ingest(int argc, char **argv){
         PGconn *pg = db_connect(conninfo); Args a = { 0 }; arg_ids(&a, &witness_trunk, 1); arg_f64(&a, witness_trust); arg_ids(&a, &witness_lineage, has_witness_lineage);
         PGresult *r = ask_once(pg, "INSERT INTO witness (id, lineage, trust) SELECT ($1::blake3[])[1], ($3::blake3[])[1], $2 WHERE NOT EXISTS (SELECT 1 FROM witness WHERE id = ($1::blake3[])[1])", &a);
         printf("  %-44s trust %.3f%s%s\n", "the witness: the source's trunk", witness_trust, has_witness_lineage ? ", with its lineage" : "", PQcmdTuples(r)[0] == '0' ? " (recorded already)" : "");
-        PQclear(r); args_free(&a); PQfinish(pg); }
+        PQclear(r); args_free(&a); PQfinish(pg);
+        /* a source that is a working tree (supersede): this whole reading is what it says now, and what only its earlier
+         * readings held (a file's former content, a file no longer there) goes, as laplace forget takes a witness out */
+        if (witness_supersedes) forget_superseded(conninfo, threads, &witness_trunk); }
     else if (do_load > 0 && !mism && !of && nev) {                            /* user-uploaded files with no single source: each file's trunk witnesses what it says */
         PGconn *pg = db_connect(conninfo); uint64_t nw = 0;
         for (int i = 0; i < nfiles; i++) {
