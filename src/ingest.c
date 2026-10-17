@@ -177,7 +177,7 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
     int *wentin = calloc((size_t)nsrc, sizeof(int));                       /* 1: it went in in this run, or has nothing to go in */
     printf("laplace ingest   %s, in order   logs in %s\n\n", want ? "the sources named" : "every source", dir);
     printf("%-4s %-38s %-10s %10s   %s\n", "", "source", "", "seconds", "");
-    double T = now(); int failed = 0, absent = 0, empty = 0, went = 0;
+    double T = now(); int failed = 0, absent = 0, held = 0, empty = 0, went = 0;
     for (int i = 0; i < nsrc && !failed; i++) {
         if (want && !want[i]) continue;
         { const char *b = NULL;                                              /* recipes/order: what it comes after went in first, in this run */
@@ -185,9 +185,9 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
           if (b) { printf("%-4d %-38s %-10s %10s   it comes after %s, which did not go in\n", i + 1, src[i].name, "not begun", "", b); short_of_order++; continue; } }
         int mine = 0; for (int k = 0; k < nrec; k++) mine += rec[k].source == i; mine += src[i].nreads;
         if (!mine) { printf("%-4d %-38s %-10s %10s   no recipe reads it yet\n", i + 1, src[i].name, "passed", ""); empty++; wentin[i] = 1; continue; }
-        if (!src[i].found[0]) { printf("%-4d %-38s %-10s %10s   it is at none of its roots\n", i + 1, src[i].name, "absent", ""); absent++; continue; }
+        if (!src[i].found[0]) { printf("%-4d %-38s %-10s %10s   it is at none of its roots%s%s\n", i + 1, src[i].name, src[i].held[0] ? "held" : "absent", "", src[i].held[0] ? ": " : "", src[i].held); if (src[i].held[0]) held++; else absent++; continue; }
         double bytes_in = (double)source_bytes(&src[i], rec, nrec), before = loads ? db_bytes(conninfo) : -1;
-        if (bytes_in <= 0) { printf("%-4d %-38s %-10s %10s   its root holds no files\n", i + 1, src[i].name, "absent", ""); absent++; continue; }
+        if (bytes_in <= 0) { printf("%-4d %-38s %-10s %10s   its root holds no files%s%s\n", i + 1, src[i].name, src[i].held[0] ? "held" : "absent", "", src[i].held[0] ? ": " : "", src[i].held); if (src[i].held[0]) held++; else absent++; continue; }
         if (loads) { double have = room_left(conninfo); struct statvfs v; double whole = 0;
             { PGconn *pg = PQconnectdb(conninfo); if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SHOW data_directory"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !statvfs(PQgetvalue(r, 0, 0), &v)) whole = (double)v.f_blocks * (double)v.f_frsize / 1e9; PQclear(r); } PQfinish(pg); }
             if (have >= 0 && have < whole / 10) { char why[128]; snprintf(why, sizeof why, "no room: %.0f GB is left of %.0f GB", have, whole);
@@ -225,7 +225,7 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
         if (code) { failed = 1; fprintf(stderr, "\n%s did not go in (exit %d); what it said is in %s\n", src[i].name, code, log); } else { went++; wentin[i] = 1; }
         if (!code && loads && before >= 0 && bytes_in > 0) { double after = db_bytes(conninfo); if (after > before) room_keep(roomf, src[i].name, (after - before) / bytes_in); }     /* what it took, for the next run's check */
     }
-    printf("\n%d sources in, %d absent, %d without a recipe, %d not begun for want of room, %d not begun because what they come after is not in%s   %'.1f s\n", went, absent, empty, short_of_room, short_of_order, failed ? ", and one that failed: the run stops there" : "", now() - T);
+    printf("\n%d sources in, %d absent, %d held, %d without a recipe, %d not begun for want of room, %d not begun because what they come after is not in%s   %'.1f s\n", went, absent, held, empty, short_of_room, short_of_order, failed ? ", and one that failed: the run stops there" : "", now() - T);
     /* each source that went in merged its own stage as it ended (cmd_ingest); one that failed left its stage, and its
      * next run takes up from it (what is staged is looked for as what is recorded is) */
     /* a plan is the check that every source is where its recipe says (Laplace-Engine#60): one that is not fails it */

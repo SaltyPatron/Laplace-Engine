@@ -166,6 +166,7 @@ typedef struct {
     char name[64];
     char witness[128], lineage[128]; double trust;
     char called[128];                                 /* what the source is, where its witness is named file by file (called NAME) */
+    char held[256];                                   /* held REASON: a source not here yet, by its keeper's choice; absent, it is said so with the reason and fails no plan */
     char root[8][512]; int nroot;                     /* where it may be kept: the first that exists, newest of a pattern */
     double room;                                      /* what it takes in the database, in times what its files hold, as measured (0: not measured) */
     int tier0;                                        /* it records every codepoint, tier 0 (its source file says tier0): the Unicode source, first */
