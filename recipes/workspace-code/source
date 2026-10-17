@@ -1,0 +1,20 @@
+name workspace-code
+# The Laplace repositories, as the workspace README names them ("Laplace Workspace"): every file each repository
+# keeps, read by its language's grammar or as text. What a repository's .gitignore files say is not the repository is
+# not read, and neither is anything under a hidden directory (.git).
+witness Laplace Workspace
+called Laplace Workspace
+class UserCuratedResource
+root $LAPLACE_SRC
+files $LAPLACE_SRC/Laplace
+files $LAPLACE_SRC/Laplace-Native
+files $LAPLACE_SRC/Laplace-postgres
+files $LAPLACE_SRC/Laplace-Engine
+files $LAPLACE_SRC/Laplace-MCP
+files $LAPLACE_SRC/Laplace-UCI
+files $LAPLACE_SRC/Laplace-Operations
+files $LAPLACE_SRC/Laplace-Wiki
+files $LAPLACE_SRC/Laplace-Conventional
+ignore .gitignore
+after unicode
+reads text json xml c cpp c_sharp python javascript typescript tsx bash powershell css html cmake make dockerfile rust go java ruby

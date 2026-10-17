@@ -76,11 +76,101 @@ static void add_path(const char *p){
     char *s = strdup(p); for (char *q = s; *q; q++) if (*q == '\\') *q = '/';
     path_of[npaths] = walking; paths[npaths++] = s;
 }
+
+/* ---- ignore files (a source's `ignore NAME`): what gitignore(5) says of the files beside and below one. A line is a
+ * pattern; `#` begins a comment line and `!` turns a pattern into one that takes a file back; a pattern ending in `/`
+ * is of directories only; one with a `/` before its end is matched against the path from the ignore file's directory,
+ * one without against a file's own name at any depth. `*`, `?` and `[...]` stay within a path component, `**` crosses
+ * them. The last pattern that matches decides, and the files of a deeper directory are decided after a shallower
+ * one's. A directory that is not the source is not walked, so nothing under it is taken back. */
+typedef struct { char *pat; int neg, dir, anchored; } IgLine;
+typedef struct { char *base; size_t nb; IgLine *line; int n; } IgFile;
+static IgFile *ig; static int nig;
+static void ig_reset(void){ for (int i = 0; i < nig; i++) { for (int j = 0; j < ig[i].n; j++) free(ig[i].line[j].pat); free(ig[i].line); free(ig[i].base); } free(ig); ig = NULL; nig = 0; }
+static void ig_load(const char *dir, const char *name){
+    char p[4096]; snprintf(p, sizeof p, "%s/%s", dir, name);
+    FILE *f = fopen(p, "r"); if (!f) return;
+    ig = xrealloc(ig, sizeof *ig * (size_t)(nig + 1)); IgFile *g = &ig[nig++];
+    g->base = strdup(dir); g->nb = strlen(dir); g->line = NULL; g->n = 0;
+    for (char *q = g->base; *q; q++) if (*q == '\\') *q = '/';
+    char ln[4096];
+    while (fgets(ln, sizeof ln, f)) {
+        size_t l = strcspn(ln, "\r\n"); ln[l] = 0;
+        while (l && (ln[l - 1] == ' ' || ln[l - 1] == '\t') && !(l >= 2 && ln[l - 2] == '\\')) ln[--l] = 0;
+        char *s = ln; if (!*s || *s == '#') continue;
+        IgLine x = { 0 };
+        if (*s == '!') { x.neg = 1; s++; } else if (*s == '\\' && (s[1] == '!' || s[1] == '#')) s++;
+        l = strlen(s); if (l && s[l - 1] == '/') { x.dir = 1; s[--l] = 0; }
+        if (!l) continue;
+        x.anchored = strchr(s, '/') != NULL; if (*s == '/') s++;
+        x.pat = strdup(s);
+        g->line = xrealloc(g->line, sizeof *g->line * (size_t)(g->n + 1)); g->line[g->n++] = x;
+    }
+    fclose(f);
+}
+/* gitignore's wildcards: 0 when the string matches */
+static int ig_set(const char **pp, char c){
+    const char *p = *pp + 1; int neg = 0, hit = 0;
+    if (*p == '!' || *p == '^') { neg = 1; p++; }
+    for (int first = 1; *p && (*p != ']' || first); first = 0) {
+        char lo = *p == '\\' && p[1] ? *++p : *p; p++; char hi = lo;
+        if (*p == '-' && p[1] && p[1] != ']') { p++; hi = *p == '\\' && p[1] ? *++p : *p; p++; }
+        if (c >= lo && c <= hi) hit = 1;
+    }
+    if (*p != ']') return -1;
+    *pp = p; return hit != neg;
+}
+static int ig_match(const char *p, const char *s){
+    for (; *p; p++, s++) {
+        if (*p == '*' && p[1] == '*' && (p[2] == '/' || !p[2])) {
+            const char *q = p[2] ? p + 3 : p + 2;
+            if (!*q) return 0;                                                 /* trailing **: everything below */
+            for (const char *t = s; ; t++) { if ((t == s || t[-1] == '/') && !ig_match(q, t)) return 0; if (!*t) return 1; }
+        }
+        if (*p == '*') { for (const char *t = s; ; t++) { if (!ig_match(p + 1, t)) return 0; if (!*t || *t == '/') return 1; } }
+        if (!*s) return 1;
+        if (*p == '?') { if (*s == '/') return 1; continue; }
+        if (*p == '[') { const char *q = p; int r = ig_set(&q, *s); if (r < 0) { if (*s != '[') return 1; continue; } if (!r || *s == '/') return 1; p = q; continue; }
+        if (*p == '\\' && p[1]) p++;
+        if (*p != *s) return 1;
+    }
+    return *s != 0;
+}
+static int ignored(const char *path, int is_dir){
+    int out = 0;
+    for (int i = 0; i < nig; i++) {
+        IgFile *g = &ig[i];
+        if (strncmp(path, g->base, g->nb) || path[g->nb] != '/') continue;
+        const char *rel = path + g->nb + 1, *nm = strrchr(rel, '/'); nm = nm ? nm + 1 : rel;
+        for (int j = 0; j < g->n; j++) { IgLine *x = &g->line[j];
+            if (x->dir && !is_dir) continue;
+            if (!ig_match(x->pat, x->anchored ? rel : nm)) out = !x->neg; }
+    }
+    return out;
+}
 static int walk_cb(const char *p, const struct stat *st, int type, struct FTW *fw){
     const char *b = p + fw->base;
+    char path[4096]; snprintf(path, sizeof path, "%s", p); for (char *q = path; *q; q++) if (*q == '\\') *q = '/';
+    size_t pl = strlen(path); while (pl > 1 && path[pl - 1] == '/') path[--pl] = 0;
     if (type == FTW_D && b[0] == '.' && fw->level > 0) return FTW_SKIP_SUBTREE;          /* hidden directories */
-    if (type == FTW_F && b[0] != '.' && st->st_size > 0) add_path(p);
+    const char *ign = walking && walking->ignore[0] ? walking->ignore : NULL;
+    if (type == FTW_D) {
+        if (ign && fw->level > 0 && ignored(path, 1)) return FTW_SKIP_SUBTREE;
+        if (ign) ig_load(path, ign);
+        return FTW_CONTINUE;
+    }
+    if (type == FTW_F && b[0] != '.' && st->st_size > 0 && !(ign && ignored(path, 0))) add_path(p);
     return FTW_CONTINUE;
+}
+/* What a source is on disk: every file under where it was found, or the files its patterns name, a directory among
+ * them walked for every file under it. */
+static void walk_dir(const char *dir){ ig_reset(); nftw(dir, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL); ig_reset(); }
+static void source_walk(const Source *sc){
+    if (!sc->nfiles) { walk_dir(sc->found); return; }
+    for (int z = 0; z < sc->nfiles; z++) { glob_t g; if (glob(sc->files[z], 0, NULL, &g)) continue;
+        for (size_t y = 0; y < g.gl_pathc; y++) { struct stat st;
+            if (!stat(g.gl_pathv[y], &st) && S_ISDIR(st.st_mode)) walk_dir(g.gl_pathv[y]); else add_path(g.gl_pathv[y]); }
+        globfree(&g); }
 }
 
 /* A claim or a tuple as text: its parts between brackets, a part that is itself a tuple the same way. */
@@ -115,8 +205,7 @@ static void show_held(const lp_id *id, int depth){
 /* How much a source's files hold, as its recipes would read them (what gzip holds is taken as eight times its size). */
 static uint64_t source_bytes(const Source *sc, Recipe *rec, int nrec){
     int from = npaths; const Source *was = walking; walking = sc;
-    if (sc->nfiles) for (int z = 0; z < sc->nfiles; z++) { glob_t g; if (!glob(sc->files[z], 0, NULL, &g)) for (size_t y = 0; y < g.gl_pathc; y++) add_path(g.gl_pathv[y]); globfree(&g); }
-    else nftw(sc->found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+    source_walk(sc);
     walking = was; uint64_t sum = 0;
     for (int i = from; i < npaths; i++) { struct stat st; if (recipe_for(rec, nrec, paths[i], sc) && !stat(paths[i], &st)) { size_t l = strlen(paths[i]); sum += (uint64_t)st.st_size * (l > 3 && !strcmp(paths[i] + l - 3, ".gz") ? 8 : 1); } free(paths[i]); }
     npaths = from; return sum;
@@ -129,8 +218,7 @@ static int by_depth(const void *x, const void *y){ const char *a = *(char *const
     return da != db ? da - db : strcmp(a, b); }
 int source_files(const Source *sc, Recipe *rec, int nrec, char ***out, Recipe ***of){
     int from = npaths; const Source *was = walking; walking = sc;
-    if (sc->nfiles) for (int z = 0; z < sc->nfiles; z++) { glob_t g; if (!glob(sc->files[z], 0, NULL, &g)) for (size_t y = 0; y < g.gl_pathc; y++) add_path(g.gl_pathv[y]); globfree(&g); }
-    else nftw(sc->found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+    source_walk(sc);
     int n = 0; char **p = malloc(sizeof(char *) * (size_t)(npaths - from + 1));
     for (int i = from; i < npaths; i++) { if (recipe_for(rec, nrec, paths[i], sc)) p[n++] = paths[i]; else free(paths[i]); }
     npaths = from; rec_now = rec; nrec_now = nrec; qsort(p, (size_t)n, sizeof(char *), by_depth);
@@ -348,14 +436,13 @@ int cmd_ingest(int argc, char **argv){
             if (src[k].unset[0]) { fprintf(stderr, "source %s: its root names $%s, which the environment does not set (Laplace-Operations laplace.env)\n", src[k].name, src[k].unset); return 2; }
             if (!src[k].found[0]) { fprintf(stderr, "source %s is not at any of its roots\n", src[k].name); return 1; }
             const Source *was = walking; walking = &src[k];
-            if (src[k].nfiles) for (int z = 0; z < src[k].nfiles; z++) { glob_t g; if (!glob(src[k].files[z], 0, NULL, &g)) for (size_t y = 0; y < g.gl_pathc; y++) add_path(g.gl_pathv[y]); globfree(&g); }
-            else nftw(src[k].found, walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+            source_walk(&src[k]);
             walking = was;
         }
         else {                                                               /* a file or directory: under a source's root, it is that source's */
             const Source *was = walking; char real[4096]; if (!walking && realpath(argv[i], real))
                 for (int z = 0; z < nsrc; z++) { size_t l = strlen(src[z].found); if (l && !strncmp(real, src[z].found, l) && (real[l] == '/' || !real[l])) { walking = &src[z]; break; } }
-            if (!stat(argv[i], &st) && S_ISDIR(st.st_mode)) nftw(argv[i], walk_cb, 64, FTW_PHYS | FTW_ACTIONRETVAL);
+            if (!stat(argv[i], &st) && S_ISDIR(st.st_mode)) walk_dir(argv[i]);
             else add_path(argv[i]);
             walking = was;
         }

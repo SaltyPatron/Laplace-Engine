@@ -1,0 +1,6 @@
+name plain
+# The repositories' files that no grammar reads and are text: SQL (and SQL templates, .sql.in), the Engine's recipes
+# and formats, Windows command scripts, test outputs, systemd units, patches and example configurations.
+match *.sql *.in *.recipe *.format *.firmware *.cmd *.bat *.out *.service *.timer *.patch *.example *.scm
+class UserCuratedResource
+grammar text
