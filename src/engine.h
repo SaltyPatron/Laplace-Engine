@@ -48,8 +48,8 @@ typedef struct {
     char weigh_name[FW_WEIGHS][96]; double weigh[FW_WEIGHS]; int nweigh;
     char role_by[96], role_name[FW_WEIGHS][96]; double role[FW_WEIGHS]; int nrole;      /* how hard a word pulls, by what is attested of it under role_by (its part of speech) */
     char chain[FW_ALTS][FW_CHAIN][96]; int nchain[FW_ALTS], nalt;                                             /* the relations a pull follows from the word that pulls hardest, in order */
-    char up[FW_CHAIN][96]; int nup; char language[2][96], gloss[96];                                          /* translation: the relations from a word up to its concept (followed back down in another language); how what stands below the concept says its language (what holds it under the first, and what that says under the second); what is shown of a concept */
-    struct { int ready; lp_id refuse[FW_NAMES], refuse_witness[FW_NAMES], weigh[FW_WEIGHS], role_by, role[FW_WEIGHS], chain[FW_ALTS][FW_CHAIN], up[FW_CHAIN], language[2], gloss; } id;
+    char lexical[4][96], gloss[2][96];                                                                         /* translation: the recipe, the thing it names a lexicalization, and its parts that are the language and the concept; the recipe and the part whose relation says what is shown of a concept (pull.c) */
+    struct { int ready; lp_id refuse[FW_NAMES], refuse_witness[FW_NAMES], weigh[FW_WEIGHS], role_by, role[FW_WEIGHS], chain[FW_ALTS][FW_CHAIN]; } id;
 } Firmware;                                           /* id: every name above as the entity it is, computed once a pass (firmware_ids) */
 /* ---- the lookups the forward pass is made of (pull.c) */
 #define MAXPARTS 12
@@ -226,6 +226,8 @@ void attest_layout(const Recipe *, File *, const uint8_t *src, size_t n);       
 typedef struct Hw Hw;
 void say_highway(const Recipe *, File *, const uint8_t *src, size_t n, Hw *);
 int  say_has_highway(const Recipe *);
+const char *say_relation(const Recipe *, const char *name);                  /* relation "TEXT" NAME: TEXT, or NULL where the recipe declares none of NAME */
+int  say_thing_parts(const Recipe *, const char *tier, const char *a, const char *b, int *ia, int *ib);     /* the first way it names a TIER by parts A and B: its parts, and where A and B stand; -1 none */
 void say_highway_lists(const Recipe *, Hw *);
 void say_obligations(FILE *);                                                /* the parts a claim would name with no meaning the recipe gives (value): said, and forgotten */
 void hw_list(Hw *, const char *list, const char *say);

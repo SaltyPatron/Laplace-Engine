@@ -40,6 +40,7 @@ static const Param
     NO_LOAD  = { "no_load", "--no-load", ARG_FLAG, NULL, "no-load" },
     PLAN     = { "plan", "--plan", ARG_FLAG, NULL, "plan" },
     CLAIMS   = { "claims", "--claims", ARG_FLAG, NULL, "what the recipes attest, as text; nothing is loaded" },
+    CLAIMS_TSV = { "claims_tsv", "--claims-tsv", ARG_FLAG, NULL, "--claims for a machine: a claim a line, kind, position, score and its parts between tabs (LIST:KEY for a type of the highway)" },
     ENTITIES = { "entities", "--entities", ARG_FLAG, NULL, "every composition a sample makes, its tier, parts and text, new or recorded; nothing is loaded" },
     AS       = { "as", "--as", ARG_TEXT, "USER", "USER" },
     SESSION  = { "session", "--session", ARG_TEXT, NULL, "NAME" },
@@ -71,7 +72,7 @@ static const Arg A_NONE[] = { END };
 static const Arg A_TIER0[] = { O(UCD), O(OUT_T0), END };
 static const Arg A_FLAGS[] = { O(UCD), O(OUT_FL), END };
 static const Arg A_HIGHWAY[] = { O(OUT_HW), O(FINGERPRINT), END };
-static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(HIGHWAY), O(WHOLE), O(NO_LOAD), O(PLAN), O(CLAIMS), O(ENTITIES),
+static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(HIGHWAY), O(WHOLE), O(NO_LOAD), O(PLAN), O(CLAIMS), O(CLAIMS_TSV), O(ENTITIES),
                                 { &WHAT, ARG_MANY, NULL, NULL }, END };
 static const Arg A_MERGE[] = { O(CONNINFO), { &JOBS, 0, NULL, "every processor" }, END };
 static const Arg A_FORGET[] = { O(CONNINFO), O(JOBS), O(EXCEPT), O(TRUNK), { &WITNESS, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };

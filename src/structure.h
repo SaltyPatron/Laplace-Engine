@@ -8,12 +8,19 @@
  *     skip N                    the first N are not NAMEs
  *     note PREFIX [IS]          a NAME that begins with PREFIX is a note: KEY IS VALUE when IS is written in it
  *     comment PREFIX            a NAME that begins with PREFIX is not read
- *     remark CHAR               in a NAME, what follows CHAR is not read
+ *     remark CHAR [KEPT]        in a NAME, what follows CHAR is not read as its parts; with KEPT, it is one text of
+ *                               the NAME, named KEPT (what wndb.5 writes after a synset's | is its gloss)
  *     quoted                    a part of the tier below may stand between double quotes (a quote in it doubled)
  *     padded                    the parts of the tier below are written with spaces around them that are not theirs
  *     is SEP                    each part of this tier is written KEY SEP VALUE: the part is named KEY
  *     continued                 a part of this tier that begins with white space goes on with the one before it
  *     escaped CHAR              the character after CHAR is itself, a tier's separator included
+ *     counted NAME [radix N] GROUP MEMBER...
+ *                               the part NAME of the tier below is a count, written in radix N (2 to 36; 10 when not
+ *                               said), of the GROUPs that follow it: each GROUP is the next parts, named MEMBER... in
+ *                               order, and the names after NAME go on after the last GROUP (wndb.5: w_cnt, "two digit
+ *                               hexadecimal integer indicating the number of words in the synset", then that many
+ *                               word lex_id). A count the file does not write as a number in its radix counts nothing
  *   part PATH by SEP [is IS] [pieces N] [space CHAR]
  *                               a named part is itself parts, parted by SEP; with IS, each is KEY IS VALUE; with pieces,
  *                               at most N, the last of them the rest as written; with space, CHAR in it stands for a space.
@@ -45,6 +52,8 @@ typedef struct {
     char name[32], sep[16]; int seplen;
     char note[8], note_is[8], comment[8]; int notelen, islen, commentlen;
     char remark, escaped; int header, quoted, skip, padded;
+    char remark_kept[32];                                 /* remark CHAR KEPT: what follows CHAR is one text, named KEPT */
+    struct { char field[64], group[32], member[8][32]; int nmember, radix; } count[4]; int ncount;     /* counted NAME [radix N] GROUP MEMBER... */
     char kv[8]; int kvlen, continued;                     /* kv: each part is written KEY kv VALUE (the recipe's "is"); continued: a part that begins with white space goes on with the one before */
     char numbered[32];                                    /* numbered NAME: each part also holds NAME, its line in the file (empty lines counted), so files written line for line join by it */
     char names[S_NAMES][64]; int nnames, rest;            /* the names of the parts of the tier below, by position; rest: the last (written NAME...) names every further part too */

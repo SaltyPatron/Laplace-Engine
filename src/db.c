@@ -345,7 +345,7 @@ int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st){
         if (files[fi].known || files[fi].skipped) continue;
         if (files[fi].has_file) { Node *x = table_find(&files[fi].file.id); if (x && !x->keep) { x->keep = 3; FPUSH(x->id); } }
         Node *x = table_find(&files[fi].trunk.id); if (x && !x->keep) { x->keep = 3; FPUSH(x->id); }
-        if (files[fi].ev.n) { Node *w = table_find(&files[fi].witness.id); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } }
+        if (files[fi].ev.n && !files[fi].source) { Node *w = table_find(&files[fi].witness.id); if (w && !w->keep) { w->keep = 3; FPUSH(w->id); } }   /* a file's own witness; a source's file has the source's trunk for one, and the name its recipe gives it is held by nothing (forget left it behind: Laplace#1885) */
         if (files[fi].has_lineage) { Node *lin = table_find(&files[fi].lineage.id); if (lin && !lin->keep) { lin->keep = 3; FPUSH(lin->id); } }
         for (uint64_t j = 0; j < files[fi].nsaid; j++) { Node *x = table_find(&files[fi].said[j].id); if (x && !x->keep) { x->keep = 3; FPUSH(x->id); } }   /* a long file's parts, a stretch at a time: its trunk, written after its last, holds them, and a recorded trunk has all it holds recorded */
         for (uint64_t i = 0; i < files[fi].ev.n; i++) { Node *c = table_find(&files[fi].ev.e[i].claim); if (c && !c->keep) { c->keep = 3; FPUSH(c->id); }     /* a record's claims are under it */
