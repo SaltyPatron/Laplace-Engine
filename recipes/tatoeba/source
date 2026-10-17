@@ -10,4 +10,6 @@ class UserCuratedResource
 root $LAPLACE_DATA/Tatoeba
 # Measured, not loaded: 294,452,005 compositions from 3,191 MB, at 750 bytes each with their indexes and standings.
 room 69
-after iso-639 wiktionary conceptnet
+# It comes after no source it does not need first, as conceptnet's source says (BRIEF.md, "Nothing is order-dependent"):
+# recipes/order still has it after the Wiktionary and ConceptNet.
+after iso-639
