@@ -207,6 +207,7 @@ typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; 
                  int laid; } File;                     /* laid: its trunk, metadata tree and content tree came from the recipe's layout (say.c) */
 int  say_says(Recipe *, const char *path, char *tok);                       /* a recipe's line, if it lays the file out or disposes of a part */
 int  say_lays(const Recipe *);
+void say_mentions(Recipe *, const char *line);                              /* a recipe's line as written: the parts it names */
 int  say_stretches(const Recipe *);                                         /* 1: a file it lays out can be read a line at a time; 2: a record ending at an empty line at a time; 0: whole */
 void comment_off(char *line);                                               /* a recipe line without its comment */
 const char *say_refers(const Recipe *, int i);                              /* the i-th recipe whose rows' keys this one's parts refer to, or NULL */
