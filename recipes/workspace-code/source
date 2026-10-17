@@ -17,4 +17,4 @@ files $LAPLACE_SRC/Laplace-Wiki
 files $LAPLACE_SRC/Laplace-Conventional
 ignore .gitignore
 after unicode
-reads text json xml c cpp c_sharp python javascript typescript tsx bash powershell css html cmake make dockerfile rust go java ruby
+reads text json xml c cpp cuda c_sharp python javascript typescript tsx bash powershell css html cmake make dockerfile rust go java ruby

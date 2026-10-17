@@ -1,5 +1,5 @@
 name msbuild
 # MSBuild project and property files (.csproj, .props, .targets) are XML: read by the xml grammar as its syntax tree.
-match *.csproj *.props *.targets *.vbproj *.fsproj
+match *.csproj *.props *.targets *.vbproj *.fsproj *.slnx
 class UserCuratedResource
 grammar xml
