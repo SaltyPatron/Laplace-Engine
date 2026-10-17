@@ -1,0 +1,9 @@
+name twic
+# The Week in Chess (theweekinchess.com): a weekly issue of the over-the-board games of that week's events, one PGN file
+# an issue (twicNNNN.pgn, opened from twicNNNN.zip beside it; Laplace-Operations data.tsv). A corpus witnessing its
+# records, as chess-com's archive is: White and Black are participants named in each record, never witnesses.
+witness The Week in Chess
+class StructuredCorpus
+root $LAPLACE_DATA/Games/Chess/twic
+files $LAPLACE_DATA/Games/Chess/twic/*.pgn
+after unicode
