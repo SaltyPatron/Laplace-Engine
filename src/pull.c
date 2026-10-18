@@ -329,8 +329,7 @@ static Claim *one_open_claims(PGconn *pg, const lp_id *first, const lp_id *rel, 
 /* A word's lexicalizations as the recipe that reads the wordnets declares them: the relation that says a word has one,
  * and which of its parts are its language and its concept. Read from that recipe, never from a second copy of its
  * names, so a recipe that renames them fails here, at once, rather than leaving every translation empty. */
-typedef struct { lp_id sense, gloss, eq[4], usage; int np, lang, concept, has_gloss, neq, has_usage; } Lexicalization;
-static int lexicalization_of(Ctx *c, const Firmware *fw, Lexicalization *x){
+int lexicalization_of(Ctx *c, const Firmware *fw, Lexicalization *x){
     memset(x, 0, sizeof *x);
     if (!fw->lexical[0][0]) { fprintf(stderr, "%s: for translate, the firmware names no lexicalization (lexicalization RECIPE THING LANGUAGE CONCEPT)\n", fw->path); return 0; }
     Recipe *R; int nr = recipes_load(laplace_recipes(), &R); const Recipe *w = NULL, *g = NULL, *e = NULL, *u = NULL;
@@ -373,6 +372,16 @@ static void codes_of(PGconn *pg, const Lexicalization *lx, const lp_id *code, Co
         from = to; }
 }
 typedef struct { lp_id *id; int *of, n, cap; } Found;                      /* entities found, each with what it is found for */
+int lexicalization_counts(PGconn *pg, Reader *rd, const Lexicalization *lx, const lp_id *ids, int n, int fan, double k, long long *uses){
+    if (!lx->has_usage || !n) return 0;
+    int count = 0, *src = NULL; Claim *claims = claims_each(pg, ids, n, &lx->usage, 1, fan, k, &count, &src);
+    for (int row = 0; row < count; row++) reader_want(rd, &claims[row].part[claims[row].np - 1]);
+    for (int row = 0; row < count; row++) { int entry = src[row]; if (entry < 0 || entry >= n) continue;
+        char *text = reader_text(rd, &claims[row].part[claims[row].np - 1], 32), *end;
+        long long value = strtoll(text, &end, 10); if (end != text && !*end && value > uses[entry]) uses[entry] = value; free(text);
+    }
+    free(claims); free(src); return 1;
+}
 static void found_put(Found *f, const lp_id *id, int of){
     if (f->n == f->cap) { f->cap = f->cap ? f->cap * 2 : 64; f->id = xrealloc(f->id, sizeof(lp_id) * (size_t)f->cap); f->of = xrealloc(f->of, sizeof(int) * (size_t)f->cap); }
     f->id[f->n] = *id; f->of[f->n++] = of; }
@@ -399,10 +408,7 @@ int cmd_translate(int argc, char **argv){
     /* by observed usages, most first; then as above, the witness's order, then standing (Laplace-Wiki Sequence/Web.md
      * 15.6): the number the usage relation states of each lexicalization, one set */
     long long *uses = calloc((size_t)(n ? n : 1), sizeof(long long));
-    if (lx.has_usage && n) { int nu = 0; Step *us = open_each(ls, n, &lx.usage, 0, 1, fan, &nu); steps++;
-        for (int j = 0; j < nu; j++) reader_want(rd, &us[j].to);
-        for (int j = 0; j < nu; j++) { char *tx = reader_text(rd, &us[j].to, 32), *e_; long long v = strtoll(tx, &e_, 10); if (e_ != tx && !*e_ && v > uses[us[j].from]) uses[us[j].from] = v; free(tx); }
-        free(us);
+    if (lx.has_usage && n) { steps += lexicalization_counts(pg, rd, &lx, ls, n, fan, read_k, uses);
         int *ord = malloc(sizeof(int) * (size_t)n); for (int i = 0; i < n; i++) ord[i] = i;
         for (int i = 1; i < n; i++) { int v = ord[i], j = i; while (j > 0 && uses[ord[j - 1]] < uses[v]) { ord[j] = ord[j - 1]; j--; } ord[j] = v; }      /* stable: ties keep the order above */
         Claim *f2 = malloc(sizeof(Claim) * (size_t)n); lp_id *l2 = malloc(sizeof(lp_id) * (size_t)n); long long *u2 = malloc(sizeof(long long) * (size_t)n);
@@ -637,7 +643,7 @@ void take_top(Claim *cl, int n, int want, const Firmware *fw, unsigned *seed){
  * through it; otherwise the top, as the firmware takes it (seed NULL: the top every time). The first of the firmware's
  * chains that reaches its end answers. Returns the steps the answering chain took, or, when none reached its end, the
  * most the last one tried took and -1 in *alt; *last is the last strand taken. */
-int chain_follow(PGconn *pg, Reader *rd, Firmware *fw, const lp_id *word, const lp_id *reading, unsigned *seed, lp_id *answer, Claim *last, int *alt){
+int chain_follow(PGconn *pg, Reader *rd, Firmware *fw, const lp_id *word, const lp_id *reading, unsigned *seed, ChainFork fork, void *fork_ctx, lp_id *answer, Claim *last, int *alt){
     firmware_ids(fw); int steps = 0;
     for (*alt = 0; *alt < fw->nalt; (*alt)++) {
         lp_id cur = *word; steps = 0;
@@ -655,6 +661,7 @@ int chain_follow(PGconn *pg, Reader *rd, Firmware *fw, const lp_id *word, const 
             positions_of(pg, cl, n); if (fw->order_witness) lp_sort(cl, (size_t)n, sizeof(Claim), claim_by_position);
             int take = -1;
             if (z == 0 && reading) for (int k = 0; k < n; k++) if (lp_id_eq(&cl[k].part[cl[k].np - 1], reading)) { take = k; break; }
+            if (take < 0 && fork && n > 1) take = fork(fork_ctx, cl, n);        /* what the context supports, when it tells the branches apart */
             if (take < 0) { take_top(cl, n, 1, fw, seed); take = 0; }
             *last = cl[take]; cur = cl[take].part[cl[take].np - 1]; steps++; free(cl);
         }
