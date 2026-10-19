@@ -18,6 +18,7 @@
 #include "engine.h"
 #include "blake3.h"
 #include "laplace_config.h"
+#include "laplace/highway.h"
 #include <locale.h>
 #include <omp.h>
 #include <stdio.h>
@@ -25,7 +26,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-typedef struct { char name[32], say[64]; Ref *t; size_t n, cap; lp_idmap *map; uint32_t first; } List;   /* map: a type's slot by its ID */
+typedef struct { char name[32], say[64]; Ref *t; size_t n, cap; lp_idmap *map; uint32_t first; int bank; } List;
 typedef struct { int list; lp_id id; } Key;                                  /* a resource's key of a type: by its list's place and the key's bytes (lp_strmap) */
 typedef struct { int list; char *key, *to; int done; } Alias;
 typedef struct { int la, lb; char *ka, *kb; } PEdge;
@@ -84,6 +85,45 @@ static void node_write(FILE *o, Seen *s, const lp_id *id, int depth){
  * no resource lists any longer keeps its slot, retired (a tombstone: never reused); a new type takes the next slot.
  * The order the resources happen to be read in decides nothing. */
 static const char *manifest_dir(void){ const char *e = getenv("LAPLACE_MANIFEST"); return e && *e ? e : LAPLACE_MANIFEST_DEFAULT; }
+typedef struct { char name[32], list[32], group[16], carrier[16]; unsigned width, offset; int flags, li; } BankSpec;
+static int banks_read(Hw *h, BankSpec banks[64]){
+    char path[4200], line[1024]; snprintf(path, sizeof path, "%s/banks.tsv", manifest_dir());
+    FILE *f = fopen(path, "r"); if (!f) { perror(path); return -1; }
+    int count = 0, bad = 0; uint64_t occupied = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (line[0] == '#' || !strncmp(line, "bank\t", 5) || line[0] == '\n' || line[0] == '\r') continue;
+        char *v[8], *save = NULL; int n = 0;
+        for (char *p = strtok_r(line, "\t\r\n", &save); p && n < 8; p = strtok_r(NULL, "\t\r\n", &save)) v[n++] = p;
+        if (n != 7 || count == 64 || strlen(v[0]) >= 32 || strlen(v[1]) >= 32 || strlen(v[2]) >= 16 || strlen(v[3]) >= 16) { bad = 1; break; }
+        char *end; unsigned long width = strtoul(v[4], &end, 10); if (!*v[4] || *end || width < 1 || width > 64) { bad = 1; break; }
+        unsigned long offset = strtoul(v[5], &end, 10); if (!*v[5] || *end || offset > 64 - width) { bad = 1; break; }
+        if (strcmp(v[6], "enum") && strcmp(v[6], "flags")) { bad = 1; break; }
+        lp_bank descriptor = { .width = (uint16_t)width, .offset = (uint16_t)offset };
+        uint64_t field = lp_mask_field(&descriptor); if (occupied & field) { bad = 1; break; } occupied |= field;
+        for (int i = 0; i < count; i++) if (!strcmp(banks[i].name, v[0]) || !strcmp(banks[i].list, v[1])) bad = 1;
+        if (bad) break;
+        BankSpec *b = banks + count++; memset(b, 0, sizeof *b);
+        snprintf(b->name, sizeof b->name, "%s", v[0]); snprintf(b->list, sizeof b->list, "%s", v[1]);
+        snprintf(b->group, sizeof b->group, "%s", v[2]); snprintf(b->carrier, sizeof b->carrier, "%s", v[3]);
+        b->width = (unsigned)width; b->offset = (unsigned)offset; b->flags = !strcmp(v[6], "flags");
+        b->li = list_of(h, b->list, b->name); h->l[b->li].bank = 1;
+    }
+    bad |= ferror(f) || !count; fclose(f);
+    if (bad) { fprintf(stderr, "%s: expected non-overlapping bank/list/group/carrier/width/offset/encoding fields in 64 bits\n", path); return -1; }
+    return count;
+}
+
+static Ref bank_identifier(Hw *h, int li, const char *key, const lp_id *old){
+    if (!key || !*key) { fprintf(stderr, "bank %s: a slot has no identifier text\n", h->l[li].name); exit(1); }
+    Ref value = text_ref(CTX[0], (const uint8_t *)key, strlen(key));
+    if (old) for (size_t i = 0; i < lp_strmap_count(h->keys); i++) {
+        Key *entry = lp_strmap_at(h->keys, i);
+        if (entry->list == li && lp_id_eq(&entry->id, old)) entry->id = value.id;
+    }
+    Key *entry = key_find(h, li, key);
+    if (entry) entry->id = value.id; else key_put(h, li, key, &value.id);
+    return value;
+}
 static size_t expand_into(const lp_id *id, char *out, size_t pos, size_t cap){
     int64_t cp = lp_tier0_codepoint(T0, id);
     if (cp >= 0) {
@@ -120,15 +160,23 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
     lp_idmap *first = lp_idmap_new(); size_t fcap = 0; const char **fkey = NULL;   /* a readable name for each type: the first key that names it */
     for (int li = 0; li < h->nl; li++) {
         List *l = &h->l[li]; int harvested = l->n > 0; size_t nz; Frozen *fz = frozen_read(l->name, &nz);
-        lp_idmap_free(first); first = lp_idmap_new(); fcap = 0; free(fkey); fkey = NULL;
+        lp_idmap_free(first); first = lp_idmap_new();
+        for (size_t i = 0; i < fcap; i++) free((void *)fkey[i]);
+        fcap = 0; free(fkey); fkey = NULL;
         size_t nk = h->keys ? lp_strmap_count(h->keys) : 0;                     /* the keys in the order they were named */
         for (size_t i = 0; i < nk; i++) { const Key *k = lp_strmap_at(h->keys, i); if (k->list != li) continue; bool fresh; size_t at = lp_idmap_put(first, &k->id, &fresh);
-            if (fresh) { if (at >= fcap) { fcap = (at + 1) * 2; fkey = xrealloc(fkey, sizeof(char *) * fcap); } size_t kl; fkey[at] = lp_strmap_key(h->keys, i, &kl) + sizeof(int); } }
+            if (fresh) {
+                if (at >= fcap) { size_t old = fcap; fcap = (at + 1) * 2; fkey = xrealloc(fkey, sizeof(char *) * fcap); memset(fkey + old, 0, (fcap - old) * sizeof *fkey); }
+                size_t kl; fkey[at] = strdup(lp_strmap_key(h->keys, i, &kl) + sizeof(int));
+                if (!fkey[at]) { perror("highway identifier"); exit(1); }
+            } }
         Ref *t = xrealloc(NULL, sizeof(Ref) * (nz + l->n + 1)); size_t n = 0; uint8_t *placed = calloc(l->n + 1, 1);
         for (size_t s = 0; s < nz; s++) {
             if (!harvested) {
                 if (fz[s].retired) { memset(&t[n], 0, sizeof(Ref)); t[n].id = fz[s].id; n++; continue; }
-                if (fz[s].p1[0] && fz[s].p2[0]) {
+                if (l->bank) {
+                    t[n] = bank_identifier(h, li, fz[s].key, &fz[s].id);
+                } else if (fz[s].p1[0] && fz[s].p2[0]) {
                     Ref two[2] = { text_ref(CTX[0], (const uint8_t *)fz[s].p1, strlen(fz[s].p1)),
                                    text_ref(CTX[0], (const uint8_t *)fz[s].p2, strlen(fz[s].p2)) };
                     two[0].said = two[1].said = 0;
@@ -148,11 +196,19 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
                 Key *k = key_find(h, li, fz[s].key);
                 if (k) was = slot_in(l, &k->id);
             }
-            if (was >= 0) { t[n] = l->t[was]; placed[was] = 1; (*kept)++; fz[s].retired = 0; }
+            if (was >= 0) { t[n] = l->bank ? bank_identifier(h, li, fz[s].key, &l->t[was].id) : l->t[was]; placed[was] = 1; (*kept)++; fz[s].retired = 0; }
+            else if (l->bank) { t[n] = bank_identifier(h, li, fz[s].key, &fz[s].id); (*kept)++; }
             else { memset(&t[n], 0, sizeof(Ref)); t[n].id = fz[s].id; if (!fz[s].retired) (*retired)++; fz[s].retired = 1; }
             n++; }
         size_t nz_before = nz;
-        for (size_t i = 0; i < l->n; i++) if (!placed[i]) { t[n++] = l->t[i]; (*added)++; }
+        for (size_t i = 0; i < l->n; i++) if (!placed[i]) {
+            if (l->bank) {
+                int64_t at = lp_idmap_find(first, &l->t[i].id);
+                if (at < 0 || (size_t)at >= fcap) { fprintf(stderr, "bank %s: an unkeyed enum cannot be appended\n", l->name); exit(1); }
+                t[n++] = bank_identifier(h, li, fkey[at], &l->t[i].id);
+            } else t[n++] = l->t[i];
+            (*added)++;
+        }
         lp_idmap_free(l->map); l->map = lp_idmap_new(); for (size_t s = 0; s < n; s++) lp_idmap_put(l->map, &t[s].id, NULL);
         free(l->t); l->t = t; l->n = n; l->cap = n + 1; free(placed);
         if (!harvested) { free(fz); continue; }
@@ -164,6 +220,12 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
         int is_pair = !strcmp(l->name, "fnfe") || !strcmp(l->name, "fnlu");
         for (size_t s = 0; s < n; s++) { char hx[33]; id_text(&t[s].id, hx); int64_t at = lp_idmap_find(first, &t[s].id);
             const char *key = at >= 0 && (size_t)at < fcap ? fkey[at] : s < nz_before ? fz[s].key : "";
+            if (l->bank && !*key) {
+                for (size_t k = 0; k < lp_strmap_count(h->keys); k++) {
+                    const Key *entry = lp_strmap_at(h->keys, k);
+                    if (entry->list == li && lp_id_eq(&entry->id, &t[s].id)) { size_t kl; key = lp_strmap_key(h->keys, k, &kl) + sizeof(int); break; }
+                }
+            }
             int ret = s < nz_before && fz[s].retired;
             char p1[160] = "", p2[160] = "";
             if (!ret) {
@@ -183,7 +245,7 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
         if (fclose(o) || os_rename(tmp, p)) { perror(p); exit(1); }
         free(fz);
     }
-    lp_idmap_free(first); free(fkey);
+    lp_idmap_free(first); for (size_t i = 0; i < fcap; i++) free((void *)fkey[i]); free(fkey);
 }
 
 /* A file written fresh beside its old self and swapped in: table_init maps the highway that is there, and on Windows a
@@ -239,8 +301,14 @@ int cmd_highway(int argc, char **argv){
     /* a key that names what another names: until no key is added */
     size_t added = 0; for (int more = 1; more; ) { more = 0;
         for (size_t i = 0; i < hw.a.n; i++) { Alias *a = &hw.a.v[i]; if (a->done) continue; Key *t = key_find(&hw, a->list, a->to); if (!t) continue; lp_id id = t->id; a->done = 1; if (key_put(&hw, a->list, a->key, &id)) { added++; more = 1; } } }
+    BankSpec banks[64]; int nbank = banks_read(&hw, banks); if (nbank < 0) return 1;
     /* every list in its frozen order: slots never move */
     size_t fz_new, fz_retired, fz_kept; freeze(&hw, &fz_new, &fz_retired, &fz_kept);
+    for (int i = 0; i < nbank; i++) {
+        const BankSpec *b = banks + i; size_t have = hw.l[b->li].n;
+        uint64_t capacity = b->flags ? b->width : b->width == 64 ? UINT64_MAX : (UINT64_C(1) << b->width) - 1;
+        if (!have || have > capacity) { fprintf(stderr, "bank %s: %zu slots do not fit its %u-bit field\n", b->name, have, b->width); return 1; }
+    }
     printf("  slots: %'zu kept, %'zu new, %'zu retired (%s/slots)\n", fz_kept, fz_new, fz_retired, manifest_dir());
     /* the lists, one after another in the order they were first named; the edges by slot */
     uint32_t total = 0; for (int l = 0; l < hw.nl; l++) { hw.l[l].first = total; total += (uint32_t)hw.l[l].n; }
@@ -295,22 +363,14 @@ int cmd_highway(int argc, char **argv){
     char lay[4300]; snprintf(lay, sizeof lay, "%s.layout", outp); o = open_fresh(lay, "w", fresh, sizeof fresh); if (!o) { perror(lay); return 1; }
     fprintf(o, "# The highway: one record per type (as a tier-0 record, its rank the slot), the lists in the resources' order, then the edges as pairs of slots.\n");
     fprintf(o, "records\t%u\nedges-count\t%zu\n", total, ne);
-    for (int i = 0; i < hw.nl; i++) fprintf(o, "list\t%s\t%s\t%u\t%zu\n", hw.l[i].name, hw.l[i].say, hw.l[i].first, hw.l[i].n);
+    for (int i = 0; i < hw.nl; i++) {
+        const List *list = hw.l + i;
+        fprintf(o, "list\t%s\t%s\t%u\t%zu\n", list->name, list->say[0] ? list->say : list->name, list->first, list->n);
+    }
     for (size_t i = 0; i < ne; ) { size_t j = i; while (j < ne && ed[j].la == ed[i].la && ed[j].lb == ed[i].lb) j++; fprintf(o, "edges\t%s\t%s\t%zu\t%zu\n", hw.l[ed[i].la].name, hw.l[ed[i].lb].name, i, j - i); i = j; }
-    /* the banks (manifest/banks.tsv): one mask per semantic group, on the row its group describes; a value's bit in its
-     * bank is its frozen slot, so nothing is packed and nothing moves. A list grown past its bank's width is refused:
-     * the bank is widened in the manifest, never spilled into another */
-    int nbank = 0;
-    { char bp[4200]; snprintf(bp, sizeof bp, "%s/banks.tsv", manifest_dir()); FILE *bf = fopen(bp, "r"); if (!bf) { perror(bp); return 1; } char line[1024];
-      while (fgets(line, sizeof line, bf)) { if (line[0] == '#' || !strncmp(line, "bank\t", 5)) continue;
-          char *save = NULL, *nm = strtok_r(line, "\t\n", &save), *ls = strtok_r(NULL, "\t\n", &save), *gr = strtok_r(NULL, "\t\n", &save), *ca = strtok_r(NULL, "\t\n", &save), *wd = strtok_r(NULL, "\t\n", &save);
-          if (!nm || !ls || !gr || !ca || !wd) { fprintf(stderr, "%s: a bank is: bank list group carrier width\n", bp); return 1; }
-          size_t width = strtoul(wd, NULL, 10), have = 0; int li = -1;
-          if (strcmp(ls, "-")) { for (int i = 0; i < hw.nl; i++) if (!strcmp(hw.l[i].name, ls)) li = i;
-              if (li < 0) { fprintf(stderr, "%s: bank %s names the list %s, which no resource lists\n", bp, nm, ls); return 1; } have = hw.l[li].n; }
-          if (have > width || width > 256) { fprintf(stderr, "%s: bank %s holds %zu values in %zu bits: widen it (at most 256)\n", bp, nm, have, width); return 1; }
-          fprintf(o, "bank\t%s\t%s\t%s\t%s\t%zu\n", nm, ls, gr, ca, width); nbank++; }
-      fclose(bf); }
+    /* The same disjoint 64-bit field contract Native and PostgreSQL consume. */
+    for (int i = 0; i < nbank; i++) { const BankSpec *b = banks + i;
+        fprintf(o, "bank\t%s\t%s\t%s\t%s\t%u\t%u\t%s\n", b->name, b->list, b->group, b->carrier, b->width, b->offset, b->flags ? "flags" : "enum"); }
     int bit = nbank;
     fclose(o); if (swap_in(lay, fresh)) return 1;
     /* the keys the resources point at their types with, beside the highway: resolved by readers, recorded nowhere */

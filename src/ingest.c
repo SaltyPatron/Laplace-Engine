@@ -396,7 +396,7 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
         int ncap = nw, nn = 0; lp_id *next = malloc(sizeof(lp_id) * (size_t)ncap); int *nof = malloc(sizeof(int) * (size_t)ncap);   /* an ID can be held by many: grown as they come */
         for (int k0 = 0; k0 < nw; k0 += 10000) { int k1 = nw - k0 < 10000 ? nw : k0 + 10000; uint8_t *ab = malloc(20 + 20 * (size_t)(k1 - k0)); size_t al = ids_param(ab, want + k0, (uint32_t)(k1 - k0));
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-            PGresult *r = PQexecParams(pg, "SELECT c.entity, st_asewkb(c.path), c.tier, st_asewkb(e.coord) FROM laplace_containers($1::blake3[], '{}'::smallint[]) c JOIN entity e ON e.id = c.entity AND e.tier = c.tier", 1, NULL, v, l, f, 1);
+            PGresult *r = PQexecParams(pg, "SELECT c.entity, st_asewkb(c.path), c.tier, st_asewkb(e.coord) FROM laplace_containers($1::blake3[], '{}'::smallint[]) c JOIN entity e ON e.id = c.entity", 1, NULL, v, l, f, 1);
             if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "which files are recorded: %s", PQerrorMessage(pg)); PQclear(r); free(ab); break; }
             for (int j = 0; j < PQntuples(r); j++) {
                 lp_vertex vx[2]; size_t nv = lp_path_vertices((const uint8_t *)PQgetvalue(r, j, 1), (size_t)PQgetlength(r, j, 1), vx, 2); if (!nv) continue;
@@ -548,10 +548,6 @@ int cmd_ingest(int argc, char **argv){
     /* Whether a file is recorded is not asked of its bytes: it is decomposed, its trunk is computed here, and the
      * trunk is looked for, trunk to leaf, with everything else (load). */
     int nknown = 0; ctx_open(threads);
-    /* A source that records tier 0 (the Unicode source, first in recipes/order) records every codepoint before anything
-     * of its own: each codepoint's ID, coordinate and Hilbert value are tier 0's, computed once from the same data and
-     * mapped, never asked of the database. A codepoint recorded already is left as it is. */
-    if (do_load > 0) for (int i = 0; i < nfiles; i++) if (files[i].source && files[i].source->tier0) { if (tier0_write(conninfo, threads)) return 1; break; }
     if (do_load) { double tk = now(); nknown = files_recorded(conninfo, files, nfiles); if (nknown) fprintf(stderr, "  %d files recorded already, found by the OS's record of them, not read (%.2f s)\n", nknown, now() - tk); }
 
     /* ---- a batch at a time: decomposed on every core, recomposed and compared, recorded, and the table emptied for
