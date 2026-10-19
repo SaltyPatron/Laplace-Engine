@@ -121,7 +121,7 @@ uint64_t over_ids(PGconn **pg, int npg, const lp_id *ids, uint64_t n, const Grou
     lp_vec_free(&jobs); lp_vec_free(&pl); free(cnt); free(place); free(fill);
     return rows;
 }
-/* The groups of the ID's first hex digit: the ledger's and the statistics' sixteen partitions. */
+/* The groups of the ID's first hex digit: the attestation history's and the statistics' sixteen partitions. */
 static int digit_group(const lp_id *ids, uint64_t i, void *ctx){ (void)ctx; return ids[i].b[0] >> 4; }
 static void digit_table(int g, int t, char *out, size_t cap, void *ctx){ (void)t; snprintf(out, cap, "%s_%x", (const char *)ctx, g); }
 Groups by_digit(const char *table){ Groups g = { 16, digit_group, NULL, digit_table, (void *)table }; return g; }
