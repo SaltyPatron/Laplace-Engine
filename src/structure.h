@@ -33,19 +33,31 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <tree_sitter/api.h>
 
 enum { S_GROUP = 1, S_VALUE, S_TEXT, S_NOTE };        /* holds nodes; a name and its text; a text; a named text beside a tier's parts */
 #define S_PIECES 2                                    /* in a group's join: it is a value parted into pieces (part NAME by SEP), not an element */
 
-typedef struct {
+typedef struct RecNode {
     const uint8_t *name, *val;        /* as the file writes them; they point into the file or into bytes the tree owns */
     uint32_t nlen, vlen;
     int32_t parent, first, last, next;  /* -1: none */
     uint32_t nkids;
     uint64_t at, end;                 /* where it begins in the file; where a group ends */
     uint8_t kind, tier, join;         /* tier: which of the layout's tiers it is a part of; join: a text the next joins */
-} SNode;
-typedef struct { SNode *n; uint32_t count, cap; uint8_t **pool; size_t npool, used, room; } STree;
+} RecNode;
+typedef struct RecTree { RecNode *n; uint32_t count, cap; uint8_t **pool; size_t npool, used, room; } RecTree;
+
+/* Thread-local zero-malloc scratch arena for record walking */
+typedef struct { uint8_t *buf; size_t cap, used; } SayScratch;
+void   *scratch_alloc(size_t bytes);
+size_t  scratch_mark(void);
+void    scratch_restore(size_t mark);
+
+/* Grammar ID and thread-local parser pool (grammars.c) */
+uint16_t          grammar_id_for(const char *name);
+const TSLanguage *grammar_lang(uint16_t id);
+TSParser         *lp_tls_parser(uint16_t grammar_id);
 
 #define S_TIERS 8
 #define S_NAMES 256
@@ -54,55 +66,73 @@ typedef struct {
     char note[8], note_is[8], comment[8]; int notelen, islen, commentlen;
     char remark, escaped; int header, quoted, skip, padded;
     char remark_kept[32];                                 /* remark CHAR KEPT: what follows CHAR is one text, named KEPT */
-    struct { char field[64], group[32], member[8][32]; int nmember, radix; } count[4]; int ncount;     /* counted NAME [radix N] GROUP MEMBER... */
+    struct { char field[64], group[32], member[8][32]; int nmember, radix; } count[4]; int ncount;     /* counted NAME [radix N] [hex] [of] GROUP MEMBER... */
     char kv[8]; int kvlen, continued;                     /* kv: each part is written KEY kv VALUE (the recipe's "is"); continued: a part that begins with white space goes on with the one before */
     char numbered[32];                                    /* numbered NAME: each part also holds NAME, its line in the file (empty lines counted), so files written line for line join by it */
     char names[S_NAMES][64]; int nnames, rest;            /* the names of the parts of the tier below, by position; rest: the last (written NAME...) names every further part too */
 } STier;
-typedef struct { char path[64], sep[8], is[8]; int seplen, islen, pieces, padded; char space; } SPart;     /* pieces: at most so many, the last the rest as written; space: the character the file writes for a space in it; padded: each piece without the white space around it */
+typedef struct { char path[64], sep[8], is[8]; int seplen, islen, pieces, padded; char space; char grammar[64]; uint16_t child_grammar_id; } SPart;     /* pieces: at most so many, the last the rest as written; space: the character the file writes for a space in it; padded: each piece without the white space around it; grammar: chained inner grammar */
 /* A file whose tree a grammar gives (the recipe names it: grammar NAME, loaded at run time): what each kind of the
  * grammar's nodes is in the file's tree, as the recipe (or the format file it names) writes it:
- *   node TYPE group [name PATH...] [list] it holds nodes; its name is the text at the first PATH there is (A/B: the B in its A);
- *                                         a list's values, and the groups in it, are named by it (a sense in "senses")
- *   node TYPE value name PATH text PATH   a name and its text
- *   node TYPE text [raw] [join]           a text, under the name of what holds it; with join, texts side by side are one text
- *   node TYPE member name FIELD value FIELD
- *                                         it names what its other part is: that part, read as its own kind, under the name
- *   node TYPE skip                        it and what is inside it are not of the tree
- *   resolve xml | json                    how the grammar's texts write what they cannot write plainly
- *   trim                                  the white space a text begins and ends with is the file's layout, not the text's
+ *   node TYPE group [name PATH...] [list] [grammar NAME]
+ *   node TYPE value name PATH text PATH [grammar NAME]
+ *   node TYPE text [raw] [join] [grammar NAME]
+ *   node TYPE member name FIELD value FIELD [grammar NAME]
+ *   node TYPE skip
+ *   resolve xml | json | turtle
+ *   trim
  * A kind the recipe says nothing of is passed through: what is inside it stands where it stands. */
-enum { G_GROUP = 1, G_VALUE, G_TEXT, G_MEMBER, G_SKIP };
+typedef enum { G_GROUP = 1, G_VALUE, G_TEXT, G_MEMBER, G_SKIP } GNodeKind;
 enum { G_XML = 1, G_JSON, G_TURTLE };
-typedef struct { char type[48]; int what, raw, join, list, kind; char name[4][64]; int nname; char text[64]; } GRule;     /* join: texts side by side are one text; list: a group of values, in order, each named by it; kind: named by its type */
-typedef struct { GRule rule[48]; int n, resolve, trim; } GMap;                 /* trim: the white space a text begins and ends with is how the file is laid out, not the text's */
+typedef struct {
+    uint16_t sym_id;
+    TSFieldId name_field_id;
+    TSFieldId text_field_id;
+    uint16_t child_grammar_id;
+    GNodeKind kind;
+    const char *tag;
+    char name_attr[64];
+    char text_attr[64];
+} CompiledRule;
+typedef struct {
+    char type[48]; int what, raw, join, list, kind;
+    char name[4][64]; int nname; char text[64];
+    char child_grammar[64];
+    CompiledRule compiled;
+} GRule;     /* join: texts side by side are one text; list: a group of values, in order, each named by it; kind: named by its type */
+typedef struct {
+    GRule rule[48]; int n, resolve, trim;
+    uint16_t grammar_id;
+    uint16_t sym_rule_offset[4096];                       /* 0 = none, 1..48 = rule index + 1 */
+} GMap;                 /* trim: the white space a text begins and ends with is how the file is laid out, not the text's */
 typedef struct { STier tier[S_TIERS]; int ntier; SPart part[32]; int npart; char empty[16][32]; int emptylen[16], nempty; char levels[8][32]; int nlevels; GMap g; } Layout;    /* empty: what the file writes where it leaves a part empty (several: empty _ None); levels: the names of the members of objects at each depth, whose keys are what the file says (levels roleset class) */
 static inline int s_empty(const Layout *l, const uint8_t *v, uint32_t n){ if (!n) return 1; for (int i = 0; i < l->nempty; i++) if (n == (uint32_t)l->emptylen[i] && !__builtin_memcmp(v, l->empty[i], n)) return 1; return 0; }
+
+/* Precompile grammar rules and chained sub-grammars into integer symbol/field IDs at recipe load time */
+void layout_compile_grammar(Layout *l, const char *grammar_name);
+
 /* The tree of a file a grammar parsed: root is the grammar's own tree (a TSNode), given by address. The whole file
  * is one part: handed over once. */
-void s_grammar(const Layout *l, const void *ts_root, const uint8_t *src, size_t n, void (*fn)(void *sink, const STree *t, int32_t root, uint64_t ordinal), void *sink);
-/* A long file of records (split ELEMENT...), parsed a part at a time on every core and read as the one tree the whole
- * file is: each record grafted where it stands in the file, so its keys resolve across the file and it is read once.
- * spans: where each record begins and ends, in the file's order; lang: the grammar (a TSLanguage). Returns how many parts
- * did not parse whole. */
-uint64_t s_grammar_split(const Layout *l, const void *lang, const uint8_t *src, size_t n, const size_t *ra, const size_t *rb, size_t nrs,
-                         void (*fn)(void *sink, const STree *t, int32_t root, uint64_t ordinal), void *sink);
+typedef void (*s_unit_fn)(void *sink, const RecTree *t, int32_t root, uint64_t ordinal);
+void s_grammar(const Layout *l, const void *ts_root, const uint8_t *src, size_t n, s_unit_fn fn, void *sink);
 
 /* A recipe's line, if it lays the file out: 1 when it was one, 0 when it is something else, -1 when it is written wrong
  * (what is wrong is said). tok is the line's first word; the rest of the line is read with strtok. */
 int layout_says(Layout *l, const char *path, char *tok);
 
+/* Single-pass streaming cursor over outermost tier records */
+int s_record_next(const Layout *l, const uint8_t *src, size_t n, size_t *cursor, size_t *rec_lo, size_t *rec_hi, uint64_t *line_no);
+
 /* The file's outermost tier, one part at a time: each handed over with its place among them, its tree its alone and
  * given back before the next. names: read from the file's head where the layout says header. Returns the parts read. */
-typedef void (*s_unit_fn)(void *sink, const STree *t, int32_t root, uint64_t ordinal);
 uint64_t s_decompose(const Layout *l, const uint8_t *src, size_t n, s_unit_fn fn, void *sink);
 /* Where the outermost tier's parts begin (past what the layout skips and past a header, whose names are read into it). */
 size_t s_head(Layout *l, const uint8_t *src, size_t n);
 /* Where the next outermost part begins at or after at: a file is parted there to be read on every core. */
 size_t s_boundary(const Layout *l, const uint8_t *src, size_t n, size_t at);
 
-int32_t s_child(const STree *t, int32_t node, const char *name, int32_t after);
-static inline int s_named(const SNode *x, const char *name, size_t l){ return x->nlen == l && !__builtin_memcmp(x->name, name, l); }
-void s_print(const STree *t, int32_t node, int depth, long *left);
+int32_t s_child(const RecTree *t, int32_t node, const char *name, int32_t after);
+static inline int s_named(const RecNode *x, const char *name, size_t l){ return x->nlen == l && !__builtin_memcmp(x->name, name, l); }
+void s_print(const RecTree *t, int32_t node, int depth, long *left);
 
 #endif
