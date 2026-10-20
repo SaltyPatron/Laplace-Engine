@@ -57,6 +57,7 @@ int os_run_logged(const char *exe, char *const argv[], const char *log, const ch
 /* The POSIX calls the Engine uses, on Windows: same names and semantics, so callers do not change. */
 #include <stdio.h>
 #include <string.h>
+#include <io.h>
 #include <time.h>
 #include <sys/types.h>
 typedef struct { void *opaque; } pthread_mutex_t;             /* an SRWLOCK: one pointer, zero-initialised */
@@ -72,6 +73,9 @@ ssize_t getline(char **line, size_t *cap, FILE *f);
 #define strtok_r strtok_s
 #define strncasecmp _strnicmp
 #define strcasecmp _stricmp
+#define strdup _strdup
+#define read _read
+#define close _close
 #define CLOCK_MONOTONIC 1
 #include <direct.h>
 #define mkdir(path, mode) _mkdir(path)
@@ -83,7 +87,7 @@ void qsort_r(void *base, size_t n, size_t size, int (*cmp)(const void *, const v
 /* statx(2): what Windows records of a file, under Linux's field names; a field Windows lacks is left out of
  * stx_mask (the caller already treats a missing field as absent). */
 #include <stdint.h>
-struct statx_timestamp { int64_t tv_sec; uint32_t tv_nsec; int32_t __reserved; };
+struct statx_timestamp { int64_t tv_sec; uint32_t tv_nsec; int32_t reserved; };
 struct statx { uint32_t stx_mask, stx_blksize; uint64_t stx_attributes; uint32_t stx_nlink, stx_uid, stx_gid; uint16_t stx_mode;
                uint64_t stx_ino, stx_size, stx_blocks, stx_attributes_mask;
                struct statx_timestamp stx_atime, stx_btime, stx_ctime, stx_mtime;

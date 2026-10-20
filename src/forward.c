@@ -139,7 +139,7 @@ int cmd_pull(int argc, char **argv){
             for (int j = 0; j < nh; j++) {
                 Run r = run_of(hh[j].path, (size_t)hh[j].path_len); int found = 0;
                 for (int i = 0; i + np <= r.n; i++) if (!memcmp(&r.id[i], ph, sizeof(lp_id) * (size_t)np)) {          /* each place it holds the run */
-                    Rest x = { malloc(sizeof(lp_id) * (size_t)(r.n - i - np + 1)), r.n - i - np }; memcpy(x.id, &r.id[i + np], sizeof(lp_id) * (size_t)x.n); memcpy(x.in.b, hh[j].entity.b, 16);
+                    Rest x = { .id = malloc(sizeof(lp_id) * (size_t)(r.n - i - np + 1)), .n = r.n - i - np }; memcpy(x.id, &r.id[i + np], sizeof(lp_id) * (size_t)x.n); memcpy(x.in.b, hh[j].entity.b, 16);
                     rest = xrealloc(rest, sizeof(Rest) * (size_t)(nrest + 2)); rest[nrest++] = x; found = 1; }
                 holders += found; free(r.id);
             }

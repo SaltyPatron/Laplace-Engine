@@ -451,15 +451,15 @@ static int ingest_highway(const char *conninfo, const char *t0p, int threads, in
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
     int highway = 0, threads = 0, do_load = 1, show_claims = 0, entities = 0, asking = 1; const char *of = NULL; extern int load_whole;
-    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-t", 's', &t0p }, { "-r", 's', &rdir }, { "-j", 'i', &threads },
-        { "-s", 's', &of },                                                       /* the files named are this source's: a part of it at a time */
-        { "--highway", 'b', &highway },
-        { "--whole", 'b', &load_whole },                                          /* after a run that was cut off: every node is looked for */
-        { "--no-load", 'v', &do_load, 0 }, { "--plan", 'v', &do_load, -1 },
-        { "--claims", 'b', &show_claims },                                        /* what the recipes attest, as text; nothing is loaded */
-        { "--claims-tsv", 'b', &tsv_claims },                                     /* --claims for a machine: a claim a line, its parts between tabs */
-        { "--entities", 'b', &entities },                                         /* what the recipes would record, entities and claims; nothing is loaded */
-        { NULL } });
+    int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "-t", .kind = 's', .at = &t0p }, { .flag = "-r", .kind = 's', .at = &rdir }, { .flag = "-j", .kind = 'i', .at = &threads },
+        { .flag = "-s", .kind = 's', .at = &of },                                                       /* the files named are this source's: a part of it at a time */
+        { .flag = "--highway", .kind = 'b', .at = &highway },
+        { .flag = "--whole", .kind = 'b', .at = &load_whole },                                          /* after a run that was cut off: every node is looked for */
+        { .flag = "--no-load", .kind = 'v', .at = &do_load, .val = 0 }, { .flag = "--plan", .kind = 'v', .at = &do_load, .val = -1 },
+        { .flag = "--claims", .kind = 'b', .at = &show_claims },                                        /* what the recipes attest, as text; nothing is loaded */
+        { .flag = "--claims-tsv", .kind = 'b', .at = &tsv_claims },                                     /* --claims for a machine: a claim a line, its parts between tabs */
+        { .flag = "--entities", .kind = 'b', .at = &entities },                                         /* what the recipes would record, entities and claims; nothing is loaded */
+        { 0 } });
     if (highway) {
         if (a < argc || of || show_claims || tsv_claims || entities || do_load < 0) { fprintf(stderr, "--highway admits only the existing highway contents; use -d, -t, -j or --no-load\n"); return 2; }
         return ingest_highway(conninfo, t0p, threads, do_load);

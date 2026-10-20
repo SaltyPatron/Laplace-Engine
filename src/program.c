@@ -454,7 +454,7 @@ static int langs_of(State *st, const lp_id *w, int n, lp_id (*out)[LANGS], int *
     int nh = 0; Hold *h = paths_of(sense, nc, &nh); st->trips += nc > 0; Ids parts = { 0 };
     for (int row = 0; row < nh; row++) { int entry = h[row].src; if (entry < 0 || entry >= nc) continue;
         int word = src[entry]; if (word < 0 || word >= n) continue;
-        path_into(&parts, lp_path_of(h[row].path, (size_t)h[row].path_len)); if (parts.n != lx->np) continue;
+        path_into(&parts, lp_path_of(h[row].path, (size_t)h[row].path_len)); if (parts.n != (size_t)lx->np) continue;
         const lp_id *language = &parts.v[lx->lang]; int duplicate = 0;
         for (int index = 0; index < nout[word]; index++) duplicate |= lp_id_eq(&out[word][index], language);
         if (!duplicate && nout[word] < LANGS) out[word][nout[word]++] = *language;
@@ -725,8 +725,8 @@ static int orient(State *st, Field *fd, Bind *bind, const Readings *R, int *namb
 }
 int cmd_turn(int argc, char **argv){
     const char *conninfo = laplace_db(), *fwp = NULL, *user = getenv("USER"), *session = NULL; int read_only = 0; long long seedv = -1;
-    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "--firmware", 's', &fwp }, { "--as", 's', &user }, { "--session", 's', &session },
-                                            { "--seed", 'l', &seedv }, { "--read", 'b', &read_only }, { NULL } });      /* --read: a read, nothing is witnessed */
+    int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "--firmware", .kind = 's', .at = &fwp }, { .flag = "--as", .kind = 's', .at = &user }, { .flag = "--session", .kind = 's', .at = &session },
+                                            { .flag = "--seed", .kind = 'l', .at = &seedv }, { .flag = "--read", .kind = 'b', .at = &read_only }, { 0 } });      /* --read: a read, nothing is witnessed */
     if (a >= argc) { fprintf(stderr, "usage: laplace turn [-d conninfo] [--firmware FILE] [--as USER] [--session NAME] [--seed N] [--read] prompt\n"); return 2; }
     if (!user || !*user) user = "user"; if (!session) session = "session";
     double T = now(); if (getenv("LAPLACE_TIMES")) setvbuf(stdout, NULL, _IONBF, 0);      /* each line as it is reached, to be timed */
@@ -885,7 +885,7 @@ int cmd_turn(int argc, char **argv){
     { int byrole[MAXOCC], nb = 0; for (int i = 0; i < st->nocc; i++) if ((st->open.w[i >> 6] >> (i & 63)) & 1) byrole[nb++] = i;
       for (int x = 1; x < nb; x++) { int v = byrole[x], y = x; while (y > 0 && st->role[byrole[y - 1]] < st->role[v]) { byrole[y] = byrole[y - 1]; y--; } byrole[y] = v; }
       for (int x = 0; x < nb && nchains < 8 && fw.nalt; x++) { lp_id ans; lp_rating rt; int o_ = byrole[x]; if (bind[o_].choice < 0 || bind[o_].level) continue; if (!chain_from(st, &st->occ[o_], &fd.c[bind[o_].choice].id, &ans, &rt)) continue;
-          chains[nchains] = (Prop){ ans, P_CHAIN, (int)(st->role[byrole[x]] * 1000 + 0.5), 0, lp_confidence(&rt, fw.k), 0, 0, byrole[x] }; chains[nchains++].shape = INFINITY;
+          chains[nchains] = (Prop){ .id = ans, .kind = P_CHAIN, .grounds = (int)(st->role[byrole[x]] * 1000 + 0.5), .conf = lp_confidence(&rt, fw.k), .occ = byrole[x] }; chains[nchains++].shape = INFINITY;
           reader_want(st->rd, &ans); char *w = reader_text(st->rd, &st->occ[byrole[x]], 32), *t = reader_text(st->rd, &ans, 80); printf("           chain from %s: %s\n", w, t); free(w); free(t); }
       printf("           %d chain%s of the firmware answer a word still owed\n", nchains, nchains == 1 ? "" : "s"); }
     disposition = ambiguous ? "ambiguous: more than one reading survives, and an ambiguous orientation emits nothing" : nbound ? "unresolved" : capped ? "resource-bounded: no joint binding among the candidates weighed" : "inconsistent: no word's reading holds together with another's";
@@ -965,9 +965,9 @@ int cmd_turn(int argc, char **argv){
         Ref p2[2] = { resp, pr }; p2[0].said = p2[1].said = 0; Ref c2 = said_claim(compose(p2, 2, (uint8_t)((resp.tier > pr.tier ? resp.tier : pr.tier) + 1)));
         Ref lap = text_ref(CTX[0], (const uint8_t *)"Laplace", 7);
         f[0].path = "the prompt"; f[0].witness = who; f[0].trust = uc ? uc->prior : 0.3; f[0].trunk = turn;
-        Event e1 = { c1.id, c1.id, 1.0f, 1500.0f, 0.0f, (uint32_t)ordinal, EV_CLAIM, 0, { { 0 } }, 0 }; ev_push(&f[0].ev, &e1);
+        Event e1 = { .claim = c1.id, .witnessed = c1.id, .score = 1.0f, .enter_rating = 1500.0f, .position = (uint32_t)ordinal, .kind = EV_CLAIM }; ev_push(&f[0].ev, &e1);
         f[1].path = "the response"; f[1].witness = lap; f[1].trust = rc ? rc->prior : 0.2; f[1].trunk = resp;
-        Event e2 = { c2.id, c2.id, 1.0f, 1500.0f, 0.0f, 0, EV_CLAIM, 0, { { 0 } }, 0 }; ev_push(&f[1].ev, &e2);
+        Event e2 = { .claim = c2.id, .witnessed = c2.id, .score = 1.0f, .enter_rating = 1500.0f, .kind = EV_CLAIM }; ev_push(&f[1].ev, &e2);
         LoadStats ls = { 0 }; if (load(conninfo, 2, f, 2, &ls)) return 1;
         char ti[33]; lp_id_hex(&turn.id, ti);
         printf("WITNESS    turn %s, at %d in the session: %llu entities new, the user's [session, turn] and Laplace's [response, prompt]\n", ti, ordinal, (unsigned long long)ls.ent_rows);
