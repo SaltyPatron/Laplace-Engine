@@ -92,6 +92,7 @@ typedef struct { char name[64]; int op; char val[128]; regex_t re; } Where;
 typedef struct { int what; char tier[32], say[64]; KSpec a, b; uint32_t when; } HwLine;       /* what: 1 types, 2 keyed, 3 alias, 4 maps */
 typedef struct PathProgram PathProgram;
 typedef struct DisProgram DisProgram;
+typedef struct KeyProjection KeyProjection;
 typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thing thing[32]; int nthing; Pair key[32]; int nkey; Att att[32]; int natt; Att pair[8]; int npair; Att hold[16]; int nhold; Rel rel[16]; int nrel;
                  Att itself[8]; int nitself;                                 /* a TIER's thing is itself what is attested: a tuple is the claim it is */
                  Att voices[8]; int nvoices;                                 /* parts each of which is a witness of its own, saying its field of the thing */
@@ -108,7 +109,7 @@ typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thi
                  /* a record's layers down its rows and its tree by head, where the recipe gives them (layers, tree): parts of the
                   * record's path beside the claims it says (record_of) */
                  char lay_tier[32], lay_row[32], layer[16][64]; int nlayer; char tree_tier[32], tree_row[32], tree_head[64], tree_rel[64];
-                 PathProgram *paths; DisProgram *dis_program, *value_program; uint16_t tree_key_index; uint32_t sc_slot; lp_id key_domain; } Say;
+                 PathProgram *paths; DisProgram *dis_program, *value_program; uint16_t tree_key_index; uint32_t sc_slot; lp_id key_domain; KeyProjection *projections; } Say;
 
 typedef struct { uint64_t key; uint16_t next, rule; uint8_t qualified; } DisEntry;
 struct DisProgram { uint16_t *buckets; DisEntry *entries; size_t capacity, count; uint64_t wildcard_lengths; };
@@ -187,7 +188,9 @@ struct PathStep {
     uint8_t operation;
 };
 enum { SELECT_FIELD, SELECT_SELF, SELECT_FILE, SELECT_ELEMENTS, SELECT_UNNAMED };
-typedef struct { NameCode whole; PathStep *first; uint16_t source_length; uint8_t special; } PathCode;
+struct KeyProjection { const PathStep *field; lp_id domain; uint16_t tier; KeyProjection *next, *all_next; };
+typedef struct { const PathStep *reference; KeyProjection *targets; } ReferenceProjection;
+typedef struct { NameCode whole; PathStep *first; uint16_t source_length; uint8_t special; ReferenceProjection *projection; } PathCode;
 typedef struct { uint32_t offset; PathCode *code; } PathEntry;
 typedef struct { NameCode name; uint64_t hash; uint32_t next; } NamePattern;
 typedef struct { const uint8_t *bytes; uint64_t hash; uint8_t length; } Mention;
@@ -350,7 +353,7 @@ static void path_register(Say *say, const char *name){
     size_t at = path_bucket(offset, program->capacity);
     while (program->entries[at].offset && program->entries[at].offset != offset) at = (at + 1) & (program->capacity - 1);
     if (program->entries[at].offset) return;
-    PathCode *code = malloc(sizeof *code); if (!code) { perror("selector program"); abort(); }
+    PathCode *code = calloc(1, sizeof *code); if (!code) { perror("selector program"); abort(); }
     size_t length = strlen(name); code->whole = compile_name(name, length); code->first = compile_steps(name, length, NULL); code->source_length = (uint16_t)length;
     code->special = length == 1 && name[0] == '.' ? SELECT_SELF : length == 6 && !memcmp(name, "{file}", 6) ? SELECT_FILE :
                     length == 2 && !memcmp(name, "*/", 2) ? SELECT_ELEMENTS : length == 3 && !memcmp(name, "...", 3) ? SELECT_UNNAMED : SELECT_FIELD;
@@ -454,6 +457,47 @@ static void compile_name_slots(Say *say){
         }
     }
 }
+static PathCode *registered_path(const Say *say, const char *name){
+    uintptr_t offset = (uintptr_t)name - (uintptr_t)say + 1;
+    if (!offset || offset > sizeof *say || !say->paths->capacity) { fputs("selector is outside its compiled recipe\n", stderr); abort(); }
+    size_t at = path_bucket((uint32_t)offset, say->paths->capacity);
+    while (say->paths->entries[at].offset) {
+        if (say->paths->entries[at].offset == offset) return say->paths->entries[at].code;
+        at = (at + 1) & (say->paths->capacity - 1);
+    }
+    fputs("semantic selector was not compiled at recipe load\n", stderr); abort();
+}
+/* Publish only selectors the recipe actually reads through >reference/path.
+ * Both sides use the same immutable integer path program. No AST nodes or
+ * record-arena pointers escape into the source-lifetime declaration table. */
+static void compile_key_projections(Say *say){
+    for (int i = 0; i < say->nthing; i++) for (int j = 0; j < say->thing[i].n; j++) {
+        const char *name = say->thing[i].name[j]; if (*name != '>') continue;
+        PathCode *path = registered_path(say, name + 1);
+        if (path->projection || !path->first) continue;
+        ReferenceProjection *projection = calloc(1, sizeof *projection);
+        if (!projection) { perror("reference projection program"); abort(); }
+        path->projection = projection; projection->reference = path->first;
+        const char *field = name + 1; unsigned brackets = 0;
+        for (; *field; field++) {
+            if (*field == '[') brackets++;
+            else if (*field == ']' && brackets) brackets--;
+            else if (*field == '/' && !brackets) { field++; break; }
+        }
+        while (*field == '/') field++;
+        for (int k = 0; k < say->nkey; k++) {
+            const Pair *key = &say->key[k]; int duplicate = 0;
+            for (KeyProjection *p = projection->targets; p; p = p->next) duplicate |= p->tier == key->tier_id;
+            if (duplicate) continue;
+            KeyProjection *target = calloc(1, sizeof *target);
+            if (!target) { perror("key projection export"); abort(); }
+            target->field = path->first->next; target->tier = key->tier_id;
+            keys_field_domain(&key->domain, field, &target->domain);
+            target->next = projection->targets; projection->targets = target;
+            target->all_next = say->projections; say->projections = target;
+        }
+    }
+}
 static void compile_semantic_paths(Say *say, const char *recipe){
     if (say->paths) return;
     say->paths = calloc(1, sizeof *say->paths); if (!say->paths) { perror("recipe selectors"); abort(); }
@@ -488,6 +532,7 @@ static void compile_semantic_paths(Say *say, const char *recipe){
     compile_diagnostics(say->dis, say->ndis); compile_diagnostics(say->val, say->nval);
     for (int i = 0; i < say->nline; i++) say->line[i].pred_length = (uint16_t)strlen(say->line[i].pred);
     compile_name_slots(say);
+    compile_key_projections(say);
 }
 static const PathCode empty_path;
 static const PathCode *path_code(const char *name){
@@ -1486,19 +1531,38 @@ static int thing_of(Sink *k, const SemanticRecord *t, int32_t g, Ref *out, int d
     if (memo) { if (r) k->tc[g] = *out; __atomic_store_n(&k->ts[g], (uint8_t)(r ? (r < 250 ? r + 2 : 252) : 2), __ATOMIC_RELEASE); }
     return r;
 }
-/* >REF/PATH: the PATH of the part of the same tree that the part REF refers to (refer REF TIER: the TIER whose key REF is
- * written as; a sense's synset, and the synset's ili); -1 where it names nothing here. */
-static int32_t referred_path(Sink *k, const SemanticRecord *t, int32_t g, const char *name){
-    const PathStep *first = path_code(name)->first; if (!first) return -1;
-    int32_t c = path_first(t, g, first, first->next); if (c < 0) return -1;
+static KeyField projected_field(Sink *k, const SemanticRecord *t, int32_t c, int depth){
+    KeyField field = {0}; if (c < 0) return field;
+    const SemanticValue *text = &t->n[c];
+    if (text->kind == S_GROUP && semantic_first(text) >= 0 && semantic_next(&t->n[semantic_first(text)]) < 0 &&
+        t->n[semantic_first(text)].kind == S_TEXT) text = &t->n[semantic_first(text)];
+    if (text->kind != S_GROUP) { field.text = text->val; field.length = text->vlen; field.has_text = 1; }
+    UnkMark mark; unknown_mark(k, t, c, &mark);
+    field.has_value = (uint8_t)value_of(k, t, c, &field.value, depth);
+    unknown_back(k, t, &mark); return field;
+}
+/* A projected field is a native product plus its original scalar text, when
+ * present. The immutable declaration survives record and COPY-window resets;
+ * an explicit absent field also preserves the earliest declaration's rank. */
+static int referred_field(Sink *k, const SemanticRecord *t, int32_t g, const char *name, KeyField *out, int depth){
+    const ReferenceProjection *projection = path_code(name)->projection;
+    if (!projection) return 0;
+    const PathStep *first = projection->reference;
+    int32_t c = path_first(t, g, first, first->next); if (c < 0) return 0;
     const Dis *d = dis_of(k->s, &t->n[c]); const SemanticValue *x = &t->n[c];
     if (x->kind == S_GROUP && semantic_first(x) >= 0 && semantic_next(&t->n[semantic_first(x)]) < 0 && t->n[semantic_first(x)].kind == S_TEXT) x = &t->n[semantic_first(x)];     /* a part that holds only its text */
-    if (!d || d->what != D_REFER || !x->vlen) return -1;
+    if (!d || d->what != D_REFER || !x->vlen) return 0;
     for (uint8_t i = 0; i < d->ntargets; i++) {
         const TargetCode *target = &d->targets[i];
         if (target->within || !target->local) continue;
-        int32_t r = keyed(k, t, target, x->val, x->vlen); if (r < 0) continue; return path_first(t, r, first->next, NULL); }
-    return -1;
+        for (const KeyProjection *p = projection->targets; p; p = p->next) if (p->tier == target->tier_id) {
+            const KeyField *field = keys_field_get(&p->domain, x->val, x->vlen);
+            if (field) { *out = *field; return 1; }
+            int32_t r = keyed(k, t, target, x->val, x->vlen); if (r < 0) break;
+            *out = projected_field(k, t, path_first(t, r, p->field, NULL), depth); return 1;
+        }
+    }
+    return 0;
 }
 /* A part as one way its kind is named: 0 when it is not named that way. */
 static int one_thing(Sink *k, const SemanticRecord *t, int32_t g, const Thing *th, Ref *out, int depth){
@@ -1525,10 +1589,15 @@ static int one_thing(Sink *k, const SemanticRecord *t, int32_t g, const Thing *t
             *out = text_of(tn->val + blo, bhi - blo); out->said = 0; return 1; }
         if (th->resolved) {                                                  /* the path of those of its parts that resolve, in the recipe's order */
             uint32_t np = 0;
-            for (int z = 0; z < th->n; z++) { int ref = th->name[z][0] == '>'; int32_t c = ref ? referred_path(k, t, g, th->name[z] + 1) : resolve_node_path(t, g, th->name[z]); if (c < 0) continue;
+            for (int z = 0; z < th->n; z++) { int ref = th->name[z][0] == '>';
+                if (ref) {
+                    KeyField field;
+                    if (referred_field(k, t, g, th->name[z] + 1, &field, depth) && field.has_value) { p[np] = field.value; p[np++].said = 0; }
+                    continue;
+                }
+                int32_t c = resolve_node_path(t, g, th->name[z]); if (c < 0) continue;
                 const SemanticValue *cn = &t->n[c]; if (cn->kind == S_GROUP && semantic_first(cn) >= 0 && semantic_next(&t->n[semantic_first(cn)]) < 0 && t->n[semantic_first(cn)].kind == S_TEXT) cn = &t->n[semantic_first(cn)];
                 if (left_empty(k->s, cn) || (cn->kind != S_GROUP && !cn->vlen)) continue;            /* what the source leaves empty: in no path, and creates no obligation */
-                if (ref) { UnkMark um; unknown_mark(k, t, c, &um); if (value_of(k, t, c, &p[np], depth)) { p[np].said = 0; np++; } else unknown_back(k, t, &um); continue; }     /* what another part says: its own reading owes what it leaves unsaid */
                 if (value_of(k, t, c, &p[np], depth)) { p[np].said = 0; np++; continue; }
                 note_obligation(k, 'o', &diagnostic_labels[DIAG_UNRESOLVED_KEY], (const uint8_t *)th->name[z], path_code(th->name[z])->source_length, NULL, 0); }     /* said, never dropped */
             if (!np) return 0;
@@ -1537,16 +1606,26 @@ static int one_thing(Sink *k, const SemanticRecord *t, int32_t g, const Thing *t
             *out = X; return 1; }
         for (int z = 0; z < th->n; z++) {
             if (th->lit[z]) { p[z] = text_of((const uint8_t *)th->name[z], strlen(th->name[z])); p[z].said = 0; continue; }      /* a text the recipe writes */
-            int32_t c = th->name[z][0] == '>' ? referred_path(k, t, g, th->name[z] + 1) : resolve_node_path(t, g, th->name[z]); if (c < 0) return 0;
+            if (th->name[z][0] == '>') {
+                KeyField field;
+                if (!referred_field(k, t, g, th->name[z] + 1, &field, depth)) return 0;
+                if (th->form[z].has_re || th->space[z]) {
+                    if (!field.has_text || !field.length) return 0;
+                    Keys form = {.n=0};
+                    if (th->form[z].has_re) { key_form(&th->form[z], field.text, field.length, &form, t, g); if (!form.n) return 0; }
+                    else { if (field.length >= sizeof form.k[0]) return 0; memcpy(form.k[0], field.text, field.length); form.k[0][field.length] = 0; }
+                    char *text = form.k[0]; if (th->space[z]) for (char *q = text; *q; q++) if (*q == th->space[z]) *q = ' ';
+                    p[z] = text_of((const uint8_t *)text, strlen(text));
+                } else { if (!field.has_value) return 0; p[z] = field.value; }
+                p[z].said = 0; continue;
+            }
+            int32_t c = resolve_node_path(t, g, th->name[z]); if (c < 0) return 0;
             if (th->form[z].has_re || th->space[z]) {                        /* the part's text as the source's notation parts it: what it writes, never what it is disposed as */
                 const SemanticValue *cn = &t->n[c]; if (cn->kind == S_GROUP && semantic_first(cn) >= 0 && semantic_next(&t->n[semantic_first(cn)]) < 0 && t->n[semantic_first(cn)].kind == S_TEXT) cn = &t->n[semantic_first(cn)];
                 if (cn->kind == S_GROUP || left_empty(k->s, cn)) return 0;
                 Keys kf; kf.n = 0; if (th->form[z].has_re) { key_form(&th->form[z], cn->val, cn->vlen, &kf, t, c); if (!kf.n) return 0; } else { if (cn->vlen >= sizeof kf.k[0]) return 0; memcpy(kf.k[0], cn->val, cn->vlen); kf.k[0][cn->vlen] = 0; }
                 char *w = kf.k[0]; if (th->space[z]) for (char *q = w; *q; q++) if (*q == th->space[z]) *q = ' ';
                 p[z] = text_of((const uint8_t *)w, strlen(w)); p[z].said = 0; continue; }
-            if (th->name[z][0] == '>') {                                     /* what another part says (a synset's ili): its own reading counts what it leaves unsaid, not this one */
-                UnkMark um; unknown_mark(k, t, c, &um); if (!value_of(k, t, c, &p[z], depth)) { unknown_back(k, t, &um); return 0; }
-                p[z].said = 0; continue; }
             if (t->n[c].kind == S_GROUP && semantic_first(&t->n[c]) >= 0 && semantic_next(&t->n[semantic_first(&t->n[c])]) >= 0) {      /* a part that is several pieces: the path of what each is, in order */
                 Ref pc[256]; uint32_t np = 0; for (int32_t q = semantic_first(&t->n[c]); q >= 0 && np < 256; q = semantic_next(&t->n[q])) if (value_of(k, t, q, &pc[np], depth)) { pc[np].said = 0; np++; }
                 if (!np) return 0; p[z] = np == 1 ? pc[0] : compose(pc, np, ref_above(pc, np)); }
@@ -1749,12 +1828,19 @@ static void keep_keys(Sink *k, const SemanticRecord *t, int32_t root){
     const Say *s = k->s; if (!s->nkey) return; int32_t end = subtree_end(t, root);
     for (int32_t g = root; g <= end; g++) { const SemanticValue *x = &t->n[g]; if (x->context || x->kind != S_GROUP || !x->nlen) continue;
         for (int i = 0; i < s->nkey; i++) if (semantic_named(x, s->key[i].tier, s->key[i].tier_length)) { int32_t kc = semantic_child(t, g, s->key[i].name, -1); Ref S;
-            if (kc >= 0 && t->n[kc].vlen && thing_of(k, t, g, &S, 0)) {
+            if (kc >= 0 && t->n[kc].vlen) {
                 const Pair *key = &s->key[i];
-                keys_put(&s->key_domain, t->n[kc].val, t->n[kc].vlen, S, &k->kr);
-                keys_put(&key->domain, t->n[kc].val, t->n[kc].vlen, S, &k->kr);
+                KeyRank rank = k->kr; rank.member = (uint64_t)g;
+                for (const KeyProjection *projection = s->projections; projection; projection = projection->all_next) if (projection->tier == key->tier_id) {
+                    KeyField field = projected_field(k, t, path_first(t, g, projection->field, NULL), 0);
+                    keys_field_put(&projection->domain, t->n[kc].val, t->n[kc].vlen, &field, &rank);
+                }
+                if (thing_of(k, t, g, &S, 0)) {
+                    keys_put(&s->key_domain, t->n[kc].val, t->n[kc].vlen, S, &rank);
+                    keys_put(&key->domain, t->n[kc].val, t->n[kc].vlen, S, &rank);
+                }
                 for (int32_t up = x->parent; up >= 0; up = t->n[up].parent) if (thing_of(k, t, up, &S, 0)) {
-                    keys_put(&key->parent_domain, t->n[kc].val, t->n[kc].vlen, S, &k->kr); break;
+                    keys_put(&key->parent_domain, t->n[kc].val, t->n[kc].vlen, S, &rank); break;
                 }
             } } }
 }
