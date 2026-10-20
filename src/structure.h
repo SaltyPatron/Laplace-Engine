@@ -112,6 +112,7 @@ typedef struct {
     CompiledRule compiled;
 } GRule;     /* join: texts side by side are one text; list: a group of values, in order, each named by it; kind: named by its type */
 typedef struct { const uint8_t *name; uint32_t length; uint8_t flags; } GColumn;
+typedef struct { GColumn trigger, group, member[8]; uint8_t arity, radix; } GCountProgram;
 typedef struct { char type[48], literal[8]; uint8_t length; TSSymbol symbol; } GSeparator;
 typedef struct { char name[64]; uint64_t hash; uint16_t length; uint8_t next; } GRecordName;
 typedef struct { char count[64], group[48], member[8][48]; uint8_t nmember, radix; } GCountShape;
@@ -136,6 +137,8 @@ typedef struct {
     char remark_group[48], remark_text[48];
     uint16_t numbered_length, root_name_length;
     uint8_t has_context;
+    char layout_prefix[4][8][64]; uint8_t prefix_length[4], prefix_count;
+    GCountProgram counts[4]; uint8_t count_count, count_by_column[S_NAMES];
 } GMap;                 /* trim: the white space a text begins and ends with is how the file is laid out, not the text's */
 struct Layout { STier tier[S_TIERS]; int ntier; SPart part[32]; int npart; uint16_t part_buckets[64]; uint64_t part_prefix_lengths; uint8_t parts_compiled, part_errors;
                 char empty[16][32]; int emptylen[16], nempty; char levels[8][32]; uint8_t level_lengths[8]; int nlevels; GMap g; };    /* empty: what the file writes where it leaves a part empty (several: empty _ None); levels: the names of the members of objects at each depth, whose keys are what the file says (levels roleset class) */
