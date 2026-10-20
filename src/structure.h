@@ -47,6 +47,10 @@ void    scratch_restore(size_t mark);
  * buffers use it and release it after their references have been consumed. */
 void   *arena_alloc(SayScratch *arena, size_t bytes);
 void    arena_release(SayScratch *arena);
+/* Temporarily use a lane-owned arena while preparing a bounded record window.
+ * The lane can then move between worker threads without retaining TLS storage. */
+SayScratch scratch_enter(SayScratch *arena);
+void       scratch_leave(SayScratch *arena, SayScratch previous);
 typedef struct { uint32_t count; uint32_t slots[]; } SNameBindings;
 typedef const SNameBindings *(*s_compile_name_fn)(const void *program, const uint8_t *name, uint32_t length, SayScratch *arena);
 
@@ -165,7 +169,7 @@ void layout_bind_names(Layout *layout, s_compile_name_fn compile, const void *pr
 enum { S_OPEN = 1, S_FIELD, S_CLOSE, S_FINISH };
 enum { S_FIELD_JOIN = 1, S_FIELD_LIST = 2, S_FIELD_TRIM = 4, S_FIELD_ALIAS = 8, S_FIELD_DERIVED = 16,
        S_FIELD_SAME_TIER = 32, S_FIELD_PARTS = 64, S_FIELD_TIER = 128, S_FIELD_CONTEXT = 256, S_FIELD_RECORD = 512 };
-enum { S_VISIT_OK = 1, S_VISIT_RELEASE = 2, S_VISIT_SKIP = 4 };
+enum { S_VISIT_OK = 1, S_VISIT_RELEASE = 2, S_VISIT_SKIP = 4, S_VISIT_RETAIN = 8 };
 typedef struct {
     TSNode source;
     TSRange range;
@@ -182,7 +186,9 @@ typedef struct {
  * point. Cursor frames live separately and survive the release. S_FINISH runs
  * once after the record's scopes close, before its scratch arena is reset;
  * remaining semantic bindings must be reduced in that callback. S_VISIT_SKIP
- * on S_OPEN omits its descendants but still emits the matching S_CLOSE. */
+ * on S_OPEN omits its descendants but still emits the matching S_CLOSE.
+ * S_VISIT_RETAIN on S_FINISH keeps the compiled operands in a caller-owned
+ * bounded window arena until its dependency barrier has completed. */
 typedef int (*s_visit_fn)(void *sink, int event, const SField *field);
 int s_cursor(const Layout *layout, TSNode root, const uint8_t *source, size_t length, s_visit_fn visit, void *sink);
 

@@ -2028,7 +2028,7 @@ static void records_of(Sink *k, const SemanticRecord *t, int32_t root, uint64_t 
         push(&k->things, &R); }
     scratch_restore(mark);
 }
-static void unit(void *sink, const SemanticRecord *t, int32_t root, uint64_t ordinal){
+static void unit(void *sink, const SemanticRecord *t, int32_t root, uint64_t ordinal, int bind_keys){
     size_t record_mark = scratch_mark();
     Sink *k = sink; const Say *s = k->s; k->kr.unit = ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f;
     sink_buffers(k);
@@ -2039,6 +2039,7 @@ static void unit(void *sink, const SemanticRecord *t, int32_t root, uint64_t ord
     k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); memset(k->uk, 0, t->count);
     Tls previous = tls_save(t, k->dm, s, &k->bindings);
     index_keys(k, t);
+    if (bind_keys) { keep_keys(k, t, root); tls_back(&previous); scratch_restore(record_mark); return; }
     if (k->hw) { unit_highway(k, t, root); keep_keys(k, t, root); tls_back(&previous); scratch_restore(record_mark); return; }     /* read for the highway: its types, not what it attests */
     if (s->nline && t->n[root].kind == S_TEXT) {                             /* a line of a page: where it matches a pattern, it says the pattern's parts */
         const SemanticValue *x = &t->n[root]; size_t mark = scratch_mark(); char stack[4096], *ln = x->vlen < sizeof stack ? stack : scratch_alloc((size_t)x->vlen + 1); memcpy(ln, x->val, x->vlen); ln[x->vlen] = 0;
@@ -2175,10 +2176,12 @@ static void finish_text(Sink *sink, SemanticValue *value){
 
 }
 typedef struct { uint32_t scope; } SemanticScope;
+typedef struct { SemanticRecord record; BindingMatrix bindings; KeyRank rank; uint64_t ordinal; } PreparedRecord;
 typedef struct {
     Sink *sink; const Layout *layout; SemanticRecord record;
     SemanticScope *scopes, *context_scopes; uint32_t depth, capacity, context_depth, context_capacity; uint64_t ordinal;
     uint8_t merged_root, parent_fixed;
+    PreparedRecord *prepared;
 } RecordCollector;
 static void collector_root(RecordCollector *collector){
     if (collector->record.count) return;
@@ -2226,8 +2229,19 @@ static int collect_record(void *sink, int event, const SField *field){
         for (int32_t value = semantic_first(&record->n[0]); value >= 0; value = semantic_next(&record->n[value])) finish_text(output, &record->n[value]);
         if (record->n[0].kind != S_GROUP) finish_text(output, &record->n[0]);
         tls_back(&previous);
-        unit(output, record, 0, collector->ordinal);
-        return S_VISIT_OK;
+        if (collector->prepared) {
+            PreparedRecord *prepared = collector->prepared;
+            prepared->record = *record; prepared->bindings = output->bindings;
+            prepared->record.bindings = &prepared->bindings;
+            prepared->rank = output->kr; prepared->ordinal = collector->ordinal;
+            for (uint32_t i = 0; i < prepared->record.count; i++) prepared->record.n[i].owner = &prepared->record;
+            unit(output, &prepared->record, 0, collector->ordinal, 1);
+            /* Products allocated during key evaluation belong to that unit's
+             * temporary frame, not to the retained window's binding operands. */
+            for (uint32_t i = 0; i < prepared->record.count; i++) prepared->record.n[i].product = NULL;
+            for (uint32_t i = 0; i < prepared->record.dropped_count; i++) prepared->record.dropped[i].seen = 0;
+        } else unit(output, record, 0, collector->ordinal, 0);
+        return S_VISIT_OK | (collector->prepared ? S_VISIT_RETAIN : 0);
     }
     if (event == S_CLOSE) {
         if (!collector->depth) return 0;
@@ -2448,6 +2462,8 @@ static void read_records(RecordPipeline *pipeline){
     }
     page_about(pipeline, &records);
     SRecord batch[RECORD_WINDOW];
+    struct { SayScratch arena; PreparedRecord *record; uint32_t count; } prepared[MAX_RECORD_LANES] = {0};
+    int bind_keys = pipeline->say->nkey != 0;
     while (!pipeline->failed) {
         uint32_t count = 0;
         while (count < RECORD_WINDOW && s_record_next(&records, &batch[count])) count++;
@@ -2456,24 +2472,51 @@ static void read_records(RecordPipeline *pipeline){
         uint32_t lanes = (count + RECORDS_PER_LANE - 1) / RECORDS_PER_LANE;
         if (lanes > pipeline->worker_count) lanes = pipeline->worker_count;
         const Layout *layout = records.layout;
-        #pragma omp taskloop grainsize(1) shared(batch)
+        #pragma omp taskloop grainsize(1) shared(batch, prepared)
         for (uint32_t lane = 0; lane < lanes; lane++) {
             Sink *worker = &pipeline->workers[lane]; reset_record_worker(pipeline, worker);
             uint32_t begin = (uint32_t)((uint64_t)count * lane / lanes), end = (uint32_t)((uint64_t)count * (lane + 1) / lanes);
+            SayScratch previous = {0};
+            if (bind_keys) {
+                previous = scratch_enter(&prepared[lane].arena);
+                prepared[lane].count = end - begin;
+                prepared[lane].record = scratch_alloc((end - begin) * sizeof(PreparedRecord));
+                memset(prepared[lane].record, 0, (end - begin) * sizeof(PreparedRecord));
+            }
             for (uint32_t i = begin; i < end && !__atomic_load_n(&pipeline->failed, __ATOMIC_ACQUIRE); i++) {
                 size_t mark = scratch_mark(); worker->bindings = (BindingMatrix){0};
                 worker->kr.file = pipeline->file->order; worker->kr.at = pipeline->file->at + batch[i].range.start_byte;
-                RecordCollector collector = {.sink=worker, .layout=layout, .ordinal=batch[i].ordinal};
+                RecordCollector collector = {.sink=worker, .layout=layout, .ordinal=batch[i].ordinal,
+                    .prepared=bind_keys ? &prepared[lane].record[i - begin] : NULL};
                 int valid = s_cursor_record(layout, &batch[i], pipeline->source, pipeline->length, collect_record, &collector);
-                scratch_restore(mark);
+                if (!bind_keys) scratch_restore(mark);
                 if (!valid) __atomic_store_n(&pipeline->failed, 1, __ATOMIC_RELEASE);
             }
+            if (bind_keys) scratch_leave(&prepared[lane].arena, previous);
         }
         if (pipeline->failed) break;
+        if (bind_keys) {
+            /* All declarations in this bounded window are now published.
+             * Evaluate the compiled operands after that dependency barrier;
+             * the source bytes and each native AST were visited only once. */
+            #pragma omp taskloop grainsize(1) shared(prepared)
+            for (uint32_t lane = 0; lane < lanes; lane++) {
+                Sink *worker = &pipeline->workers[lane]; reset_record_worker(pipeline, worker);
+                SayScratch previous = scratch_enter(&prepared[lane].arena);
+                for (uint32_t i = 0; i < prepared[lane].count; i++) {
+                    PreparedRecord *record = &prepared[lane].record[i];
+                    worker->kr = record->rank; worker->bindings = record->bindings;
+                    unit(worker, &record->record, 0, record->ordinal, 0);
+                }
+                scratch_leave(&prepared[lane].arena, previous);
+            }
+        }
         /* The taskgroup has joined: append complete lane results in source
          * order before reusing their arenas for the next bounded window. */
         for (uint32_t lane = 0; lane < lanes; lane++) merge_record_output(pipeline->result, &pipeline->workers[lane]);
+        for (uint32_t lane = 0; lane < lanes; lane++) prepared[lane].arena.used = prepared[lane].arena.stack_used = 0;
     }
+    for (uint32_t lane = 0; lane < MAX_RECORD_LANES; lane++) arena_release(&prepared[lane].arena);
     s_records_close(&records);
 }
 

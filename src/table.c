@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <time.h>
 #include <immintrin.h>
+#include <blake3.h>
 
 Node *NODE; Vtx *VTX;
 const lp_tier0_record *T0;
@@ -26,6 +27,16 @@ void *xrealloc(void *p, size_t n){ p = realloc(p, n ? n : 1); if (!p) { perror("
 #define VCHUNK (1u << 16)                               /* vertices a thread takes at a time */
 static uint64_t *slot, smask, node_top, vtx_top, node_cap, vtx_cap, grow_at;
 static uint64_t *area[2]; static int side, resizing;          /* the slots alternate between two reserved areas as the table doubles */
+
+/* Source-lifetime key lookup, independent of the batch's NODE/VTX storage.
+ * Published entries are immutable. Replacing a duplicate key appends an earlier
+ * ranked version with a head CAS; readers never lock or observe a partial Ref.
+ * No entry is reclaimed while a source worker can retain it. */
+#define KEY_BUCKETS (UINT64_C(1) << 20)
+#define KEY_CAPACITY (UINT64_C(1) << 29)
+typedef struct { lp_id hash; Ref value; KeyRank rank; uint64_t next; } KeyEntry;
+typedef struct { uint64_t *head, top, count; KeyEntry *entry; } KeyTable;
+static KeyTable keys;
 
 static void *reserve(size_t bytes){
     void *p = os_reserve(bytes);
@@ -48,8 +59,50 @@ void table_init(void){
     area[0] = reserve(SLOTS_MAX * sizeof *slot); area[1] = reserve(SLOTS_MAX * sizeof *slot); slot = area[0]; side = 0;
     vtx_cap = SLOTS_MAX * 4;
     NODE = reserve(SLOTS_MAX * sizeof(Node)); VTX = reserve(vtx_cap * sizeof(Vtx));
+    keys.head = reserve(KEY_BUCKETS * sizeof *keys.head);
+    keys.entry = reserve(KEY_CAPACITY * sizeof *keys.entry);
     table_size_slots(1ull << 26);
 }
+
+/* This hash indexes a recipe-local symbol, never mints a content entity ID. */
+static lp_id key_hash(const char *recipe, const uint8_t *text, size_t length){
+    blake3_hasher hash; lp_id id; blake3_hasher_init(&hash);
+    blake3_hasher_update(&hash, recipe, strlen(recipe) + 1);
+    blake3_hasher_update(&hash, text, length);
+    blake3_hasher_finalize(&hash, id.b, sizeof id.b); return id;
+}
+static int key_rank_before(const KeyRank *a, const KeyRank *b){
+    return a->file != b->file ? a->file < b->file : a->at != b->at ? a->at < b->at : a->unit < b->unit;
+}
+void keys_put(const char *recipe, const uint8_t *text, size_t length, Ref value, const KeyRank *rank){
+    lp_id hash = key_hash(recipe, text, length); uint64_t bucket; memcpy(&bucket, hash.b, sizeof bucket);
+    uint64_t *head = &keys.head[bucket & (KEY_BUCKETS - 1)], index = 0;
+    uint64_t observed = __atomic_load_n(head, __ATOMIC_ACQUIRE);
+    for (;;) {
+        const KeyEntry *previous = NULL;
+        for (uint64_t at = observed; at; at = keys.entry[at - 1].next)
+            if (lp_id_eq(&keys.entry[at - 1].hash, &hash)) { previous = &keys.entry[at - 1]; break; }
+        if (previous && !key_rank_before(rank, &previous->rank)) return;
+        if (!index) {
+            index = __atomic_fetch_add(&keys.top, 1, __ATOMIC_RELAXED) + 1;
+            if (index > KEY_CAPACITY) { fputs("source key table capacity exhausted\n", stderr); exit(1); }
+            keys.entry[index - 1] = (KeyEntry){.hash=hash, .value=value, .rank=*rank};
+        }
+        keys.entry[index - 1].next = observed;
+        if (__atomic_compare_exchange_n(head, &observed, index, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            if (!previous) __atomic_fetch_add(&keys.count, 1, __ATOMIC_RELAXED);
+            return;
+        }
+    }
+}
+int keys_get(const char *recipe, const uint8_t *text, size_t length, Ref *out){
+    lp_id hash = key_hash(recipe, text, length); uint64_t bucket; memcpy(&bucket, hash.b, sizeof bucket);
+    for (uint64_t at = __atomic_load_n(&keys.head[bucket & (KEY_BUCKETS - 1)], __ATOMIC_ACQUIRE);
+         at; at = keys.entry[at - 1].next)
+        if (lp_id_eq(&keys.entry[at - 1].hash, &hash)) { *out = keys.entry[at - 1].value; return 1; }
+    return 0;
+}
+uint64_t keys_held(void){ return __atomic_load_n(&keys.count, __ATOMIC_ACQUIRE); }
 
 void tier0_open(const char *path){
     T0 = lp_tier0_map(path);
@@ -172,7 +225,7 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
         if (!w) {
             if (!__atomic_compare_exchange_n(&slot[k], &w, tag | BUSY, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) continue;  /* another thread took it: look again */
             Node *x = node_new(c); int own; uint64_t vo = vtx_room(c, n, &own); Vtx *vt = &VTX[vo]; uint32_t nv = 0;
-            x->id = r.id; memcpy(x->m, r.c.m, 32); x->tier = tier; x->len = n; x->voff = vo; x->keep = 0; x->kind = 0;
+            x->id = r.id; memcpy(x->m, r.c.m, 32); x->tier = tier; x->len = n; x->voff = vo; x->keep = 0; x->kind = 0; x->spine = 0;
             for (uint32_t i = 0; i < n; i++) {                                          /* runs of the same child said the same way; what each is within this path, above the run */
                 uint64_t above = m_above(&ch[i]);
                 if (nv && !memcmp(&vt[nv - 1].id, &ch[i].id, 16) && (vt[nv - 1].m & ~((1ull << LP_M_RUN_BITS) - 1)) == above && vt[nv - 1].spare == ch[i].spare
@@ -215,6 +268,7 @@ void table_kinds(void){
     #pragma omp parallel for schedule(dynamic, 65536)
     for (uint64_t i = 0; i < end; i++) { Node *x = &NODE[i]; if (!x->live) continue;
         for (uint32_t v = 0; v < x->nv; v++) { uint64_t said = VSAID(VTX[x->voff + v].m); if (!said) continue;
+            if (said == LP_SAID_HOLDS) { Node *c = table_find(&VTX[x->voff + v].id); if (c) __atomic_store_n(&c->spine, 1, __ATOMIC_RELAXED); }
             uint8_t bit = said == LP_SAID_CLAIM ? LP_KIND_CLAIM : said == LP_SAID_RECORD ? LP_KIND_RECORD : said == LP_SAID_TUPLE ? LP_KIND_TUPLE : 255;
             if (bit != 255) { Node *c = table_find(&VTX[x->voff + v].id); if (c) __atomic_fetch_or(&c->kind, (uint8_t)(1u << bit), __ATOMIC_RELAXED); }
             if (said == LP_SAID_METADATA) __atomic_fetch_or(&x->kind, (uint8_t)(1u << LP_KIND_FILE), __ATOMIC_RELAXED); } }
