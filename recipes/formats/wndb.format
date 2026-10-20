@@ -1,0 +1,27 @@
+# Princeton WordNet database files, as the tree-sitter-wndb grammar gives them.
+grammar wndb
+remark-content - gloss
+counted-shape w_cnt radix 16 word word lex_id
+counted-shape p_cnt pointer pointer_symbol target pos source_target
+counted-shape p_cnt index_pointer ptr_symbol
+counted-shape f_cnt frame plus f_num w_num
+records header synset_record index_record sense_record exc_record frame_record sentidx_record
+node document group
+node synset_record group kind tier 0
+node index_record group kind tier 0
+node sense_record group kind tier 0
+node exc_record group kind tier 0
+node frame_record group kind tier 0
+node sentidx_record group kind tier 0
+node word group kind
+node pointer group kind
+node frame group kind
+node index_pointer group kind
+node field text trim
+node gloss text raw
+node header skip
+node words_end skip
+node pointers_end skip
+node frames_end skip
+node index_pointers_end skip
+node index_end skip
