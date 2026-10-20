@@ -71,6 +71,10 @@
 #include <string.h>
 #include <regex.h>
 #include <tree_sitter/api.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <io.h>
+#endif
 
 enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, D_RANGE, D_OWN };
 /* A key as a resource writes it, matched by a pattern and written as a template (\1: the pattern's first part) where it
@@ -1007,7 +1011,7 @@ static void push(Refs *a, const Ref *x){
 typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; uint64_t open[256]; float er, ed, score; uint64_t ordinal; Ref fw, voice; int voiced; char opennm[16][64]; uint8_t open_length[16]; int nopen; uint64_t unknown; char unknm[8][96]; int nunk; Refs grp; Ref fname, fstem;
                  const SemanticRecord *ix_tree; uint32_t ix_count; LocalKey *local_keys; size_t local_capacity, local_count;
                  BindingMatrix bindings;
-                 uint64_t blocked; uint8_t binding_phase;
+                 uint64_t blocked; uint8_t binding_phase, defer_missing;
                  SayScratch output;
                  const SemanticRecord *tc_tree; uint32_t tc_n; Ref *tc; uint8_t *ts, *uk;
                  long selfcp;                                                /* the code point the part being read is, or -1 */
@@ -2169,7 +2173,7 @@ static void records_of(Sink *k, const SemanticRecord *t, int32_t root, uint64_t 
 static void unit(void *sink, const SemanticRecord *t, int32_t root, uint64_t ordinal, int bind_keys){
     size_t record_mark = scratch_mark();
     Sink *k = sink; const Say *s = k->s; k->kr.unit = ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f;
-    uint8_t binding_phase = k->binding_phase; k->binding_phase = (uint8_t)(bind_keys != 0);
+    uint8_t binding_phase = k->binding_phase; k->binding_phase = (uint8_t)(bind_keys == 1 || k->defer_missing);
     sink_buffers(k);
     k->cs_epoch++; k->cs_n = 0; k->rec = root;                               /* a new part: none of its claims made yet, its own record */
     k->dm = scratch_alloc(sizeof(int16_t) * t->count); memset(k->dm, 0, sizeof(int16_t) * t->count);
@@ -2316,15 +2320,22 @@ static void finish_text(Sink *sink, SemanticValue *value){
 
 }
 typedef struct { uint32_t scope; } SemanticScope;
-typedef struct { SemanticRecord record; BindingMatrix bindings; KeyRank rank; uint64_t ordinal; } PreparedRecord;
-static void prepared_keys(Sink *sink, PreparedRecord *record){
-    sink->kr = record->rank; sink->bindings = record->bindings;
-    unit(sink, &record->record, 0, record->ordinal, 1);
-    /* Cached native products belong to unit's temporary frame. The retained
-     * compiled operands must not keep those pointers between barrier rounds. */
+typedef struct {
+    SemanticRecord record; BindingMatrix bindings; KeyRank rank; uint64_t ordinal;
+    size_t things_at, things_count, meta_at, meta_count; uint8_t ready;
+} PreparedRecord;
+static void prepared_clear(PreparedRecord *record){
     for (uint32_t i = 0; i < record->record.count; i++) record->record.n[i].product = NULL;
     for (uint32_t i = 0; i < record->record.dropped_count; i++) record->record.dropped[i].seen = 0;
 }
+static void prepared_keys_mode(Sink *sink, PreparedRecord *record, int final){
+    sink->kr = record->rank; sink->bindings = record->bindings;
+    unit(sink, &record->record, 0, record->ordinal, final ? 2 : 1);
+    /* Cached native products belong to unit's temporary frame. The retained
+     * compiled operands must not keep those pointers between barrier rounds. */
+    prepared_clear(record);
+}
+static void prepared_keys(Sink *sink, PreparedRecord *record){ prepared_keys_mode(sink, record, 0); }
 typedef struct {
     Sink *sink; const Layout *layout; SemanticRecord record;
     SemanticScope *scopes, *context_scopes; uint32_t depth, capacity, context_depth, context_capacity; uint64_t ordinal;
@@ -2536,11 +2547,154 @@ int file_os(const Recipe *r, const File *f, Ref *out){
  * its metadata tree and its content tree. */
 
 enum { RECORD_WINDOW = 1024, RECORDS_PER_LANE = 16, MAX_RECORD_LANES = RECORD_WINDOW / RECORDS_PER_LANE };
+typedef struct DeferredJob {
+    struct DeferredJob *next;
+    int64_t operands, products; uint64_t tried; uint8_t ready;
+} DeferredJob;
+typedef struct {
+    FILE *operands, *products; DeferredJob *first, *last, *free;
+    SayScratch jobs, read;
+} DeferredRecords;
 typedef struct {
     const Recipe *recipe; File *file; const Say *say; const uint8_t *source; size_t length; const SInput *input;
-    Sink *result, *workers; uint32_t worker_count;
+    Sink *result, *workers, *evaluators; uint32_t worker_count;
     Ref filename, stem, about; int has_about, failed;
+    DeferredRecords deferred;
 } RecordPipeline;
+
+/* Private, host-local journals retain compiled operands and native products,
+ * never packaging buffers or parser nodes. Files disappear on close, including an
+ * unsuccessful ingest. Large dependency spans therefore do not retain all
+ * intervening records or native closures in RAM. */
+static void journal_error(void){ perror("deferred record journal"); exit(2); }
+#ifdef _WIN32
+static void journal_windows_error(const char *operation, DWORD code){
+    fprintf(stderr, "deferred record journal: %s failed (Win32 %lu)\n", operation, (unsigned long)code); exit(2);
+}
+#endif
+static FILE *record_journal(void){
+#ifdef _WIN32
+    wchar_t directory[MAX_PATH + 1], path[MAX_PATH + 1];
+    DWORD n = GetTempPathW(MAX_PATH + 1, directory);
+    if (!n) journal_windows_error("GetTempPathW", GetLastError());
+    if (n > MAX_PATH) { fputs("deferred record journal: temporary directory exceeds GetTempFileNameW's path limit\n", stderr); exit(2); }
+    if (!GetTempFileNameW(directory, L"lpr", 0, path)) journal_windows_error("GetTempFileNameW", GetLastError());
+    HANDLE handle = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, NULL);
+    if (handle == INVALID_HANDLE_VALUE) { DWORD code = GetLastError(); DeleteFileW(path); journal_windows_error("CreateFileW", code); }
+    int fd = _open_osfhandle((intptr_t)handle, _O_RDWR | _O_BINARY);
+    if (fd < 0) { CloseHandle(handle); journal_error(); }
+    FILE *file = _fdopen(fd, "w+b"); if (!file) { _close(fd); journal_error(); }
+#else
+    FILE *file = tmpfile(); if (!file) journal_error();
+#endif
+    return file;
+}
+static int64_t journal_seek(FILE *file, int64_t offset, int origin){
+#ifdef _WIN32
+    if (_fseeki64(file, offset, origin)) journal_error();
+    int64_t at = _ftelli64(file);
+#else
+    if (fseeko(file, (off_t)offset, origin)) journal_error();
+    int64_t at = (int64_t)ftello(file);
+#endif
+    if (at < 0) journal_error(); return at;
+}
+static void journal_write(FILE *file, const void *bytes, size_t length){
+    if (length && fwrite(bytes, 1, length, file) != length) journal_error();
+}
+static void journal_read(FILE *file, void *bytes, size_t length){
+    if (length && fread(bytes, 1, length, file) != length) journal_error();
+}
+typedef struct {
+    KeyRank rank; uint64_t ordinal, buckets, bucket_count, links;
+    uint32_t values, dropped, dropped_buckets;
+} OperandHeader;
+static int64_t journal_operands(DeferredRecords *deferred, const PreparedRecord *prepared){
+    if (!deferred->operands) deferred->operands = record_journal();
+    FILE *file = deferred->operands; int64_t offset = journal_seek(file, 0, SEEK_END);
+    const SemanticRecord *record = &prepared->record; const BindingMatrix *bindings = &prepared->bindings;
+    OperandHeader header = {.rank=prepared->rank, .ordinal=prepared->ordinal, .buckets=bindings->capacity,
+        .bucket_count=bindings->count, .links=bindings->link_count, .values=record->count,
+        .dropped=record->dropped_count, .dropped_buckets=record->dropped_bucket_count};
+    journal_write(file, &header, sizeof header);
+    journal_write(file, bindings->buckets, bindings->capacity * sizeof(BindingBucket));
+    journal_write(file, bindings->links, bindings->link_count * sizeof(BindingLink));
+    journal_write(file, record->dropped_buckets, (size_t)record->dropped_bucket_count * sizeof(uint32_t));
+    for (uint32_t i = 0; i < record->count; i++) {
+        const SemanticValue *value = &record->n[i];
+        if (value->text) { fputs("unfinished text entered the deferred operand journal\n", stderr); exit(2); }
+        SemanticValue saved = *value; saved.owner = NULL; saved.name = saved.val = NULL; saved.product = NULL;
+        journal_write(file, &saved, sizeof saved);
+        journal_write(file, value->name, value->nlen); journal_write(file, value->val, value->vlen);
+    }
+    for (uint32_t i = 0; i < record->dropped_count; i++) {
+        DroppedField saved = record->dropped[i]; saved.name = NULL; saved.seen = 0;
+        journal_write(file, &saved, sizeof saved); journal_write(file, record->dropped[i].name, saved.length);
+    }
+    return offset;
+}
+static PreparedRecord *journal_restore(DeferredRecords *deferred, const DeferredJob *job){
+    FILE *file = deferred->operands; journal_seek(file, job->operands, SEEK_SET);
+    OperandHeader header; journal_read(file, &header, sizeof header);
+    PreparedRecord *prepared = scratch_alloc(sizeof *prepared); *prepared = (PreparedRecord){.rank=header.rank, .ordinal=header.ordinal};
+    SemanticRecord *record = &prepared->record; BindingMatrix *bindings = &prepared->bindings;
+    *bindings = (BindingMatrix){.capacity=(size_t)header.buckets, .count=(size_t)header.bucket_count,
+        .link_count=(size_t)header.links, .link_capacity=(size_t)header.links};
+    bindings->buckets = scratch_alloc(bindings->capacity * sizeof(BindingBucket));
+    bindings->links = scratch_alloc(bindings->link_count * sizeof(BindingLink));
+    journal_read(file, bindings->buckets, bindings->capacity * sizeof(BindingBucket));
+    journal_read(file, bindings->links, bindings->link_count * sizeof(BindingLink));
+    *record = (SemanticRecord){.count=header.values, .capacity=header.values, .bindings=bindings,
+        .dropped_count=header.dropped, .dropped_capacity=header.dropped, .dropped_bucket_count=header.dropped_buckets};
+    record->dropped_buckets = scratch_alloc((size_t)header.dropped_buckets * sizeof(uint32_t));
+    journal_read(file, record->dropped_buckets, (size_t)header.dropped_buckets * sizeof(uint32_t));
+    record->n = scratch_alloc((size_t)header.values * sizeof(SemanticValue));
+    for (uint32_t i = 0; i < header.values; i++) {
+        SemanticValue *value = &record->n[i]; journal_read(file, value, sizeof *value); value->owner = record;
+        uint8_t *name = scratch_alloc(value->nlen), *text = scratch_alloc(value->vlen);
+        journal_read(file, name, value->nlen); journal_read(file, text, value->vlen); value->name = name; value->val = text;
+    }
+    record->dropped = scratch_alloc((size_t)header.dropped * sizeof(DroppedField));
+    for (uint32_t i = 0; i < header.dropped; i++) {
+        DroppedField *field = &record->dropped[i]; journal_read(file, field, sizeof *field);
+        uint8_t *name = scratch_alloc(field->length); journal_read(file, name, field->length); field->name = name;
+    }
+    return prepared;
+}
+static DeferredJob *deferred_job(DeferredRecords *records){
+    DeferredJob *job = records->free;
+    if (job) records->free = job->next; else job = arena_alloc(&records->jobs, sizeof *job);
+    *job = (DeferredJob){.operands=-1, .products=-1};
+    if (records->last) records->last->next = job; else records->first = job;
+    records->last = job; return job;
+}
+static void journal_products(DeferredRecords *records, DeferredJob *job, const Ref *things, size_t n, const Ref *metadata, size_t nm){
+    if (!records->products) records->products = record_journal();
+    job->products = journal_seek(records->products, 0, SEEK_END); job->ready = 1;
+    uint64_t counts[2] = {n, nm}; journal_write(records->products, counts, sizeof counts);
+    journal_write(records->products, things, n * sizeof(Ref)); journal_write(records->products, metadata, nm * sizeof(Ref));
+    for (size_t i = 0; i < n; i++) table_pin(&things[i].id);
+    for (size_t i = 0; i < nm; i++) table_pin(&metadata[i].id);
+}
+static void deferred_drain(RecordPipeline *pipeline){
+    DeferredRecords *records = &pipeline->deferred;
+    while (records->first && records->first->ready) {
+        DeferredJob *job = records->first; journal_seek(records->products, job->products, SEEK_SET);
+        uint64_t counts[2]; journal_read(records->products, counts, sizeof counts);
+        for (int side = 0; side < 2; side++) for (uint64_t i = 0; i < counts[side]; i++) {
+            Ref product; journal_read(records->products, &product, sizeof product);
+            push(side ? &pipeline->result->meta : &pipeline->result->things, &product);
+        }
+        records->first = job->next; if (!records->first) records->last = NULL;
+        job->next = records->free; records->free = job;
+    }
+    if (!records->first) {
+        if (records->operands && fclose(records->operands)) journal_error();
+        if (records->products && fclose(records->products)) journal_error();
+        records->operands = records->products = NULL;
+    }
+}
 static void merge_record_output(Sink *result, const Sink *worker){
     for (uint64_t i = 0; i < worker->ev.n; i++) sink_event(result, &worker->ev.e[i]);
     for (size_t i = 0; i < worker->meta.n; i++) push(&result->meta, &worker->meta.c[i]);
@@ -2577,6 +2731,43 @@ static void reset_record_worker(RecordPipeline *pipeline, Sink *worker){
         .fw=pipeline->file->witness, .fname=pipeline->filename, .fstem=pipeline->stem,
         .fabout=pipeline->about, .has_fabout=pipeline->has_about, .hw=pipeline->result->hw, .output=arena};
     sink_buffers(worker);
+}
+static void deferred_bind(RecordPipeline *pipeline, int final){
+    DeferredRecords *records = &pipeline->deferred; Sink *worker = &pipeline->evaluators[0];
+    for (DeferredJob *job = records->first; job; job = job->next) if (!job->ready) {
+        records->read.used = records->read.stack_used = 0;
+        SayScratch previous = scratch_enter(&records->read);
+        PreparedRecord *record = journal_restore(records, job);
+        reset_record_worker(pipeline, worker); prepared_keys_mode(worker, record, final);
+        scratch_leave(&records->read, previous);
+    }
+}
+static void deferred_finish(RecordPipeline *pipeline, int final){
+    DeferredRecords *records = &pipeline->deferred; Sink *worker = &pipeline->evaluators[0];
+    if (final) {
+        uint64_t before;
+        do { before = keys_revision(); deferred_bind(pipeline, 1); } while (keys_revision() != before);
+    }
+    uint64_t revision = keys_revision();
+    for (DeferredJob *job = records->first; job; job = job->next) if (!job->ready && (final || job->tried != revision)) {
+        records->read.used = records->read.stack_used = 0;
+        SayScratch previous = scratch_enter(&records->read);
+        PreparedRecord *record = journal_restore(records, job);
+        reset_record_worker(pipeline, worker); worker->defer_missing = (uint8_t)!final;
+        worker->kr = record->rank; worker->bindings = record->bindings;
+        unit(worker, &record->record, 0, record->ordinal, 0); job->tried = revision;
+        if (!worker->blocked || final) {
+            journal_products(records, job, worker->things.c, worker->things.n, worker->meta.c, worker->meta.n);
+            worker->things.n = worker->meta.n = 0; merge_record_output(pipeline->result, worker);
+        }
+        scratch_leave(&records->read, previous);
+    }
+    deferred_drain(pipeline);
+}
+static void deferred_close(DeferredRecords *records){
+    if (records->operands && fclose(records->operands)) journal_error();
+    if (records->products && fclose(records->products)) journal_error();
+    arena_release(&records->jobs); arena_release(&records->read); *records = (DeferredRecords){0};
 }
 static void page_about(RecordPipeline *pipeline, const SRecords *records){
     if (!pipeline->say->has_about) return;
@@ -2648,6 +2839,7 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
                     for (uint32_t i = 0; i < prepared[lane].count; i++) prepared_keys(worker, &prepared[lane].record[i]);
                     scratch_leave(&prepared[lane].arena, previous);
                 }
+                deferred_bind(pipeline, 0);
             } while (keys_revision() != before);
             /* All declarations in this bounded window are now published.
              * Evaluate the compiled operands after that dependency barrier;
@@ -2655,18 +2847,49 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
             #pragma omp taskloop grainsize(1) shared(prepared)
             for (uint32_t lane = 0; lane < lanes; lane++) {
                 Sink *worker = &pipeline->workers[lane]; reset_record_worker(pipeline, worker);
+                Sink *evaluation = &pipeline->evaluators[lane];
                 SayScratch previous = scratch_enter(&prepared[lane].arena);
                 for (uint32_t i = 0; i < prepared[lane].count; i++) {
                     PreparedRecord *record = &prepared[lane].record[i];
-                    worker->kr = record->rank; worker->bindings = record->bindings;
-                    unit(worker, &record->record, 0, record->ordinal, 0);
+                    reset_record_worker(pipeline, evaluation); evaluation->defer_missing = 1;
+                    evaluation->kr = record->rank; evaluation->bindings = record->bindings;
+                    unit(evaluation, &record->record, 0, record->ordinal, 0);
+                    record->ready = evaluation->blocked == 0;
+                    record->things_at = worker->things.n; record->meta_at = worker->meta.n;
+                    if (record->ready) merge_record_output(worker, evaluation);
+                    record->things_count = worker->things.n - record->things_at;
+                    record->meta_count = worker->meta.n - record->meta_at;
+                    prepared_clear(record);
                 }
                 scratch_leave(&prepared[lane].arena, previous);
             }
         }
         /* The taskgroup has joined: append complete lane results in source
          * order before reusing their arenas for the next bounded window. */
-        for (uint32_t lane = 0; lane < lanes; lane++) merge_record_output(pipeline->result, &pipeline->workers[lane]);
+        for (uint32_t lane = 0; lane < lanes; lane++) {
+            Sink *worker = &pipeline->workers[lane];
+            if (bind_keys) {
+                DeferredRecords *deferred = &pipeline->deferred;
+                for (uint32_t i = 0; i < prepared[lane].count; i++) {
+                    PreparedRecord *record = &prepared[lane].record[i];
+                    const Ref *things = record->things_count ? worker->things.c + record->things_at : NULL;
+                    const Ref *metadata = record->meta_count ? worker->meta.c + record->meta_at : NULL;
+                    if (!record->ready) {
+                        DeferredJob *job = deferred_job(deferred);
+                        job->operands = journal_operands(deferred, record); job->tried = keys_revision();
+                    } else if (deferred->first) {
+                        DeferredJob *job = deferred_job(deferred);
+                        journal_products(deferred, job, things, record->things_count, metadata, record->meta_count);
+                    } else {
+                        for (size_t n = 0; n < record->things_count; n++) push(&pipeline->result->things, &things[n]);
+                        for (size_t n = 0; n < record->meta_count; n++) push(&pipeline->result->meta, &metadata[n]);
+                    }
+                }
+                worker->things.n = worker->meta.n = 0;
+            }
+            merge_record_output(pipeline->result, worker);
+        }
+        if (bind_keys) deferred_finish(pipeline, 0);
         for (uint32_t lane = 0; lane < lanes; lane++) prepared[lane].arena.used = prepared[lane].arena.stack_used = 0;
     }
     for (uint32_t lane = 0; lane < MAX_RECORD_LANES; lane++) arena_release(&prepared[lane].arena);
@@ -2703,6 +2926,8 @@ static void read_records(RecordPipeline *pipeline){
     const SInput *input = pipeline->input ? pipeline->input : &memory_input;
     Layout *layout = malloc(sizeof *layout);
     if (!layout) { perror("record window layout"); pipeline->failed = 1; return; }
+    pipeline->evaluators = calloc(pipeline->worker_count, sizeof *pipeline->evaluators);
+    if (!pipeline->evaluators) { perror("record evaluators"); free(layout); pipeline->failed = 1; return; }
     *layout = pipeline->say->lay;
     int independent = say_record_streamable(pipeline->recipe), ended = 0;
     size_t quantum = (size_t)8 << 20;
@@ -2755,6 +2980,7 @@ static void read_records(RecordPipeline *pipeline){
         }
         if (layout->ntier) { layout->tier[0].header = 0; layout->tier[0].skip = 0; }
         s_records_close(&records);
+        if (!pipeline->failed && ended && consumed == buffer.n) deferred_finish(pipeline, 1);
         if (pipeline->file->emit && !pipeline->failed) {
             Sink *result = pipeline->result;
             if (pipeline->file->emit(pipeline->file->emit_context, result->things.c, result->things.n,
@@ -2767,6 +2993,9 @@ static void read_records(RecordPipeline *pipeline){
         if (pipeline->failed || (ended && !buffer.n)) break;
     } while (1);
     if (has_header && !independent) scratch_restore(header_mark);
+    if (!pipeline->failed && pipeline->deferred.first) { fputs("deferred records reached file closure before they were finalized\n", stderr); exit(2); }
+    deferred_close(&pipeline->deferred);
+    release_sinks(pipeline->evaluators, pipeline->worker_count); pipeline->evaluators = NULL;
     arena_release(&headers); lp_buf_free(&buffer); free(layout);
     pipeline->source = original_source; pipeline->length = original_length;
 }
