@@ -177,13 +177,15 @@ int layout_says(Layout *l, const char *path, char *tok){
         str_set(scope->open, sizeof scope->open, open); str_set(scope->close, sizeof scope->close, close);
         str_set(scope->name, sizeof scope->name, identity); str_set(scope->empty, sizeof scope->empty, single); return 1;
     }
-    if (!strcmp(tok, "scope-space") || !strcmp(tok, "scope-misc")) {
-        int spaces = !strcmp(tok, "scope-space"); char *name; unsigned added = 0;
+    if (!strcmp(tok, "scope-space") || !strcmp(tok, "scope-misc") || !strcmp(tok, "scope-prefix") || !strcmp(tok, "scope-first")) {
+        int kind = !strcmp(tok, "scope-space") ? 0 : !strcmp(tok, "scope-misc") ? 1 : !strcmp(tok, "scope-prefix") ? 2 : 3;
+        char *name; unsigned added = 0;
         while ((name = strtok(NULL, " \t\r\n"))) {
-            uint8_t *count = spaces ? &l->g.scope_space_count : &l->g.scope_misc_count;
-            unsigned capacity = spaces ? 8 : 16;
+            uint8_t *count = kind == 0 ? &l->g.scope_space_count : kind == 1 ? &l->g.scope_misc_count : kind == 2 ? &l->g.scope_prefix_count : &l->g.scope_first_count;
+            unsigned capacity = kind == 1 ? 16 : kind == 3 ? 4 : 8;
             if (*count == capacity || strlen(name) >= 48) return -1;
-            str_set(spaces ? l->g.scope_space[(*count)++] : l->g.scope_misc[(*count)++], 48, name); added++;
+            char (*names)[48] = kind == 0 ? l->g.scope_space : kind == 1 ? l->g.scope_misc : kind == 2 ? l->g.scope_prefix : l->g.scope_first;
+            str_set(names[(*count)++], 48, name); added++;
         }
         return added ? 1 : -1;
     }
@@ -707,13 +709,13 @@ int layout_compile_grammar(Layout *l, const char *grammar_name){
                 else g->scope_roles[symbol] = (uint8_t)(1 + i + 8 * role);
             }
         }
-        for (unsigned kind = 0; kind < 2; kind++) {
-            unsigned count = kind ? g->scope_misc_count : g->scope_space_count;
+        for (unsigned kind = 0; kind < 4; kind++) {
+            unsigned count = kind == 0 ? g->scope_space_count : kind == 1 ? g->scope_misc_count : kind == 2 ? g->scope_prefix_count : g->scope_first_count;
             for (unsigned i = 0; i < count; i++) {
-                const char *name = kind ? g->scope_misc[i] : g->scope_space[i];
+                const char *name = kind == 0 ? g->scope_space[i] : kind == 1 ? g->scope_misc[i] : kind == 2 ? g->scope_prefix[i] : g->scope_first[i];
                 TSSymbol symbol = ts_language_symbol_for_name(lang, name, (uint32_t)strlen(name), true);
                 if (!symbol || g->scope_roles[symbol]) g->unresolved++;
-                else g->scope_roles[symbol] = kind ? 255 : 254;
+                else g->scope_roles[symbol] = kind == 0 ? 254 : kind == 1 ? 255 : kind == 2 ? 253 : 252;
             }
         }
         if (g->unresolved) fprintf(stderr, "grammar %s: unresolved or overlapping scope declaration\n", grammar_name);
@@ -1283,7 +1285,7 @@ static int scope_validate(const Layout *layout, TSNode root, const GInput *input
             count--;
         } else if (role >= 17 && role <= 24) {
             if (!count && ++roots != 1) { valid = 0; break; }
-        } else if (!count && role != 255) {
+        } else if (!count && role != 255 && role != 253 && role != 252) {
             if (role != 254) { valid = 0; break; }
             size_t value_mark = scratch_mark(); const uint8_t *text; uint32_t length;
             GW worker = {.l=layout, .src=input->src, .input=input}; g_text(&worker, node, 0, &text, &length);
@@ -1313,7 +1315,7 @@ static int scope_extent(const GMap *grammar, TSNode start, TSRange *range){
 }
 
 static const SContext *record_context_snapshot(SRecords *records, TSNode node);
-static int records_open(SRecords *records, const Layout *layout, const uint8_t *source, size_t length, int tail){
+static int records_open(SRecords *records, const Layout *layout, const uint8_t *source, size_t length, int tail, int scopes){
     *records = (SRecords){0};
     if (!layout->g.compiled || layout->g.unresolved || length > UINT32_MAX) return 0;
     TSParser *parser = lp_tls_parser(layout->g.grammar_id);
@@ -1333,7 +1335,7 @@ static int records_open(SRecords *records, const Layout *layout, const uint8_t *
         prefix /= 2;
     }
     GInput scope_input = {.src=source, .length=(uint32_t)prefix}; scope_input.range.end_byte = (uint32_t)prefix;
-    if (layout->g.scope_count && !scope_validate(layout, ts_tree_root_node(tree), &scope_input)) { ts_tree_delete(tree); return 0; }
+    if (scopes && layout->g.scope_count && !scope_validate(layout, ts_tree_root_node(tree), &scope_input)) { ts_tree_delete(tree); return 0; }
     TSTreeCursor *cursor = lp_tls_cursor(ts_tree_root_node(tree));
     if (!cursor) { ts_tree_delete(tree); return 0; }
     records->layout = layout; records->source = source; records->length = (uint32_t)prefix;
@@ -1343,7 +1345,7 @@ static int records_open(SRecords *records, const Layout *layout, const uint8_t *
     return 1;
 }
 int s_records_open(SRecords *records, const Layout *layout, const uint8_t *source, size_t length){
-    return records_open(records, layout, source, length, 0);
+    return records_open(records, layout, source, length, 0, 1);
 }
 static int record_policy(const SRecords *records, TSNode node){
     const Layout *layout = records->layout;
@@ -1469,8 +1471,10 @@ static int scope_record_next(SRecords *records, SRecord *record){
     }
     records->done = 1; return 0;
 }
+static int scope_stream_next(SRecords *records, SRecord *record);
 int s_record_next(SRecords *records, SRecord *record){
     if (!records->cursor || records->done) return 0;
+    if (records->stream) return scope_stream_next(records, record);
     if (records->layout->g.scope_count) return scope_record_next(records, record);
     if (records->started && !record_advance(records, records->descend)) return 0;
     records->started = 1;
@@ -1518,7 +1522,7 @@ void s_records_close(SRecords *records){
 int s_records_window(SRecords *records, const Layout *layout, const uint8_t *source, size_t length,
                      int final, size_t *consumed, SayScratch *headers){
     *consumed = 0;
-    if (!records_open(records, layout, source, length, !final)) return final ? -1 : 0;
+    if (!records_open(records, layout, source, length, !final, 1)) return final ? -1 : 0;
     records->header_arena = headers;
     TSNode root = ts_tree_root_node(records->tree);
     SRecord record; uint32_t last = 0, previous = 0;
@@ -1938,7 +1942,8 @@ static int cursor_scope_project(const Layout *layout, TSNode root, TSRange range
             if (opening.action & S_VISIT_SKIP) skipped = 1;
         } else if (role >= 9 && role <= 16) {
             if (skipped && --skipped) continue;
-            if (!count) { valid = 0; break; }
+            if (!count || scope_role(grammar, fields[count - 1].source) != role - 8 ||
+                !scope_equal(layout, role - 8, fields[count - 1].source, node, input)) { valid = 0; break; }
             SField field = fields[--count]; field.range.end_byte = ts_node_end_byte(node); field.range.end_point = ts_node_end_point(node);
             if (!close_field(visit, sink, &field)) { valid = 0; break; }
         } else if (!skipped) {
@@ -2008,7 +2013,7 @@ static int record_context(const Layout *layout, TSNode root, const GInput *input
  * buffer. A window projects each ancestor header once; record workers replay
  * compiled fields rather than parsing the same headers for every record. */
 typedef struct ContextEvent { SField field; int event; struct ContextEvent *next; } ContextEvent;
-struct SContext { ContextEvent *first, *last; SField *opened; uint32_t count; };
+struct SContext { ContextEvent *first, *last; SField *opened; uint32_t count; const SContext *parent; };
 typedef struct ContextEntry {
     const void *owner; uint32_t start; SContext value; struct ContextEntry *next;
 } ContextEntry;
@@ -2041,37 +2046,46 @@ static size_t context_bucket(const void *owner, uint32_t start, size_t capacity)
     key ^= key >> 30; key *= UINT64_C(0xbf58476d1ce4e5b9); key ^= key >> 27;
     return (size_t)key & (capacity - 1);
 }
+static int scope_context_header(const Layout *layout, const GRule *rule, TSNode node, const GInput *input,
+    ContextCapture *capture, SField *field){
+    ContextVisitor inherited = {capture_context, capture};
+    ScopeOpening opening = {.visit=context_visit, .sink=&inherited, .node=node, .header_only=1};
+    if (!cursor_project(layout, node, input, scope_opening_visit, &opening, NULL, 0, 0, 0) || !(opening.action & S_VISIT_OK)) return 0;
+    *field = opening.field;
+    for (unsigned k = 0; k < rule->ncontext; k++) {
+        TSNode header;
+        if (!at_path(node, &rule->compiled.context[k], &header)) continue;
+        if (header.id != node.id) {
+            if (!cursor_project(layout, header, input, context_visit, &inherited, NULL, 0, 0, 0)) return 0;
+        } else {
+            TSTreeCursor *cursor = lp_tls_cursor(node); if (!cursor) return 0;
+            int valid = 1;
+            if (ts_tree_cursor_goto_first_child(cursor)) do {
+                if (!cursor_project(layout, ts_tree_cursor_current_node(cursor), input, context_visit, &inherited, NULL, 0, 0, 0)) { valid = 0; break; }
+            } while (ts_tree_cursor_goto_next_sibling(cursor));
+            lp_tls_cursor_release(cursor); if (!valid) return 0;
+        }
+    }
+    return 1;
+}
 static int scope_record_context(SRecords *records, const GInput *input, ContextCapture *capture, SField **opened, uint32_t *count){
     *opened = NULL; *count = 0;
     if (!records->scopes || !records->scopes->count) return 1;
     const Layout *layout = records->layout; SScopeState *state = records->scopes;
     SField *fields = scratch_alloc((size_t)state->count * sizeof *fields);
-    GW worker = {.l=layout, .src=input->src, .input=input}; ContextVisitor inherited = {capture_context, capture};
+    GW worker = {.l=layout, .src=input->src, .input=input};
     for (uint32_t i = 0; i < state->count; i++) {
         TSNode node = state->frames[i].node;
         const GRule *rule = rule_at(&worker, node, 0, ts_node_symbol(ts_node_parent(node)));
         if (!rule || rule->what != G_GROUP || !rule->ncontext) continue;
-        ScopeOpening opening = {.visit=context_visit, .sink=&inherited, .node=node, .header_only=1};
-        if (!cursor_project(layout, node, input, scope_opening_visit, &opening, NULL, 0, 0, 0) || !(opening.action & S_VISIT_OK)) return 0;
-        fields[(*count)++] = opening.field;
-        for (unsigned k = 0; k < rule->ncontext; k++) {
-            TSNode header;
-            if (!at_path(node, &rule->compiled.context[k], &header)) continue;
-            if (header.id != node.id) {
-                if (!cursor_project(layout, header, input, context_visit, &inherited, NULL, 0, 0, 0)) return 0;
-            } else {
-                TSTreeCursor *cursor = lp_tls_cursor(node); if (!cursor) return 0;
-                int valid = 1;
-                if (ts_tree_cursor_goto_first_child(cursor)) do {
-                    if (!cursor_project(layout, ts_tree_cursor_current_node(cursor), input, context_visit, &inherited, NULL, 0, 0, 0)) { valid = 0; break; }
-                } while (ts_tree_cursor_goto_next_sibling(cursor));
-                lp_tls_cursor_release(cursor); if (!valid) return 0;
-            }
-        }
+        if (!scope_context_header(layout, rule, node, input, capture, &fields[*count])) return 0;
+        (*count)++;
     }
     *opened = fields; return 1;
 }
+static const SContext *scope_stream_context(const SScopeStream *stream);
 static const SContext *record_context_snapshot(SRecords *records, TSNode node){
+    if (records->stream) return scope_stream_context(records->stream);
     SayScratch *arena = &records->context_arena;
     SContextStore *store = records->contexts;
     if (!store) { store = arena_alloc(arena, sizeof *store); *store = (SContextStore){0}; records->contexts = store; }
@@ -2112,6 +2126,181 @@ static const SContext *record_context_snapshot(SRecords *records, TSNode node){
     return &entry->value;
 }
 
+typedef struct ScopeStreamFrame {
+    struct ScopeStreamFrame *parent, *next, *all;
+    SayScratch *arena; size_t mark; SContext header, attributes;
+    SField opening; const SContext *inherited;
+    const uint8_t *name; uint32_t name_length;
+    uint64_t ordinal, offset; uint8_t kind, emit;
+    void *continuation;
+} ScopeStreamFrame;
+struct SScopeStream {
+    SayScratch arena, headers; ScopeStreamFrame *top, *free, *all, *retired;
+    uint8_t *prefix_seen; unsigned roots;
+    uint64_t ordinal, offset, first_offset; size_t consumed; uint8_t final, begun;
+};
+SScopeStream *s_scope_stream_open(const Layout *layout){
+    if (!layout->g.compiled || layout->g.unresolved || !layout->g.scope_count) return NULL;
+    SScopeStream *stream = calloc(1, sizeof *stream); if (!stream) return NULL;
+    stream->prefix_seen = arena_alloc(&stream->arena, layout->g.symbol_count);
+    memset(stream->prefix_seen, 0, layout->g.symbol_count); return stream;
+}
+void s_scope_stream_close(SScopeStream *stream){
+    if (!stream) return;
+    arena_release(&stream->headers); arena_release(&stream->arena); free(stream);
+}
+static const SContext *scope_stream_context(const SScopeStream *stream){
+    return stream->top ? (stream->top->emit ? &stream->top->attributes : stream->top->inherited) : NULL;
+}
+static ScopeStreamFrame *scope_stream_frame(SScopeStream *stream){
+    ScopeStreamFrame *frame = stream->free;
+    if (frame) stream->free = frame->next;
+    else {
+        frame = arena_alloc(&stream->arena, sizeof *frame); *frame = (ScopeStreamFrame){.all=stream->all}; stream->all = frame;
+    }
+    ScopeStreamFrame *all = frame->all;
+    *frame = (ScopeStreamFrame){.arena=&stream->headers, .mark=stream->headers.used, .all=all,
+        .parent=stream->top, .inherited=scope_stream_context(stream)};
+    return frame;
+}
+static void scope_stream_recycle(SScopeStream *stream, ScopeStreamFrame *frame){
+    stream->headers.used = frame->mark;
+    frame->next = stream->free; stream->free = frame;
+}
+int s_scope_stream_window(SRecords *records, SScopeStream *stream, const Layout *layout,
+    const uint8_t *source, size_t length, uint64_t offset, int final){
+    if (!records_open(records, layout, source, length, !final, 0)) return final ? -1 : 0;
+    TSNode root = ts_tree_root_node(records->tree);
+    uint32_t last = 0, previous = 0;
+    if (ts_tree_cursor_goto_first_child(records->cursor)) do {
+        TSNode node = ts_tree_cursor_current_node(records->cursor);
+        if (ts_node_is_named(node)) { previous = last; last = ts_node_end_byte(node); }
+    } while (ts_tree_cursor_goto_next_sibling(records->cursor));
+    uint32_t prefix = final ? (uint32_t)length : previous;
+    if (!prefix && length) { s_records_close(records); return final ? -1 : 0; }
+    records->limit = prefix; records->stream = stream; records->ordinal = stream->ordinal;
+    if (!stream->begun) { stream->first_offset = offset; stream->begun = 1; }
+    stream->offset = offset; stream->final = (uint8_t)final; stream->consumed = 0;
+    ts_tree_cursor_reset(records->cursor, root); return 1;
+}
+size_t s_scope_stream_consumed(const SRecords *records){ return records->stream ? records->stream->consumed : 0; }
+static int scope_stream_error(SRecords *records, TSNode node){
+    fprintf(stderr, "invalid packaging scope at source byte %llu\n", (unsigned long long)(records->stream->offset + ts_node_start_byte(node)));
+    records->failed = records->done = 1; return 0;
+}
+static int scope_stream_next(SRecords *records, SRecord *record){
+    SScopeStream *stream = records->stream; const Layout *layout = records->layout; const GMap *grammar = &layout->g;
+    if (records->done) return 0;
+    /* A completion is a batch boundary: its readers finish before this frame
+     * returns to the active-depth pool. No per-record allocation is needed. */
+    if (stream->retired) { scope_stream_recycle(stream, stream->retired); stream->retired = NULL; }
+    int advanced = records->started ? ts_tree_cursor_goto_next_sibling(records->cursor) : ts_tree_cursor_goto_first_child(records->cursor);
+    records->started = 1;
+    GInput input = {.src=records->source, .length=records->length}; input.range.end_byte = records->length; input.source_row = layout->source_row;
+    GW worker = {.l=layout, .src=input.src, .input=&input};
+    while (advanced) {
+        TSNode node = ts_tree_cursor_current_node(records->cursor); uint8_t role = scope_role(grammar, node);
+        if (ts_node_start_byte(node) >= records->limit) break;
+        if (role == 252 || role == 253) {
+            TSSymbol symbol = ts_node_symbol(node);
+            if (stream->top || stream->roots || stream->prefix_seen[symbol] ||
+                (role == 252 && stream->offset + ts_node_start_byte(node) != stream->first_offset)) return scope_stream_error(records, node);
+            stream->prefix_seen[symbol] = 1;
+        } else if ((role && role <= 8) || (role >= 17 && role <= 24)) {
+            if (!stream->top && stream->roots) return scope_stream_error(records, node);
+            int selected = record_matches(records, node);
+            const GRule *rule = rule_at(&worker, node, 0, ts_node_symbol(ts_node_parent(node)));
+            int header = !selected && rule && rule->what == G_GROUP && rule->ncontext;
+            if (selected || role >= 17) {
+                TSRange range;
+                if (!scope_extent(grammar, node, &range) || range.end_byte > records->limit) {
+                    if (stream->final) return scope_stream_error(records, node);
+                    stream->consumed = ts_node_start_byte(node); records->done = 1; return 0;
+                }
+                if (!stream->top) stream->roots++;
+                const SContext *context = scope_stream_context(stream);
+                if (role <= 8) {
+                    TSNode parent = ts_node_parent(node); ts_tree_cursor_reset(records->cursor, parent);
+                    if (ts_tree_cursor_goto_first_child_for_byte(records->cursor, range.end_byte - 1) < 0) return scope_stream_error(records, node);
+                }
+                stream->consumed = range.end_byte;
+                if (selected || header) {
+                    *record = (SRecord){.node=node, .range=range, .ordinal=stream->ordinal++,
+                        .source_offset=stream->offset + range.start_byte, .header=(uint8_t)header, .context=context};
+                    records->ordinal = stream->ordinal; return 1;
+                }
+            } else {
+                ScopeStreamFrame *frame = scope_stream_frame(stream); frame->kind = role; frame->emit = (uint8_t)header;
+                frame->offset = stream->offset + ts_node_start_byte(node);
+                TSNode identity;
+                if (!at_path(node, &grammar->scopes[role - 1].identity, &identity)) return scope_stream_error(records, node);
+                size_t mark = scratch_mark(); const uint8_t *name; uint32_t length;
+                g_text(&worker, identity, 0, &name, &length);
+                uint8_t *owned = arena_alloc(frame->arena, length); memcpy(owned, name, length); frame->name = owned; frame->name_length = length;
+                scratch_restore(mark);
+                if (!stream->top) stream->roots++;
+                if (header) {
+                    ContextCapture capture = {&frame->header, frame->arena};
+                    ScopeOpening opening = {.visit=capture_context, .sink=&capture, .node=node};
+                    mark = scratch_mark();
+                    if (!cursor_project(layout, node, &input, scope_opening_visit, &opening, NULL, 0, 0, 0) || !(opening.action & S_VISIT_OK)) {
+                        scratch_restore(mark); return scope_stream_error(records, node);
+                    }
+                    frame->opening = context_field_copy(frame->arena, &opening.field); scratch_restore(mark);
+                    ContextCapture attributes = {&frame->attributes, frame->arena}; SField inherited;
+                    mark = scratch_mark();
+                    if (!scope_context_header(layout, rule, node, &input, &attributes, &inherited)) {
+                        scratch_restore(mark); return scope_stream_error(records, node);
+                    }
+                    scratch_restore(mark); frame->attributes.parent = frame->inherited;
+                    frame->attributes.opened = &frame->opening; frame->attributes.count = 1;
+                    frame->ordinal = stream->ordinal++;
+                }
+                stream->top = frame; stream->consumed = ts_node_end_byte(node);
+                if (header) {
+                    *record = (SRecord){.node=node, .range=node_range(node), .ordinal=frame->ordinal, .source_offset=frame->offset,
+                        .state=S_RECORD_RESERVE, .continuation=&frame->continuation, .context=frame->inherited, .projection=&frame->header};
+                    records->ordinal = stream->ordinal; return 1;
+                }
+            }
+        } else if (role >= 9 && role <= 16) {
+            ScopeStreamFrame *frame = stream->top; TSNode identity;
+            if (!frame || frame->kind != role - 8 || !at_path(node, &grammar->scopes[role - 9].identity, &identity)) return scope_stream_error(records, node);
+            size_t mark = scratch_mark(); const uint8_t *name; uint32_t length;
+            g_text(&worker, identity, 0, &name, &length);
+            int matched = length == frame->name_length && !memcmp(name, frame->name, length); scratch_restore(mark);
+            if (!matched) return scope_stream_error(records, node);
+            stream->top = frame->parent; stream->consumed = ts_node_end_byte(node);
+            if (frame->emit) {
+                SField close = frame->opening; close.range.end_byte = ts_node_end_byte(node); close.range.end_point = ts_node_end_point(node);
+                ContextCapture capture = {&frame->header, frame->arena}; capture_context(&capture, S_CLOSE, &close);
+                stream->retired = frame;
+                *record = (SRecord){.range=close.range, .ordinal=frame->ordinal, .source_offset=frame->offset,
+                    .state=S_RECORD_COMPLETE, .header=1, .context=frame->inherited, .projection=&frame->header, .continuation=&frame->continuation};
+                return 1;
+            }
+            scope_stream_recycle(stream, frame);
+        } else if (!stream->top && role != 255) {
+            if (role != 254) return scope_stream_error(records, node);
+            size_t mark = scratch_mark(); const uint8_t *text; uint32_t length; g_text(&worker, node, 0, &text, &length);
+            int valid = 1;
+            for (uint32_t i = 0; i < length; i++) if (text[i] != ' ' && text[i] != '\t' && text[i] != '\n' && text[i] != '\r') { valid = 0; break; }
+            scratch_restore(mark); if (!valid) return scope_stream_error(records, node);
+        } else if (stream->top && stream->top->emit) {
+            ScopeStreamFrame *frame = stream->top; ContextCapture capture = {&frame->header, frame->arena};
+            size_t mark = scratch_mark();
+            if (!cursor_project(layout, node, &input, capture_context, &capture, frame->opening.name, frame->opening.name_length, 0, 0)) {
+                scratch_restore(mark); return scope_stream_error(records, node);
+            }
+            scratch_restore(mark);
+        }
+        advanced = ts_tree_cursor_goto_next_sibling(records->cursor);
+    }
+    stream->consumed = records->limit; records->done = 1;
+    if (stream->final && (stream->top || stream->roots != 1)) return scope_stream_error(records, ts_tree_root_node(records->tree));
+    return 0;
+}
+
 typedef struct { s_visit_fn visit; void *sink; uint8_t opened, skipped; } HeaderVisitor;
 static int header_visit(void *sink, int event, const SField *field){
     HeaderVisitor *header = sink;
@@ -2121,19 +2310,41 @@ static int header_visit(void *sink, int event, const SField *field){
     } else if (event == S_CLOSE && header->skipped) { header->skipped = 0; return S_VISIT_OK; }
     return header->visit(header->sink, event, field);
 }
-static int cursor_record(const Layout *layout, TSNode root, TSRange range, int header, const SContext *inherited, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
-    if (!layout->g.compiled || layout->g.unresolved || length > UINT32_MAX || !visit || ts_node_is_null(root) || ts_node_has_error(root)) return 0;
+static int cursor_record(const Layout *layout, TSNode root, TSRange range, int header, const SContext *inherited, const SContext *projection, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
+    if (!layout->g.compiled || layout->g.unresolved || length > UINT32_MAX || !visit ||
+        (!projection && (ts_node_is_null(root) || ts_node_has_error(root)))) return 0;
     GInput input = {0}; input.src = source; input.length = (uint32_t)length; input.range.end_byte = (uint32_t)length;
     input.source_row = layout->source_row;
     size_t mark = scratch_mark();
     SField *context = NULL; uint32_t contexts = 0; int valid = 1;
     if (inherited) {
-        context = inherited->opened; contexts = inherited->count;
-        for (const ContextEvent *event = inherited->first; event && valid; event = event->next)
-            valid = (visit(sink, event->event, &event->field) & S_VISIT_OK) != 0;
+        uint32_t depth = 0, total = 0;
+        for (const SContext *part = inherited; part; part = part->parent) { depth++; total += part->count; }
+        const SContext **chain = scratch_alloc((size_t)depth * sizeof *chain); uint32_t at = depth;
+        for (const SContext *part = inherited; part; part = part->parent) chain[--at] = part;
+        context = scratch_alloc((size_t)total * sizeof *context);
+        for (uint32_t i = 0; i < depth && valid; i++) {
+            const SContext *part = chain[i];
+            for (const ContextEvent *event = part->first; event && valid; event = event->next) {
+                valid = (visit(sink, event->event, &event->field) & S_VISIT_OK) != 0;
+                if (event == part->last) break;
+            }
+            if (part->count) memcpy(context + contexts, part->opened, (size_t)part->count * sizeof *context);
+            contexts += part->count;
+        }
     } else if (!layout->g.scope_count) valid = record_context(layout, root, &input, visit, sink, &context, &contexts);
     HeaderVisitor visitor = {visit, sink, 0, 0};
-    if (valid) valid = layout->g.scope_count ?
+    if (valid && projection) {
+        for (const ContextEvent *event = projection->first; event && valid; event = event->next) {
+            SField field = event->field; field.flags &= (uint16_t)~S_FIELD_CONTEXT;
+            valid = (visit(sink, event->event, &field) & S_VISIT_OK) != 0;
+            if (event == projection->last) break;
+        }
+        if (valid && header == 2 && projection->first) {
+            SField close = projection->first->field; close.flags &= (uint16_t)~S_FIELD_CONTEXT;
+            valid = (visit(sink, S_CLOSE, &close) & S_VISIT_OK) != 0;
+        }
+    } else if (valid) valid = layout->g.scope_count ?
         cursor_scope_project(layout, root, range, &input, header ? header_visit : visit, header ? &visitor : sink) :
         cursor_project(layout, root, &input, header ? header_visit : visit, header ? &visitor : sink, NULL, 0, 0, 0);
     while (valid && contexts) valid = (visit(sink, S_CLOSE, &context[--contexts]) & S_VISIT_OK) != 0;
@@ -2151,10 +2362,10 @@ int s_cursor(const Layout *layout, TSNode root, const uint8_t *source, size_t le
         GInput input = {.src=source, .length=(uint32_t)length}; input.range.end_byte = (uint32_t)length;
         if (length > UINT32_MAX || !scope_validate(layout, root, &input)) return 0;
     }
-    return cursor_record(layout, root, node_range(root), 0, NULL, source, length, visit, sink);
+    return cursor_record(layout, root, node_range(root), 0, NULL, NULL, source, length, visit, sink);
 }
 int s_cursor_record(const Layout *layout, const SRecord *record, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
-    return cursor_record(layout, record->node, record->range, record->header, record->context, source, length, visit, sink);
+    return cursor_record(layout, record->node, record->range, record->state == S_RECORD_RESERVE ? 2 : record->header, record->context, record->projection, source, length, visit, sink);
 }
 
 /* ---- laplace structure LAYOUT FILE [-n NODES]: a file's tree as a layout parts it, for writing recipes. LAYOUT is a
