@@ -241,10 +241,14 @@ const char *say_refers(const Recipe *, int i);                              /* t
 /* A source's keys across its files: what a key names, kept for the files read after (table.c). A key defined more than
  * once is kept as the first in the file's order defines it, whichever thread puts it first: its rank is the file's place
  * in the run, the offset of the part of it read, and the unit's place in that part. */
-typedef struct { uint64_t file, at, unit; } KeyRank;
+typedef struct { uint64_t file, at, unit, member; } KeyRank;
+typedef struct { Ref value; const uint8_t *text; uint32_t length; uint8_t has_value, has_text; } KeyField;
 void keys_domain(const char *recipe, const char *tier, int within, lp_id *out); /* recipe-load symbol namespace, never an entity */
+void keys_field_domain(const lp_id *domain, const char *path, lp_id *out);
 void keys_put(const lp_id *domain, const uint8_t *k, size_t n, Ref x, const KeyRank *rank);
 int  keys_get(const lp_id *domain, const uint8_t *k, size_t n, Ref *out);
+void keys_field_put(const lp_id *domain, const uint8_t *k, size_t n, const KeyField *field, const KeyRank *rank);
+const KeyField *keys_field_get(const lp_id *domain, const uint8_t *k, size_t n);
 void attest_layout(const Recipe *, File *, const uint8_t *src, size_t n);             /* records read so far: a stretch's positions go on from the last */
 struct SInput;
 int  say_record_streamable(const Recipe *);
