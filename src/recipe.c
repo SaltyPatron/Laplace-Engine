@@ -538,8 +538,54 @@ int reads_in_stretches(const Recipe *r, char *boundary){
     if (!r || !r->curated) return 0;
     int b = say_stretches(r); if (!b) return 0; *boundary = (char)b; return 1;      /* by its outermost tier */
 }
+typedef struct { FILE *plain; gzFile compressed; File *file; int failed; } RecipeInput;
+int recipe_record_streamable(const Recipe *recipe){
+    return recipe && recipe->curated && !recipe->native && say_record_streamable(recipe);
+}
+static size_t recipe_input_read(void *context, uint8_t *out, size_t capacity){
+    RecipeInput *input = context; size_t n;
+    if (input->compressed) {
+        unsigned take = capacity > INT_MAX ? INT_MAX : (unsigned)capacity;
+        int got = gzread(input->compressed, out, take);
+        if (got < 0) { input->failed = 1; return 0; }
+        n = (size_t)got;
+    } else n = fread(out, 1, capacity, input->plain);
+    input->file->bytes += n; return n;
+}
+static int recipe_input_error(void *context){
+    RecipeInput *input = context;
+    if (input->compressed) {
+        int status; const char *message = gzerror(input->compressed, &status);
+        if (status != Z_OK && status != Z_STREAM_END) {
+            fprintf(stderr, "%s: %s\n", input->file->path, message); input->failed = 1;
+        }
+    } else if (ferror(input->plain)) { perror(input->file->path); input->failed = 1; }
+    return input->failed;
+}
 void decompose_file(Ctx *c, File *f){
-    size_t n; uint8_t *src0 = read_all(f->path, &n); if (!src0) { f->skipped = 1; f->exact = -1; return; }
+    const Recipe *r = f->recipe;
+    if (recipe_record_streamable(r)) {
+        RecipeInput reader = {.file=f}; size_t length = strlen(f->path);
+        if (length > 3 && !strcmp(f->path + length - 3, ".gz")) {
+            reader.compressed = gzopen(f->path, "rb");
+            if (reader.compressed) gzbuffer(reader.compressed, 1 << 20);
+        } else reader.plain = fopen(f->path, "rb");
+        if (!reader.compressed && !reader.plain) { perror(f->path); exit(2); }
+        const char *witness = f->source ? source_called(f->source) : r->witness[0] ? r->witness : r->name;
+        const char *lineage = f->source ? f->source->lineage : r->lineage;
+        if (!witness || strchr(witness, '{') || strchr(lineage, '{')) {
+            fprintf(stderr, "%s: streaming records require a declared source record and lineage, without witness templates\n", f->path); exit(2);
+        }
+        f->witness = text_ref(c, (const uint8_t *)witness, strlen(witness)); f->trunk = f->witness;
+        if (lineage[0]) { f->lineage = text_ref(c, (const uint8_t *)lineage, strlen(lineage)); f->has_lineage = 1; }
+        SInput input = {.context=&reader, .read=recipe_input_read, .error=recipe_input_error};
+        f->bytes = 0; attest_input(r, f, &input);
+        if (reader.compressed) { if (gzclose(reader.compressed) != Z_OK) reader.failed = 1; }
+        else if (fclose(reader.plain)) reader.failed = 1;
+        if (reader.failed) { fprintf(stderr, "%s: input did not close cleanly\n", f->path); exit(2); }
+        f->exact = 1; return;
+    }
+    size_t n; uint8_t *src0 = read_all(f->path, &n); if (!src0) { perror(f->path); f->exact = -1; exit(2); }
     f->bytes = n; decompose_bytes(c, f, src0, n, 1);
     if (f->recipe && f->recipe->curated) f->exact = 1;
     else {
