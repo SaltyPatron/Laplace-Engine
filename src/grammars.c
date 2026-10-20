@@ -24,7 +24,7 @@ const NativeGrammar *native_grammar(const char *name){
 /* ---- Dynamic Tree-sitter grammar registry & thread-local parser pool ---- */
 #define MAX_GRAMMARS 512
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
-static struct { char name[64]; const TSLanguage *lang; } g_reg[MAX_GRAMMARS];
+static struct { char name[64]; const TSLanguage *lang; uint8_t fingerprint[32]; } g_reg[MAX_GRAMMARS];
 static uint16_t g_nreg = 0;
 #define LANGUAGE_SLOTS 1024
 static struct { uintptr_t language; uint16_t id; } language_index[LANGUAGE_SLOTS];
@@ -59,7 +59,7 @@ uint16_t grammar_id_for_language(const TSLanguage *language){
     }
 }
 
-static const TSLanguage *dl_load_grammar(const char *name){
+static const TSLanguage *dl_load_grammar(const char *name, uint8_t fingerprint[32]){
     const char *dir = laplace_grammars();
     char p[1024], sym[128];
     snprintf(p, sizeof p, "%s/libtree-sitter-%s" OS_DLL_SUFFIX, dir, name);
@@ -67,6 +67,7 @@ static const TSLanguage *dl_load_grammar(const char *name){
     for (char *c = sym; *c; c++) if (*c == '-') *c = '_';
     void *h = os_dl_open(p);
     if (!h) { fprintf(stderr, "grammar %s: %s\n", name, os_dl_error()); return NULL; }
+    if (!program_file_hash(p, fingerprint)) { fprintf(stderr, "grammar %s: cannot fingerprint %s\n", name, p); return NULL; }
     const TSLanguage *(*f)(void) = (const TSLanguage *(*)(void))os_dl_sym(h, sym);
     if (!f) { fprintf(stderr, "grammar %s: missing entry point %s: %s\n", name, sym, os_dl_error()); return NULL; }
     return f();
@@ -85,7 +86,7 @@ uint16_t grammar_id_for(const char *name){
     if (g_nreg >= MAX_GRAMMARS - 1) { pthread_mutex_unlock(&g_mu); return 0; }
     uint16_t idx = g_nreg;
     snprintf(g_reg[idx].name, sizeof g_reg[idx].name, "%s", name);
-    g_reg[idx].lang = dl_load_grammar(name);
+    g_reg[idx].lang = dl_load_grammar(name, g_reg[idx].fingerprint);
     const TSLanguage *l = g_reg[idx].lang;
     __atomic_store_n(&g_nreg, (uint16_t)(idx + 1), __ATOMIC_RELEASE);
     if (l) language_publish(l, (uint16_t)(idx + 1));
@@ -96,6 +97,13 @@ uint16_t grammar_id_for(const char *name){
 const TSLanguage *grammar_lang(uint16_t id){
     if (!id || id > __atomic_load_n(&g_nreg, __ATOMIC_ACQUIRE)) return NULL;
     return g_reg[id - 1].lang;
+}
+void grammar_program_hash(uint16_t id, uint8_t out[32]){
+    if (!id) { memset(out, 0, 32); return; }
+    if (id > __atomic_load_n(&g_nreg, __ATOMIC_ACQUIRE) || !g_reg[id - 1].lang) {
+        fputs("reading contract refers to an unavailable grammar\n", stderr); abort();
+    }
+    memcpy(out, g_reg[id - 1].fingerprint, 32);
 }
 
 typedef struct {
