@@ -159,6 +159,13 @@ static char *name_next(char **at, char *out, size_t cap){                  /* a 
 }
 int layout_says(Layout *l, const char *path, char *tok){
     STier *t = l->ntier ? &l->tier[l->ntier - 1] : NULL;
+    if (!strcmp(tok, "framing")) {
+        char *name = strtok(NULL, " \t\r\n");
+        if (!name || strlen(name) >= sizeof l->g.framing || strtok(NULL, " \t\r\n")) {
+            fprintf(stderr, "%s: framing GRAMMAR\n", path); return -1;
+        }
+        str_set(l->g.framing, sizeof l->g.framing, name); return 1;
+    }
     if (!strcmp(tok, "tier")) { char *nm = strtok(NULL, " \t\r\n"), *by = strtok(NULL, " \t\r\n"), *sp = strtok(NULL, " \t\r\n");
         if (!nm || !by || strcmp(by, "by") || !sp || l->ntier == S_TIERS) { fprintf(stderr, "%s: tier NAME by SEPARATOR (at most %d tiers)\n", path, S_TIERS); return -1; }
         t = &l->tier[l->ntier++]; memset(t, 0, sizeof *t); str_set(t->name, sizeof t->name, nm); t->seplen = sep_read(sp, t->sep, sizeof t->sep);
@@ -476,13 +483,13 @@ static int native_counted_layout(const Layout *layout){
     }
     return 0;
 }
-static int compile_conllu_records(Layout *layout, char *grammar, size_t capacity){
+static int compile_product_records(Layout *layout, char *grammar, size_t capacity, const char *product, const char *framing){
     Layout *inner = malloc(sizeof *inner); if (!inner) { perror("record product grammar"); return 0; }
     *inner = *layout;
-    if ((!inner->g.n && !use_format(inner, "conllu")) || !layout_compile_grammar(inner, "conllu")) { free(inner); return 0; }
+    if ((!inner->g.n && !use_format(inner, product)) || !layout_compile_grammar(inner, product)) { free(inner); return 0; }
     layout->g = (GMap){0}; layout->npart = layout->parts_compiled = layout->part_errors = 0;
     memset(layout->part_buckets, 0, sizeof layout->part_buckets); layout->part_prefix_lengths = 0; layout->nlevels = 0;
-    str_set(grammar, capacity, "lp_conllu_records");
+    str_set(grammar, capacity, framing);
     if (!use_format(layout, grammar)) { free(inner); return 0; }
     layout->record_inner = inner;
     for (int i = 0; i < layout->g.n; i++) if (layout->g.rule[i].what == G_TEXT) {
@@ -499,7 +506,7 @@ int layout_compile_tiers(Layout *layout, char *grammar, size_t capacity){
              layout->tier[1].kvlen == 1 && layout->tier[1].kv[0] == ':' && layout->tier[1].continued) name = "lp_registry";
     else if (layout->ntier == 2 && separated_by(&layout->tier[0], "\n\n") && separated_by(&layout->tier[1], "\n")) name = "lp_paragraphs";
     else if (layout->ntier == 3 && separated_by(&layout->tier[0], "\n\n") &&
-             separated_by(&layout->tier[1], "\n") && separated_by(&layout->tier[2], "\t")) return compile_conllu_records(layout, grammar, capacity);
+             separated_by(&layout->tier[1], "\n") && separated_by(&layout->tier[2], "\t")) return compile_product_records(layout, grammar, capacity, "conllu", "lp_conllu_records");
     else if (layout->ntier == 2 && separated_by(&layout->tier[0], "\n")) {
         const STier *fields = &layout->tier[1];
         if (layout->tier[0].ncount && separated_by(fields, " ")) {
@@ -531,7 +538,15 @@ int layout_compile_recipe(Layout *layout, char *grammar, size_t capacity){
     if (layout->g.compiled) return !layout->g.unresolved;
     if (!layout->g.n) return layout_compile_tiers(layout, grammar, capacity);
     if (layout->ntier == 3 && !strcmp(grammar, "conllu") && separated_by(&layout->tier[0], "\n\n") &&
-        separated_by(&layout->tier[1], "\n") && separated_by(&layout->tier[2], "\t")) return compile_conllu_records(layout, grammar, capacity);
+        separated_by(&layout->tier[1], "\n") && separated_by(&layout->tier[2], "\t")) return compile_product_records(layout, grammar, capacity, "conllu", "lp_conllu_records");
+    if (layout->g.framing[0]) {
+        if (layout->g.record_name_count) { fputs("product framing cannot discard selected ancestor scopes\n", stderr); return 0; }
+        for (int i = 0; i < layout->g.n; i++) if (layout->g.rule[i].ncontext) {
+            fputs("product framing requires ancestor headers in its outer grammar\n", stderr); return 0;
+        }
+        char product[64], framing[48]; str_set(product, sizeof product, grammar); str_set(framing, sizeof framing, layout->g.framing);
+        return compile_product_records(layout, grammar, capacity, product, framing);
+    }
     /* JSON Lines has a physical record container and an independent JSON
      * product grammar. Keep the recipe's own levels and part instructions on
      * the child, rather than replacing them with a generic JSON format. */

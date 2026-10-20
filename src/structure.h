@@ -139,6 +139,7 @@ typedef struct {
     char remark_group[48], remark_text[48];
     uint16_t numbered_length, root_name_length;
     uint8_t has_context;
+    char framing[48];
     char layout_prefix[4][8][64]; uint8_t prefix_length[4], prefix_count;
     GCountProgram counts[4]; uint8_t count_count, count_by_column[S_NAMES];
 } GMap;                 /* trim: the white space a text begins and ends with is how the file is laid out, not the text's */
