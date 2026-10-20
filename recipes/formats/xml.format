@@ -7,8 +7,9 @@
 #   written down, and not of its tree
 grammar xml
 resolve xml
+quotes AttValue
 trim
-node element group name STag/Name EmptyElemTag/Name
+node element group name STag/Name EmptyElemTag/Name context STag EmptyElemTag
 node Attribute value name Name text AttValue
 node CharData text join
 node EntityRef text join
