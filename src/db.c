@@ -96,9 +96,9 @@ int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers
     free(hit); return all;
 }
 
-/* Existence of a structural trunk alone is insufficient: an interrupted source
- * may have copied it before publishing its witness. Only published containment
- * permits skipping the file's bytes and evidence. */
+/* A file trunk is persisted only after its complete structural closure. Its
+ * existence therefore prunes the file independently of source publication.
+ * A new source can attest that recorded subtree without reading its bytes. */
 int files_known(PGconn **pg, int npg, File *files, int nfiles, LoadStats *st){
     (void)npg;
     lp_id *ids = malloc(sizeof *ids * (size_t)(nfiles ? nfiles : 1));
@@ -109,14 +109,12 @@ int files_known(PGconn **pg, int npg, File *files, int nfiles, LoadStats *st){
     if (count) {
         Args a = {0}; arg_ids(&a, ids, (size_t)count);
         PGresult *q = ask_once(pg[0],
-            "WITH RECURSIVE above(origin,id) AS (SELECT id,id FROM unnest($1::blake3[]) id"
-            " UNION SELECT a.origin,p.entity FROM above a JOIN public.physicality p"
-            " ON p.path @> ARRAY[a.id]::blake3[])"
-            " SELECT DISTINCT a.origin FROM above a JOIN public.witness w ON w.id=a.id", &a);
-        lp_idmap *published = lp_idmap_new();
-        for (int row = 0; row < PQntuples(q); row++) { lp_id id; bool fresh; memcpy(id.b, PQgetvalue(q,row,0),16); lp_idmap_put(published,&id,&fresh); }
-        for (int i = 0; i < count; i++) if (lp_idmap_find(published, &ids[i]) >= 0) { files[of[i]].known = 1; found++; }
-        PQclear(q); args_free(&a); lp_idmap_free(published);
+            "SELECT e.id FROM public.entity e JOIN public.physicality p ON p.entity=e.id"
+            " WHERE e.id=ANY($1::blake3[])", &a);
+        lp_idmap *recorded = lp_idmap_new();
+        for (int row = 0; row < PQntuples(q); row++) { lp_id id; bool fresh; memcpy(id.b, PQgetvalue(q,row,0),16); lp_idmap_put(recorded,&id,&fresh); }
+        for (int i = 0; i < count; i++) if (lp_idmap_find(recorded, &ids[i]) >= 0) { files[of[i]].known = 1; found++; }
+        PQclear(q); args_free(&a); lp_idmap_free(recorded);
     }
     if (st) st->known += (uint64_t)found;
     free(ids); free(of); return found;
