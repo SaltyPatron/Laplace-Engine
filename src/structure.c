@@ -6,6 +6,7 @@
 #include "engine.h"
 #include "structure.h"
 #include "os.h"
+#include "laplace_config.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -158,6 +159,16 @@ int layout_says(Layout *l, const char *path, char *tok){
         if (!nm || !by || strcmp(by, "by") || !sp || l->ntier == S_TIERS) { fprintf(stderr, "%s: tier NAME by SEPARATOR (at most %d tiers)\n", path, S_TIERS); return -1; }
         t = &l->tier[l->ntier++]; memset(t, 0, sizeof *t); str_set(t->name, sizeof t->name, nm); t->seplen = sep_read(sp, t->sep, sizeof t->sep);
         if (!t->seplen) { fprintf(stderr, "%s: tier %s is parted by nothing\n", path, nm); return -1; } return 1; }
+    if (!strcmp(tok, "layout-prefix")) {
+        GMap *grammar = &l->g;
+        if (grammar->prefix_count == 4) { fprintf(stderr, "%s: at most four layout prefixes\n", path); return -1; }
+        unsigned prefix = grammar->prefix_count++; char *name;
+        while ((name = strtok(NULL, " \t\r\n"))) {
+            if (grammar->prefix_length[prefix] == 8) { fprintf(stderr, "%s: at most eight names in a layout prefix\n", path); return -1; }
+            str_set(grammar->layout_prefix[prefix][grammar->prefix_length[prefix]++], 64, name);
+        }
+        return grammar->prefix_length[prefix] ? 1 : -1;
+    }
     if (!strcmp(tok, "part")) { char *pa = strtok(NULL, " \t\r\n"), *by = strtok(NULL, " \t\r\n"), *sp = strtok(NULL, " \t\r\n"), *w;
         if (!pa || !by || (strcmp(by, "by") && strcmp(by, "grammar")) || !sp || l->npart == 32) { fprintf(stderr, "%s: part NAME by SEPARATOR [is IS] [pieces N] [space CHAR] [padded] [grammar NAME]\n", path); return -1; }
         SPart *p = &l->part[l->npart++]; memset(p, 0, sizeof *p); str_set(p->path, sizeof p->path, pa);
@@ -364,14 +375,24 @@ static uint64_t part_hash(const uint8_t *bytes, size_t length){
     for (size_t i = 0; i < length; i++) hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
     return hash;
 }
+static FILE *format_open(const char *name, char *path, size_t capacity){
+    snprintf(path, capacity, "%s/formats/%s.format", laplace_recipes(), name);
+    FILE *file = fopen(path, "r");
+    if (!file && errno == ENOENT && strcmp(laplace_recipes(), LAPLACE_RECIPES_DEFAULT)) {
+        snprintf(path, capacity, "%s/formats/%s.format", LAPLACE_RECIPES_DEFAULT, name);
+        file = fopen(path, "r");
+    }
+    if (!file) perror(path);
+    return file;
+}
 static const Layout *inner_layout(const char *name){
     uint16_t id = grammar_id_for(name);
     if (!id || id >= 512) return NULL;
     if (inner_state[id] == 2) return inner_layouts[id];
     if (inner_state[id]) { fprintf(stderr, "grammar %s: cyclic or failed injected format\n", name); return NULL; }
     inner_state[id] = 1;
-    char path[4400]; snprintf(path, sizeof path, "%s/formats/%s.format", laplace_recipes(), name);
-    FILE *file = fopen(path, "r"); if (!file) { perror(path); inner_state[id] = 3; return NULL; }
+    char path[4400]; FILE *file = format_open(name, path, sizeof path);
+    if (!file) { inner_state[id] = 3; return NULL; }
     Layout *layout = calloc(1, sizeof *layout); if (!layout) { perror("injected format"); abort(); }
     char line[2048]; int valid = 1, declared = 0;
     while (fgets(line, sizeof line, file)) {
@@ -422,8 +443,7 @@ static int compile_symbol_mask(const TSLanguage *language, uint32_t count, const
     return found;
 }
 static int use_format(Layout *layout, const char *name){
-    char path[4400]; snprintf(path, sizeof path, "%s/formats/%s.format", laplace_recipes(), name);
-    FILE *file = fopen(path, "r"); if (!file) { perror(path); return 0; }
+    char path[4400]; FILE *file = format_open(name, path, sizeof path); if (!file) return 0;
     char line[2048]; int valid = 1, declared = 0;
     while (fgets(line, sizeof line, file)) {
         comment_off(line); char *token = strtok(line, " \t\r\n"); if (!token) continue;
@@ -438,6 +458,20 @@ static int separated_by(const STier *tier, const char *separator){
     size_t length = strlen(separator);
     return (size_t)tier->seplen == length && !memcmp(tier->sep, separator, length);
 }
+static int native_counted_layout(const Layout *layout){
+    static Layout *format;
+    if (!format) {
+        format = calloc(1, sizeof *format); if (!format) { perror("counted grammar schema"); abort(); }
+        if (!use_format(format, "wndb")) { free(format); format = NULL; return -1; }
+    }
+    const STier *row = &layout->tier[0];
+    for (unsigned p = 0; p < format->g.prefix_count; p++) {
+        unsigned n = format->g.prefix_length[p]; if (n > (unsigned)row->nnames) continue;
+        unsigned i = 0; while (i < n && !strcmp(row->names[i], format->g.layout_prefix[p][i])) i++;
+        if (i == n) return 1;
+    }
+    return 0;
+}
 int layout_compile_tiers(Layout *layout, char *grammar, size_t capacity){
     if (!layout->ntier || layout->g.n || layout->g.compiled) return 0;
     const char *name = NULL;
@@ -449,8 +483,10 @@ int layout_compile_tiers(Layout *layout, char *grammar, size_t capacity){
              separated_by(&layout->tier[1], "\n") && separated_by(&layout->tier[2], "\t")) name = "conllu";
     else if (layout->ntier == 2 && separated_by(&layout->tier[0], "\n")) {
         const STier *fields = &layout->tier[1];
-        if (layout->tier[0].ncount) name = "wndb";
-        else if (separated_by(fields, " ")) name = "lp_words";
+        if (layout->tier[0].ncount && separated_by(fields, " ")) {
+            int native = native_counted_layout(layout); if (native < 0) return 0;
+            name = native ? "wndb" : "lp_words";
+        } else if (separated_by(fields, " ")) name = "lp_words";
         else {
             const char *kind = separated_by(fields, ",") ? "csv" : separated_by(fields, "\t") ? "tsv" :
                                separated_by(fields, "|") ? "psv" : separated_by(fields, ";") ? "semicolon" : NULL;
@@ -493,10 +529,37 @@ int layout_compile_recipe(Layout *layout, char *grammar, size_t capacity){
     }
     return layout_compile_grammar(layout, grammar);
 }
+static int map_count_columns(GMap *grammar, int pending_header){
+    memset(grammar->count_by_column, 0, sizeof grammar->count_by_column);
+    for (unsigned c = 0; c < grammar->count_count; c++) {
+        const GColumn *trigger = &grammar->counts[c].trigger; unsigned found = 0;
+        for (uint32_t column = 0; column < grammar->column_count && column < S_NAMES; column++) {
+            const GColumn *name = &grammar->columns[column];
+            if (name->length != trigger->length || memcmp(name->name, trigger->name, name->length)) continue;
+            if (found || grammar->count_by_column[column]) { fputs("counted field has ambiguous column bindings\n", stderr); return 0; }
+            grammar->count_by_column[column] = (uint8_t)(c + 1); found = 1;
+        }
+        if (!found && !pending_header) { fprintf(stderr, "counted %.*s: no named count column\n", (int)trigger->length, trigger->name); return 0; }
+    }
+    return 1;
+}
 static int compile_count_shapes(Layout *layout){
     GMap *grammar = &layout->g;
     for (int tier = 0; tier < layout->ntier; tier++) for (int c = 0; c < layout->tier[tier].ncount; c++) {
         const STier *source = &layout->tier[tier]; const GCountShape *shape = NULL;
+        if (!grammar->count_shape_count) {
+            if (tier || layout->ntier != 2 || !grammar->column_type_count || grammar->column_tier || grammar->count_count == 4) {
+                fputs("counted fields require a compiled row/column grammar\n", stderr); return 0;
+            }
+            GCountProgram *program = &grammar->counts[grammar->count_count++];
+            program->trigger = (GColumn){(const uint8_t *)source->count[c].field, (uint32_t)strlen(source->count[c].field), 0};
+            program->group = (GColumn){(const uint8_t *)source->count[c].group, (uint32_t)strlen(source->count[c].group), 0};
+            program->arity = (uint8_t)source->count[c].nmember; program->radix = (uint8_t)source->count[c].radix;
+            for (unsigned member = 0; member < program->arity; member++)
+                program->member[member] = (GColumn){(const uint8_t *)source->count[c].member[member],
+                    (uint32_t)strlen(source->count[c].member[member]), S_FIELD_ALIAS | S_FIELD_SAME_TIER};
+            continue;
+        }
         for (uint8_t i = 0; i < grammar->count_shape_count; i++) {
             const GCountShape *candidate = &grammar->count_shapes[i];
             if (!strcmp(candidate->count, source->count[c].field) && candidate->nmember == source->count[c].nmember &&
@@ -597,6 +660,7 @@ int layout_compile_grammar(Layout *l, const char *grammar_name){
             }
         }
     }
+    if (!map_count_columns(g, l->ntier && l->tier[0].header)) g->unresolved++;
     for (uint8_t i = 0; i < g->separator_count; i++) {
         GSeparator *separator = &g->separators[i];
         separator->symbol = ts_language_symbol_for_name(lang, separator->type, (uint32_t)strlen(separator->type), true);
@@ -1023,6 +1087,12 @@ static const GColumn *column_alias(const Layout *layout, TSSymbol parent, TSSymb
 /* Native cursor projection. Frames describe only the active ancestor chain;
  * completed fields leave this walker immediately through the visitor. */
 typedef struct {
+    const GCountProgram *program;
+    SField closing;
+    uint32_t remaining;
+    uint8_t member, skip;
+} CountFrame;
+typedef struct {
     TSNode node, selected;
     size_t value_mark;
     const uint8_t *name, *context_name, *selected_name;
@@ -1032,6 +1102,8 @@ typedef struct {
     unsigned level;
     uint8_t context_list, close_scope, route, name_flags, unnamed;
     SField closing;
+    CountFrame *counts;
+    uint8_t count_input, count_member, count_omitted;
 } CursorFrame;
 
 static int cursor_project(const Layout *layout, TSNode root, const GInput *input, s_visit_fn visit, void *sink,
@@ -1098,6 +1170,7 @@ static int record_header(SRecords *records, TSNode node){
     lp_tls_cursor_release(cursor);
     if (!valid || !count) return 0;
     file_layout->g.columns = columns; file_layout->g.column_count = count; records->layout = file_layout;
+    if (!map_count_columns(&file_layout->g, 0)) return 0;
     records->header_pending = 0; return 1;
 }
 static int record_matches(const SRecords *records, TSNode node){
@@ -1283,6 +1356,35 @@ static int cursor_child(CursorFrame *frame, TSTreeCursor *cursor){
     return 0;
 }
 
+/* Counts are values of native field nodes, not a second lexer over the row.
+ * Column and member names were bound when the layout compiled. */
+static int count_number(const GCountProgram *program, const uint8_t *text, uint32_t length, uint32_t *out){
+    uint32_t value = 0; *out = 0;
+    for (uint32_t i = 0; i < length; i++) {
+        unsigned c = text[i], digit = c >= '0' && c <= '9' ? c - '0' :
+            c >= 'a' && c <= 'z' ? c - 'a' + 10 : c >= 'A' && c <= 'Z' ? c - 'A' + 10 : 36;
+        if (digit >= program->radix) return 1; /* a non-number counts no groups */
+        if (value > (UINT32_MAX - digit) / program->radix) return 0;
+        value = value * program->radix + digit;
+    }
+    *out = value; return 1;
+}
+static int count_group_range(const Layout *layout, TSNode parent, TSNode first, unsigned arity, TSRange *range){
+    TSTreeCursor *cursor = lp_tls_cursor(parent); if (!cursor) return 0;
+    unsigned members = 0; *range = node_range(first);
+    int positioned = ts_tree_cursor_goto_first_child_for_byte(cursor, range->start_byte) >= 0;
+    if (positioned && !ts_node_eq(first, ts_tree_cursor_current_node(cursor)))
+        positioned = range->start_byte == range->end_byte && ts_tree_cursor_goto_previous_sibling(cursor) &&
+            ts_node_eq(first, ts_tree_cursor_current_node(cursor));
+    if (positioned) do {
+        TSNode node = ts_tree_cursor_current_node(cursor); TSSymbol symbol = ts_node_symbol(node);
+        if (symbol >= layout->g.symbol_count || !layout->g.column_symbols[symbol]) continue;
+        range->end_byte = ts_node_end_byte(node); range->end_point = ts_node_end_point(node);
+        if (++members == arity) break;
+    } while (ts_tree_cursor_goto_next_sibling(cursor));
+    lp_tls_cursor_release(cursor); return members == arity;
+}
+
 static int cursor_project(const Layout *layout, TSNode root, const GInput *input, s_visit_fn visit, void *sink,
                           const uint8_t *name, uint32_t name_length, int list, int flatten){
     GW worker = {.l=layout, .src=input->src, .input=input};
@@ -1307,6 +1409,7 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
         SField field = {.source=frame->node, .range=source_range(input, node_range(frame->node)), .name=frame->name, .name_length=frame->name_length,
                         .arena_begin=frame->value_mark, .grammar=layout->g.grammar_id,
                         .flags=frame->name_flags};
+        if (frame->count_omitted) { children = 0; goto after_rule; }
         if (rule && (rule->trim || (rule->what == G_TEXT && layout->g.trim))) field.flags |= S_FIELD_TRIM;
         if (rule && (rule->compiled.flags & 1u)) field.flags |= S_FIELD_SAME_TIER;
         if (rule && rule->alias_tier && rule->alias_tier <= layout->ntier) { field.tier = rule->alias_tier - 1u; field.flags |= S_FIELD_TIER; }
@@ -1356,10 +1459,18 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
                 if (!at_path(frame->node, &rule->compiled.name[0], &key) || !at_path(frame->node, &rule->compiled.text, &payload)) { valid = 0; break; }
                 g_text(&worker, key, 1, &field.name, &field.name_length); field.kind = S_VALUE;
             } else if (!field.name && rule->kind) { field.name = (const uint8_t *)rule->type; field.name_length = rule->compiled.type_length; }
+            if (frame->count_input) {
+                g_text(&worker, payload, text_mode, &field.value, &field.value_length);
+                const GCountProgram *program = &layout->g.counts[frame->count_input - 1]; uint32_t groups;
+                if (count < 2 || !count_number(program, field.value, field.value_length, &groups)) { valid = 0; break; }
+                CursorFrame *parent = &frames[count - 2];
+                if (groups && !parent->counts) parent->counts = scratch_stack_alloc(sizeof *parent->counts);
+                if (parent->counts) *parent->counts = (CountFrame){.program=groups ? program : NULL, .remaining=groups};
+            }
             if (rule->compiled.inner) {
                 if (!cursor_injection(&worker, payload, rule->compiled.inner, text_mode, field, visit, sink)) { valid = 0; break; }
             } else {
-                g_text(&worker, payload, text_mode, &field.value, &field.value_length);
+                if (!frame->count_input) g_text(&worker, payload, text_mode, &field.value, &field.value_length);
                 field.range = source_range(input, node_range(payload));
                 if (rule->what == G_NOTE) {
                     size_t n = field.value_length; field.value = trimmed(field.value, &n); field.value_length = (uint32_t)n;
@@ -1396,6 +1507,7 @@ after_rule:
         }
         for (;;) {
             frame = &frames[count - 1];
+            if (frame->counts && frame->counts->remaining) { valid = 0; break; }
             if (frame->close_scope && count == 1 && layout->g.numbered_length && layout->ntier > 1) {
                 char text[24]; size_t length = u64_digits((uint64_t)ts_node_start_point(root).row + 1, text);
                 uint8_t *value = scratch_alloc(length); memcpy(value, text, length);
@@ -1406,8 +1518,18 @@ after_rule:
                 if (!visit(sink, S_FIELD, &number)) { valid = 0; break; }
             }
             if (frame->close_scope && !close_field(visit, sink, &frame->closing)) { valid = 0; break; }
+            int counted_member = frame->count_member;
             if (!--count) break;
             frame = &frames[count - 1];
+            if (counted_member) {
+                CountFrame *state = frame->counts;
+                if (!state || !state->program || !state->remaining) { valid = 0; break; }
+                if (++state->member == state->program->arity) {
+                    if (!close_field(visit, sink, &state->closing)) { valid = 0; break; }
+                    state->member = state->skip = 0;
+                    if (!--state->remaining) state->program = NULL;
+                }
+            }
             /* A member has one selected value; its key and bookkeeping siblings
              * have no disposition and are never walked as independent fields. */
             if (!frame->selected.id && ts_tree_cursor_goto_next_sibling(cursor) && cursor_child(frame, cursor)) goto push_child;
@@ -1429,7 +1551,28 @@ push_child:;
             if (!(child_rule && (child_rule->what == G_GROUP || child_rule->what == G_SKIP) && (child_rule->nname || child_rule->kind))) {
                 next.name = (const uint8_t *)layout->g.field_names[next.field]; next.name_length = layout->g.field_lengths[next.field];
             }
-            const GColumn *alias = column_alias(layout, next.parent, ts_node_symbol(child), next.field, &frame->column);
+            TSSymbol symbol = ts_node_symbol(child);
+            int column = layout->g.column_parents && layout->g.column_symbols && next.parent < layout->g.symbol_count &&
+                symbol < layout->g.symbol_count && layout->g.column_parents[next.parent] && layout->g.column_symbols[symbol];
+            uint32_t position = frame->column;
+            const GColumn *alias;
+            if (column && frame->counts && frame->counts->program) {
+                CountFrame *state = frame->counts; const GCountProgram *program = state->program;
+                if (!state->member) {
+                    TSRange range;
+                    if (!count_group_range(layout, frame->node, child, program->arity, &range)) { valid = 0; break; }
+                    state->closing = (SField){.source=frame->node, .range=source_range(input, range),
+                        .name=program->group.name, .name_length=program->group.length, .kind=S_GROUP,
+                        .grammar=layout->g.grammar_id, .arena_begin=scratch_mark()};
+                    int action = visit(sink, S_OPEN, &state->closing);
+                    if (!(action & S_VISIT_OK)) { valid = 0; break; }
+                    state->skip = (uint8_t)((action & S_VISIT_SKIP) != 0);
+                }
+                alias = &program->member[state->member]; next.count_member = 1; next.count_omitted = state->skip;
+            } else {
+                alias = column_alias(layout, next.parent, symbol, next.field, &frame->column);
+                if (column && position < S_NAMES) next.count_input = layout->g.count_by_column[position];
+            }
             if (alias) { next.name = alias->name; next.name_length = alias->length; next.name_flags = alias->flags; }
             else if (!next.name && layout->g.column_parents && layout->g.column_symbols &&
                      next.parent < layout->g.symbol_count && ts_node_symbol(child) < layout->g.symbol_count &&
