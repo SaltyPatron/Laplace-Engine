@@ -150,7 +150,7 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
     }
     copy_end(&c); *rows_e = c.rows;
     part_name(p, "physicality", tn, sizeof tn); snprintf(sql, sizeof sql, "COPY stage.%s (entity, tier, hilbert, path, mask) FROM STDIN (FORMAT binary)", tn);
-    uint8_t mask[4 + 32]; { uint32_t bl = htonl(256); memcpy(mask, &bl, 4); }         /* bit varying, binary: its length in bits, then its bytes, first bit first */
+    uint8_t mask[4 + LP_MASK_BITS / 8]; { uint32_t bl = htonl(LP_MASK_BITS); memcpy(mask, &bl, 4); } /* SQL bit(64): length, then bits in position order */
     copy_begin(&c, pg, sql);
     for (uint64_t b = lo; b < hi; b++) {
         Node *x = &NODE[bucket[p][b].idx];
@@ -160,8 +160,8 @@ static void write_node_rows(PGconn *pg, int p, uint64_t lo, uint64_t hi, uint64_
         lp_ewkb_runs_spare(ids, runs, spare, x->nv, gp, gl);
         /* the row's own bank, kind: what the row is. What its constituents are (a part of speech, a dependency relation)
          * is their banks', on the rows those banks describe (manifest/banks.tsv), never this row's */
-        memset(mask + 4, 0, 32); for (int b = 0; b < 8; b++) if (x->kind & (1u << b)) mask[4 + (b >> 3)] |= (uint8_t)(0x80 >> (b & 7));
-        c16(&c, 5); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cf_i64(&c, hsigned(bucket[p][b].h)); cfield(&c, gp, (uint32_t)gl); cfield(&c, mask, 36); c.rows++;
+        memset(mask + 4, 0, LP_MASK_BITS / 8); for (int b = 0; b < 8; b++) if (x->kind & (1u << b)) mask[4 + (b >> 3)] |= (uint8_t)(0x80 >> (b & 7));
+        c16(&c, 5); cfield(&c, x->id.b, 16); cf_i16(&c, x->tier); cf_i64(&c, hsigned(bucket[p][b].h)); cfield(&c, gp, (uint32_t)gl); cfield(&c, mask, sizeof mask); c.rows++;
         if (gp != geo) free(gp);
     }
     copy_end(&c); *rows_p = c.rows;
