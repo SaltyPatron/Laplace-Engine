@@ -1,0 +1,7 @@
+# Tab-separated packaging, including quoted fields and embedded newlines.
+grammar tsv
+resolve csv
+quotes field
+node document group
+node row group kind
+node field text trim
