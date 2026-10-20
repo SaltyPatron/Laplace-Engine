@@ -12,6 +12,7 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <blake3.h>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -437,8 +438,9 @@ static const Layout *inner_layout(const char *name){
     if (!file) { inner_state[id] = 3; return NULL; }
     Layout *layout = calloc(1, sizeof *layout); if (!layout) { perror("injected format"); abort(); }
     char line[2048]; int valid = 1, declared = 0;
+    blake3_hasher program; blake3_hasher_init(&program); Recipe source = {.program_state=&program};
     while (fgets(line, sizeof line, file)) {
-        comment_off(line); char *token = strtok(line, " \t\r\n"); if (!token) continue;
+        comment_off(line); recipe_program_line(&source, path, line); char *token = strtok(line, " \t\r\n"); if (!token) continue;
         if (!strcmp(token, "grammar")) {
             char *language = strtok(NULL, " \t\r\n"); declared = language && *language && strlen(language) < sizeof layout->g.language;
             if (!declared) { valid = 0; break; } str_set(layout->g.language, sizeof layout->g.language, language);
@@ -446,6 +448,7 @@ static const Layout *inner_layout(const char *name){
         else if (layout_says(layout, path, token) != 1) { valid = 0; break; }
     }
     fclose(file);
+    blake3_hasher_finalize(&program, layout->g.format_hash, sizeof layout->g.format_hash);
     if (!valid || !declared || !layout_compile_grammar(layout, name)) { inner_state[id] = 3; return NULL; }
     inner_layouts[id] = layout; inner_state[id] = 2; return layout;
 }
@@ -490,15 +493,33 @@ static int compile_symbol_mask(const TSLanguage *language, uint32_t count, const
 static int use_format(Layout *layout, const char *name){
     char path[4400]; FILE *file = format_open(name, path, sizeof path); if (!file) return 0;
     char line[2048]; int valid = 1, declared = 0;
+    blake3_hasher program; blake3_hasher_init(&program); Recipe source = {.program_state=&program};
     while (fgets(line, sizeof line, file)) {
-        comment_off(line); char *token = strtok(line, " \t\r\n"); if (!token) continue;
+        comment_off(line); recipe_program_line(&source, path, line); char *token = strtok(line, " \t\r\n"); if (!token) continue;
         if (!strcmp(token, "grammar")) {
             char *grammar = strtok(NULL, " \t\r\n"); declared = grammar && *grammar && strlen(grammar) < sizeof layout->g.language;
             if (!declared) { valid = 0; break; }
             str_set(layout->g.language, sizeof layout->g.language, grammar);
         } else if (layout_says(layout, path, token) != 1) { valid = 0; break; }
     }
-    fclose(file); return valid && declared;
+    fclose(file); blake3_hasher_finalize(&program, layout->g.format_hash, sizeof layout->g.format_hash); return valid && declared;
+}
+void layout_program_hash(const Layout *layout, uint8_t out[32]){
+    blake3_hasher hash; blake3_hasher_init(&hash);
+    if (layout) {
+        uint8_t dependency[32]; grammar_program_hash(layout->g.grammar_id, dependency);
+        blake3_hasher_update(&hash, dependency, sizeof dependency);
+        blake3_hasher_update(&hash, layout->g.format_hash, sizeof layout->g.format_hash);
+        for (int i = 0; i < layout->g.n; i++) if (layout->g.rule[i].compiled.inner) {
+            layout_program_hash(layout->g.rule[i].compiled.inner, dependency); blake3_hasher_update(&hash, dependency, sizeof dependency);
+        }
+        for (int i = 0; i < layout->npart; i++) {
+            if (layout->part[i].inner) { layout_program_hash(layout->part[i].inner, dependency); blake3_hasher_update(&hash, dependency, sizeof dependency); }
+            if (layout->part[i].syntax) { layout_program_hash(layout->part[i].syntax, dependency); blake3_hasher_update(&hash, dependency, sizeof dependency); }
+        }
+        if (layout->record_inner) { layout_program_hash(layout->record_inner, dependency); blake3_hasher_update(&hash, dependency, sizeof dependency); }
+    }
+    blake3_hasher_finalize(&hash, out, 32);
 }
 static int separated_by(const STier *tier, const char *separator){
     size_t length = strlen(separator);

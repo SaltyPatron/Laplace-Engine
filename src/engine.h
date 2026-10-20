@@ -176,7 +176,14 @@ typedef struct {
     void *say;                                        /* the file's layout and the disposition of its parts, as the recipe configures them (say.c) */
     const struct NativeGrammar *native;               /* the grammar the recipe names, when it is a reading of the engine's own, not tree-sitter's */
     void *native_recipe;                              /* what that grammar's own lines said */
+    uint8_t program_hash[32]; void *program_state;     /* effective recipe/format source; state exists only while compiling */
 } Recipe;
+void recipe_program_line(Recipe *recipe, const char *path, const char *line);
+void recipe_reading_hash(const Recipe *recipe, uint8_t out[32]);
+int program_file_hash(const char *path, uint8_t out[32]);
+void program_environment_hash(uint8_t out[32]);
+void grammar_program_hash(uint16_t grammar, uint8_t out[32]);
+void say_program_hash(const Recipe *recipe, uint8_t out[32]);
 /* A source: a body of content with one identity, however many files it comes in. Its recipes say how each kind of
  * its files reads; the source says who the witness is, where the source is kept, and which sources it comes after. */
 typedef struct {
