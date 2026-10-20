@@ -589,12 +589,12 @@ static int compile_count_shapes(Layout *layout){
                 fputs("counted fields require a compiled row/column grammar\n", stderr); return 0;
             }
             GCountProgram *program = &grammar->counts[grammar->count_count++];
-            program->trigger = (GColumn){(const uint8_t *)source->count[c].field, (uint32_t)strlen(source->count[c].field), 0};
-            program->group = (GColumn){(const uint8_t *)source->count[c].group, (uint32_t)strlen(source->count[c].group), 0};
+            program->trigger = (GColumn){.name = (const uint8_t *)source->count[c].field, .length = (uint32_t)strlen(source->count[c].field)};
+            program->group = (GColumn){.name = (const uint8_t *)source->count[c].group, .length = (uint32_t)strlen(source->count[c].group)};
             program->arity = (uint8_t)source->count[c].nmember; program->radix = (uint8_t)source->count[c].radix;
             for (unsigned member = 0; member < program->arity; member++)
-                program->member[member] = (GColumn){(const uint8_t *)source->count[c].member[member],
-                    (uint32_t)strlen(source->count[c].member[member]), S_FIELD_ALIAS | S_FIELD_SAME_TIER};
+                program->member[member] = (GColumn){.name = (const uint8_t *)source->count[c].member[member],
+                    .length = (uint32_t)strlen(source->count[c].member[member]), .flags = S_FIELD_ALIAS | S_FIELD_SAME_TIER};
             continue;
         }
         for (uint8_t i = 0; i < grammar->count_shape_count; i++) {
@@ -693,7 +693,7 @@ int layout_compile_grammar(Layout *l, const char *grammar_name){
             const STier *tier = &l->tier[g->column_tier]; g->column_count = (uint32_t)tier->nnames;
             if (g->column_count) {
                 g->columns = calloc(g->column_count, sizeof *g->columns); if (!g->columns) { perror("column names"); abort(); }
-                for (uint32_t i = 0; i < g->column_count; i++) g->columns[i] = (GColumn){(const uint8_t *)tier->names[i], (uint32_t)strlen(tier->names[i]), S_FIELD_ALIAS};
+                for (uint32_t i = 0; i < g->column_count; i++) g->columns[i] = (GColumn){.name = (const uint8_t *)tier->names[i], .length = (uint32_t)strlen(tier->names[i]), .flags = S_FIELD_ALIAS};
             }
         }
     }
@@ -1203,7 +1203,7 @@ static int record_header(SRecords *records, TSNode node){
         if (count == S_NAMES) { fputs("header exceeds the compiled column limit\n", stderr); valid = 0; break; }
         const uint8_t *name; uint32_t length; g_text(&worker, child, grammar->padded ? 2 : 0, &name, &length);
         if (grammar->trim) { size_t n = length; name = trimmed(name, &n); length = (uint32_t)n; }
-        columns[count++] = (GColumn){name, length, S_FIELD_ALIAS};
+        columns[count++] = (GColumn){.name = name, .length = length, .flags = S_FIELD_ALIAS};
         if (layout->compile_name) columns[count - 1].bindings = layout->compile_name(layout->name_program, name, length, &tls_scratch);
     } while (ts_tree_cursor_goto_next_sibling(cursor));
     lp_tls_cursor_release(cursor);
