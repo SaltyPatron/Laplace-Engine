@@ -97,7 +97,7 @@ static void rows_under(const Dag *d, size_t top, const char *who, const lp_idmap
 
 int cmd_held(int argc, char **argv){
     const char *conninfo = laplace_db(), *tsv = NULL; int files = 0, voices = 0, byid = 0;
-    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "--files", 'b', &files }, { "--voices", 'b', &voices }, { "--tsv", 's', &tsv }, { "--id", 'b', &byid }, { NULL } });
+    int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "--files", .kind = 'b', .at = &files }, { .flag = "--voices", .kind = 'b', .at = &voices }, { .flag = "--tsv", .kind = 's', .at = &tsv }, { .flag = "--id", .kind = 'b', .at = &byid }, { 0 } });
     if (a >= argc) { fprintf(stderr, "usage: laplace held [-d conninfo] [--files] [--voices] [--tsv FILE] PART...   (LIST:KEY a highway type, ? open)\n"); return 2; }
     setlocale(LC_NUMERIC, "en_US.UTF-8"); tier0_open(NULL);
     PGconn *pg = db_connect(conninfo); double T = now();
@@ -175,7 +175,7 @@ static int stands_compare(PGconn *pg, lp_idmap *stand, int write, uint64_t *same
 }
 int cmd_replay(int argc, char **argv){
     const char *conninfo = laplace_db(), *tsv = NULL; int write = 0, voices = 0, files = 0;
-    opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "--write", 'b', &write }, { "--tsv", 's', &tsv }, { "--voices", 'b', &voices }, { "--files", 'b', &files }, { NULL } });
+    opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "--write", .kind = 'b', .at = &write }, { .flag = "--tsv", .kind = 's', .at = &tsv }, { .flag = "--voices", .kind = 'b', .at = &voices }, { .flag = "--files", .kind = 'b', .at = &files }, { 0 } });
     setlocale(LC_NUMERIC, "en_US.UTF-8"); tier0_open(NULL);
     PGconn *pg = db_connect(conninfo); double T = now(); Reader *rd = reader_new(pg);
     printf("laplace replay   %s   standings from containment alone: each witness's trunk walked down to the claims its records say\n", PQdb(pg));
