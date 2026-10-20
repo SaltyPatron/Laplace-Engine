@@ -255,6 +255,11 @@ struct SInput;
 int  say_record_streamable(const Recipe *);
 int  recipe_record_streamable(const Recipe *);
 void attest_input(const Recipe *, File *, const struct SInput *);
+typedef int (*source_file_ready_fn)(void *, File *);
+void say_source_begin(void);
+int say_source_poll(source_file_ready_fn, void *);
+int say_source_end(source_file_ready_fn, void *);
+int say_has_keys(const Recipe *);
 /* The highway, read from the resources by their recipes (types, keyed, alias, maps lines): what a file says of its
  * types, handed over in the file's order (highway.c keeps them). */
 typedef struct Hw Hw;
