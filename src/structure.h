@@ -156,6 +156,7 @@ typedef struct {
     char scope_prefix[8][48], scope_first[4][48]; uint8_t scope_prefix_count, scope_first_count;
     uint8_t *scope_roles;
     char language[64];
+    uint8_t format_hash[32];
     char framing[48];
     char layout_prefix[4][8][64]; uint8_t prefix_length[4], prefix_count;
     GCountProgram counts[4]; uint8_t count_count, count_by_column[S_NAMES];
@@ -173,6 +174,7 @@ int layout_compile_parts(Layout *l);
  * integer dispatch used by explicit .format files. No input bytes are read. */
 int layout_compile_tiers(Layout *layout, char *grammar, size_t capacity);
 int layout_compile_recipe(Layout *layout, char *grammar, size_t capacity);
+void layout_program_hash(const Layout *layout, uint8_t out[32]);
 void layout_bind_names(Layout *layout, s_compile_name_fn compile, const void *program);
 
 /* A compiled grammar emits semantic fields as the native cursor enters and

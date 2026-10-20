@@ -12,6 +12,9 @@
 #include <time.h>
 #include <immintrin.h>
 #include <blake3.h>
+#include <errno.h>
+#include <unistd.h>
+#include "laplace/tier0.h"
 
 Node *NODE; Vtx *VTX;
 const lp_tier0_record *T0;
@@ -38,6 +41,36 @@ static uint64_t *area[2]; static int side, resizing;          /* the slots alter
 typedef struct { lp_id hash; KeyField field; KeyRank rank; uint64_t next; } KeyEntry;
 typedef struct { uint64_t *head, top, count, revision, text_top; KeyEntry *entry; uint8_t *text; } KeyTable;
 static KeyTable keys;
+
+/* Exact executable/perf-cache provenance for a reading. This fingerprint is
+ * file metadata, not content identity. Compute it once without opening any
+ * corpus file; changing the reader must invalidate an OS-only pre-check. */
+static pthread_mutex_t program_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint8_t program_environment[32]; static int program_ready;
+void program_environment_hash(uint8_t out[32]){
+    if (!__atomic_load_n(&program_ready, __ATOMIC_ACQUIRE)) {
+        pthread_mutex_lock(&program_mutex);
+        if (!program_ready) {
+            if (!T0) { fputs("reading contract requires the mapped Tier-0 cache\n", stderr); exit(1); }
+            char executable[4096]; ssize_t n = readlink("/proc/self/exe", executable, sizeof executable - 1);
+            if (n <= 0 || n >= (ssize_t)sizeof executable - 1) { perror("reading executable"); exit(1); }
+            executable[n] = 0; uint8_t artifact[32]; blake3_hasher hash; blake3_hasher_init(&hash);
+            if (!program_file_hash(executable, artifact)) { perror(executable); exit(1); }
+            blake3_hasher_update(&hash, artifact, sizeof artifact);
+            blake3_hasher cache; blake3_hasher_init(&cache);
+            blake3_hasher_update(&cache, T0, (size_t)LP_TIER0_COUNT * sizeof *T0);
+            blake3_hasher_finalize(&cache, artifact, sizeof artifact); blake3_hasher_update(&hash, artifact, sizeof artifact);
+            int available = program_file_hash(lp_highway_path(), artifact);
+            if (!available && errno != ENOENT) { perror(lp_highway_path()); exit(1); }
+            uint8_t present = (uint8_t)available; blake3_hasher_update(&hash, &present, sizeof present);
+            if (available) blake3_hasher_update(&hash, artifact, sizeof artifact);
+            blake3_hasher_finalize(&hash, program_environment, sizeof program_environment);
+            __atomic_store_n(&program_ready, 1, __ATOMIC_RELEASE);
+        }
+        pthread_mutex_unlock(&program_mutex);
+    }
+    memcpy(out, program_environment, sizeof program_environment);
+}
 
 static void *reserve(size_t bytes){
     void *p = os_reserve(bytes);
