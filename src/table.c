@@ -34,8 +34,9 @@ static uint64_t *area[2]; static int side, resizing;          /* the slots alter
  * No entry is reclaimed while a source worker can retain it. */
 #define KEY_BUCKETS (UINT64_C(1) << 20)
 #define KEY_CAPACITY (UINT64_C(1) << 29)
-typedef struct { lp_id hash; Ref value; KeyRank rank; uint64_t next; } KeyEntry;
-typedef struct { uint64_t *head, top, count; KeyEntry *entry; } KeyTable;
+#define KEY_TEXT_CAPACITY (UINT64_C(8) << 30)
+typedef struct { lp_id hash; KeyField field; KeyRank rank; uint64_t next; } KeyEntry;
+typedef struct { uint64_t *head, top, count, text_top; KeyEntry *entry; uint8_t *text; } KeyTable;
 static KeyTable keys;
 
 static void *reserve(size_t bytes){
@@ -61,6 +62,7 @@ void table_init(void){
     NODE = reserve(SLOTS_MAX * sizeof(Node)); VTX = reserve(vtx_cap * sizeof(Vtx));
     keys.head = reserve(KEY_BUCKETS * sizeof *keys.head);
     keys.entry = reserve(KEY_CAPACITY * sizeof *keys.entry);
+    keys.text = reserve(KEY_TEXT_CAPACITY);
     table_size_slots(1ull << 26);
 }
 
@@ -72,6 +74,15 @@ void keys_domain(const char *recipe, const char *tier, int within, lp_id *out){
     blake3_hasher_update(&hash, &parent, 1);
     blake3_hasher_finalize(&hash, out->b, sizeof out->b);
 }
+/* A compiled field selector has its own namespace underneath a declaration.
+ * These hashes index bindings, never identify substrate content. */
+void keys_field_domain(const lp_id *domain, const char *path, lp_id *out){
+    blake3_hasher hash; blake3_hasher_init(&hash); uint8_t field = 1;
+    blake3_hasher_update(&hash, domain->b, sizeof domain->b);
+    blake3_hasher_update(&hash, &field, 1);
+    blake3_hasher_update(&hash, path, strlen(path));
+    blake3_hasher_finalize(&hash, out->b, sizeof out->b);
+}
 static lp_id key_hash(const lp_id *domain, const uint8_t *text, size_t length){
     blake3_hasher hash; lp_id id; blake3_hasher_init(&hash);
     blake3_hasher_update(&hash, domain->b, sizeof domain->b);
@@ -79,10 +90,11 @@ static lp_id key_hash(const lp_id *domain, const uint8_t *text, size_t length){
     blake3_hasher_finalize(&hash, id.b, sizeof id.b); return id;
 }
 static int key_rank_before(const KeyRank *a, const KeyRank *b){
-    return a->file != b->file ? a->file < b->file : a->at != b->at ? a->at < b->at : a->unit < b->unit;
+    return a->file != b->file ? a->file < b->file : a->at != b->at ? a->at < b->at :
+        a->unit != b->unit ? a->unit < b->unit : a->member < b->member;
 }
-void keys_put(const lp_id *domain, const uint8_t *text, size_t length, Ref value, const KeyRank *rank){
-    table_pin(&value.id);
+void keys_field_put(const lp_id *domain, const uint8_t *text, size_t length, const KeyField *field, const KeyRank *rank){
+    if (field->has_value) table_pin(&field->value.id);
     lp_id hash = key_hash(domain, text, length); uint64_t bucket; memcpy(&bucket, hash.b, sizeof bucket);
     uint64_t *head = &keys.head[bucket & (KEY_BUCKETS - 1)], index = 0;
     uint64_t observed = __atomic_load_n(head, __ATOMIC_ACQUIRE);
@@ -90,11 +102,24 @@ void keys_put(const lp_id *domain, const uint8_t *text, size_t length, Ref value
         const KeyEntry *previous = NULL;
         for (uint64_t at = observed; at; at = keys.entry[at - 1].next)
             if (lp_id_eq(&keys.entry[at - 1].hash, &hash)) { previous = &keys.entry[at - 1]; break; }
-        if (previous && !key_rank_before(rank, &previous->rank)) return;
+        if (previous && !key_rank_before(rank, &previous->rank)) {
+            /* A declaration may acquire its native product after the key
+             * barrier. A later duplicate must never supply a missing field. */
+            int same = !key_rank_before(&previous->rank, rank);
+            if (!same || previous->field.has_value || !field->has_value) return;
+        }
         if (!index) {
             index = __atomic_fetch_add(&keys.top, 1, __ATOMIC_RELAXED) + 1;
             if (index > KEY_CAPACITY) { fputs("source key table capacity exhausted\n", stderr); exit(1); }
-            keys.entry[index - 1] = (KeyEntry){.hash=hash, .value=value, .rank=*rank};
+            KeyField owned = *field;
+            if (field->has_text && field->length) {
+                uint64_t at = __atomic_fetch_add(&keys.text_top, field->length, __ATOMIC_RELAXED);
+                if (at > KEY_TEXT_CAPACITY || field->length > KEY_TEXT_CAPACITY - at) {
+                    fputs("source key field text capacity exhausted\n", stderr); exit(1);
+                }
+                memcpy(keys.text + at, field->text, field->length); owned.text = keys.text + at;
+            } else owned.text = NULL;
+            keys.entry[index - 1] = (KeyEntry){.hash=hash, .field=owned, .rank=*rank};
         }
         keys.entry[index - 1].next = observed;
         if (__atomic_compare_exchange_n(head, &observed, index, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
@@ -103,12 +128,20 @@ void keys_put(const lp_id *domain, const uint8_t *text, size_t length, Ref value
         }
     }
 }
-int keys_get(const lp_id *domain, const uint8_t *text, size_t length, Ref *out){
+const KeyField *keys_field_get(const lp_id *domain, const uint8_t *text, size_t length){
     lp_id hash = key_hash(domain, text, length); uint64_t bucket; memcpy(&bucket, hash.b, sizeof bucket);
     for (uint64_t at = __atomic_load_n(&keys.head[bucket & (KEY_BUCKETS - 1)], __ATOMIC_ACQUIRE);
          at; at = keys.entry[at - 1].next)
-        if (lp_id_eq(&keys.entry[at - 1].hash, &hash)) { *out = keys.entry[at - 1].value; return 1; }
-    return 0;
+        if (lp_id_eq(&keys.entry[at - 1].hash, &hash)) return &keys.entry[at - 1].field;
+    return NULL;
+}
+void keys_put(const lp_id *domain, const uint8_t *text, size_t length, Ref value, const KeyRank *rank){
+    KeyField field = {.value=value, .has_value=1}; keys_field_put(domain, text, length, &field, rank);
+}
+int keys_get(const lp_id *domain, const uint8_t *text, size_t length, Ref *out){
+    const KeyField *field = keys_field_get(domain, text, length);
+    if (!field || !field->has_value) return 0;
+    *out = field->value; return 1;
 }
 uint64_t keys_held(void){ return __atomic_load_n(&keys.count, __ATOMIC_ACQUIRE); }
 
