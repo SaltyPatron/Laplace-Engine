@@ -1,0 +1,7 @@
+grammar wn_sense_key
+node sense_key group
+node lemma text kind
+node ss_type text kind
+node lex_filenum text kind
+node hex_id text
+node head_word text kind

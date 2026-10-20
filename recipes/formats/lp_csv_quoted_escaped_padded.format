@@ -1,0 +1,9 @@
+# Compiled delimiter, quoting, escaping and padding policy.
+grammar lp_csv_quoted_escaped_padded
+quotes field
+resolve delimited quoted escaped \ padded
+records row
+columns field under row tier 0
+node document group
+node row group kind tier 0
+node field text

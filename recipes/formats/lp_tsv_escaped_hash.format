@@ -1,0 +1,11 @@
+# Compiled delimiter, quoting, escaping and padding policy.
+grammar lp_tsv_escaped_hash
+remark-content remark remark_text
+quotes field
+resolve delimited escaped \
+records row
+columns field under row tier 0
+node document group
+node row group kind tier 0
+node field text
+node remark skip

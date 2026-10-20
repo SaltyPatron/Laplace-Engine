@@ -1,0 +1,13 @@
+# CoNLL-U, as the tree-sitter-conllu grammar gives it.
+grammar conllu
+records sentence
+columns id field under word_line tier 1 fields ID FORM LEMMA UPOS XPOS FEATS HEAD DEPREL DEPS MISC
+node document group
+node sentence group kind tier 0
+node comment note name key text value
+node word_line group kind tier 1
+node id text
+node field text field FEATS grammar kv_pipe
+node field text field DEPS grammar deps
+node field text field MISC grammar kv_pipe
+node field text
