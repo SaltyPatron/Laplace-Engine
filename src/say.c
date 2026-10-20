@@ -2353,6 +2353,7 @@ int file_os(const Recipe *r, const File *f, Ref *out){
 /* The file, read: every part of its outermost tier on every core, joined in the file's order; then its trunk, over
  * its metadata tree and its content tree. */
 
+enum { RECORD_WINDOW = 1024, RECORDS_PER_LANE = 16, MAX_RECORD_LANES = RECORD_WINDOW / RECORDS_PER_LANE };
 typedef struct {
     const Recipe *recipe; File *file; const Say *say; const uint8_t *source; size_t length;
     Sink *result, *workers; uint32_t worker_count;
@@ -2422,7 +2423,6 @@ static void read_records(RecordPipeline *pipeline){
         pipeline->failed = 1; return;
     }
     page_about(pipeline, &records);
-    enum { RECORD_WINDOW = 256, RECORDS_PER_LANE = 16 };
     SRecord batch[RECORD_WINDOW];
     while (!pipeline->failed) {
         uint32_t count = 0;
@@ -2462,7 +2462,8 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     const char *sb = base; if (sy->stemfrom) { const char *f0 = NULL; for (const char *c = base; c < base + bl; c++) if (*c == sy->stemfrom) f0 = c; if (f0) sb = f0 + 1; }
     const char *dot = memchr(sb, sy->stem ? sy->stem : '.', (size_t)(base + bl - sb)); Ref fname = string_ref((const uint8_t *)base, bl), fstem = string_ref((const uint8_t *)sb, dot ? (size_t)(dot - sb) : (size_t)(base + bl - sb));    /* the file's own name, and the part of it {file} stands for */
 
-    uint32_t workers = (uint32_t)omp_get_max_threads(); if (!workers) workers = 1; if (workers > 16) workers = 16;
+    uint32_t workers = (uint32_t)omp_get_max_threads(); if (!workers) workers = 1;
+    if (workers > MAX_RECORD_LANES) workers = MAX_RECORD_LANES;
     size_t nc = 1; Sink *part = calloc(1, sizeof *part), *lanes = calloc(workers, sizeof *lanes);
     if (!part || !lanes) { perror("record workers"); free(part); free(lanes); free(sy); exit(2); }
     part[0].r = r; part[0].s = sy; part[0].hw = hw; sink_buffers(&part[0]);
