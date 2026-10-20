@@ -1011,7 +1011,7 @@ static void push(Refs *a, const Ref *x){
 typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; uint64_t open[256]; float er, ed, score; uint64_t ordinal; Ref fw, voice; int voiced; char opennm[16][64]; uint8_t open_length[16]; int nopen; uint64_t unknown; char unknm[8][96]; int nunk; Refs grp; Ref fname, fstem;
                  const SemanticRecord *ix_tree; uint32_t ix_count; LocalKey *local_keys; size_t local_capacity, local_count;
                  BindingMatrix bindings;
-                 uint64_t blocked; uint8_t binding_phase, defer_missing;
+                 uint64_t blocked; uint8_t binding_phase, defer_missing, reserve_declarations;
                  SayScratch output;
                  const SemanticRecord *tc_tree; uint32_t tc_n; Ref *tc; uint8_t *ts, *uk;
                  long selfcp;                                                /* the code point the part being read is, or -1 */
@@ -1844,7 +1844,7 @@ static void keys_at(const Say *s, const SemanticRecord *t, int32_t g, const KSpe
 /* The file's key for every part of the unit named the key's tier, wherever it is in the unit (an instance of a sentence
  * of an XML document read as one tree, or a row that is the unit itself), kept for the source's other files that point
  * at it (refer NAME RECIPE). */
-static void keep_keys(Sink *k, const SemanticRecord *t, int32_t root){
+static void keep_keys(Sink *k, const SemanticRecord *t, int32_t root, int reserve){
     const Say *s = k->s; if (!s->nkey) return; int32_t end = subtree_end(t, root);
     /* Establish declaration rank before evaluating any identity. An earlier
      * unresolved declaration reserves its key instead of allowing a later
@@ -1858,8 +1858,11 @@ static void keep_keys(Sink *k, const SemanticRecord *t, int32_t root){
             keys_field_put(&s->key_domain, t->n[field].val, t->n[field].vlen, &waiting, &rank);
             keys_field_put(&key->domain, t->n[field].val, t->n[field].vlen, &waiting, &rank);
             keys_field_put(&key->parent_domain, t->n[field].val, t->n[field].vlen, &waiting, &rank);
+            if (reserve) for (const KeyProjection *projection = s->projections; projection; projection = projection->all_next)
+                if (projection->tier == key->tier_id) keys_field_put(&projection->domain, t->n[field].val, t->n[field].vlen, &waiting, &rank);
         }
     }
+    if (reserve) return;
     for (int32_t g = root; g <= end; g++) { const SemanticValue *x = &t->n[g]; if (x->context || x->kind != S_GROUP || !x->nlen) continue;
         for (int i = 0; i < s->nkey; i++) if (semantic_named(x, s->key[i].tier, s->key[i].tier_length)) { int32_t kc = semantic_child(t, g, s->key[i].name, -1); Ref S;
             if (kc >= 0 && t->n[kc].vlen) {
@@ -2182,8 +2185,8 @@ static void unit(void *sink, const SemanticRecord *t, int32_t root, uint64_t ord
     k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); memset(k->uk, 0, t->count);
     Tls previous = tls_save(t, k->dm, s, &k->bindings);
     index_keys(k, t);
-    if (bind_keys) { keep_keys(k, t, root); k->binding_phase = binding_phase; tls_back(&previous); scratch_restore(record_mark); return; }
-    if (k->hw) { unit_highway(k, t, root); keep_keys(k, t, root); k->binding_phase = binding_phase; tls_back(&previous); scratch_restore(record_mark); return; }     /* read for the highway: its types, not what it attests */
+    if (bind_keys) { keep_keys(k, t, root, bind_keys == 3); k->binding_phase = binding_phase; tls_back(&previous); scratch_restore(record_mark); return; }
+    if (k->hw) { unit_highway(k, t, root); keep_keys(k, t, root, 0); k->binding_phase = binding_phase; tls_back(&previous); scratch_restore(record_mark); return; }     /* read for the highway: its types, not what it attests */
     if (s->nline && t->n[root].kind == S_TEXT) {                             /* a line of a page: where it matches a pattern, it says the pattern's parts */
         const SemanticValue *x = &t->n[root]; size_t mark = scratch_mark(); char stack[4096], *ln = x->vlen < sizeof stack ? stack : scratch_alloc((size_t)x->vlen + 1); memcpy(ln, x->val, x->vlen); ln[x->vlen] = 0;
         for (int i = 0; i < s->nline; i++) { regmatch_t m[5]; if (regexec(&s->line[i].re, ln, 5, m, 0)) continue;
@@ -2215,7 +2218,7 @@ static void unit(void *sink, const SemanticRecord *t, int32_t root, uint64_t ord
         }
     }
     while (np_) { np_--; together(k, pend[np_].e0, pend[np_].has ? &pend[np_].about : NULL); }
-    keep_keys(k, t, root);
+    keep_keys(k, t, root, 0);
     /* the part itself, whole, with what it says, into the file's content tree as its record (records_of). A part the
      * recipe does not speak of (a row its where leaves out) is in no tree: a recipe that says what a file's parts are
      * reads a curated source, mined for what it says and not kept byte for byte (Storage: curated sources are mined for
@@ -2322,7 +2325,7 @@ static void finish_text(Sink *sink, SemanticValue *value){
 typedef struct { uint32_t scope; } SemanticScope;
 typedef struct {
     SemanticRecord record; BindingMatrix bindings; KeyRank rank; uint64_t ordinal;
-    size_t things_at, things_count, meta_at, meta_count; uint8_t ready;
+    size_t things_at, things_count, meta_at, meta_count; uint8_t ready, reserve;
 } PreparedRecord;
 static void prepared_clear(PreparedRecord *record){
     for (uint32_t i = 0; i < record->record.count; i++) record->record.n[i].product = NULL;
@@ -2330,7 +2333,7 @@ static void prepared_clear(PreparedRecord *record){
 }
 static void prepared_keys_mode(Sink *sink, PreparedRecord *record, int final){
     sink->kr = record->rank; sink->bindings = record->bindings;
-    unit(sink, &record->record, 0, record->ordinal, final ? 2 : 1);
+    unit(sink, &record->record, 0, record->ordinal, record->reserve || sink->reserve_declarations ? 3 : final ? 2 : 1);
     /* Cached native products belong to unit's temporary frame. The retained
      * compiled operands must not keep those pointers between barrier rounds. */
     prepared_clear(record);
@@ -2549,7 +2552,7 @@ int file_os(const Recipe *r, const File *f, Ref *out){
 enum { RECORD_WINDOW = 1024, RECORDS_PER_LANE = 16, MAX_RECORD_LANES = RECORD_WINDOW / RECORDS_PER_LANE };
 typedef struct DeferredJob {
     struct DeferredJob *next;
-    int64_t operands, products; uint64_t tried; uint8_t ready;
+    int64_t operands, products; uint64_t tried; uint8_t ready, key_gap;
 } DeferredJob;
 typedef struct {
     FILE *operands, *products; DeferredJob *first, *last, *free;
@@ -2558,7 +2561,7 @@ typedef struct {
 typedef struct RecordPipeline {
     const Recipe *recipe; File *file; const Say *say; const uint8_t *source; size_t length; const SInput *input;
     Sink *result, *workers, *evaluators; uint32_t worker_count;
-    Ref filename, stem, about; int has_about, failed;
+    Ref filename, stem, about; int has_about, failed; uint32_t key_gaps;
     DeferredRecords deferred;
     struct RecordPipeline *next;
 } RecordPipeline;
@@ -2738,11 +2741,12 @@ static void reset_record_worker(RecordPipeline *pipeline, Sink *worker){
     *worker = (Sink){.r=pipeline->recipe, .s=pipeline->say, .er=1500.0f, .ed=0.0f,
         .fw=pipeline->file->witness, .fname=pipeline->filename, .fstem=pipeline->stem,
         .fabout=pipeline->about, .has_fabout=pipeline->has_about, .hw=pipeline->result->hw, .output=arena};
+    worker->reserve_declarations = pipeline->key_gaps != 0;
     sink_buffers(worker);
 }
 static void deferred_bind(RecordPipeline *pipeline, int final){
     DeferredRecords *records = &pipeline->deferred; Sink *worker = &pipeline->evaluators[0];
-    for (DeferredJob *job = records->first; job; job = job->next) if (!job->ready) {
+    for (DeferredJob *job = records->first; job; job = job->next) if (!job->ready && job->operands >= 0) {
         records->read.used = records->read.stack_used = 0;
         SayScratch previous = scratch_enter(&records->read);
         PreparedRecord *record = journal_restore(records, job);
@@ -2757,7 +2761,7 @@ static void deferred_finish(RecordPipeline *pipeline, int final){
         do { before = keys_revision(); deferred_bind(pipeline, 1); } while (keys_revision() != before);
     }
     uint64_t revision = keys_revision();
-    for (DeferredJob *job = records->first; job; job = job->next) if (!job->ready && (final || job->tried != revision)) {
+    for (DeferredJob *job = records->first; job; job = job->next) if (!pipeline->key_gaps && !job->ready && job->operands >= 0 && (final || job->tried != revision)) {
         records->read.used = records->read.stack_used = 0;
         SayScratch previous = scratch_enter(&records->read);
         PreparedRecord *record = journal_restore(records, job);
@@ -2809,10 +2813,13 @@ static void page_about(RecordPipeline *pipeline, const SRecords *records){
 static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint64_t byte_at){
     SRecord batch[RECORD_WINDOW];
     struct { SayScratch arena; PreparedRecord *record; uint32_t count; } prepared[MAX_RECORD_LANES] = {0};
-    int bind_keys = pipeline->say->nkey != 0;
+    int bind_keys = pipeline->say->nkey != 0 || records->stream != NULL;
     while (!pipeline->failed) {
         uint32_t count = 0;
-        while (count < RECORD_WINDOW && s_record_next(records, &batch[count])) count++;
+        while (count < RECORD_WINDOW && s_record_next(records, &batch[count])) {
+            int boundary = batch[count].state != S_RECORD_VALUE; count++;
+            if (boundary) break;
+        }
         if (records->failed) { pipeline->failed = 1; break; }
         if (!count) break;
         uint32_t lanes = (count + RECORDS_PER_LANE - 1) / RECORDS_PER_LANE;
@@ -2831,9 +2838,11 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
             }
             for (uint32_t i = begin; i < end && !__atomic_load_n(&pipeline->failed, __ATOMIC_ACQUIRE); i++) {
                 size_t mark = scratch_mark(); worker->bindings = (BindingMatrix){0};
-                worker->kr.file = pipeline->file->order; worker->kr.at = pipeline->file->at + byte_at + batch[i].range.start_byte;
+                worker->kr.file = pipeline->file->order;
+                worker->kr.at = pipeline->file->at + (records->stream ? batch[i].source_offset : byte_at + batch[i].range.start_byte);
                 RecordCollector collector = {.sink=worker, .layout=layout, .ordinal=batch[i].ordinal,
                     .prepared=bind_keys ? &prepared[lane].record[i - begin] : NULL};
+                if (collector.prepared) collector.prepared->reserve = batch[i].state == S_RECORD_RESERVE;
                 int valid = s_cursor_record(layout, &batch[i], pipeline->source, pipeline->length, collect_record, &collector);
                 if (!bind_keys) scratch_restore(mark);
                 if (!valid) __atomic_store_n(&pipeline->failed, 1, __ATOMIC_RELEASE);
@@ -2853,7 +2862,8 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
                 for (uint32_t lane = 0; lane < lanes; lane++) {
                     Sink *worker = &pipeline->workers[lane]; reset_record_worker(pipeline, worker);
                     SayScratch previous = scratch_enter(&prepared[lane].arena);
-                    for (uint32_t i = 0; i < prepared[lane].count; i++) prepared_keys(worker, &prepared[lane].record[i]);
+                    for (uint32_t i = 0; i < prepared[lane].count; i++)
+                        if (prepared[lane].record[i].record.count) prepared_keys(worker, &prepared[lane].record[i]);
                     scratch_leave(&prepared[lane].arena, previous);
                 }
                 deferred_bind(pipeline, 0);
@@ -2868,6 +2878,7 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
                 SayScratch previous = scratch_enter(&prepared[lane].arena);
                 for (uint32_t i = 0; i < prepared[lane].count; i++) {
                     PreparedRecord *record = &prepared[lane].record[i];
+                    if (!record->record.count || record->reserve || pipeline->key_gaps) continue;
                     reset_record_worker(pipeline, evaluation); evaluation->defer_missing = 1;
                     evaluation->kr = record->rank; evaluation->bindings = record->bindings;
                     unit(evaluation, &record->record, 0, record->ordinal, 0);
@@ -2887,15 +2898,36 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
             Sink *worker = &pipeline->workers[lane];
             if (bind_keys) {
                 DeferredRecords *deferred = &pipeline->deferred;
+                uint32_t begin = (uint32_t)((uint64_t)count * lane / lanes);
                 for (uint32_t i = 0; i < prepared[lane].count; i++) {
                     PreparedRecord *record = &prepared[lane].record[i];
+                    const SRecord *framed = &batch[begin + i];
+                    if (framed->state == S_RECORD_RESERVE) {
+                        DeferredJob *job = deferred_job(deferred); *framed->continuation = job;
+                        const SemanticRecord *semantic = &record->record;
+                        Tls previous = tls_save(semantic, NULL, pipeline->say, &record->bindings);
+                        for (uint32_t g = 0; g < semantic->count && !job->key_gap; g++) {
+                            const SemanticValue *value = &semantic->n[g];
+                            if (value->context || value->kind != S_GROUP || !value->nlen) continue;
+                            for (int key = 0; key < pipeline->say->nkey; key++) {
+                                const Pair *declaration = &pipeline->say->key[key];
+                                if (!semantic_named(value, declaration->tier, declaration->tier_length)) continue;
+                                if (semantic_child(semantic, (int32_t)g, declaration->name, -1) < 0) { job->key_gap = 1; break; }
+                            }
+                        }
+                        tls_back(&previous);
+                        pipeline->key_gaps += job->key_gap; continue;
+                    }
                     const Ref *things = record->things_count ? worker->things.c + record->things_at : NULL;
                     const Ref *metadata = record->meta_count ? worker->meta.c + record->meta_at : NULL;
+                    DeferredJob *reserved = framed->state == S_RECORD_COMPLETE ? *framed->continuation : NULL;
+                    if (framed->state == S_RECORD_COMPLETE && !reserved) { fputs("scope header has no reserved source position\n", stderr); exit(2); }
+                    if (reserved && reserved->key_gap) { pipeline->key_gaps--; reserved->key_gap = 0; }
                     if (!record->ready) {
-                        DeferredJob *job = deferred_job(deferred);
+                        DeferredJob *job = reserved ? reserved : deferred_job(deferred);
                         job->operands = journal_operands(deferred, record); job->tried = keys_revision();
-                    } else if (deferred->first) {
-                        DeferredJob *job = deferred_job(deferred);
+                    } else if (reserved || deferred->first) {
+                        DeferredJob *job = reserved ? reserved : deferred_job(deferred);
                         journal_products(deferred, job, things, record->things_count, metadata, record->meta_count);
                     } else {
                         for (size_t n = 0; n < record->things_count; n++) push(&pipeline->result->things, &things[n]);
@@ -2933,8 +2965,8 @@ static int input_fill(const SInput *input, lp_buf *buffer, size_t target, size_t
 }
 int say_record_streamable(const Recipe *recipe){
     const Say *say = recipe ? recipe->say : NULL;
-    return say && say->lay.g.compiled && say->lay.g.record_count &&
-        !say->lay.g.record_name_count && !say->lay.g.has_context && !say->has_about;
+    return say && say->lay.g.compiled && !say->has_about && (say->lay.g.scope_count ||
+        (say->lay.g.record_count && !say->lay.g.record_name_count && !say->lay.g.has_context));
 }
 static void read_records(RecordPipeline *pipeline){
     const uint8_t *original_source = pipeline->source; size_t original_length = pipeline->length;
@@ -2947,6 +2979,8 @@ static void read_records(RecordPipeline *pipeline){
     if (!pipeline->evaluators) { perror("record evaluators"); free(layout); pipeline->failed = 1; return; }
     *layout = pipeline->say->lay;
     int independent = say_record_streamable(pipeline->recipe), ended = 0;
+    SScopeStream *scopes = independent && layout->g.scope_count ? s_scope_stream_open(layout) : NULL;
+    if (independent && layout->g.scope_count && !scopes) { fputs("cannot create packaging scope stream\n", stderr); pipeline->failed = 1; }
     size_t quantum = (size_t)8 << 20;
     const char *configured = getenv("LAPLACE_RECORD_WINDOW_BYTES");
     if (configured && *configured) {
@@ -2959,6 +2993,10 @@ static void read_records(RecordPipeline *pipeline){
     SayScratch headers = {0}; lp_buf buffer = {0};
     do {
         size_t target = independent ? quantum : UINT32_MAX;
+        if (scopes && buffer.n >= target) {
+            if (buffer.n > UINT32_MAX - quantum) { pipeline->failed = 1; break; }
+            target = buffer.n + quantum;
+        }
         if (first && target < 3) target = 3;
         if (!input_fill(input, &buffer, target, quantum, &ended)) { pipeline->failed = 1; break; }
         if (first && pipeline->input && buffer.n >= 3 && buffer.b[0] == 0xef && buffer.b[1] == 0xbb && buffer.b[2] == 0xbf) {
@@ -2967,7 +3005,8 @@ static void read_records(RecordPipeline *pipeline){
         first = 0; size_t consumed = 0; SRecords records; int status;
         layout->source_row = source_row;
         for (;;) {
-            status = independent ? s_records_window(&records, layout, buffer.b, buffer.n, ended, &consumed, &headers) :
+            status = scopes ? s_scope_stream_window(&records, scopes, layout, buffer.b, buffer.n, byte_at, ended) :
+                independent ? s_records_window(&records, layout, buffer.b, buffer.n, ended, &consumed, &headers) :
                 s_records_open(&records, layout, buffer.b, buffer.n);
             if (status || ended) break;
             if (buffer.n > UINT32_MAX - quantum) { status = -1; break; }
@@ -2990,6 +3029,7 @@ static void read_records(RecordPipeline *pipeline){
             }
         }
         ordinal = records.ordinal;
+        if (scopes) consumed = s_scope_stream_consumed(&records);
         if (records.file_layout) {
             Layout *next = records.file_layout; records.file_layout = NULL;
             if (!has_header) { header_mark = records.header_mark; has_header = 1; }
@@ -3015,7 +3055,7 @@ static void read_records(RecordPipeline *pipeline){
     }
     if (pipeline->failed || !pipeline->deferred.first) deferred_close(&pipeline->deferred);
     release_sinks(pipeline->evaluators, pipeline->worker_count); pipeline->evaluators = NULL;
-    arena_release(&headers); lp_buf_free(&buffer); free(layout);
+    s_scope_stream_close(scopes); arena_release(&headers); lp_buf_free(&buffer); free(layout);
     pipeline->source = original_source; pipeline->length = original_length;
 }
 

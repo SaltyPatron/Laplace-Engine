@@ -153,6 +153,7 @@ typedef struct {
     uint8_t has_context;
     GScope scopes[8]; uint8_t scope_count, scope_space_count, scope_misc_count;
     char scope_space[8][48], scope_misc[16][48];
+    char scope_prefix[8][48], scope_first[4][48]; uint8_t scope_prefix_count, scope_first_count;
     uint8_t *scope_roles;
     char language[64];
     char framing[48];
@@ -216,6 +217,7 @@ int layout_says(Layout *l, const char *path, char *tok);
 typedef struct SContext SContext;
 typedef struct SContextStore SContextStore;
 typedef struct SScopeState SScopeState;
+typedef struct SScopeStream SScopeStream;
 typedef struct {
     const Layout *layout;
     const uint8_t *source;
@@ -227,17 +229,27 @@ typedef struct {
     SayScratch context_arena;
     SContextStore *contexts;
     SScopeState *scopes;
+    SScopeStream *stream;
     size_t header_mark;
     uint64_t ordinal;
     uint8_t started, done, failed, header_pending, descend;
 } SRecords;
-typedef struct { TSNode node; TSRange range; uint64_t ordinal; uint8_t header; const SContext *context; } SRecord;
+enum { S_RECORD_VALUE, S_RECORD_RESERVE, S_RECORD_COMPLETE };
+typedef struct { TSNode node; TSRange range; uint64_t ordinal, source_offset;
+    uint8_t header, state; const SContext *context, *projection; void **continuation; } SRecord;
 int s_records_open(SRecords *records, const Layout *layout, const uint8_t *source, size_t length);
 /* Frame a complete prefix of a packaging window. Returns 1 with an iterable
  * prefix, 0 when more input is needed, or -1 for an invalid final window.
  * Nonfinal input retains the last complete record as boundary lookahead. */
 int s_records_window(SRecords *records, const Layout *layout, const uint8_t *source, size_t length,
                      int final, size_t *consumed, SayScratch *headers);
+/* Persistent active headers for event grammars. The input window and its AST
+ * remain disposable; only decoded active headers survive between windows. */
+SScopeStream *s_scope_stream_open(const Layout *layout);
+void s_scope_stream_close(SScopeStream *stream);
+int s_scope_stream_window(SRecords *records, SScopeStream *stream, const Layout *layout,
+    const uint8_t *source, size_t length, uint64_t offset, int final);
+size_t s_scope_stream_consumed(const SRecords *records);
 int s_record_next(SRecords *records, SRecord *record);
 void s_records_close(SRecords *records);
 int s_cursor_record(const Layout *layout, const SRecord *record, const uint8_t *source, size_t length, s_visit_fn visit, void *sink);
