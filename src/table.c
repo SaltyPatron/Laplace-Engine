@@ -65,18 +65,25 @@ void table_init(void){
 }
 
 /* This hash indexes a recipe-local symbol, never mints a content entity ID. */
-static lp_id key_hash(const char *recipe, const uint8_t *text, size_t length){
-    blake3_hasher hash; lp_id id; blake3_hasher_init(&hash);
+void keys_domain(const char *recipe, const char *tier, int within, lp_id *out){
+    blake3_hasher hash; blake3_hasher_init(&hash); uint8_t parent = within != 0;
     blake3_hasher_update(&hash, recipe, strlen(recipe) + 1);
+    blake3_hasher_update(&hash, tier, strlen(tier) + 1);
+    blake3_hasher_update(&hash, &parent, 1);
+    blake3_hasher_finalize(&hash, out->b, sizeof out->b);
+}
+static lp_id key_hash(const lp_id *domain, const uint8_t *text, size_t length){
+    blake3_hasher hash; lp_id id; blake3_hasher_init(&hash);
+    blake3_hasher_update(&hash, domain->b, sizeof domain->b);
     blake3_hasher_update(&hash, text, length);
     blake3_hasher_finalize(&hash, id.b, sizeof id.b); return id;
 }
 static int key_rank_before(const KeyRank *a, const KeyRank *b){
     return a->file != b->file ? a->file < b->file : a->at != b->at ? a->at < b->at : a->unit < b->unit;
 }
-void keys_put(const char *recipe, const uint8_t *text, size_t length, Ref value, const KeyRank *rank){
+void keys_put(const lp_id *domain, const uint8_t *text, size_t length, Ref value, const KeyRank *rank){
     table_pin(&value.id);
-    lp_id hash = key_hash(recipe, text, length); uint64_t bucket; memcpy(&bucket, hash.b, sizeof bucket);
+    lp_id hash = key_hash(domain, text, length); uint64_t bucket; memcpy(&bucket, hash.b, sizeof bucket);
     uint64_t *head = &keys.head[bucket & (KEY_BUCKETS - 1)], index = 0;
     uint64_t observed = __atomic_load_n(head, __ATOMIC_ACQUIRE);
     for (;;) {
@@ -96,8 +103,8 @@ void keys_put(const char *recipe, const uint8_t *text, size_t length, Ref value,
         }
     }
 }
-int keys_get(const char *recipe, const uint8_t *text, size_t length, Ref *out){
-    lp_id hash = key_hash(recipe, text, length); uint64_t bucket; memcpy(&bucket, hash.b, sizeof bucket);
+int keys_get(const lp_id *domain, const uint8_t *text, size_t length, Ref *out){
+    lp_id hash = key_hash(domain, text, length); uint64_t bucket; memcpy(&bucket, hash.b, sizeof bucket);
     for (uint64_t at = __atomic_load_n(&keys.head[bucket & (KEY_BUCKETS - 1)], __ATOMIC_ACQUIRE);
          at; at = keys.entry[at - 1].next)
         if (lp_id_eq(&keys.entry[at - 1].hash, &hash)) { *out = keys.entry[at - 1].value; return 1; }

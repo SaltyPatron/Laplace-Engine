@@ -78,12 +78,12 @@ enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, 
 typedef struct KeyProgram KeyProgram;
 typedef struct DiagnosticLabel DiagnosticLabel;
 typedef struct { char list[32], path[160], as[4][64]; int nas; regex_t re; int has_re, node; KeyProgram *program; } KSpec;     /* as: the templates, tried in order */
-typedef struct { char name[64]; uint16_t length, tier_id; uint8_t within, local; } TargetCode;
+typedef struct { char name[64]; uint16_t length, tier_id; uint8_t within, local; lp_id domain; } TargetCode;
 typedef struct { char name[64]; int what; char arg[64]; KSpec k; uint32_t when;
                  struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; const char *text;
                  TargetCode *targets; uint8_t ntargets; uint16_t name_length, arg_length, text_length;
                  DiagnosticLabel *road_label, *statement_label; uint32_t name_slot, part_slot, parent_slot; } Dis;   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse); text: what a relation line words it as */
-typedef struct { char tier[32], name[64]; uint16_t tier_length, tier_id; } Pair;
+typedef struct { char tier[32], name[64]; uint16_t tier_length, tier_id; lp_id domain, parent_domain; } Pair;
 typedef struct { char tier[32]; char name[64][64]; int n; uint32_t when; char by[64], of[64]; int file; } Att;      /* when: the conditions it is said under, by their places in where[]; by: the part that names who says it; of: the part it is said of; file: a witness stands within the file */
 typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char by[64]; int alone; } Rel;     /* alone: where what it is to names nothing, the relation alone */
 typedef struct { char tier[32], name[8][160]; int n, within, infile, span, inclusive, of, resolved; char lit[8], space[8]; KSpec form[8]; } Thing;    /* of: the path of the things of its parts of these names, in order (a sentence of its words) */   /* within: its name stands only within the thing it is inside: the pair of that thing and it; infile: only within the file; span: the stretch of a text name[2] between the characters name[0] and name[1] */
@@ -108,7 +108,7 @@ typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thi
                  /* a record's layers down its rows and its tree by head, where the recipe gives them (layers, tree): parts of the
                   * record's path beside the claims it says (record_of) */
                  char lay_tier[32], lay_row[32], layer[16][64]; int nlayer; char tree_tier[32], tree_row[32], tree_head[64], tree_rel[64];
-                 PathProgram *paths; DisProgram *dis_program, *value_program; uint16_t tree_key_index; uint32_t sc_slot; } Say;
+                 PathProgram *paths; DisProgram *dis_program, *value_program; uint16_t tree_key_index; uint32_t sc_slot; lp_id key_domain; } Say;
 
 typedef struct { uint64_t key; uint16_t next, rule; uint8_t qualified; } DisEntry;
 struct DisProgram { uint16_t *buckets; DisEntry *entries; size_t capacity, count; uint64_t wildcard_lengths; };
@@ -363,7 +363,7 @@ static void register_att_paths(Say *say, const Att *att, int count){
         for (int j = 0; j < att[i].n; j++) path_register(say, att[i].name[j]);
     }
 }
-static void compile_targets(Say *say, Dis *rules, int count){
+static void compile_targets(Say *say, Dis *rules, int count, const char *recipe){
     for (int i = 0; i < count; i++) {
         Dis *rule = &rules[i]; if (rule->targets || (rule->what != D_TYPE && rule->what != D_REFER)) continue;
         size_t length = strlen(rule->arg), capacity = length / 2 + 1;
@@ -377,6 +377,7 @@ static void compile_targets(Say *say, Dis *rules, int count){
             if (rule->what == D_REFER && *at == '^') { target->within = 1; at++; }
             target->length = (uint16_t)(next - at); memcpy(target->name, at, target->length); target->name[target->length] = 0;
             for (int j = 0; j < say->nkey; j++) if (!strcmp(say->key[j].tier, target->name)) { target->local = 1; target->tier_id = say->key[j].tier_id; break; }
+            keys_domain(target->local ? recipe : target->name, target->local ? target->name : "", target->local && target->within, &target->domain);
             at = next;
         }
     }
@@ -453,9 +454,10 @@ static void compile_name_slots(Say *say){
         }
     }
 }
-static void compile_semantic_paths(Say *say){
+static void compile_semantic_paths(Say *say, const char *recipe){
     if (say->paths) return;
     say->paths = calloc(1, sizeof *say->paths); if (!say->paths) { perror("recipe selectors"); abort(); }
+    keys_domain(recipe, "", 0, &say->key_domain);
     compile_mentions(say);
     for (int i = 0; i < say->nthing; i++) {
         path_register(say, say->thing[i].tier);
@@ -470,6 +472,7 @@ static void compile_semantic_paths(Say *say){
     for (int i = 0; i < say->nkey; i++) {
         Pair *key = &say->key[i]; path_register(say, key->tier); path_register(say, key->name);
         key->tier_length = (uint16_t)strlen(key->tier); key->tier_id = (uint16_t)(i + 1);
+        keys_domain(recipe, key->tier, 0, &key->domain); keys_domain(recipe, key->tier, 1, &key->parent_domain);
         for (int j = 0; j < i; j++) if (!strcmp(say->key[j].tier, key->tier)) { key->tier_id = say->key[j].tier_id; break; }
         if (!strcmp(key->tier, say->tree_row)) say->tree_key_index = (uint16_t)(i + 1);
     }
@@ -481,7 +484,7 @@ static void compile_semantic_paths(Say *say){
     path_register(say, say->lay_tier); path_register(say, say->lay_row); path_register(say, say->tree_tier); path_register(say, say->tree_row);
     path_register(say, say->tree_head); path_register(say, say->tree_rel); path_register(say, say->voice.tier); path_register(say, say->voice.name);
     for (int i = 0; i < say->nlayer; i++) path_register(say, say->layer[i]);
-    compile_targets(say, say->dis, say->ndis); compile_targets(say, say->val, say->nval);
+    compile_targets(say, say->dis, say->ndis, recipe); compile_targets(say, say->val, say->nval, recipe);
     compile_diagnostics(say->dis, say->ndis); compile_diagnostics(say->val, say->nval);
     for (int i = 0; i < say->nline; i++) say->line[i].pred_length = (uint16_t)strlen(say->line[i].pred);
     compile_name_slots(say);
@@ -718,7 +721,7 @@ static const SNameBindings *compile_name_bindings(const void *context, const uin
 int say_compile(Recipe *r){
     Say *s = r->say;
     if (!s) return 1;
-    compile_semantic_paths(s);
+    compile_semantic_paths(s, r->name);
     if (!s->dis_program) s->dis_program = compile_dispositions(s->dis, s->ndis);
     if (!s->value_program) s->value_program = compile_dispositions(s->val, s->nval);
     if (s->nsplit && !s->lay.g.compiled) {
@@ -1450,10 +1453,18 @@ static int value_of(Sink *k, const SemanticRecord *t, int32_t c, Ref *out, int d
     if (d->what == D_REFER && depth < 16) {                                  /* the first of its targets that holds the key */
         for (uint8_t i = 0; i < d->ntargets; i++) {
             const TargetCode *target = &d->targets[i];
-            if (!target->local) { if (keys_get(target->name, x->val, x->vlen, out)) return 1; continue; }      /* a key of another of the source's files: the thing its row is */
-            int32_t g = keyed(k, t, target, x->val, x->vlen); if (g < 0) continue;                            /* in the same tree: by the index */
-            if (target->within) { for (int32_t up = t->n[g].parent; up >= 0; up = t->n[up].parent) if (thing_of(k, t, up, out, depth + 1)) return 1; continue; }   /* the thing what holds the key is inside */
-            if (thing_of(k, t, g, out, depth + 1)) return 1; }
+            /* Published keys obey source-order rank, including duplicate
+             * declarations outside this record. Local bindings also bootstrap
+             * products while their declarations are still being evaluated. */
+            if (keys_get(&target->domain, x->val, x->vlen, out)) return 1;
+            if (target->local) {
+                int32_t g = keyed(k, t, target, x->val, x->vlen);
+                if (g >= 0) {
+                    if (target->within) { for (int32_t up = t->n[g].parent; up >= 0; up = t->n[up].parent) if (thing_of(k, t, up, out, depth + 1)) return 1; }
+                    else if (thing_of(k, t, g, out, depth + 1)) return 1;
+                }
+            }
+        }
         unknown_key(k, t, c, x);
         return 0; }
     return 0;
@@ -1738,7 +1749,14 @@ static void keep_keys(Sink *k, const SemanticRecord *t, int32_t root){
     const Say *s = k->s; if (!s->nkey) return; int32_t end = subtree_end(t, root);
     for (int32_t g = root; g <= end; g++) { const SemanticValue *x = &t->n[g]; if (x->context || x->kind != S_GROUP || !x->nlen) continue;
         for (int i = 0; i < s->nkey; i++) if (semantic_named(x, s->key[i].tier, s->key[i].tier_length)) { int32_t kc = semantic_child(t, g, s->key[i].name, -1); Ref S;
-            if (kc >= 0 && t->n[kc].vlen && thing_of(k, t, g, &S, 0)) keys_put(k->r->name, t->n[kc].val, t->n[kc].vlen, S, &k->kr); } }
+            if (kc >= 0 && t->n[kc].vlen && thing_of(k, t, g, &S, 0)) {
+                const Pair *key = &s->key[i];
+                keys_put(&s->key_domain, t->n[kc].val, t->n[kc].vlen, S, &k->kr);
+                keys_put(&key->domain, t->n[kc].val, t->n[kc].vlen, S, &k->kr);
+                for (int32_t up = x->parent; up >= 0; up = t->n[up].parent) if (thing_of(k, t, up, &S, 0)) {
+                    keys_put(&key->parent_domain, t->n[kc].val, t->n[kc].vlen, S, &k->kr); break;
+                }
+            } } }
 }
 /* A part read for the highway: the types it is, their keys, and the keys it maps to one another. */
 static void unit_highway(Sink *k, const SemanticRecord *t, int32_t root){
