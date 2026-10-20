@@ -40,6 +40,11 @@ enum { S_GROUP = 1, S_VALUE, S_TEXT, S_NOTE };        /* holds nodes; a name and
 
 /* Thread-local zero-malloc scratch arena for record walking */
 typedef struct { uint8_t *buf; size_t cap, committed, used, stack_used, stack_committed; } SayScratch;
+typedef struct SInput {
+    void *context;
+    size_t (*read)(void *context, uint8_t *out, size_t capacity);
+    int (*error)(void *context);
+} SInput;
 void   *scratch_alloc(size_t bytes);
 size_t  scratch_mark(void);
 void    scratch_restore(size_t mark);
@@ -149,7 +154,8 @@ typedef struct {
 } GMap;                 /* trim: the white space a text begins and ends with is how the file is laid out, not the text's */
 struct Layout { STier tier[S_TIERS]; int ntier; SPart part[32]; int npart; uint16_t part_buckets[64]; uint64_t part_prefix_lengths; uint8_t parts_compiled, part_errors;
                 char empty[16][32]; int emptylen[16], nempty; char levels[8][32]; uint8_t level_lengths[8]; int nlevels; GMap g;
-                s_compile_name_fn compile_name; const void *name_program; Layout *record_inner; };    /* empty: what the file writes where it leaves a part empty (several: empty _ None); levels: the names of the members of objects at each depth, whose keys are what the file says (levels roleset class) */
+                s_compile_name_fn compile_name; const void *name_program; Layout *record_inner;
+                uint64_t source_row; };    /* source_row: the file's physical row at a packaging window's start */
 static inline int s_empty(const Layout *l, const uint8_t *v, uint32_t n){ if (!n) return 1; for (int i = 0; i < l->nempty; i++) if (n == (uint32_t)l->emptylen[i] && !__builtin_memcmp(v, l->empty[i], n)) return 1; return 0; }
 
 /* Precompile grammar rules and chained sub-grammars into integer symbol/field IDs at recipe load time */
@@ -203,16 +209,22 @@ int layout_says(Layout *l, const char *path, char *tok);
 typedef struct {
     const Layout *layout;
     const uint8_t *source;
-    uint32_t length;
+    uint32_t length, limit, skip_before;
     TSTree *tree;
     TSTreeCursor *cursor;
     Layout *file_layout;
+    SayScratch *header_arena;
     size_t header_mark;
     uint64_t ordinal;
     uint8_t started, done, failed, header_pending, descend;
 } SRecords;
 typedef struct { TSNode node; TSRange range; uint64_t ordinal; uint8_t header; } SRecord;
 int s_records_open(SRecords *records, const Layout *layout, const uint8_t *source, size_t length);
+/* Frame a complete prefix of a packaging window. Returns 1 with an iterable
+ * prefix, 0 when more input is needed, or -1 for an invalid final window.
+ * Nonfinal input retains the last complete record as boundary lookahead. */
+int s_records_window(SRecords *records, const Layout *layout, const uint8_t *source, size_t length,
+                     int final, size_t *consumed, SayScratch *headers);
 int s_record_next(SRecords *records, SRecord *record);
 void s_records_close(SRecords *records);
 int s_cursor_record(const Layout *layout, const SRecord *record, const uint8_t *source, size_t length, s_visit_fn visit, void *sink);

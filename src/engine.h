@@ -130,7 +130,7 @@ static inline Ref said_claim(Ref r){ r.said = LP_SAID_CLAIM; return r; }
 static inline Ref said_tuple(Ref r){ r.said = LP_SAID_TUPLE; return r; }
 static inline Ref said_metadata(Ref r){ r.said = LP_SAID_METADATA; return r; }
 static inline Ref said_record(Ref r){ if (r.said != LP_SAID_CLAIM && r.said != LP_SAID_TUPLE) r.said = LP_SAID_RECORD; return r; }
-typedef struct { lp_id id; int64_t m[4]; uint64_t voff; uint32_t nv, len; uint8_t tier, keep, kind, live, spine; } Node;   /* spine: explicit record-block factoring; never a database probe frontier */
+typedef struct { lp_id id; int64_t m[4]; uint64_t voff; uint32_t nv, len; uint8_t tier, keep, kind, live, spine, pin; } Node;   /* spine: record-block factoring; pin: a reference surviving the current window */
 extern Node *NODE;                                                    /* every node of the table: NODE[0, table_end()), each with live set */
 extern Vtx *VTX;                                                      /* a node's vertices: VTX[voff, voff + nv) */
 uint64_t table_end(void);
@@ -211,6 +211,8 @@ int     recipes_broken(const Recipe *r, int n, const Source *of);             /*
 enum { EV_CLAIM = 0, EV_RECORD = 1, EV_MEMBER = 2 };      /* a claim that is its own record; a record; a claim within the record before it */
 typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviation; uint32_t position; uint8_t kind, own_witness; lp_id witness; uint32_t run; int32_t rec; } Event;
 typedef struct { Event *e; uint64_t n, cap; } Events;
+typedef int (*record_batch_fn)(void *, const Ref *, size_t, const Ref *, size_t, const Events *);
+struct FileAssembly;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */
 typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; int has_lineage; uint64_t bytes, incomplete; int exact, skipped, known; Events ev;
@@ -222,7 +224,14 @@ typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; 
                  uint64_t records;
                  uint32_t order;                       /* its place among the run's files, as ingest orders them */
                  uint64_t at;                          /* where the bytes being read begin in it: a stretch's offset */
-                 int laid; } File;                     /* laid: its trunk, metadata tree and content tree came from the recipe's layout (say.c) */
+                 int laid;
+                 record_batch_fn emit; void *emit_context; struct FileAssembly *assembly;
+                 } File;                     /* laid: its trunk, metadata tree and content tree came from the recipe's layout (say.c) */
+void file_stream_begin(File *);
+void file_stream_add(File *, const Ref *, size_t, const Ref *, size_t, uint64_t);
+const Ref *file_stream_roots(File *, size_t *);
+void file_stream_finish(File *);
+void table_pin(const lp_id *);
 int  say_says(Recipe *, const char *path, char *tok);                       /* a recipe's line, if it lays the file out or disposes of a part */
 int  say_lays(const Recipe *);
 void say_mentions(Recipe *, const char *line);                              /* a recipe's line as written: the parts it names */
@@ -236,6 +245,10 @@ typedef struct { uint64_t file, at, unit; } KeyRank;
 void keys_put(const char *recipe, const uint8_t *k, size_t n, Ref x, const KeyRank *rank);
 int  keys_get(const char *recipe, const uint8_t *k, size_t n, Ref *out);
 void attest_layout(const Recipe *, File *, const uint8_t *src, size_t n);             /* records read so far: a stretch's positions go on from the last */
+struct SInput;
+int  say_record_streamable(const Recipe *);
+int  recipe_record_streamable(const Recipe *);
+void attest_input(const Recipe *, File *, const struct SInput *);
 /* The highway, read from the resources by their recipes (types, keyed, alias, maps lines): what a file says of its
  * types, handed over in the file's order (highway.c keeps them). */
 typedef struct Hw Hw;
