@@ -36,7 +36,7 @@ static uint64_t *area[2]; static int side, resizing;          /* the slots alter
 #define KEY_CAPACITY (UINT64_C(1) << 29)
 #define KEY_TEXT_CAPACITY (UINT64_C(8) << 30)
 typedef struct { lp_id hash; KeyField field; KeyRank rank; uint64_t next; } KeyEntry;
-typedef struct { uint64_t *head, top, count, text_top; KeyEntry *entry; uint8_t *text; } KeyTable;
+typedef struct { uint64_t *head, top, count, revision, text_top; KeyEntry *entry; uint8_t *text; } KeyTable;
 static KeyTable keys;
 
 static void *reserve(size_t bytes){
@@ -106,7 +106,8 @@ void keys_field_put(const lp_id *domain, const uint8_t *text, size_t length, con
             /* A declaration may acquire its native product after the key
              * barrier. A later duplicate must never supply a missing field. */
             int same = !key_rank_before(&previous->rank, rank);
-            if (!same || previous->field.has_value || !field->has_value) return;
+            int improves = (!previous->field.has_value && field->has_value) || (previous->field.blocked && !field->blocked);
+            if (!same || !improves) return;
         }
         if (!index) {
             index = __atomic_fetch_add(&keys.top, 1, __ATOMIC_RELAXED) + 1;
@@ -124,6 +125,7 @@ void keys_field_put(const lp_id *domain, const uint8_t *text, size_t length, con
         keys.entry[index - 1].next = observed;
         if (__atomic_compare_exchange_n(head, &observed, index, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
             if (!previous) __atomic_fetch_add(&keys.count, 1, __ATOMIC_RELAXED);
+            __atomic_fetch_add(&keys.revision, 1, __ATOMIC_RELEASE);
             return;
         }
     }
@@ -144,6 +146,7 @@ int keys_get(const lp_id *domain, const uint8_t *text, size_t length, Ref *out){
     *out = field->value; return 1;
 }
 uint64_t keys_held(void){ return __atomic_load_n(&keys.count, __ATOMIC_ACQUIRE); }
+uint64_t keys_revision(void){ return __atomic_load_n(&keys.revision, __ATOMIC_ACQUIRE); }
 
 void tier0_open(const char *path){
     T0 = lp_tier0_map(path);
