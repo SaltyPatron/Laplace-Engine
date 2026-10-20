@@ -8,7 +8,9 @@
 grammar lp_xml_scopes
 scope STag end ETag name Name empty EmptyElemTag
 scope-space CharData
-scope-misc XMLDecl doctypedecl Comment PI StyleSheetPI XmlModelPI
+scope-misc Comment PI StyleSheetPI XmlModelPI
+scope-prefix doctypedecl
+scope-first XMLDecl
 resolve xml
 quotes AttValue
 trim
