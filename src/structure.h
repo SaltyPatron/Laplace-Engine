@@ -47,6 +47,8 @@ void    scratch_restore(size_t mark);
  * buffers use it and release it after their references have been consumed. */
 void   *arena_alloc(SayScratch *arena, size_t bytes);
 void    arena_release(SayScratch *arena);
+typedef struct { uint32_t count; uint32_t slots[]; } SNameBindings;
+typedef const SNameBindings *(*s_compile_name_fn)(const void *program, const uint8_t *name, uint32_t length, SayScratch *arena);
 
 /* Grammar ID and thread-local parser pool (grammars.c) */
 uint16_t          grammar_id_for(const char *name);
@@ -111,7 +113,7 @@ typedef struct {
     char alias[64]; uint8_t alias_tier;
     CompiledRule compiled;
 } GRule;     /* join: texts side by side are one text; list: a group of values, in order, each named by it; kind: named by its type */
-typedef struct { const uint8_t *name; uint32_t length; uint8_t flags; } GColumn;
+typedef struct { const uint8_t *name; uint32_t length; uint8_t flags; const SNameBindings *bindings; } GColumn;
 typedef struct { GColumn trigger, group, member[8]; uint8_t arity, radix; } GCountProgram;
 typedef struct { char type[48], literal[8]; uint8_t length; TSSymbol symbol; } GSeparator;
 typedef struct { char name[64]; uint64_t hash; uint16_t length; uint8_t next; } GRecordName;
@@ -141,7 +143,8 @@ typedef struct {
     GCountProgram counts[4]; uint8_t count_count, count_by_column[S_NAMES];
 } GMap;                 /* trim: the white space a text begins and ends with is how the file is laid out, not the text's */
 struct Layout { STier tier[S_TIERS]; int ntier; SPart part[32]; int npart; uint16_t part_buckets[64]; uint64_t part_prefix_lengths; uint8_t parts_compiled, part_errors;
-                char empty[16][32]; int emptylen[16], nempty; char levels[8][32]; uint8_t level_lengths[8]; int nlevels; GMap g; };    /* empty: what the file writes where it leaves a part empty (several: empty _ None); levels: the names of the members of objects at each depth, whose keys are what the file says (levels roleset class) */
+                char empty[16][32]; int emptylen[16], nempty; char levels[8][32]; uint8_t level_lengths[8]; int nlevels; GMap g;
+                s_compile_name_fn compile_name; const void *name_program; Layout *record_inner; };    /* empty: what the file writes where it leaves a part empty (several: empty _ None); levels: the names of the members of objects at each depth, whose keys are what the file says (levels roleset class) */
 static inline int s_empty(const Layout *l, const uint8_t *v, uint32_t n){ if (!n) return 1; for (int i = 0; i < l->nempty; i++) if (n == (uint32_t)l->emptylen[i] && !__builtin_memcmp(v, l->empty[i], n)) return 1; return 0; }
 
 /* Precompile grammar rules and chained sub-grammars into integer symbol/field IDs at recipe load time */
@@ -151,6 +154,7 @@ int layout_compile_parts(Layout *l);
  * integer dispatch used by explicit .format files. No input bytes are read. */
 int layout_compile_tiers(Layout *layout, char *grammar, size_t capacity);
 int layout_compile_recipe(Layout *layout, char *grammar, size_t capacity);
+void layout_bind_names(Layout *layout, s_compile_name_fn compile, const void *program);
 
 /* A compiled grammar emits semantic fields as the native cursor enters and
  * leaves scopes. Only active cursor frames are retained; no projected AST is
@@ -159,12 +163,13 @@ int layout_compile_recipe(Layout *layout, char *grammar, size_t capacity);
  * than retaining the parser's nodes after the callback returns. */
 enum { S_OPEN = 1, S_FIELD, S_CLOSE, S_FINISH };
 enum { S_FIELD_JOIN = 1, S_FIELD_LIST = 2, S_FIELD_TRIM = 4, S_FIELD_ALIAS = 8, S_FIELD_DERIVED = 16,
-       S_FIELD_SAME_TIER = 32, S_FIELD_PARTS = 64, S_FIELD_TIER = 128, S_FIELD_CONTEXT = 256 };
+       S_FIELD_SAME_TIER = 32, S_FIELD_PARTS = 64, S_FIELD_TIER = 128, S_FIELD_CONTEXT = 256, S_FIELD_RECORD = 512 };
 enum { S_VISIT_OK = 1, S_VISIT_RELEASE = 2, S_VISIT_SKIP = 4 };
 typedef struct {
     TSNode source;
     TSRange range;
     const uint8_t *name, *value;
+    const SNameBindings *bindings;
     size_t arena_begin;
     uint32_t name_length, value_length;
     uint16_t grammar, flags;
