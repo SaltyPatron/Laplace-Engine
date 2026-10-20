@@ -206,6 +206,8 @@ int layout_says(Layout *l, const char *path, char *tok);
 /* A parsed outer packaging window. Record iteration skips each returned
  * subtree, so nested symbols cannot split their enclosing record. The caller
  * finishes all work using a record before closing the window. */
+typedef struct SContext SContext;
+typedef struct SContextStore SContextStore;
 typedef struct {
     const Layout *layout;
     const uint8_t *source;
@@ -214,11 +216,13 @@ typedef struct {
     TSTreeCursor *cursor;
     Layout *file_layout;
     SayScratch *header_arena;
+    SayScratch context_arena;
+    SContextStore *contexts;
     size_t header_mark;
     uint64_t ordinal;
     uint8_t started, done, failed, header_pending, descend;
 } SRecords;
-typedef struct { TSNode node; TSRange range; uint64_t ordinal; uint8_t header; } SRecord;
+typedef struct { TSNode node; TSRange range; uint64_t ordinal; uint8_t header; const SContext *context; } SRecord;
 int s_records_open(SRecords *records, const Layout *layout, const uint8_t *source, size_t length);
 /* Frame a complete prefix of a packaging window. Returns 1 with an iterable
  * prefix, 0 when more input is needed, or -1 for an invalid final window.
