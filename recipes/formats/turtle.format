@@ -5,7 +5,9 @@
 #   escapes resolved) and its language tag (without the @) or its datatype
 #   prefix and base directives, blank nodes and collections are not of the tree
 grammar turtle
+records triple
 resolve turtle
+quotes string
 node triple group kind
 node subject group kind
 node property group kind
