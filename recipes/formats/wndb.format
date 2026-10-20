@@ -1,5 +1,7 @@
 # Princeton WordNet database files, as the tree-sitter-wndb grammar gives them.
 grammar wndb
+layout-prefix synset_offset lex_filenum ss_type w_cnt
+layout-prefix lemma pos synset_cnt p_cnt
 remark-content - gloss
 counted-shape w_cnt radix 16 word word lex_id
 counted-shape p_cnt pointer pointer_symbol target pos source_target
