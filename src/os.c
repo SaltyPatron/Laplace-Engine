@@ -370,7 +370,7 @@ int os_run_logged(const char *exe, char *const argv[], const char *log, const ch
     /* The child reads nothing: its input is NUL, not this process's input handle (a pipe to a process that may be
      * gone, or no console at all under a service). */
     HANDLE in = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
-    STARTUPINFOW si = { sizeof si }; si.dwFlags = STARTF_USESTDHANDLES;
+    STARTUPINFOW si = { .cb = sizeof si }; si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = in; si.hStdOutput = h; si.hStdError = h;
     char *was = getenv(var) ? _strdup(getenv(var)) : NULL; _putenv_s(var, value);   /* the child inherits it */
     PROCESS_INFORMATION pi; BOOL ok = CreateProcessW(we, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
