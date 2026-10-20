@@ -251,19 +251,23 @@ static void show_record_events(const File *file){
 }
 typedef struct {
     const char *conninfo; int threads, show; File *file; Fold *fold; LoadStats *stats;
-    uint64_t *events, windows; double database_seconds;
+    uint64_t *events, windows; double database_seconds, *source_seconds;
 } StreamLoad;
 static int stream_record_batch(void *context, const Ref *things, size_t n, const Ref *metadata, size_t nm, const Events *events){
     StreamLoad *stream = context; File *file = stream->file;
-    file_stream_add(file, things, n, metadata, nm, events->n);
-    size_t roots; const Ref *root = file_stream_roots(file, &roots);
+    size_t roots = 0; const Ref *root = NULL;
+    if (file->assembly) {
+        file_stream_add(file, things, n, metadata, nm, events->n);
+        root = file_stream_roots(file, &roots);
+    }
     Events previous = file->ev; Ref *said = file->said; uint64_t nsaid = file->nsaid, csaid = file->csaid;
     file->ev = *events; file->said = (Ref *)root; file->nsaid = roots; file->csaid = roots;
     if (stream->show) show_record_events(file);
     *stream->events += events->n;
     double begin = now(); fold_events(stream->fold, file, 1);
     int result = load(stream->conninfo, stream->threads, file, 1, stream->stats);
-    stream->database_seconds += now() - begin;
+    double elapsed = now() - begin; stream->database_seconds += elapsed;
+    if (stream->source_seconds) *stream->source_seconds += elapsed;
     file->ev = previous; file->said = said; file->nsaid = nsaid; file->csaid = csaid;
     if (!result) {
         stream->windows++; table_reset();
@@ -271,6 +275,29 @@ static int stream_record_batch(void *context, const Ref *things, size_t n, const
                 (unsigned long long)stream->windows, (unsigned long long)stream->stats->ent_rows, (unsigned long long)stream->stats->phy_rows);
     }
     return result;
+}
+typedef struct {
+    const char *conninfo; int threads, show, loading; Fold *fold; LoadStats *stats;
+    uint64_t *events; double database_seconds;
+} SourceCompletion;
+static int source_file_ready(void *context, File *file){
+    SourceCompletion *source = context; double start = now();
+    int streamed = file->emit != NULL;
+    if (file->emit) {
+        Events empty = {0};
+        if (file->emit(file->emit_context, NULL, 0, NULL, 0, &empty)) return 1;
+        file->emit = NULL; file->emit_context = NULL;
+    } else {
+        *source->events += file->ev.n;
+        if (source->show) show_record_events(file);
+        if (source->loading) {
+            fold_events(source->fold, file, 1);
+            if (load(source->conninfo, source->threads, file, 1, source->stats)) return 1;
+        }
+    }
+    if (source->loading && !streamed) source->database_seconds += now() - start;
+    if (!file->partial && getenv("LAPLACE_TRUNKS")) { char id[33]; id_text(&file->trunk.id, id); fprintf(stderr, "  trunk %s  %s\n", id, file->path); }
+    return 0;
 }
 /* Every source there is, in the order they go in, each in a process of its own with the options given, its output
  * kept in a log of its own. A source none of whose files is here is said so and passed over; a source that fails
@@ -580,6 +607,11 @@ int cmd_ingest(int argc, char **argv){
     uint64_t batch = (uint64_t)(getenv("LAPLACE_BATCH_MB") ? atoll(getenv("LAPLACE_BATCH_MB")) : 1024) << 20;
     uint64_t bytes = 0, nev = 0; int done = 0, exact = 0, mism = 0, batches = 0; double t_dec = 0, t_rec = 0; LoadStats st = { 0 };
     Fold *fold = fold_new();                                                  /* cumulative evidence, updated in PostgreSQL as each batch flows */
+    StreamLoad *streams = calloc((size_t)nfiles, sizeof *streams);
+    if (nfiles && !streams) { perror("source stream loaders"); return 1; }
+    SourceCompletion completion = {.conninfo=conninfo, .threads=threads, .show=show_claims, .loading=do_load,
+        .fold=fold, .stats=&st, .events=&nev};
+    say_source_begin();
     st.known += (uint64_t)nknown;                                            /* found by their OS record, never read */
     uint64_t *size = calloc((size_t)nfiles, 8);
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
@@ -597,14 +629,26 @@ int cmd_ingest(int argc, char **argv){
                 !(do_load && !files[b0].known && !files[b0].skipped && recipe_record_streamable(files[b0].recipe))))) { sum += size[b0]; b0++; }
         table_size(sum);                                                                                                  /* the table is empty here: room for what this batch makes */
         double td = now();
-        StreamLoad stream = {.conninfo=conninfo, .threads=threads, .show=show_claims, .file=&files[a0],
-            .fold=fold, .stats=&st, .events=&nev};
+        StreamLoad *stream = &streams[a0];
+        *stream = (StreamLoad){.conninfo=conninfo, .threads=threads, .show=show_claims, .file=&files[a0],
+            .fold=fold, .stats=&st, .events=&nev, .source_seconds=&completion.database_seconds};
         if (streaming) {
-            File *file = &files[a0]; file->emit = stream_record_batch; file->emit_context = &stream;
+            File *file = &files[a0]; file->emit = stream_record_batch; file->emit_context = stream;
             file_stream_begin(file); decompose_file(CTX[0], file);
-            file->emit = NULL; file->emit_context = NULL;
+            if (!file->partial) { file->emit = NULL; file->emit_context = NULL; }
             bytes += file->bytes; done++;
-            t_dec += now() - td - stream.database_seconds;
+            t_dec += now() - td - stream->database_seconds;
+        } else {
+        int ordered = 0;
+        for (int i = a0; i < b0; i++) ordered |= say_has_keys(files[i].recipe);
+        if (ordered) {
+            /* Source-rank declarations must arrive in canonical file order.
+             * Each file's grammar records still run on all worker lanes. */
+            for (int i = a0; i < b0; i++) {
+                if (files[i].known || files[i].skipped) continue;
+                decompose_file(CTX[0], &files[i]); bytes += files[i].bytes; done++;
+            }
+            t_dec += now() - td;
         } else {
         /* the longest first: a long file begun last is decomposed on one core while every other waits for it */
         int *order = malloc(sizeof(int) * (size_t)(b0 - a0)); for (int i = a0; i < b0; i++) order[i - a0] = i;
@@ -626,6 +670,7 @@ int cmd_ingest(int argc, char **argv){
         }
         free(order); t_dec += now() - td;
         }
+        }
         td = now();
         /* The provider compared with the original buffer before releasing it.
          * Verification never opens and reads the source a second time. */
@@ -634,7 +679,7 @@ int cmd_ingest(int argc, char **argv){
             if (files[i].known || files[i].skipped) continue;
             if (files[i].exact) exact++;
             else { mism++; fprintf(stderr, "  %s: does not recompose\n", files[i].path); }
-            if (getenv("LAPLACE_TRUNKS")) { char id[33]; id_text(&files[i].trunk.id, id); fprintf(stderr, "  trunk %s  %s\n", id, files[i].path); }
+            if (!files[i].partial && getenv("LAPLACE_TRUNKS")) { char id[33]; id_text(&files[i].trunk.id, id); fprintf(stderr, "  trunk %s  %s\n", id, files[i].path); }
         }
         t_rec += now() - td;
         if (mism) { fputs("ingest: source verification failed; no witness is published\n", stderr); return 1; }
@@ -645,10 +690,23 @@ int cmd_ingest(int argc, char **argv){
             fold_events(fold, files + a0, b0 - a0);
             if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1;
         }
+        for (int i = a0; i < b0; i++) if (files[i].partial) { free(files[i].ev.e); files[i].ev = (Events){0}; }
+        td = now(); double database_before = completion.database_seconds;
+        if (say_source_poll(source_file_ready, &completion)) return 1;
+        t_dec += now() - td - (completion.database_seconds - database_before);
         batches++;
-        if (b0 < nfiles) { for (int i = a0; i < b0; i++) { free(files[i].ev.e); memset(&files[i].ev, 0, sizeof files[i].ev); } table_reset(); }
+        if (b0 < nfiles) {
+            for (int i = a0; i < b0; i++) { free(files[i].ev.e); memset(&files[i].ev, 0, sizeof files[i].ev); }
+            /* No-load realization has no persisted backing for native key
+             * products. Keep its source DAG until all continuations finish. */
+            if (do_load) table_reset();
+        }
         a0 = b0;
     }
+    double source_finish = now(), database_before = completion.database_seconds;
+    if (say_source_end(source_file_ready, &completion)) return 1;
+    t_dec += now() - source_finish - (completion.database_seconds - database_before);
+    free(streams);
     #undef SHOW
     #undef WHOLE
     fputc('\n', stderr);
