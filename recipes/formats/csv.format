@@ -1,0 +1,7 @@
+# CSV, TSV, and PSV, as the tree-sitter-csv grammar gives them.
+grammar csv
+resolve csv
+quotes field
+node document group
+node row group kind
+node field text trim
