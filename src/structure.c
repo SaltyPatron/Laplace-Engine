@@ -166,6 +166,27 @@ static char *name_next(char **at, char *out, size_t cap){                  /* a 
 }
 int layout_says(Layout *l, const char *path, char *tok){
     STier *t = l->ntier ? &l->tier[l->ntier - 1] : NULL;
+    if (!strcmp(tok, "scope")) {
+        char *open = strtok(NULL, " \t\r\n"), *end = strtok(NULL, " \t\r\n"), *close = strtok(NULL, " \t\r\n"),
+             *name = strtok(NULL, " \t\r\n"), *identity = strtok(NULL, " \t\r\n"), *empty = strtok(NULL, " \t\r\n"), *single = strtok(NULL, " \t\r\n");
+        if (!open || !end || strcmp(end, "end") || !close || !name || strcmp(name, "name") || !identity ||
+            !empty || strcmp(empty, "empty") || !single || strtok(NULL, " \t\r\n") || l->g.scope_count == 8) {
+            fprintf(stderr, "%s: scope OPEN end CLOSE name PATH empty SINGLE\n", path); return -1;
+        }
+        GScope *scope = &l->g.scopes[l->g.scope_count++];
+        str_set(scope->open, sizeof scope->open, open); str_set(scope->close, sizeof scope->close, close);
+        str_set(scope->name, sizeof scope->name, identity); str_set(scope->empty, sizeof scope->empty, single); return 1;
+    }
+    if (!strcmp(tok, "scope-space") || !strcmp(tok, "scope-misc")) {
+        int spaces = !strcmp(tok, "scope-space"); char *name; unsigned added = 0;
+        while ((name = strtok(NULL, " \t\r\n"))) {
+            uint8_t *count = spaces ? &l->g.scope_space_count : &l->g.scope_misc_count;
+            unsigned capacity = spaces ? 8 : 16;
+            if (*count == capacity || strlen(name) >= 48) return -1;
+            str_set(spaces ? l->g.scope_space[(*count)++] : l->g.scope_misc[(*count)++], 48, name); added++;
+        }
+        return added ? 1 : -1;
+    }
     if (!strcmp(tok, "framing")) {
         char *name = strtok(NULL, " \t\r\n");
         if (!name || strlen(name) >= sizeof l->g.framing || strtok(NULL, " \t\r\n")) {
@@ -369,6 +390,7 @@ int layout_says(Layout *l, const char *path, char *tok){
 
 static int grammar_path_compile(const TSLanguage *lang, const char *path, GPath *out){
     memset(out, 0, sizeof *out);
+    if (path[0] == '.' && !path[1]) return 1;
     for (const char *at = path; *at;) {
         const char *end = strchr(at, '/'); uint32_t len = (uint32_t)(end ? (size_t)(end - at) : strlen(at));
         if (len) {
@@ -415,7 +437,10 @@ static const Layout *inner_layout(const char *name){
     char line[2048]; int valid = 1, declared = 0;
     while (fgets(line, sizeof line, file)) {
         comment_off(line); char *token = strtok(line, " \t\r\n"); if (!token) continue;
-        if (!strcmp(token, "grammar")) { char *language = strtok(NULL, " \t\r\n"); declared = language && !strcmp(language, name); if (!declared) { valid = 0; break; } }
+        if (!strcmp(token, "grammar")) {
+            char *language = strtok(NULL, " \t\r\n"); declared = language && *language && strlen(language) < sizeof layout->g.language;
+            if (!declared) { valid = 0; break; } str_set(layout->g.language, sizeof layout->g.language, language);
+        }
         else if (layout_says(layout, path, token) != 1) { valid = 0; break; }
     }
     fclose(file);
@@ -466,8 +491,9 @@ static int use_format(Layout *layout, const char *name){
     while (fgets(line, sizeof line, file)) {
         comment_off(line); char *token = strtok(line, " \t\r\n"); if (!token) continue;
         if (!strcmp(token, "grammar")) {
-            char *grammar = strtok(NULL, " \t\r\n"); declared = grammar && !strcmp(grammar, name);
+            char *grammar = strtok(NULL, " \t\r\n"); declared = grammar && *grammar && strlen(grammar) < sizeof layout->g.language;
             if (!declared) { valid = 0; break; }
+            str_set(layout->g.language, sizeof layout->g.language, grammar);
         } else if (layout_says(layout, path, token) != 1) { valid = 0; break; }
     }
     fclose(file); return valid && declared;
@@ -660,6 +686,7 @@ static int compile_remarks(Layout *layout){
 int layout_compile_grammar(Layout *l, const char *grammar_name){
     GMap *g = &l->g;
     if (g->compiled) return !g->unresolved;
+    if (*g->language) grammar_name = g->language;
     g->compiled = 1; g->grammar_id = grammar_id_for(grammar_name);
     if (l->ntier) {
         g->numbered_length = (uint16_t)strlen(l->tier[0].numbered);
@@ -669,6 +696,28 @@ int layout_compile_grammar(Layout *l, const char *grammar_name){
     const TSLanguage *lang = grammar_lang(g->grammar_id);
     if (!lang) { g->unresolved++; fprintf(stderr, "grammar %s: no compiled language\n", grammar_name); return 0; }
     g->symbol_count = ts_language_symbol_count(lang);
+    if (g->scope_count) {
+        g->scope_roles = calloc(g->symbol_count, 1); if (!g->scope_roles) { perror("scope dispatch"); abort(); }
+        for (unsigned i = 0; i < g->scope_count; i++) {
+            GScope *scope = &g->scopes[i]; const char *names[] = {scope->open, scope->close, scope->empty};
+            if (!grammar_path_compile(lang, scope->name, &scope->identity)) g->unresolved++;
+            for (unsigned role = 0; role < 3; role++) {
+                TSSymbol symbol = ts_language_symbol_for_name(lang, names[role], (uint32_t)strlen(names[role]), true);
+                if (!symbol || g->scope_roles[symbol]) g->unresolved++;
+                else g->scope_roles[symbol] = (uint8_t)(1 + i + 8 * role);
+            }
+        }
+        for (unsigned kind = 0; kind < 2; kind++) {
+            unsigned count = kind ? g->scope_misc_count : g->scope_space_count;
+            for (unsigned i = 0; i < count; i++) {
+                const char *name = kind ? g->scope_misc[i] : g->scope_space[i];
+                TSSymbol symbol = ts_language_symbol_for_name(lang, name, (uint32_t)strlen(name), true);
+                if (!symbol || g->scope_roles[symbol]) g->unresolved++;
+                else g->scope_roles[symbol] = kind ? 255 : 254;
+            }
+        }
+        if (g->unresolved) fprintf(stderr, "grammar %s: unresolved or overlapping scope declaration\n", grammar_name);
+    }
     g->field_count = ts_language_field_count(lang);
     g->field_names = calloc((size_t)g->field_count + 1, sizeof(char *));
     g->field_lengths = calloc((size_t)g->field_count + 1, sizeof(uint32_t));
@@ -1173,9 +1222,94 @@ typedef struct {
 
 static int cursor_project(const Layout *layout, TSNode root, const GInput *input, s_visit_fn visit, void *sink,
                           const uint8_t *name, uint32_t name_length, int list, int flatten);
+static int cursor_scope_project(const Layout *layout, TSNode root, TSRange range, const GInput *input, s_visit_fn visit, void *sink);
 
 static TSRange node_range(TSNode node){
     return (TSRange){ts_node_start_point(node), ts_node_end_point(node), ts_node_start_byte(node), ts_node_end_byte(node)};
+}
+
+typedef struct { TSNode node; uint8_t kind; } ScopeFrame;
+struct SScopeState { ScopeFrame *frames; uint32_t count, capacity; };
+static uint8_t scope_role(const GMap *grammar, TSNode node){
+    TSSymbol symbol = ts_node_symbol(node);
+    return symbol < grammar->symbol_count ? grammar->scope_roles[symbol] : 0;
+}
+static int scope_equal(const Layout *layout, uint8_t kind, TSNode open, TSNode close, const GInput *input){
+    TSNode a, b;
+    const GMap *grammar = &layout->g;
+    if (!at_path(open, &grammar->scopes[kind - 1].identity, &a) ||
+        !at_path(close, &grammar->scopes[kind - 1].identity, &b)) return 0;
+    size_t mark = scratch_mark(); const uint8_t *left, *right; uint32_t nl, nr;
+    GW worker = {.l=layout, .src=input->src, .input=input};
+    g_text(&worker, a, 0, &left, &nl); g_text(&worker, b, 0, &right, &nr);
+    int equal = nl == nr && !memcmp(left, right, nl); scratch_restore(mark); return equal;
+}
+static void scope_push(SRecords *records, TSNode node, uint8_t kind){
+    if (!records->scopes) {
+        records->scopes = arena_alloc(&records->context_arena, sizeof *records->scopes);
+        *records->scopes = (SScopeState){0};
+    }
+    SScopeState *state = records->scopes;
+    if (state->count == state->capacity) {
+        uint32_t capacity = state->capacity ? state->capacity * 2 : 16;
+        if (capacity < state->capacity) { fputs("scope depth overflow\n", stderr); abort(); }
+        ScopeFrame *frames = arena_alloc(&records->context_arena, (size_t)capacity * sizeof *frames);
+        if (state->count) memcpy(frames, state->frames, (size_t)state->count * sizeof *frames);
+        state->frames = frames; state->capacity = capacity;
+    }
+    state->frames[state->count++] = (ScopeFrame){node, kind};
+}
+/* Validate lexical events before exposing records. Name bytes are source data,
+ * not runtime grammar dispatch. Only the active nesting chain is retained. */
+static int scope_validate(const Layout *layout, TSNode root, const GInput *input){
+    const GMap *grammar = &layout->g;
+    TSTreeCursor *cursor = lp_tls_cursor(root); if (!cursor) return 0;
+    size_t mark = tls_scratch.stack_used, count = 0, capacity = 16; unsigned roots = 0;
+    ScopeFrame *frames = scratch_stack_alloc(capacity * sizeof *frames); int valid = 1;
+    if (ts_tree_cursor_goto_first_child(cursor)) do {
+        TSNode node = ts_tree_cursor_current_node(cursor); if (!ts_node_is_named(node)) continue;
+        uint8_t role = scope_role(grammar, node);
+        if (role && role <= 8) {
+            if (!count && ++roots != 1) { valid = 0; break; }
+            if (count == capacity) {
+                if (capacity > SIZE_MAX / 2 / sizeof *frames) { valid = 0; break; }
+                ScopeFrame *grown = scratch_stack_alloc(capacity * 2 * sizeof *grown);
+                memcpy(grown, frames, count * sizeof *grown); frames = grown; capacity *= 2;
+            }
+            frames[count++] = (ScopeFrame){node, role};
+        } else if (role >= 9 && role <= 16) {
+            if (!count || frames[count - 1].kind != role - 8 ||
+                !scope_equal(layout, role - 8, frames[count - 1].node, node, input)) { valid = 0; break; }
+            count--;
+        } else if (role >= 17 && role <= 24) {
+            if (!count && ++roots != 1) { valid = 0; break; }
+        } else if (!count && role != 255) {
+            if (role != 254) { valid = 0; break; }
+            size_t value_mark = scratch_mark(); const uint8_t *text; uint32_t length;
+            GW worker = {.l=layout, .src=input->src, .input=input}; g_text(&worker, node, 0, &text, &length);
+            for (uint32_t i = 0; i < length; i++)
+                if (text[i] != ' ' && text[i] != '\t' && text[i] != '\r' && text[i] != '\n') { valid = 0; break; }
+            scratch_restore(value_mark);
+            if (!valid) break;
+        }
+    } while (ts_tree_cursor_goto_next_sibling(cursor));
+    if (count || roots != 1) valid = 0;
+    if (!valid) fprintf(stderr, "packaging scopes do not form one matched document near byte %u\n", ts_node_start_byte(ts_tree_cursor_current_node(cursor)));
+    lp_tls_cursor_release(cursor); tls_scratch.stack_used = mark; return valid;
+}
+static int scope_extent(const GMap *grammar, TSNode start, TSRange *range){
+    *range = node_range(start); uint8_t role = scope_role(grammar, start);
+    if (role >= 17 && role <= 24) return 1;
+    TSTreeCursor *cursor = lp_tls_cursor(ts_node_parent(start)); if (!cursor) return 0;
+    int depth = 0, valid = 0;
+    if (ts_tree_cursor_goto_first_child_for_byte(cursor, range->start_byte) >= 0) do {
+        TSNode node = ts_tree_cursor_current_node(cursor); role = scope_role(grammar, node);
+        if (role && role <= 8) depth++;
+        else if (role >= 9 && role <= 16 && !--depth) {
+            range->end_byte = ts_node_end_byte(node); range->end_point = ts_node_end_point(node); valid = 1; break;
+        }
+    } while (ts_tree_cursor_goto_next_sibling(cursor));
+    lp_tls_cursor_release(cursor); return valid;
 }
 
 static const SContext *record_context_snapshot(SRecords *records, TSNode node);
@@ -1198,6 +1332,8 @@ static int records_open(SRecords *records, const Layout *layout, const uint8_t *
          * format scanner guesses where a quote, newline or record ends. */
         prefix /= 2;
     }
+    GInput scope_input = {.src=source, .length=(uint32_t)prefix}; scope_input.range.end_byte = (uint32_t)prefix;
+    if (layout->g.scope_count && !scope_validate(layout, ts_tree_root_node(tree), &scope_input)) { ts_tree_delete(tree); return 0; }
     TSTreeCursor *cursor = lp_tls_cursor(ts_tree_root_node(tree));
     if (!cursor) { ts_tree_delete(tree); return 0; }
     records->layout = layout; records->source = source; records->length = (uint32_t)prefix;
@@ -1296,8 +1432,46 @@ static int record_advance(SRecords *records, int descend){
     while (ts_tree_cursor_goto_parent(records->cursor));
     records->done = 1; return 0;
 }
+static int scope_record_next(SRecords *records, SRecord *record){
+    if (records->done) return 0;
+    int advanced = records->started ? ts_tree_cursor_goto_next_sibling(records->cursor) : ts_tree_cursor_goto_first_child(records->cursor);
+    records->started = 1;
+    const GMap *grammar = &records->layout->g;
+    while (advanced) {
+        TSNode node = ts_tree_cursor_current_node(records->cursor); uint8_t role = scope_role(grammar, node);
+        if ((role && role <= 8) || (role >= 17 && role <= 24)) {
+            int selected = record_matches(records, node), header = 0;
+            if (!selected && grammar->has_context) {
+                GInput input = {.src=records->source, .length=records->length};
+                GW worker = {.l=records->layout, .src=records->source, .input=&input};
+                const GRule *rule = rule_at(&worker, node, 0, ts_node_symbol(ts_node_parent(node)));
+                header = rule && rule->what == G_GROUP && rule->ncontext;
+            }
+            if (selected || header) {
+                TSRange range;
+                if (!scope_extent(grammar, node, &range)) { records->failed = records->done = 1; return 0; }
+                const SContext *context = grammar->has_context ? record_context_snapshot(records, node) : NULL;
+                if (records->failed) return 0;
+                if (selected && role <= 8) {
+                    TSNode parent = ts_node_parent(node);
+                    ts_tree_cursor_reset(records->cursor, parent);
+                    if (ts_tree_cursor_goto_first_child_for_byte(records->cursor, range.end_byte - 1) < 0) { records->failed = records->done = 1; return 0; }
+                } else if (role <= 8) scope_push(records, node, role);
+                *record = (SRecord){.node=node, .range=range, .ordinal=records->ordinal++, .header=(uint8_t)header, .context=context};
+                return 1;
+            }
+            if (role <= 8) scope_push(records, node, role);
+        } else if (role >= 9 && role <= 16) {
+            if (!records->scopes || !records->scopes->count) { records->failed = records->done = 1; return 0; }
+            records->scopes->count--;
+        }
+        advanced = ts_tree_cursor_goto_next_sibling(records->cursor);
+    }
+    records->done = 1; return 0;
+}
 int s_record_next(SRecords *records, SRecord *record){
     if (!records->cursor || records->done) return 0;
+    if (records->layout->g.scope_count) return scope_record_next(records, record);
     if (records->started && !record_advance(records, records->descend)) return 0;
     records->started = 1;
     const GMap *grammar = &records->layout->g;
@@ -1511,6 +1685,10 @@ static int count_group_range(const Layout *layout, TSNode parent, TSNode first, 
 
 static int cursor_project(const Layout *layout, TSNode root, const GInput *input, s_visit_fn visit, void *sink,
                           const uint8_t *name, uint32_t name_length, int list, int flatten){
+    if (layout->g.scope_count && ts_node_is_null(ts_node_parent(root))) {
+        if (!scope_validate(layout, root, input)) return 0;
+        return cursor_scope_project(layout, root, node_range(root), input, visit, sink);
+    }
     GW worker = {.l=layout, .src=input->src, .input=input};
     const void *omit = NULL;
     if (flatten) {
@@ -1718,6 +1896,62 @@ push_child:;
     lp_tls_cursor_release(cursor); tls_scratch.stack_used = stack_mark; return valid;
 }
 
+typedef struct { s_visit_fn visit; void *sink; TSNode node; TSRange range; SField field; int action; uint8_t header_only; } ScopeOpening;
+static int scope_opening_visit(void *sink, int event, const SField *field){
+    ScopeOpening *opening = sink;
+    if (field->source.id == opening->node.id) {
+        if (event == S_CLOSE) return S_VISIT_OK;
+        if (event == S_OPEN) {
+            opening->field = *field;
+            if (opening->range.end_byte) opening->field.range = opening->range;
+            opening->action = opening->visit(opening->sink, event, &opening->field);
+            return opening->action | (opening->header_only ? S_VISIT_SKIP : 0);
+        }
+    }
+    return opening->visit(opening->sink, event, field);
+}
+/* A lexical event grammar and an ordinary recursive grammar emit exactly the
+ * same semantic scopes. Retain open fields only until their matching close;
+ * attributes and leaves use the existing compiled cursor and injection path. */
+static int cursor_scope_project(const Layout *layout, TSNode root, TSRange range, const GInput *input, s_visit_fn visit, void *sink){
+    const GMap *grammar = &layout->g;
+    TSNode parent = ts_node_parent(root); if (ts_node_is_null(parent)) parent = root;
+    TSTreeCursor *cursor = lp_tls_cursor(parent); if (!cursor) return 0;
+    size_t mark = tls_scratch.stack_used, capacity = 16, count = 0;
+    SField *fields = scratch_stack_alloc(capacity * sizeof *fields); unsigned skipped = 0; int valid = 1;
+    if (ts_tree_cursor_goto_first_child_for_byte(cursor, range.start_byte) >= 0) do {
+        TSNode node = ts_tree_cursor_current_node(cursor);
+        if (ts_node_start_byte(node) >= range.end_byte) break;
+        uint8_t role = scope_role(grammar, node);
+        if (role && role <= 8) {
+            if (skipped) { skipped++; continue; }
+            ScopeOpening opening = {.visit=visit, .sink=sink, .node=node};
+            if (!scope_extent(grammar, node, &opening.range)) { valid = 0; break; }
+            if (!cursor_project(layout, node, input, scope_opening_visit, &opening, NULL, 0, 0, 0) ||
+                !(opening.action & S_VISIT_OK)) { valid = 0; break; }
+            if (count == capacity) {
+                if (capacity > SIZE_MAX / 2 / sizeof *fields) { valid = 0; break; }
+                SField *grown = scratch_stack_alloc(capacity * 2 * sizeof *grown);
+                memcpy(grown, fields, count * sizeof *grown); fields = grown; capacity *= 2;
+            }
+            fields[count++] = opening.field;
+            if (opening.action & S_VISIT_SKIP) skipped = 1;
+        } else if (role >= 9 && role <= 16) {
+            if (skipped && --skipped) continue;
+            if (!count) { valid = 0; break; }
+            SField field = fields[--count]; field.range.end_byte = ts_node_end_byte(node); field.range.end_point = ts_node_end_point(node);
+            if (!close_field(visit, sink, &field)) { valid = 0; break; }
+        } else if (!skipped) {
+            const uint8_t *name = count ? fields[count - 1].name : NULL;
+            uint32_t length = count ? fields[count - 1].name_length : 0;
+            int list = count && (fields[count - 1].flags & S_FIELD_LIST);
+            if (!cursor_project(layout, node, input, visit, sink, name, length, list, 0)) { valid = 0; break; }
+        }
+    } while (ts_tree_cursor_goto_next_sibling(cursor));
+    if (count || skipped) valid = 0;
+    lp_tls_cursor_release(cursor); tls_scratch.stack_used = mark; return valid;
+}
+
 typedef struct { s_visit_fn visit; void *sink; } ContextVisitor;
 static int context_visit(void *sink, int event, const SField *field){
     ContextVisitor *context = sink; SField inherited = *field;
@@ -1807,11 +2041,42 @@ static size_t context_bucket(const void *owner, uint32_t start, size_t capacity)
     key ^= key >> 30; key *= UINT64_C(0xbf58476d1ce4e5b9); key ^= key >> 27;
     return (size_t)key & (capacity - 1);
 }
+static int scope_record_context(SRecords *records, const GInput *input, ContextCapture *capture, SField **opened, uint32_t *count){
+    *opened = NULL; *count = 0;
+    if (!records->scopes || !records->scopes->count) return 1;
+    const Layout *layout = records->layout; SScopeState *state = records->scopes;
+    SField *fields = scratch_alloc((size_t)state->count * sizeof *fields);
+    GW worker = {.l=layout, .src=input->src, .input=input}; ContextVisitor inherited = {capture_context, capture};
+    for (uint32_t i = 0; i < state->count; i++) {
+        TSNode node = state->frames[i].node;
+        const GRule *rule = rule_at(&worker, node, 0, ts_node_symbol(ts_node_parent(node)));
+        if (!rule || rule->what != G_GROUP || !rule->ncontext) continue;
+        ScopeOpening opening = {.visit=context_visit, .sink=&inherited, .node=node, .header_only=1};
+        if (!cursor_project(layout, node, input, scope_opening_visit, &opening, NULL, 0, 0, 0) || !(opening.action & S_VISIT_OK)) return 0;
+        fields[(*count)++] = opening.field;
+        for (unsigned k = 0; k < rule->ncontext; k++) {
+            TSNode header;
+            if (!at_path(node, &rule->compiled.context[k], &header)) continue;
+            if (header.id != node.id) {
+                if (!cursor_project(layout, header, input, context_visit, &inherited, NULL, 0, 0, 0)) return 0;
+            } else {
+                TSTreeCursor *cursor = lp_tls_cursor(node); if (!cursor) return 0;
+                int valid = 1;
+                if (ts_tree_cursor_goto_first_child(cursor)) do {
+                    if (!cursor_project(layout, ts_tree_cursor_current_node(cursor), input, context_visit, &inherited, NULL, 0, 0, 0)) { valid = 0; break; }
+                } while (ts_tree_cursor_goto_next_sibling(cursor));
+                lp_tls_cursor_release(cursor); if (!valid) return 0;
+            }
+        }
+    }
+    *opened = fields; return 1;
+}
 static const SContext *record_context_snapshot(SRecords *records, TSNode node){
     SayScratch *arena = &records->context_arena;
     SContextStore *store = records->contexts;
     if (!store) { store = arena_alloc(arena, sizeof *store); *store = (SContextStore){0}; records->contexts = store; }
-    TSNode parent = ts_node_parent(node);
+    TSNode parent = records->layout->g.scope_count ?
+        (records->scopes && records->scopes->count ? records->scopes->frames[records->scopes->count - 1].node : (TSNode){0}) : ts_node_parent(node);
     const void *owner = parent.id; uint32_t start = ts_node_is_null(parent) ? 0 : ts_node_start_byte(parent);
     if (store->capacity) {
         for (ContextEntry *entry = store->buckets[context_bucket(owner, start, store->capacity)]; entry; entry = entry->next)
@@ -1832,7 +2097,9 @@ static const SContext *record_context_snapshot(SRecords *records, TSNode node){
     GInput input = {.src=records->source, .length=records->length}; input.range.end_byte = records->length;
     input.source_row = records->layout->source_row;
     size_t mark = scratch_mark(); SField *opened; uint32_t count;
-    if (!record_context(records->layout, node, &input, capture_context, &capture, &opened, &count)) {
+    int valid = records->layout->g.scope_count ? scope_record_context(records, &input, &capture, &opened, &count) :
+        record_context(records->layout, node, &input, capture_context, &capture, &opened, &count);
+    if (!valid) {
         scratch_restore(mark); records->failed = 1; return NULL;
     }
     if (count) {
@@ -1854,7 +2121,7 @@ static int header_visit(void *sink, int event, const SField *field){
     } else if (event == S_CLOSE && header->skipped) { header->skipped = 0; return S_VISIT_OK; }
     return header->visit(header->sink, event, field);
 }
-static int cursor_record(const Layout *layout, TSNode root, int header, const SContext *inherited, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
+static int cursor_record(const Layout *layout, TSNode root, TSRange range, int header, const SContext *inherited, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
     if (!layout->g.compiled || layout->g.unresolved || length > UINT32_MAX || !visit || ts_node_is_null(root) || ts_node_has_error(root)) return 0;
     GInput input = {0}; input.src = source; input.length = (uint32_t)length; input.range.end_byte = (uint32_t)length;
     input.source_row = layout->source_row;
@@ -1864,13 +2131,15 @@ static int cursor_record(const Layout *layout, TSNode root, int header, const SC
         context = inherited->opened; contexts = inherited->count;
         for (const ContextEvent *event = inherited->first; event && valid; event = event->next)
             valid = (visit(sink, event->event, &event->field) & S_VISIT_OK) != 0;
-    } else valid = record_context(layout, root, &input, visit, sink, &context, &contexts);
+    } else if (!layout->g.scope_count) valid = record_context(layout, root, &input, visit, sink, &context, &contexts);
     HeaderVisitor visitor = {visit, sink, 0, 0};
-    if (valid) valid = cursor_project(layout, root, &input, header ? header_visit : visit, header ? &visitor : sink, NULL, 0, 0, 0);
+    if (valid) valid = layout->g.scope_count ?
+        cursor_scope_project(layout, root, range, &input, header ? header_visit : visit, header ? &visitor : sink) :
+        cursor_project(layout, root, &input, header ? header_visit : visit, header ? &visitor : sink, NULL, 0, 0, 0);
     while (valid && contexts) valid = (visit(sink, S_CLOSE, &context[--contexts]) & S_VISIT_OK) != 0;
     int retained = 0;
     if (valid) {
-        SField end = {.source=root, .range=node_range(root), .arena_begin=mark, .grammar=layout->g.grammar_id};
+        SField end = {.source=root, .range=range, .arena_begin=mark, .grammar=layout->g.grammar_id};
         int result = visit(sink, S_FINISH, &end);
         valid = (result & S_VISIT_OK) != 0; retained = valid && (result & S_VISIT_RETAIN);
     }
@@ -1878,10 +2147,14 @@ static int cursor_record(const Layout *layout, TSNode root, int header, const SC
     return valid;
 }
 int s_cursor(const Layout *layout, TSNode root, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
-    return cursor_record(layout, root, 0, NULL, source, length, visit, sink);
+    if (layout->g.scope_count) {
+        GInput input = {.src=source, .length=(uint32_t)length}; input.range.end_byte = (uint32_t)length;
+        if (length > UINT32_MAX || !scope_validate(layout, root, &input)) return 0;
+    }
+    return cursor_record(layout, root, node_range(root), 0, NULL, source, length, visit, sink);
 }
 int s_cursor_record(const Layout *layout, const SRecord *record, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
-    return cursor_record(layout, record->node, record->header, record->context, source, length, visit, sink);
+    return cursor_record(layout, record->node, record->range, record->header, record->context, source, length, visit, sink);
 }
 
 /* ---- laplace structure LAYOUT FILE [-n NODES]: a file's tree as a layout parts it, for writing recipes. LAYOUT is a
