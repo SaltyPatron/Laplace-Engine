@@ -29,7 +29,7 @@ static int by_occ(const void *a, const void *b){ double x = ((const Followed *)a
 static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int limit);
 int cmd_fills(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL; int limit = 12;
-    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-n", 'i', &limit }, { "-t", 's', &t0p }, { NULL } });
+    int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "-n", .kind = 'i', .at = &limit }, { .flag = "-t", .kind = 's', .at = &t0p }, { 0 } });
     if (a >= argc) { fprintf(stderr, "usage: laplace fills [-d conninfo] [-n N] phrase\n"); return 2; }
     tier0_open(t0p); table_init(); ctx_open(1);
     return fills(conninfo, CTX[0], argv[a], limit);

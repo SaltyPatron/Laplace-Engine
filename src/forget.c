@@ -171,7 +171,7 @@ static uint64_t sweep(PGconn **pg, int npg, int dry, const Set *seed){
 }
 int cmd_sweep(int argc, char **argv){
     const char *conninfo = laplace_db(); int npg = 0, dry = 0;
-    if (opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-j", 'i', &npg }, { "--dry", 'b', &dry }, { NULL } }) < argc) {
+    if (opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "-j", .kind = 'i', .at = &npg }, { .flag = "--dry", .kind = 'b', .at = &dry }, { 0 } }) < argc) {
         fprintf(stderr, "usage: laplace sweep [-d conninfo] [-j connections] [--dry]\n"); return 2; }
     if (npg <= 0) npg = omp_get_num_procs();
     setlocale(LC_NUMERIC, "en_US.UTF-8"); tier0_open(NULL);
@@ -209,7 +209,7 @@ static int forget_going(PGconn **pg, int npg, Set *going){
 
 int cmd_forget(int argc, char **argv){
     const char *conninfo = laplace_db(); int npg = 0, except = 0, trunk = 0;
-    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-j", 'i', &npg }, { "--except", 'b', &except }, { "--trunk", 'b', &trunk }, { NULL } });
+    int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "-j", .kind = 'i', .at = &npg }, { .flag = "--except", .kind = 'b', .at = &except }, { .flag = "--trunk", .kind = 'b', .at = &trunk }, { 0 } });
     if (a >= argc && !except) { fprintf(stderr, "usage: laplace forget [-d conninfo] [-j connections] [--trunk] witness...\n       laplace forget --except witness...   (every witness but these)\n"); return 2; }
     if (npg <= 0) npg = omp_get_num_procs();
     setlocale(LC_NUMERIC, "en_US.UTF-8");
