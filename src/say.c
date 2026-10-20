@@ -1007,6 +1007,7 @@ static void push(Refs *a, const Ref *x){
 typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; uint64_t open[256]; float er, ed, score; uint64_t ordinal; Ref fw, voice; int voiced; char opennm[16][64]; uint8_t open_length[16]; int nopen; uint64_t unknown; char unknm[8][96]; int nunk; Refs grp; Ref fname, fstem;
                  const SemanticRecord *ix_tree; uint32_t ix_count; LocalKey *local_keys; size_t local_capacity, local_count;
                  BindingMatrix bindings;
+                 uint64_t blocked; uint8_t binding_phase;
                  SayScratch output;
                  const SemanticRecord *tc_tree; uint32_t tc_n; Ref *tc; uint8_t *ts, *uk;
                  long selfcp;                                                /* the code point the part being read is, or -1 */
@@ -1501,7 +1502,11 @@ static int value_of(Sink *k, const SemanticRecord *t, int32_t c, Ref *out, int d
             /* Published keys obey source-order rank, including duplicate
              * declarations outside this record. Local bindings also bootstrap
              * products while their declarations are still being evaluated. */
-            if (keys_get(&target->domain, x->val, x->vlen, out)) return 1;
+            const KeyField *declaration = keys_field_get(&target->domain, x->val, x->vlen);
+            if (declaration && declaration->has_value) { *out = declaration->value; return 1; }
+            if (declaration && declaration->blocked) {
+                k->blocked++; if (!k->binding_phase) unknown_key(k, t, c, x); return 0;
+            }
             if (target->local) {
                 int32_t g = keyed(k, t, target, x->val, x->vlen);
                 if (g >= 0) {
@@ -1510,6 +1515,7 @@ static int value_of(Sink *k, const SemanticRecord *t, int32_t c, Ref *out, int d
                 }
             }
         }
+        if (k->binding_phase) { k->blocked++; return 0; }
         unknown_key(k, t, c, x);
         return 0; }
     return 0;
@@ -1523,12 +1529,13 @@ static int spoken_thing(Sink *k, const SemanticRecord *t, int32_t g, Ref *out){
 static int entity_of(Sink *k, const SemanticRecord *t, int32_t c, Ref *out);
 static int thing_of(Sink *k, const SemanticRecord *t, int32_t g, Ref *out, int depth){
     int memo = k->tc_tree == t && (uint32_t)g < k->tc_n;                     /* each thing is composed once in a tree; the threads reading one tree share what is composed */
-    if (memo) { uint8_t st = __atomic_load_n(&k->ts[g], __ATOMIC_ACQUIRE); if (st >= 3) { *out = k->tc[g]; return st - 2; } if (st == 2) return 0; }     /* 3 and up: named, by the way st - 3 */
+    if (memo) { uint8_t st = __atomic_load_n(&k->ts[g], __ATOMIC_ACQUIRE); if (st >= 3) { *out = k->tc[g]; return st - 2; } if (st == 1 || st == 2) { if (st == 1) k->blocked++; return 0; } }     /* 1: awaits a declaration; 2: unnamed; 3 and up: named, by the way st - 3 */
     if (memo && composing(g)) return 0;                                            /* being composed by this thread: a thing named by itself names nothing */
     int pushed = memo && nbusy < BUSY_MAX; if (pushed) busy[nbusy++] = g;
+    uint64_t blocked = k->blocked;
     int r = thing_compose(k, t, g, out, depth);
     if (pushed) nbusy--;
-    if (memo) { if (r) k->tc[g] = *out; __atomic_store_n(&k->ts[g], (uint8_t)(r ? (r < 250 ? r + 2 : 252) : 2), __ATOMIC_RELEASE); }
+    if (memo) { if (r) k->tc[g] = *out; __atomic_store_n(&k->ts[g], (uint8_t)(r ? (r < 250 ? r + 2 : 252) : blocked != k->blocked ? 1 : 2), __ATOMIC_RELEASE); }
     return r;
 }
 static KeyField projected_field(Sink *k, const SemanticRecord *t, int32_t c, int depth){
@@ -1538,7 +1545,10 @@ static KeyField projected_field(Sink *k, const SemanticRecord *t, int32_t c, int
         t->n[semantic_first(text)].kind == S_TEXT) text = &t->n[semantic_first(text)];
     if (text->kind != S_GROUP) { field.text = text->val; field.length = text->vlen; field.has_text = 1; }
     UnkMark mark; unknown_mark(k, t, c, &mark);
+    uint64_t blocked = k->blocked;
     field.has_value = (uint8_t)value_of(k, t, c, &field.value, depth);
+    field.blocked = (uint8_t)(blocked != k->blocked);
+    if (field.blocked) field.has_value = 0;
     unknown_back(k, t, &mark); return field;
 }
 /* A projected field is a native product plus its original scalar text, when
@@ -1557,11 +1567,12 @@ static int referred_field(Sink *k, const SemanticRecord *t, int32_t g, const cha
         if (target->within || !target->local) continue;
         for (const KeyProjection *p = projection->targets; p; p = p->next) if (p->tier == target->tier_id) {
             const KeyField *field = keys_field_get(&p->domain, x->val, x->vlen);
-            if (field) { *out = *field; return 1; }
+            if (field) { *out = *field; if (field->blocked) k->blocked++; return 1; }
             int32_t r = keyed(k, t, target, x->val, x->vlen); if (r < 0) break;
             *out = projected_field(k, t, path_first(t, r, p->field, NULL), depth); return 1;
         }
     }
+    if (k->binding_phase) k->blocked++;
     return 0;
 }
 /* A part as one way its kind is named: 0 when it is not named that way. */
@@ -1648,7 +1659,12 @@ static int one_thing(Sink *k, const SemanticRecord *t, int32_t g, const Thing *t
 /* A part as the thing it is: the first of the ways its kind is named that names it (a code point, or a range). */
 static int thing_compose(Sink *k, const SemanticRecord *t, int32_t g, Ref *out, int depth){
     const SemanticValue *x = &t->n[g]; const Say *s = k->s;
-    for (int i = 0; i < s->nthing; i++) if (named_as(x, s->thing[i].tier) && one_thing(k, t, g, &s->thing[i], out, depth)) return i + 1;                       /* which way named it, counted from 1 */
+    for (int i = 0; i < s->nthing; i++) if (named_as(x, s->thing[i].tier)) {
+        uint64_t blocked = k->blocked;
+        int named = one_thing(k, t, g, &s->thing[i], out, depth);
+        if (blocked != k->blocked) return 0;
+        if (named) return i + 1;
+    }
     return 0;
 }
 /* Whether a part is one of those that name the thing it is in (an entry's word and pos): by the way that named it,
@@ -1826,6 +1842,20 @@ static void keys_at(const Say *s, const SemanticRecord *t, int32_t g, const KSpe
  * at it (refer NAME RECIPE). */
 static void keep_keys(Sink *k, const SemanticRecord *t, int32_t root){
     const Say *s = k->s; if (!s->nkey) return; int32_t end = subtree_end(t, root);
+    /* Establish declaration rank before evaluating any identity. An earlier
+     * unresolved declaration reserves its key instead of allowing a later
+     * duplicate's already available product to impersonate it. */
+    KeyField waiting = {.blocked=1};
+    for (int32_t g = root; g <= end; g++) {
+        const SemanticValue *x = &t->n[g]; if (x->context || x->kind != S_GROUP || !x->nlen) continue;
+        for (int i = 0; i < s->nkey; i++) if (semantic_named(x, s->key[i].tier, s->key[i].tier_length)) {
+            int32_t field = semantic_child(t, g, s->key[i].name, -1); if (field < 0 || !t->n[field].vlen) continue;
+            const Pair *key = &s->key[i]; KeyRank rank = k->kr; rank.member = (uint64_t)g;
+            keys_field_put(&s->key_domain, t->n[field].val, t->n[field].vlen, &waiting, &rank);
+            keys_field_put(&key->domain, t->n[field].val, t->n[field].vlen, &waiting, &rank);
+            keys_field_put(&key->parent_domain, t->n[field].val, t->n[field].vlen, &waiting, &rank);
+        }
+    }
     for (int32_t g = root; g <= end; g++) { const SemanticValue *x = &t->n[g]; if (x->context || x->kind != S_GROUP || !x->nlen) continue;
         for (int i = 0; i < s->nkey; i++) if (semantic_named(x, s->key[i].tier, s->key[i].tier_length)) { int32_t kc = semantic_child(t, g, s->key[i].name, -1); Ref S;
             if (kc >= 0 && t->n[kc].vlen) {
@@ -1835,13 +1865,17 @@ static void keep_keys(Sink *k, const SemanticRecord *t, int32_t root){
                     KeyField field = projected_field(k, t, path_first(t, g, projection->field, NULL), 0);
                     keys_field_put(&projection->domain, t->n[kc].val, t->n[kc].vlen, &field, &rank);
                 }
-                if (thing_of(k, t, g, &S, 0)) {
-                    keys_put(&s->key_domain, t->n[kc].val, t->n[kc].vlen, S, &rank);
-                    keys_put(&key->domain, t->n[kc].val, t->n[kc].vlen, S, &rank);
-                }
+                uint64_t blocked = k->blocked; KeyField declaration = {0};
+                if (thing_of(k, t, g, &S, 0)) { declaration.value = S; declaration.has_value = 1; }
+                declaration.blocked = (uint8_t)(blocked != k->blocked);
+                keys_field_put(&s->key_domain, t->n[kc].val, t->n[kc].vlen, &declaration, &rank);
+                keys_field_put(&key->domain, t->n[kc].val, t->n[kc].vlen, &declaration, &rank);
+                blocked = k->blocked; declaration = (KeyField){0};
                 for (int32_t up = x->parent; up >= 0; up = t->n[up].parent) if (thing_of(k, t, up, &S, 0)) {
-                    keys_put(&key->parent_domain, t->n[kc].val, t->n[kc].vlen, S, &rank); break;
+                    declaration.value = S; declaration.has_value = 1; break;
                 }
+                declaration.blocked = (uint8_t)(blocked != k->blocked);
+                keys_field_put(&key->parent_domain, t->n[kc].val, t->n[kc].vlen, &declaration, &rank);
             } } }
 }
 /* A part read for the highway: the types it is, their keys, and the keys it maps to one another. */
@@ -2135,6 +2169,7 @@ static void records_of(Sink *k, const SemanticRecord *t, int32_t root, uint64_t 
 static void unit(void *sink, const SemanticRecord *t, int32_t root, uint64_t ordinal, int bind_keys){
     size_t record_mark = scratch_mark();
     Sink *k = sink; const Say *s = k->s; k->kr.unit = ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f;
+    uint8_t binding_phase = k->binding_phase; k->binding_phase = (uint8_t)(bind_keys != 0);
     sink_buffers(k);
     k->cs_epoch++; k->cs_n = 0; k->rec = root;                               /* a new part: none of its claims made yet, its own record */
     k->dm = scratch_alloc(sizeof(int16_t) * t->count); memset(k->dm, 0, sizeof(int16_t) * t->count);
@@ -2143,8 +2178,8 @@ static void unit(void *sink, const SemanticRecord *t, int32_t root, uint64_t ord
     k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); memset(k->uk, 0, t->count);
     Tls previous = tls_save(t, k->dm, s, &k->bindings);
     index_keys(k, t);
-    if (bind_keys) { keep_keys(k, t, root); tls_back(&previous); scratch_restore(record_mark); return; }
-    if (k->hw) { unit_highway(k, t, root); keep_keys(k, t, root); tls_back(&previous); scratch_restore(record_mark); return; }     /* read for the highway: its types, not what it attests */
+    if (bind_keys) { keep_keys(k, t, root); k->binding_phase = binding_phase; tls_back(&previous); scratch_restore(record_mark); return; }
+    if (k->hw) { unit_highway(k, t, root); keep_keys(k, t, root); k->binding_phase = binding_phase; tls_back(&previous); scratch_restore(record_mark); return; }     /* read for the highway: its types, not what it attests */
     if (s->nline && t->n[root].kind == S_TEXT) {                             /* a line of a page: where it matches a pattern, it says the pattern's parts */
         const SemanticValue *x = &t->n[root]; size_t mark = scratch_mark(); char stack[4096], *ln = x->vlen < sizeof stack ? stack : scratch_alloc((size_t)x->vlen + 1); memcpy(ln, x->val, x->vlen); ln[x->vlen] = 0;
         for (int i = 0; i < s->nline; i++) { regmatch_t m[5]; if (regexec(&s->line[i].re, ln, 5, m, 0)) continue;
@@ -2183,6 +2218,7 @@ static void unit(void *sink, const SemanticRecord *t, int32_t root, uint64_t ord
      * knowledge, not recorded bit-perfect) */
     Ref T; int whole = speaks ? entity_of(k, t, root, &T) : 0;
     records_of(k, t, root, ev0, whole ? &T : NULL);
+    k->binding_phase = binding_phase;
     tls_back(&previous);
     scratch_restore(record_mark);
 }
@@ -2281,6 +2317,14 @@ static void finish_text(Sink *sink, SemanticValue *value){
 }
 typedef struct { uint32_t scope; } SemanticScope;
 typedef struct { SemanticRecord record; BindingMatrix bindings; KeyRank rank; uint64_t ordinal; } PreparedRecord;
+static void prepared_keys(Sink *sink, PreparedRecord *record){
+    sink->kr = record->rank; sink->bindings = record->bindings;
+    unit(sink, &record->record, 0, record->ordinal, 1);
+    /* Cached native products belong to unit's temporary frame. The retained
+     * compiled operands must not keep those pointers between barrier rounds. */
+    for (uint32_t i = 0; i < record->record.count; i++) record->record.n[i].product = NULL;
+    for (uint32_t i = 0; i < record->record.dropped_count; i++) record->record.dropped[i].seen = 0;
+}
 typedef struct {
     Sink *sink; const Layout *layout; SemanticRecord record;
     SemanticScope *scopes, *context_scopes; uint32_t depth, capacity, context_depth, context_capacity; uint64_t ordinal;
@@ -2339,11 +2383,7 @@ static int collect_record(void *sink, int event, const SField *field){
             prepared->record.bindings = &prepared->bindings;
             prepared->rank = output->kr; prepared->ordinal = collector->ordinal;
             for (uint32_t i = 0; i < prepared->record.count; i++) prepared->record.n[i].owner = &prepared->record;
-            unit(output, &prepared->record, 0, collector->ordinal, 1);
-            /* Products allocated during key evaluation belong to that unit's
-             * temporary frame, not to the retained window's binding operands. */
-            for (uint32_t i = 0; i < prepared->record.count; i++) prepared->record.n[i].product = NULL;
-            for (uint32_t i = 0; i < prepared->record.dropped_count; i++) prepared->record.dropped[i].seen = 0;
+            prepared_keys(output, prepared);
         } else unit(output, record, 0, collector->ordinal, 0);
         return S_VISIT_OK | (collector->prepared ? S_VISIT_RETAIN : 0);
     }
@@ -2594,6 +2634,21 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
         }
         if (pipeline->failed) break;
         if (bind_keys) {
+            /* Resolve declarations to a fixed point before producing claims.
+             * The native table publishes only monotone improvements at a
+             * fixed source rank, so cycles stop when no declaration changes.
+             * This revisits compiled operands, never source bytes or ASTs. */
+            uint64_t before;
+            do {
+                before = keys_revision();
+                #pragma omp taskloop grainsize(1) shared(prepared)
+                for (uint32_t lane = 0; lane < lanes; lane++) {
+                    Sink *worker = &pipeline->workers[lane]; reset_record_worker(pipeline, worker);
+                    SayScratch previous = scratch_enter(&prepared[lane].arena);
+                    for (uint32_t i = 0; i < prepared[lane].count; i++) prepared_keys(worker, &prepared[lane].record[i]);
+                    scratch_leave(&prepared[lane].arena, previous);
+                }
+            } while (keys_revision() != before);
             /* All declarations in this bounded window are now published.
              * Evaluate the compiled operands after that dependency barrier;
              * the source bytes and each native AST were visited only once. */
