@@ -1178,6 +1178,7 @@ static TSRange node_range(TSNode node){
     return (TSRange){ts_node_start_point(node), ts_node_end_point(node), ts_node_start_byte(node), ts_node_end_byte(node)};
 }
 
+static const SContext *record_context_snapshot(SRecords *records, TSNode node);
 static int records_open(SRecords *records, const Layout *layout, const uint8_t *source, size_t length, int tail){
     *records = (SRecords){0};
     if (!layout->g.compiled || layout->g.unresolved || length > UINT32_MAX) return 0;
@@ -1322,7 +1323,9 @@ int s_record_next(SRecords *records, SRecord *record){
                 continue;
             }
             records->descend = (uint8_t)header;
-            *record = (SRecord){.node=node, .range=node_range(node), .ordinal=records->ordinal++, .header=(uint8_t)header}; return 1;
+            const SContext *context = records->layout->g.has_context ? record_context_snapshot(records, node) : NULL;
+            if (records->failed) return 0;
+            *record = (SRecord){.node=node, .range=node_range(node), .ordinal=records->ordinal++, .header=(uint8_t)header, .context=context}; return 1;
         }
         if (!record_advance(records, 1)) return 0;
     }
@@ -1335,6 +1338,7 @@ void s_records_close(SRecords *records){
         if (records->header_arena) records->header_arena->used = records->header_mark;
         else scratch_restore(records->header_mark);
     }
+    arena_release(&records->context_arena);
     *records = (SRecords){0};
 }
 int s_records_window(SRecords *records, const Layout *layout, const uint8_t *source, size_t length,
@@ -1766,6 +1770,81 @@ static int record_context(const Layout *layout, TSNode root, const GInput *input
     }
     *opened = fields; return 1;
 }
+/* Immutable lexical context, independent of the packaging AST and input byte
+ * buffer. A window projects each ancestor header once; record workers replay
+ * compiled fields rather than parsing the same headers for every record. */
+typedef struct ContextEvent { SField field; int event; struct ContextEvent *next; } ContextEvent;
+struct SContext { ContextEvent *first, *last; SField *opened; uint32_t count; };
+typedef struct ContextEntry {
+    const void *owner; uint32_t start; SContext value; struct ContextEntry *next;
+} ContextEntry;
+struct SContextStore { ContextEntry **buckets; size_t capacity, count; };
+typedef struct { SContext *context; SayScratch *arena; } ContextCapture;
+static SField context_field_copy(SayScratch *arena, const SField *field){
+    SField copy = *field; copy.source = (TSNode){0}; copy.flags |= S_FIELD_CONTEXT;
+    if (field->name_length) {
+        uint8_t *name = arena_alloc(arena, field->name_length); memcpy(name, field->name, field->name_length); copy.name = name;
+    }
+    if (field->value_length) {
+        uint8_t *value = arena_alloc(arena, field->value_length); memcpy(value, field->value, field->value_length); copy.value = value;
+    }
+    if (field->bindings) {
+        size_t size = sizeof(SNameBindings) + (size_t)field->bindings->count * sizeof(uint32_t);
+        SNameBindings *bindings = arena_alloc(arena, size); memcpy(bindings, field->bindings, size); copy.bindings = bindings;
+    }
+    return copy;
+}
+static int capture_context(void *sink, int event, const SField *field){
+    ContextCapture *capture = sink;
+    ContextEvent *entry = arena_alloc(capture->arena, sizeof *entry);
+    *entry = (ContextEvent){.field=context_field_copy(capture->arena, field), .event=event};
+    if (capture->context->last) capture->context->last->next = entry;
+    else capture->context->first = entry;
+    capture->context->last = entry; return S_VISIT_OK;
+}
+static size_t context_bucket(const void *owner, uint32_t start, size_t capacity){
+    uint64_t key = (uint64_t)(uintptr_t)owner ^ ((uint64_t)start << 32 | start);
+    key ^= key >> 30; key *= UINT64_C(0xbf58476d1ce4e5b9); key ^= key >> 27;
+    return (size_t)key & (capacity - 1);
+}
+static const SContext *record_context_snapshot(SRecords *records, TSNode node){
+    SayScratch *arena = &records->context_arena;
+    SContextStore *store = records->contexts;
+    if (!store) { store = arena_alloc(arena, sizeof *store); *store = (SContextStore){0}; records->contexts = store; }
+    TSNode parent = ts_node_parent(node);
+    const void *owner = parent.id; uint32_t start = ts_node_is_null(parent) ? 0 : ts_node_start_byte(parent);
+    if (store->capacity) {
+        for (ContextEntry *entry = store->buckets[context_bucket(owner, start, store->capacity)]; entry; entry = entry->next)
+            if (entry->owner == owner && entry->start == start) return &entry->value;
+    }
+    if (store->count >= store->capacity / 2) {
+        size_t capacity = store->capacity ? store->capacity * 2 : 128;
+        if (capacity > SIZE_MAX / sizeof(ContextEntry *)) { fputs("ancestor context index overflow\n", stderr); abort(); }
+        ContextEntry **buckets = arena_alloc(arena, capacity * sizeof *buckets); memset(buckets, 0, capacity * sizeof *buckets);
+        for (size_t i = 0; i < store->capacity; i++) for (ContextEntry *entry = store->buckets[i], *next; entry; entry = next) {
+            next = entry->next; size_t bucket = context_bucket(entry->owner, entry->start, capacity);
+            entry->next = buckets[bucket]; buckets[bucket] = entry;
+        }
+        store->buckets = buckets; store->capacity = capacity;
+    }
+    ContextEntry *entry = arena_alloc(arena, sizeof *entry); *entry = (ContextEntry){.owner=owner, .start=start};
+    ContextCapture capture = {&entry->value, arena};
+    GInput input = {.src=records->source, .length=records->length}; input.range.end_byte = records->length;
+    input.source_row = records->layout->source_row;
+    size_t mark = scratch_mark(); SField *opened; uint32_t count;
+    if (!record_context(records->layout, node, &input, capture_context, &capture, &opened, &count)) {
+        scratch_restore(mark); records->failed = 1; return NULL;
+    }
+    if (count) {
+        entry->value.opened = arena_alloc(arena, (size_t)count * sizeof(SField)); entry->value.count = count;
+        for (uint32_t i = 0; i < count; i++) entry->value.opened[i] = context_field_copy(arena, &opened[i]);
+    }
+    scratch_restore(mark);
+    size_t bucket = context_bucket(owner, start, store->capacity);
+    entry->next = store->buckets[bucket]; store->buckets[bucket] = entry; store->count++;
+    return &entry->value;
+}
+
 typedef struct { s_visit_fn visit; void *sink; uint8_t opened, skipped; } HeaderVisitor;
 static int header_visit(void *sink, int event, const SField *field){
     HeaderVisitor *header = sink;
@@ -1775,13 +1854,17 @@ static int header_visit(void *sink, int event, const SField *field){
     } else if (event == S_CLOSE && header->skipped) { header->skipped = 0; return S_VISIT_OK; }
     return header->visit(header->sink, event, field);
 }
-static int cursor_record(const Layout *layout, TSNode root, int header, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
+static int cursor_record(const Layout *layout, TSNode root, int header, const SContext *inherited, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
     if (!layout->g.compiled || layout->g.unresolved || length > UINT32_MAX || !visit || ts_node_is_null(root) || ts_node_has_error(root)) return 0;
     GInput input = {0}; input.src = source; input.length = (uint32_t)length; input.range.end_byte = (uint32_t)length;
     input.source_row = layout->source_row;
     size_t mark = scratch_mark();
-    SField *context; uint32_t contexts;
-    int valid = record_context(layout, root, &input, visit, sink, &context, &contexts);
+    SField *context = NULL; uint32_t contexts = 0; int valid = 1;
+    if (inherited) {
+        context = inherited->opened; contexts = inherited->count;
+        for (const ContextEvent *event = inherited->first; event && valid; event = event->next)
+            valid = (visit(sink, event->event, &event->field) & S_VISIT_OK) != 0;
+    } else valid = record_context(layout, root, &input, visit, sink, &context, &contexts);
     HeaderVisitor visitor = {visit, sink, 0, 0};
     if (valid) valid = cursor_project(layout, root, &input, header ? header_visit : visit, header ? &visitor : sink, NULL, 0, 0, 0);
     while (valid && contexts) valid = (visit(sink, S_CLOSE, &context[--contexts]) & S_VISIT_OK) != 0;
@@ -1795,10 +1878,10 @@ static int cursor_record(const Layout *layout, TSNode root, int header, const ui
     return valid;
 }
 int s_cursor(const Layout *layout, TSNode root, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
-    return cursor_record(layout, root, 0, source, length, visit, sink);
+    return cursor_record(layout, root, 0, NULL, source, length, visit, sink);
 }
 int s_cursor_record(const Layout *layout, const SRecord *record, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
-    return cursor_record(layout, record->node, record->header, source, length, visit, sink);
+    return cursor_record(layout, record->node, record->header, record->context, source, length, visit, sink);
 }
 
 /* ---- laplace structure LAYOUT FILE [-n NODES]: a file's tree as a layout parts it, for writing recipes. LAYOUT is a
