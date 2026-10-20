@@ -2555,12 +2555,20 @@ typedef struct {
     FILE *operands, *products; DeferredJob *first, *last, *free;
     SayScratch jobs, read;
 } DeferredRecords;
-typedef struct {
+typedef struct RecordPipeline {
     const Recipe *recipe; File *file; const Say *say; const uint8_t *source; size_t length; const SInput *input;
     Sink *result, *workers, *evaluators; uint32_t worker_count;
     Ref filename, stem, about; int has_about, failed;
     DeferredRecords deferred;
+    struct RecordPipeline *next;
 } RecordPipeline;
+static RecordPipeline *source_pending;
+static int source_active;
+int say_has_keys(const Recipe *recipe){ const Say *say = recipe ? recipe->say : NULL; return say && say->nkey != 0; }
+void say_source_begin(void){
+    if (source_active || source_pending) { fputs("a semantic source session is already active\n", stderr); exit(2); }
+    source_active = 1;
+}
 
 /* Private, host-local journals retain compiled operands and native products,
  * never packaging buffers or parser nodes. Files disappear on close, including an
@@ -2768,6 +2776,15 @@ static void deferred_close(DeferredRecords *records){
     if (records->operands && fclose(records->operands)) journal_error();
     if (records->products && fclose(records->products)) journal_error();
     arena_release(&records->jobs); arena_release(&records->read); *records = (DeferredRecords){0};
+}
+static void pending_outputs(RecordPipeline *pipeline){
+    Sink *result = pipeline->result; File *file = pipeline->file;
+    table_pin(&pipeline->filename.id); table_pin(&pipeline->stem.id); table_pin(&file->witness.id);
+    if (file->has_lineage) table_pin(&file->lineage.id);
+    for (size_t i = 0; i < result->things.n; i++) table_pin(&result->things.c[i].id);
+    for (size_t i = 0; i < result->meta.n; i++) table_pin(&result->meta.c[i].id);
+    for (uint64_t i = 0; i < result->ev.n; i++) ev_push(&file->ev, &result->ev.e[i]);
+    result->ev.n = 0;
 }
 static void page_about(RecordPipeline *pipeline, const SRecords *records){
     if (!pipeline->say->has_about) return;
@@ -2980,7 +2997,7 @@ static void read_records(RecordPipeline *pipeline){
         }
         if (layout->ntier) { layout->tier[0].header = 0; layout->tier[0].skip = 0; }
         s_records_close(&records);
-        if (!pipeline->failed && ended && consumed == buffer.n) deferred_finish(pipeline, 1);
+        if (!pipeline->failed && ended && consumed == buffer.n) deferred_finish(pipeline, !source_active || pipeline->result->hw != NULL);
         if (pipeline->file->emit && !pipeline->failed) {
             Sink *result = pipeline->result;
             if (pipeline->file->emit(pipeline->file->emit_context, result->things.c, result->things.n,
@@ -2993,43 +3010,18 @@ static void read_records(RecordPipeline *pipeline){
         if (pipeline->failed || (ended && !buffer.n)) break;
     } while (1);
     if (has_header && !independent) scratch_restore(header_mark);
-    if (!pipeline->failed && pipeline->deferred.first) { fputs("deferred records reached file closure before they were finalized\n", stderr); exit(2); }
-    deferred_close(&pipeline->deferred);
+    if (!pipeline->failed && pipeline->deferred.first && (!source_active || pipeline->result->hw)) {
+        fputs("deferred records reached file closure before they were finalized\n", stderr); exit(2);
+    }
+    if (pipeline->failed || !pipeline->deferred.first) deferred_close(&pipeline->deferred);
     release_sinks(pipeline->evaluators, pipeline->worker_count); pipeline->evaluators = NULL;
     arena_release(&headers); lp_buf_free(&buffer); free(layout);
     pipeline->source = original_source; pipeline->length = original_length;
 }
 
-static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw *hw, const SInput *input){
-    Say *sy = xrealloc(NULL, sizeof *sy); *sy = *(const Say *)r->say;      /* the recipe's sayings, a copy for this file: on the heap, as a Say is larger than a thread's stack holds */
-    if (!sy->lay.g.compiled || sy->lay.g.unresolved) {
-        fprintf(stderr, "%s: semantic grammar was not compiled before record execution\n", r->name); free(sy); exit(2);
-    }
-    const char *base = strrchr(f->path, '/'); base = base ? base + 1 : f->path; size_t bl = strlen(base); if (bl > 3 && !strcmp(base + bl - 3, ".gz")) bl -= 3;
-    const char *sb = base; if (sy->stemfrom) { const char *f0 = NULL; for (const char *c = base; c < base + bl; c++) if (*c == sy->stemfrom) f0 = c; if (f0) sb = f0 + 1; }
-    const char *dot = memchr(sb, sy->stem ? sy->stem : '.', (size_t)(base + bl - sb)); Ref fname = string_ref((const uint8_t *)base, bl), fstem = string_ref((const uint8_t *)sb, dot ? (size_t)(dot - sb) : (size_t)(base + bl - sb));    /* the file's own name, and the part of it {file} stands for */
-    if (f->emit) {
-        table_pin(&fname.id); table_pin(&fstem.id); table_pin(&f->witness.id);
-        if (f->has_lineage) table_pin(&f->lineage.id);
-    }
-
-    uint32_t workers = (uint32_t)omp_get_max_threads(); if (!workers) workers = 1;
-    if (workers > MAX_RECORD_LANES) workers = MAX_RECORD_LANES;
-    size_t nc = 1; Sink *part = calloc(1, sizeof *part), *lanes = calloc(workers, sizeof *lanes);
-    if (!part || !lanes) { perror("record workers"); free(part); free(lanes); free(sy); exit(2); }
-    part[0].r = r; part[0].s = sy; part[0].hw = hw; sink_buffers(&part[0]);
-    RecordPipeline pipeline = {.recipe=r, .file=f, .say=sy, .source=src, .length=n, .input=input,
-        .result=&part[0], .workers=lanes, .worker_count=workers, .filename=fname, .stem=fstem};
-    if (f->emit || omp_in_parallel()) read_records(&pipeline);
-    else {
-        #pragma omp parallel
-        {
-            #pragma omp master
-            read_records(&pipeline);
-        }
-    }
-    release_sinks(lanes, workers);
-    if (pipeline.failed) { f->incomplete++; release_sinks(part, nc); free(sy); exit(2); }
+static void finish_laid(RecordPipeline *pipeline){
+    const Recipe *r = pipeline->recipe; File *f = pipeline->file; const Say *sy = pipeline->say;
+    Sink *part = pipeline->result; size_t nc = 1; Hw *hw = part[0].hw;
     Refs things = {.arena=&part[0].output}, meta = {.arena=&part[0].output}; uint64_t open = 0;
     for (size_t i = 0; i < nc; i++) {
         for (uint64_t j = 0; j < part[i].ev.n; j++) ev_push(&f->ev, &part[i].ev.e[j]);
@@ -3044,7 +3036,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     { uint64_t unk = 0; for (size_t i = 0; i < nc; i++) unk += part[i].unknown;
       if (unk) { fprintf(stderr, "\n  %s: %llu keys in %s name a type no list of the highway holds, and say nothing; for instance:", r->name, (unsigned long long)unk, f->path);
           for (size_t i = 0, shown = 0; i < nc && shown < 3; i++) for (int j = 0; j < part[i].nunk && shown < 3; j++, shown++) fprintf(stderr, " [%s]", part[i].unknm[j]); fputc('\n', stderr); } }
-    if (f->emit) { file_stream_finish(f); release_sinks(part, nc); free(sy); return; }
+    if (f->emit) { file_stream_finish(f); release_sinks(part, nc); free(pipeline); return; }
     if (hw) {                                                                /* for the highway: what the file says of its types, in the file's order */
         for (size_t i = 0; i < nc; i++) { for (size_t j = 0; j < part[i].nhr; j++) { HwRec *x = &part[i].hr[j]; const HwLine *h = &sy->hw[x->line];
                 if (x->what == 1) hw_type(hw, h->a.list, h->say, x->thing);
@@ -3053,7 +3045,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
                 else hw_edge(hw, h->a.list, x->a, h->b.list, x->b);
             }
         }
-        release_sinks(part, nc); free(sy); return; }
+        release_sinks(part, nc); free(pipeline); return; }
     /* the trunk: [metadata, content]. The metadata tree: the file's name, and what its parts say of the file itself.
      * The content tree: the things of its outermost tier, in the file's order. */
     /* A file read a stretch at a time gathers what each stretch held, and its trunk is made when the last is read. */
@@ -3061,7 +3053,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     { uint64_t need = f->nsaid + things.n + meta.n; if (need > f->csaid) { f->csaid = need * 2 + 1024; f->said = xrealloc(f->said, f->csaid * sizeof(Ref)); }
       for (size_t j = 0; j < meta.n; j++) { Ref x = meta.c[j]; x.said = LP_SAID_METADATA; f->said[f->nsaid++] = x; }
       for (size_t j = 0; j < things.n; j++) { Ref x = things.c[j]; if (x.said == LP_SAID_METADATA) x.said = 0; f->said[f->nsaid++] = x; } }
-    if (f->partial) { release_sinks(part, nc); free(sy); return; }
+    if (f->partial) { release_sinks(part, nc); free(pipeline); return; }
     things.n = meta.n = 0;
     for (uint64_t j = 0; j < f->nsaid; j++) { Ref x = f->said[j]; if (x.said == LP_SAID_METADATA) { x.said = LP_SAID_TUPLE; push(&meta, &x); } else push(&things, &x); }
     free(f->said); f->said = NULL; f->nsaid = f->csaid = 0;
@@ -3073,7 +3065,100 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         if (nm) { f->file.said = 0; f->file.outcome = 0; f->file.position = 0; f->file.spare = 0; }   /* a file with no metadata is its content: it says in its source's trunk what its content is (records, or a record) */
         f->has_file = 1; f->trunk = content; }
     else if (f->ev.n && nm) { Ref two[1] = { said_metadata(metadata) }; f->file = two[0]; f->file.said = 0; f->has_file = 0; }
-    release_sinks(part, nc); free(sy);
+    release_sinks(part, nc); free(pipeline);
+}
+static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw *hw, const SInput *input){
+    /* The compiled recipe is immutable. File-specific headers and lexical
+     * operands already have owned storage; no per-file recipe copy is needed. */
+    const Say *sy = r->say;
+    if (!sy->lay.g.compiled || sy->lay.g.unresolved) {
+        fprintf(stderr, "%s: semantic grammar was not compiled before record execution\n", r->name); exit(2);
+    }
+    const char *base = strrchr(f->path, '/'); base = base ? base + 1 : f->path;
+    size_t bl = strlen(base); if (bl > 3 && !strcmp(base + bl - 3, ".gz")) bl -= 3;
+    const char *sb = base;
+    if (sy->stemfrom) { const char *from = NULL; for (const char *c = base; c < base + bl; c++) if (*c == sy->stemfrom) from = c; if (from) sb = from + 1; }
+    const char *dot = memchr(sb, sy->stem ? sy->stem : '.', (size_t)(base + bl - sb));
+    Ref fname = string_ref((const uint8_t *)base, bl), fstem = string_ref((const uint8_t *)sb, dot ? (size_t)(dot - sb) : (size_t)(base + bl - sb));
+    if (f->emit) {
+        table_pin(&fname.id); table_pin(&fstem.id); table_pin(&f->witness.id);
+        if (f->has_lineage) table_pin(&f->lineage.id);
+    }
+    uint32_t workers = (uint32_t)omp_get_max_threads(); if (!workers) workers = 1;
+    if (workers > MAX_RECORD_LANES) workers = MAX_RECORD_LANES;
+    Sink *part = calloc(1, sizeof *part), *lanes = calloc(workers, sizeof *lanes);
+    RecordPipeline *pipeline = calloc(1, sizeof *pipeline);
+    if (!part || !lanes || !pipeline) { perror("record workers"); exit(2); }
+    *part = (Sink){.r=r, .s=sy, .hw=hw}; sink_buffers(part);
+    *pipeline = (RecordPipeline){.recipe=r, .file=f, .say=sy, .source=src, .length=n, .input=input,
+        .result=part, .workers=lanes, .worker_count=workers, .filename=fname, .stem=fstem};
+    if (f->emit || omp_in_parallel()) read_records(pipeline);
+    else {
+        #pragma omp parallel
+        {
+            #pragma omp master
+            read_records(pipeline);
+        }
+    }
+    release_sinks(lanes, workers); pipeline->workers = NULL;
+    if (pipeline->failed) { f->incomplete++; deferred_close(&pipeline->deferred); release_sinks(part, 1); free(pipeline); exit(2); }
+    if (pipeline->deferred.first) {
+        f->partial = 1; pipeline->source = NULL; pipeline->length = 0; pipeline->input = NULL;
+        if (!f->emit) pending_outputs(pipeline);
+        RecordPipeline *head = __atomic_load_n(&source_pending, __ATOMIC_ACQUIRE);
+        do { pipeline->next = head; } while (!__atomic_compare_exchange_n(&source_pending, &head, pipeline, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
+        return;
+    }
+    finish_laid(pipeline);
+}
+static int pending_file_order(const void *a, const void *b){
+    const RecordPipeline *x = *(RecordPipeline *const *)a, *y = *(RecordPipeline *const *)b;
+    return x->file->order < y->file->order ? -1 : x->file->order > y->file->order;
+}
+static int source_drain(source_file_ready_fn ready, void *context, int final){
+    RecordPipeline *head = __atomic_exchange_n(&source_pending, NULL, __ATOMIC_ACQ_REL);
+    size_t count = 0; for (RecordPipeline *p = head; p; p = p->next) count++;
+    RecordPipeline **files = count ? malloc(count * sizeof *files) : NULL;
+    Sink *evaluation = count ? calloc(1, sizeof *evaluation) : NULL;
+    if (count && (!files || !evaluation)) { perror("source continuations"); exit(2); }
+    size_t at = 0; for (RecordPipeline *p = head; p; p = p->next) { files[at++] = p; p->evaluators = evaluation; }
+    if (count) qsort(files, count, sizeof *files, pending_file_order);
+    uint64_t before;
+    do {
+        before = keys_revision();
+        for (size_t i = 0; i < count; i++) deferred_bind(files[i], final);
+    } while (keys_revision() != before);
+    int failed = 0;
+    for (size_t i = 0; i < count; i++) {
+        RecordPipeline *pipeline = files[i]; File *file = pipeline->file;
+        deferred_finish(pipeline, final);
+        if (file->emit) {
+            Sink *result = pipeline->result;
+            if (file->emit(file->emit_context, result->things.c, result->things.n,
+                           result->meta.c, result->meta.n, &result->ev)) failed = 1;
+            result->things.n = result->meta.n = result->ev.n = 0;
+        }
+        if (pipeline->deferred.first) {
+            if (!file->emit) {
+                pending_outputs(pipeline);
+                if (!failed && ready && ready(context, file)) failed = 1;
+                free(file->ev.e); file->ev = (Events){0};
+            }
+            pipeline->evaluators = NULL;
+            RecordPipeline *pending = __atomic_load_n(&source_pending, __ATOMIC_ACQUIRE);
+            do { pipeline->next = pending; } while (!__atomic_compare_exchange_n(&source_pending, &pending, pipeline, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
+            continue;
+        }
+        if (!file->emit) file->partial = 0;
+        deferred_close(&pipeline->deferred); finish_laid(pipeline);
+        if (!failed && ready && ready(context, file)) failed = 1;
+    }
+    if (evaluation) release_sinks(evaluation, 1);
+    free(files); return failed;
+}
+int say_source_poll(source_file_ready_fn ready, void *context){ return source_drain(ready, context, 0); }
+int say_source_end(source_file_ready_fn ready, void *context){
+    int failed = source_drain(ready, context, 1); source_active = 0; return failed;
 }
 void attest_layout(const Recipe *r, File *f, const uint8_t *src, size_t n){ read_laid(r, f, src, n, NULL, NULL); }
 void attest_input(const Recipe *r, File *f, const SInput *input){ read_laid(r, f, NULL, 0, NULL, input); }
