@@ -411,7 +411,7 @@ static Ref blocks(Ref *r, size_t n){
 static void member(File *f, Ref rec, Ref *part, int n, uint32_t *pos){
     for (int i = 0; i < n; i++) if (part[i].said != LP_SAID_TUPLE) part[i].said = 0;
     Ref c = n == 1 ? part[0] : compose(part, (uint32_t)n, ref_above(part, (size_t)n)); c = said_claim(c);
-    Event e = { c.id, rec.id, 1.0f, 1500.0f, 0.0f, ++*pos, EV_MEMBER, 0, { { 0 } }, 0 }; ev_push(&f->ev, &e);
+    Event e = { .claim = c.id, .witnessed = rec.id, .score = 1.0f, .enter_rating = 1500.0f, .position = ++*pos, .kind = EV_MEMBER }; ev_push(&f->ev, &e);
 }
 /* A PGN file, read: every game a record, in the file's order; its trunk [the OS's record, its records]. */
 static void chess_read(const Recipe *rcp, File *f, const uint8_t *src, size_t n){
@@ -445,7 +445,7 @@ static void chess_read(const Recipe *rcp, File *f, const uint8_t *src, size_t n)
                unread++; if (unread <= 5) fprintf(stderr, "\n  %s: game %u is kept as its text and not replayed: %s", f->path, ordinal, rd.err); }
         if (!part.n) { free(part.c); free(tags.c); game_free(&g); continue; }
         rec = comp(part.c, part.n); free(part.c);
-        Event e = { rec.id, rec.id, 1.0f, 1500.0f, 0.0f, ordinal, EV_RECORD, 0, { { 0 } }, 0 }; ev_push(&f->ev, &e);
+        Event e = { .claim = rec.id, .witnessed = rec.id, .score = 1.0f, .enter_rating = 1500.0f, .position = ordinal, .kind = EV_RECORD }; ev_push(&f->ev, &e);
         uint32_t pos = 0; int outcome = !result || !(rl == 1 && *result == '*');
         if (ok && (!g.main.n)) zero++;
         if (!outcome) unfinished++;
@@ -653,7 +653,7 @@ static void verify_ids(Db *d, Stat *st){
 }
 int cmd_pgn(int argc, char **argv){
     const char *conninfo = laplace_db(), *outp = NULL, *t0p = NULL; int verify = 0;
-    int a = opts(argc, argv, (const Opt[]){ { "-d", 's', &conninfo }, { "-t", 's', &t0p }, { "-o", 's', &outp }, { "--verify", 'b', &verify }, { NULL } });
+    int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "-t", .kind = 's', .at = &t0p }, { .flag = "-o", .kind = 's', .at = &outp }, { .flag = "--verify", .kind = 'b', .at = &verify }, { 0 } });
     if (a >= argc) { fprintf(stderr, "usage: laplace pgn [-d conninfo] [-o file] [--verify] ID...   (a file's, a record's or a line's ID)\n"); return 2; }
     tier0_open(t0p); rules_load();
     IdVec roots = { 0 }; for (int i = a; i < argc; i++) { lp_id x; if (!id_parse(argv[i], &x)) { fprintf(stderr, "%s is no ID\n", argv[i]); return 2; } lp_push(&roots, x); }
