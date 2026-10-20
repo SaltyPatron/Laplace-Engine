@@ -5,6 +5,7 @@
 #   escapes resolved) and its language tag (without the @) or its datatype
 #   prefix and base directives, blank nodes and collections are not of the tree
 grammar turtle
+framing lp_turtle_records
 records triple
 resolve turtle
 quotes string
