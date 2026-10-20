@@ -714,6 +714,7 @@ int say_says(Recipe *r, const char *path, char *tok){
     s->laid_line = 1; return layout_says(&s->lay, path, tok);
 }
 int say_lays(const Recipe *r){ const Say *s = r->say; return s && (s->lay.ntier > 0 || s->lay.g.n > 0); }
+static const SNameBindings *compile_name_bindings(const void *context, const uint8_t *name, uint32_t length, SayScratch *arena);
 int say_compile(Recipe *r){
     Say *s = r->say;
     if (!s) return 1;
@@ -726,6 +727,7 @@ int say_compile(Recipe *r){
     }
     if (!s->lay.ntier && !s->lay.g.n) return 1;
     if (!layout_compile_recipe(&s->lay, r->grammar, sizeof r->grammar)) return 0;
+    layout_bind_names(&s->lay, compile_name_bindings, s->paths);
     r->lang = grammar_lang(s->lay.g.grammar_id); return r->lang != NULL;
 }
 /* Whether a file this recipe lays out can be read a stretch at a time: its outermost parts are lines (1) or end at an
@@ -900,6 +902,29 @@ static int bind_field_name(BindingMatrix *matrix, const PathProgram *program, ui
     }
     if (length <= program->max_name_length) matches += bind_name_matches(matrix, program, scope, value, name, length, note, hash, 0);
     return matches;
+}
+static int static_name_matches(const NameCode *pattern, const uint8_t *name, uint32_t length){
+    return !pattern->note && pattern->length <= length && (pattern->wildcard || pattern->length == length) &&
+        (!pattern->length || !memcmp(pattern->bytes, name, pattern->length));
+}
+static const SNameBindings *compile_name_bindings(const void *context, const uint8_t *name, uint32_t length, SayScratch *arena){
+    const PathProgram *program = context; size_t count = program->has_positions;
+    for (size_t i = 0; i < program->name_count; i++) count += static_name_matches(&program->names[i].name, name, length);
+    if (count > UINT32_MAX || count > (SIZE_MAX - sizeof(SNameBindings)) / sizeof(uint32_t)) { fputs("compiled name bindings exceed address space\n", stderr); abort(); }
+    size_t bytes = sizeof(SNameBindings) + count * sizeof(uint32_t);
+    SNameBindings *bindings = arena ? arena_alloc(arena, bytes) : malloc(bytes);
+    if (!bindings) { perror("compiled field bindings"); abort(); }
+    bindings->count = 0;
+    if (program->has_positions) bindings->slots[bindings->count++] = 0;
+    for (size_t i = 0; i < program->name_count; i++)
+        if (static_name_matches(&program->names[i].name, name, length)) bindings->slots[bindings->count++] = (uint32_t)(i + 1);
+    return bindings;
+}
+static int bind_semantic_field(BindingMatrix *matrix, const PathProgram *program, uint32_t scope, uint32_t value, const SField *field){
+    const SNameBindings *compiled = field->kind == S_NOTE ? NULL : field->bindings;
+    if (!compiled) return bind_field_name(matrix, program, scope, value, field->name, field->name_length, field->kind == S_NOTE);
+    if (matrix) for (uint32_t i = 0; i < compiled->count; i++) bindings_add(matrix, scope, compiled->slots[i], value);
+    return (int)compiled->count;
 }
 
 enum { DIAG_ATTEST, DIAG_HOLDS, DIAG_RELATE, DIAG_LINE_PREDICATE, DIAG_LINE, DIAG_NO_LIST, DIAG_SELF_VALUE, DIAG_UNRESOLVED_KEY };
@@ -2077,7 +2102,7 @@ static uint32_t semantic_variable(SemanticRecord *record, const PathProgram *pro
     if (parent >= 0) {
         record->n[id].operand = bindings_add(record->bindings, (uint32_t)parent, BIND_INPUTS, id);
         record->n[parent].arity++;
-        bind_field_name(record->bindings, program, (uint32_t)parent, id, field->name, field->name_length, field->kind == S_NOTE);
+        bind_semantic_field(record->bindings, program, (uint32_t)parent, id, field);
     }
     return id;
 }
@@ -2176,7 +2201,7 @@ static int collect_record(void *sink, int event, const SField *field){
         }
         int32_t parent = collector->context_depth ? (int32_t)collector->context_scopes[collector->context_depth - 1].scope : -1;
         if (event == S_FIELD && field->name_length &&
-            !bind_field_name(NULL, output->s->paths, (uint32_t)parent, 0, field->name, field->name_length, field->kind == S_NOTE)) return S_VISIT_OK;
+            !bind_semantic_field(NULL, output->s->paths, (uint32_t)parent, 0, field)) return S_VISIT_OK;
         uint32_t variable = semantic_variable(record, output->s->paths, parent, field);
         if (event == S_OPEN) {
             if (collector->context_depth == collector->context_capacity) {
@@ -2231,7 +2256,7 @@ static int collect_record(void *sink, int event, const SField *field){
     } else {
         int required = event == S_OPEN || field->kind != S_VALUE || !field->name_length ||
             (field->flags & S_FIELD_SAME_TIER) ||
-            bind_field_name(NULL, output->s->paths, (uint32_t)parent, 0, field->name, field->name_length, field->kind == S_NOTE);
+            bind_semantic_field(NULL, output->s->paths, (uint32_t)parent, 0, field);
         if (!required) { drop_field(record, parent, field, collector->layout); return S_VISIT_OK; }
         variable = semantic_variable(record, output->s->paths, parent, field);
     }
@@ -2240,8 +2265,7 @@ static int collect_record(void *sink, int event, const SField *field){
          * not an ancestor in the source grammar. Parent selectors see the
          * actual inherited scope directly. */
         record->n[variable].parent = record->n[0].parent;
-        bind_field_name(record->bindings, output->s->paths, (uint32_t)record->n[0].parent, variable,
-                        field->name, field->name_length, field->kind == S_NOTE);
+        bind_semantic_field(record->bindings, output->s->paths, (uint32_t)record->n[0].parent, variable, field);
     }
     if (event == S_OPEN) {
         if (collector->depth == collector->capacity) {

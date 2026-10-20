@@ -49,7 +49,11 @@ static void arena_ready(SayScratch *arena){
 #ifdef _WIN32
         arena->buf = VirtualAlloc(NULL, (size_t)SCRATCH_RESERVE, MEM_RESERVE, PAGE_NOACCESS);
 #else
-        void *buffer = mmap(NULL, (size_t)SCRATCH_RESERVE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+#ifdef MAP_NORESERVE
+        flags |= MAP_NORESERVE;
+#endif
+        void *buffer = mmap(NULL, (size_t)SCRATCH_RESERVE, PROT_READ | PROT_WRITE, flags, -1, 0);
         arena->buf = buffer == MAP_FAILED ? NULL : buffer;
         arena->committed = (size_t)SCRATCH_RESERVE;
 #endif
@@ -472,6 +476,21 @@ static int native_counted_layout(const Layout *layout){
     }
     return 0;
 }
+static int compile_conllu_records(Layout *layout, char *grammar, size_t capacity){
+    Layout *inner = malloc(sizeof *inner); if (!inner) { perror("record product grammar"); return 0; }
+    *inner = *layout;
+    if ((!inner->g.n && !use_format(inner, "conllu")) || !layout_compile_grammar(inner, "conllu")) { free(inner); return 0; }
+    layout->g = (GMap){0}; layout->npart = layout->parts_compiled = layout->part_errors = 0;
+    memset(layout->part_buckets, 0, sizeof layout->part_buckets); layout->part_prefix_lengths = 0; layout->nlevels = 0;
+    str_set(grammar, capacity, "lp_conllu_records");
+    if (!use_format(layout, grammar)) { free(inner); return 0; }
+    layout->record_inner = inner;
+    for (int i = 0; i < layout->g.n; i++) if (layout->g.rule[i].what == G_TEXT) {
+        layout->g.rule[i].compiled.inner = inner; layout->g.rule[i].compiled.child_grammar_id = inner->g.grammar_id;
+        layout->g.rule[i].compiled.flags |= 2u;
+    }
+    return layout_compile_grammar(layout, grammar);
+}
 int layout_compile_tiers(Layout *layout, char *grammar, size_t capacity){
     if (!layout->ntier || layout->g.n || layout->g.compiled) return 0;
     const char *name = NULL;
@@ -480,7 +499,7 @@ int layout_compile_tiers(Layout *layout, char *grammar, size_t capacity){
              layout->tier[1].kvlen == 1 && layout->tier[1].kv[0] == ':' && layout->tier[1].continued) name = "lp_registry";
     else if (layout->ntier == 2 && separated_by(&layout->tier[0], "\n\n") && separated_by(&layout->tier[1], "\n")) name = "lp_paragraphs";
     else if (layout->ntier == 3 && separated_by(&layout->tier[0], "\n\n") &&
-             separated_by(&layout->tier[1], "\n") && separated_by(&layout->tier[2], "\t")) name = "conllu";
+             separated_by(&layout->tier[1], "\n") && separated_by(&layout->tier[2], "\t")) return compile_conllu_records(layout, grammar, capacity);
     else if (layout->ntier == 2 && separated_by(&layout->tier[0], "\n")) {
         const STier *fields = &layout->tier[1];
         if (layout->tier[0].ncount && separated_by(fields, " ")) {
@@ -511,6 +530,8 @@ int layout_compile_tiers(Layout *layout, char *grammar, size_t capacity){
 int layout_compile_recipe(Layout *layout, char *grammar, size_t capacity){
     if (layout->g.compiled) return !layout->g.unresolved;
     if (!layout->g.n) return layout_compile_tiers(layout, grammar, capacity);
+    if (layout->ntier == 3 && !strcmp(grammar, "conllu") && separated_by(&layout->tier[0], "\n\n") &&
+        separated_by(&layout->tier[1], "\n") && separated_by(&layout->tier[2], "\t")) return compile_conllu_records(layout, grammar, capacity);
     /* JSON Lines has a physical record container and an independent JSON
      * product grammar. Keep the recipe's own levels and part instructions on
      * the child, rather than replacing them with a generic JSON format. */
@@ -522,6 +543,7 @@ int layout_compile_recipe(Layout *layout, char *grammar, size_t capacity){
         memset(layout->part_buckets, 0, sizeof layout->part_buckets); layout->part_prefix_lengths = 0; layout->nlevels = 0;
         str_set(grammar, capacity, "lp_records");
         if (!use_format(layout, grammar)) { free(inner); return 0; }
+        layout->record_inner = inner;
         for (int i = 0; i < layout->g.n; i++) if (layout->g.rule[i].what == G_TEXT) {
             layout->g.rule[i].compiled.inner = inner;
             layout->g.rule[i].compiled.child_grammar_id = inner->g.grammar_id;
@@ -542,6 +564,21 @@ static int map_count_columns(GMap *grammar, int pending_header){
         if (!found && !pending_header) { fprintf(stderr, "counted %.*s: no named count column\n", (int)trigger->length, trigger->name); return 0; }
     }
     return 1;
+}
+void layout_bind_names(Layout *layout, s_compile_name_fn compile, const void *program){
+    layout->compile_name = compile; layout->name_program = program;
+    if (!compile) return;
+    if (layout->record_inner) layout_bind_names(layout->record_inner, compile, program);
+    for (uint32_t i = 0; i < layout->g.column_count; i++) {
+        GColumn *column = &layout->g.columns[i]; column->bindings = compile(program, column->name, column->length, NULL);
+    }
+    for (unsigned i = 0; i < layout->g.count_count; i++) {
+        GCountProgram *count = &layout->g.counts[i];
+        count->group.bindings = compile(program, count->group.name, count->group.length, NULL);
+        for (unsigned j = 0; j < count->arity; j++) {
+            GColumn *column = &count->member[j]; column->bindings = compile(program, column->name, column->length, NULL);
+        }
+    }
 }
 static int compile_count_shapes(Layout *layout){
     GMap *grammar = &layout->g;
@@ -1031,7 +1068,7 @@ static int injected_input(GW *w, TSNode payload, int raw, GInput *result){
     int padded = raw & 2, trim = raw & 4; raw &= 1;
     GInput input = *w->input;
     input.range = (TSRange){ts_node_start_point(payload), ts_node_end_point(payload), ts_node_start_byte(payload), ts_node_end_byte(payload)};
-    if (!index_input(&input)) return 0;
+    if ((input.decode.n || (!raw && w->l->g.resolve)) && !index_input(&input)) return 0;
     if (padded && !input_padding_off(&input, w->l->g.escaped)) return 0;
     uint32_t begin = input.range.start_byte, end = input.range.end_byte;
     GUnit first[3] = {{0}}, last[3] = {{0}}; TSPoint last_point[3]; uint32_t last_byte[3], count = 0;
@@ -1096,6 +1133,7 @@ typedef struct {
     TSNode node, selected;
     size_t value_mark;
     const uint8_t *name, *context_name, *selected_name;
+    const SNameBindings *bindings;
     uint32_t name_length, context_length, selected_length, column;
     TSFieldId field;
     TSSymbol parent;
@@ -1166,6 +1204,7 @@ static int record_header(SRecords *records, TSNode node){
         const uint8_t *name; uint32_t length; g_text(&worker, child, grammar->padded ? 2 : 0, &name, &length);
         if (grammar->trim) { size_t n = length; name = trimmed(name, &n); length = (uint32_t)n; }
         columns[count++] = (GColumn){name, length, S_FIELD_ALIAS};
+        if (layout->compile_name) columns[count - 1].bindings = layout->compile_name(layout->name_program, name, length, &tls_scratch);
     } while (ts_tree_cursor_goto_next_sibling(cursor));
     lp_tls_cursor_release(cursor);
     if (!valid || !count) return 0;
@@ -1272,6 +1311,12 @@ static int cursor_injection(GW *worker, TSNode payload, const Layout *inner, int
                             s_visit_fn visit, void *sink){
     GInput input;
     if (!injected_input(worker, payload, raw, &input)) return 0;
+    if (field.flags & S_FIELD_RECORD) {
+        TSTree *tree = parse_input_tree(inner, &input);
+        if (!tree) { fputs("record does not parse completely with its product grammar\n", stderr); return 0; }
+        int valid = cursor_project(inner, ts_tree_root_node(tree), &input, visit, sink, NULL, 0, 0, 1);
+        ts_tree_delete(tree); return valid;
+    }
     field.kind = S_GROUP; field.value = NULL; field.value_length = 0; field.flags |= S_FIELD_LIST;
     int action = visit(sink, S_OPEN, &field);
     if (!(action & S_VISIT_OK)) return 0;
@@ -1294,6 +1339,7 @@ static int part_piece(const SPart *part, const GInput *input, SField field, TSRa
     if (!ts_node_is_null(assignment)) {
         uint32_t length = ts_node_start_byte(assignment) - range.start_byte;
         field.name = decode_text(&input->decode, input->src + range.start_byte, &length);
+        field.bindings = NULL;
         field.name_length = length; field.kind = S_VALUE;
         range.start_byte = ts_node_end_byte(assignment); range.start_point = ts_node_end_point(assignment);
     }
@@ -1407,17 +1453,21 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
         const GRule *rule = frame->route || frame->node.id == omit ? NULL : rule_at(&worker, frame->node, frame->field, frame->parent);
         int children = 1;
         SField field = {.source=frame->node, .range=source_range(input, node_range(frame->node)), .name=frame->name, .name_length=frame->name_length,
+                        .bindings=frame->bindings,
                         .arena_begin=frame->value_mark, .grammar=layout->g.grammar_id,
                         .flags=frame->name_flags};
         if (frame->count_omitted) { children = 0; goto after_rule; }
         if (rule && (rule->trim || (rule->what == G_TEXT && layout->g.trim))) field.flags |= S_FIELD_TRIM;
         if (rule && (rule->compiled.flags & 1u)) field.flags |= S_FIELD_SAME_TIER;
+        if (rule && (rule->compiled.flags & 2u)) field.flags |= S_FIELD_RECORD;
         if (rule && rule->alias_tier && rule->alias_tier <= layout->ntier) { field.tier = rule->alias_tier - 1u; field.flags |= S_FIELD_TIER; }
         if (rule && rule->compiled.alias_length) {
+            field.bindings = NULL;
             field.name = (const uint8_t *)rule->alias; field.name_length = rule->compiled.alias_length; field.flags |= S_FIELD_ALIAS;
         }
         if (rule && rule->what == G_SKIP) children = 0;
         else if (rule && rule->what == G_MEMBER) {
+            field.bindings = NULL;
             TSNode key, value;
             if (!at_path(frame->node, &rule->compiled.name[0], &key) || !at_path(frame->node, &rule->compiled.text, &value) || value.id == frame->node.id) { valid = 0; break; }
             g_text(&worker, key, 0, &frame->selected_name, &frame->selected_length);
@@ -1442,6 +1492,7 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
                             (!rule->join && (rule->trim || (rule->what == G_TEXT && layout->g.trim)) ? 4 : 0);
             field.kind = S_TEXT;
             if (rule->what == G_NOTE) {
+                field.bindings = NULL;
                 TSNode key;
                 int has_key = at_path(frame->node, &rule->compiled.name[0], &key);
                 int has_value = at_path(frame->node, &rule->compiled.text, &payload);
@@ -1455,6 +1506,7 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
                 }
                 field.kind = S_NOTE;
             } else if (rule->what == G_VALUE) {
+                field.bindings = NULL;
                 TSNode key;
                 if (!at_path(frame->node, &rule->compiled.name[0], &key) || !at_path(frame->node, &rule->compiled.text, &payload)) { valid = 0; break; }
                 g_text(&worker, key, 1, &field.name, &field.name_length); field.kind = S_VALUE;
@@ -1563,6 +1615,7 @@ push_child:;
                     if (!count_group_range(layout, frame->node, child, program->arity, &range)) { valid = 0; break; }
                     state->closing = (SField){.source=frame->node, .range=source_range(input, range),
                         .name=program->group.name, .name_length=program->group.length, .kind=S_GROUP,
+                        .bindings=program->group.bindings,
                         .grammar=layout->g.grammar_id, .arena_begin=scratch_mark()};
                     int action = visit(sink, S_OPEN, &state->closing);
                     if (!(action & S_VISIT_OK)) { valid = 0; break; }
@@ -1573,7 +1626,7 @@ push_child:;
                 alias = column_alias(layout, next.parent, symbol, next.field, &frame->column);
                 if (column && position < S_NAMES) next.count_input = layout->g.count_by_column[position];
             }
-            if (alias) { next.name = alias->name; next.name_length = alias->length; next.name_flags = alias->flags; }
+            if (alias) { next.name = alias->name; next.name_length = alias->length; next.name_flags = alias->flags; next.bindings = alias->bindings; }
             else if (!next.name && layout->g.column_parents && layout->g.column_symbols &&
                      next.parent < layout->g.symbol_count && ts_node_symbol(child) < layout->g.symbol_count &&
                      layout->g.column_parents[next.parent] && layout->g.column_symbols[ts_node_symbol(child)]) next.unnamed = 1;
