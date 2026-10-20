@@ -5,6 +5,7 @@
 #   null says nothing
 grammar json
 resolve json
+quotes string
 node object group
 node array group list
 node pair member name key value value
