@@ -1,7 +1,9 @@
 /* os_run_logged on Windows (ingest starts one process per source with it): a start that fails, a child that dies
  * with an NT status, a child that exits, the variable the child inherits, the input it does not read. The child is
  * this program again. Built and run as the test os_run (ctest) on Windows only. */
+#ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
+#endif
 #include "os.h"
 #include <windows.h>
 #include <stdio.h>
