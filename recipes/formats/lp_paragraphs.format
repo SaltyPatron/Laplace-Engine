@@ -1,0 +1,8 @@
+# Paragraph records; line names come from the enclosing tier's names vector.
+grammar lp_paragraphs
+records record
+columns line under record tier 0
+node document group
+node record group kind tier 0
+node line text
+node separator skip
