@@ -58,6 +58,68 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <blake3.h>
+
+int program_file_hash(const char *path, uint8_t out[32]){
+    FILE *file = fopen(path, "rb"); if (!file) return 0;
+    blake3_hasher hash; blake3_hasher_init(&hash); uint8_t bytes[32768]; size_t n;
+    while ((n = fread(bytes, 1, sizeof bytes, file))) blake3_hasher_update(&hash, bytes, n);
+    int valid = !ferror(file); fclose(file);
+    if (valid) blake3_hasher_finalize(&hash, out, 32); return valid;
+}
+static void program_size(blake3_hasher *hash, uint64_t value){
+    uint8_t bytes[8]; for (unsigned i = 0; i < 8; i++) bytes[i] = (uint8_t)(value >> (i * 8));
+    blake3_hasher_update(hash, bytes, sizeof bytes);
+}
+static void program_text(blake3_hasher *hash, const char *text){
+    size_t n = strlen(text); program_size(hash, n); blake3_hasher_update(hash, text, n);
+}
+/* A reading fingerprint is metadata, never an entity ID. Frame configuration
+ * bytes before hashing them; no host path or ambiguous concatenation enters
+ * the semantic program fingerprint. Include format lines in expansion order. */
+void recipe_program_line(Recipe *recipe, const char *path, const char *line){
+    if (!recipe->program_state) return;
+    const char *name = path;
+    for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') name = p + 1;
+    const char *begin = line; while (*begin == ' ' || *begin == '\t') begin++;
+    const char *tail = begin; while (*tail && *tail != ' ' && *tail != '\t' && *tail != '\r' && *tail != '\n') tail++;
+    size_t directive = (size_t)(tail - begin);
+    /* These compiler directives consume the remaining bytes as a pattern;
+     * native grammars also own their parameter syntax. Preserve those bytes
+     * rather than treating significant spaces as token separators. */
+    if (recipe->native || (directive == 4 && !memcmp(begin, "line", 4)) || (directive == 5 && !memcmp(begin, "about", 5))) {
+        if (!directive) return;
+        while (*tail == ' ' || *tail == '\t') tail++;
+        size_t n = strcspn(tail, "\r\n"); blake3_hasher *hash = recipe->program_state;
+        program_text(hash, name); program_size(hash, directive); blake3_hasher_update(hash, begin, directive);
+        program_size(hash, n); blake3_hasher_update(hash, tail, n); return;
+    }
+    uint8_t canonical[4096]; size_t used = 0; int quoted = 0, space = 0;
+    for (const char *p = line; *p; p++) {
+        if (!quoted && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) { space = used != 0; continue; }
+        if (used + (size_t)space >= sizeof canonical) { fputs("recipe contract line exceeds compiler input limit\n", stderr); abort(); }
+        if (space) { canonical[used++] = ' '; space = 0; }
+        canonical[used++] = (uint8_t)*p; if (*p == '"') quoted = !quoted;
+    }
+    if (!used) return;
+    blake3_hasher *hash = recipe->program_state; program_text(hash, name);
+    program_size(hash, used); blake3_hasher_update(hash, canonical, used);
+}
+void recipe_reading_hash(const Recipe *recipe, uint8_t out[32]){
+    blake3_hasher hash; blake3_hasher_init(&hash);
+    if (recipe) {
+        blake3_hasher_update(&hash, recipe->program_hash, sizeof recipe->program_hash);
+        program_text(&hash, recipe->name); program_text(&hash, recipe->grammar);
+        program_text(&hash, recipe->witness); program_text(&hash, recipe->lineage);
+        uint64_t trust; memcpy(&trust, &recipe->trust, sizeof trust); program_size(&hash, trust);
+        program_size(&hash, recipe->curated != 0); program_size(&hash, recipe->native != NULL);
+        uint8_t semantic[32]; say_program_hash(recipe, semantic); blake3_hasher_update(&hash, semantic, sizeof semantic);
+        if (recipe->lang) {
+            grammar_program_hash(grammar_id_for_language(recipe->lang), semantic); blake3_hasher_update(&hash, semantic, sizeof semantic);
+        }
+    }
+    blake3_hasher_finalize(&hash, out, 32);
+}
 
 static Ctx *ctx_here(void){ return CTX[omp_get_thread_num()]; }
 
@@ -101,8 +163,9 @@ static void rest_of(char *into, size_t cap){ char *rest = strtok(NULL, "\r\n"); 
 static int recipe_parse(const char *path, Recipe *r){
     FILE *f = fopen(path, "r"); if (!f) return 0;
     memset(r, 0, sizeof *r); char line[4096];
+    blake3_hasher program; blake3_hasher_init(&program); r->program_state = &program;
     while (fgets(line, sizeof line, f)) {
-        comment_off(line); char whole[4096]; snprintf(whole, sizeof whole, "%s", line);
+        comment_off(line); recipe_program_line(r, path, line); char whole[4096]; snprintf(whole, sizeof whole, "%s", line);
         char *tok = strtok(line, " \t\r\n"); if (!tok) continue;
         if (!strcmp(tok, "name")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->name, sizeof r->name, "%s", tok); }
         else if (!strcmp(tok, "match")) while ((tok = strtok(NULL, " \t\r\n")) && r->nmatch < 16) snprintf(r->match[r->nmatch++], 128, "%s", tok);
@@ -116,9 +179,10 @@ static int recipe_parse(const char *path, Recipe *r){
                               : say_says(r, path, tok);                     /* the file's layout and the disposition of its parts */
             if (sv > 0 && !r->native) say_mentions(r, whole);              /* its words: a part named in none is left open */
             if (!sv) fprintf(stderr, "%s: \"%s\" is not something a recipe says\n", path, tok);
-            if (sv <= 0) { fclose(f); return 0; } }
+            if (sv <= 0) { fclose(f); r->program_state = NULL; return 0; } }
     }
     fclose(f);
+    blake3_hasher_finalize(&program, r->program_hash, sizeof r->program_hash); r->program_state = NULL;
     if (r->like[0]) return 1;
     /* A grammar-only recipe records packaging bytes. Native semantic execution
      * requires its explicit directives, rather than silently turning a raw PGN
@@ -276,6 +340,10 @@ int recipes_load(const char *dir, Recipe **out){
         int j = 0; while (j < n && strcmp(r[j].name, r[i].like)) j++;
         if (j == n || r[j].broken) { fprintf(stderr, "recipe %s reads like %s, which %s\n", r[i].name, r[i].like, j == n ? "is not a recipe" : "did not load"); r[i].broken = 1; r[i].like[0] = 0; continue; }
         Recipe me = r[i]; r[i] = r[j]; snprintf(r[i].file, sizeof r[i].file, "%s", me.file);
+        blake3_hasher program; blake3_hasher_init(&program);
+        blake3_hasher_update(&program, r[j].program_hash, sizeof r[j].program_hash);
+        blake3_hasher_update(&program, me.program_hash, sizeof me.program_hash);
+        blake3_hasher_finalize(&program, r[i].program_hash, sizeof r[i].program_hash);
         snprintf(r[i].name, sizeof r[i].name, "%s", me.name); memcpy(r[i].match, me.match, sizeof me.match); r[i].nmatch = me.nmatch; r[i].source = me.source;
         memcpy(r[i].witness, me.witness, sizeof me.witness); memcpy(r[i].lineage, me.lineage, sizeof me.lineage); r[i].trust = me.trust; r[i].like[0] = 0;
     }

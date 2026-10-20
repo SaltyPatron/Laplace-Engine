@@ -65,6 +65,7 @@
 #include <sys/stat.h>
 #include "engine.h"
 #include "structure.h"
+#include <blake3.h>
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -600,7 +601,7 @@ int say_says(Recipe *r, const char *path, char *tok){
     if (!strcmp(tok, "format")) {                                            /* the format's own lines, kept once for every recipe of that format: recipes/formats/NAME.format */
         char *fn = strtok(NULL, " \t\r\n"), fp[4400], line[2048]; if (!fn) { fprintf(stderr, "%s: format NAME\n", path); return -1; }
         snprintf(fp, sizeof fp, "%s/formats/%s.format", laplace_recipes(), fn); FILE *f = fopen(fp, "r"); if (!f) { perror(fp); return -1; }
-        while (fgets(line, sizeof line, f)) { comment_off(line); char whole[2048]; snprintf(whole, sizeof whole, "%s", line); char *t2 = strtok(line, " \t\r\n"); if (!t2) continue;
+        while (fgets(line, sizeof line, f)) { comment_off(line); recipe_program_line(r, fp, line); char whole[2048]; snprintf(whole, sizeof whole, "%s", line); char *t2 = strtok(line, " \t\r\n"); if (!t2) continue;
             if (!strcmp(t2, "grammar")) { char *g = strtok(NULL, " \t\r\n"); if (g) snprintf(r->grammar, sizeof r->grammar, "%s", g); continue; }
             int sv = say_says(r, fp, t2); if (sv > 0) say_mentions(r, whole); if (sv <= 0) { if (!sv) fprintf(stderr, "%s: \"%s\" is not something a format says\n", fp, t2); fclose(f); return -1; } }
         fclose(f); return 1; }
@@ -2485,6 +2486,9 @@ static Ref blocks_of(Ref *r, size_t n){
  * returns. Each is disposed of by the file's recipe, else by the stock recipe file, as any part is: metadata, a
  * [name, value] in the file's metadata tree; omit, nowhere; neither, an obligation left open and said once. A pathname's
  * value is its filenames, one composition: a path is a Merkle DAG of its folders. */
+void say_program_hash(const Recipe *recipe, uint8_t out[32]){
+    const Say *say = recipe ? recipe->say : NULL; layout_program_hash(say ? &say->lay : NULL, out);
+}
 static const Recipe *stock_file;
 void file_record_stock(const Recipe *r){ stock_file = r; }
 int say_only_disposes(const Recipe *r){ const Say *s = r->say; return s && s->ndis && !s->nthing && !s->natt && !s->nrel && !s->nhw && !s->npair && !s->nhold && !s->nkey; }
@@ -2544,6 +2548,16 @@ size_t file_record(const Recipe *r, const File *f, Ref *out, size_t cap){
  * of the file is read, so a file whose trunk is recorded is found by it (ingest.c, files_recorded). 0: none. */
 int file_os(const Recipe *r, const File *f, Ref *out){
     Ref m[32]; size_t n = file_record(r, f, m, 32); if (!n) return 0;
+    uint8_t environment[32], program[32], stock[32], digest[32];
+    program_environment_hash(environment); recipe_reading_hash(r, program); recipe_reading_hash(stock_file, stock);
+    blake3_hasher hash; blake3_hasher_init(&hash);
+    blake3_hasher_update(&hash, environment, sizeof environment); blake3_hasher_update(&hash, program, sizeof program);
+    blake3_hasher_update(&hash, stock, sizeof stock); blake3_hasher_finalize(&hash, digest, sizeof digest);
+    static const char hex[] = "0123456789abcdef"; uint8_t text[64];
+    for (unsigned i = 0; i < sizeof digest; i++) { text[2 * i] = hex[digest[i] >> 4]; text[2 * i + 1] = hex[digest[i] & 15]; }
+    if (n == 32) { fputs("file metadata has no room for its reading contract\n", stderr); exit(1); }
+    Ref contract[2] = {string_ref((const uint8_t *)"reading contract", 16), string_ref(text, sizeof text)};
+    m[n++] = said_tuple(compose(contract, 2, ref_above(contract, 2)));
     *out = compose(m, (uint32_t)n, ref_above(m, n)); out->said = 0; return 1;
 }
 /* The file, read: every part of its outermost tier on every core, joined in the file's order; then its trunk, over
