@@ -127,6 +127,9 @@ typedef struct { GColumn trigger, group, member[8]; uint8_t arity, radix; } GCou
 typedef struct { char type[48], literal[8]; uint8_t length; TSSymbol symbol; } GSeparator;
 typedef struct { char name[64]; uint64_t hash; uint16_t length; uint8_t next; } GRecordName;
 typedef struct { char count[64], group[48], member[8][48]; uint8_t nmember, radix; } GCountShape;
+/* Event grammars expose lexical scopes as siblings. Pairing is compiled once;
+ * the walker retains only the active scope chain, never a second AST. */
+typedef struct { char open[48], close[48], empty[48], name[64]; GPath identity; } GScope;
 typedef struct {
     GRule rule[48]; int n, resolve, trim; uint8_t quoted, escaped, padded;
     uint16_t grammar_id;
@@ -148,6 +151,10 @@ typedef struct {
     char remark_group[48], remark_text[48];
     uint16_t numbered_length, root_name_length;
     uint8_t has_context;
+    GScope scopes[8]; uint8_t scope_count, scope_space_count, scope_misc_count;
+    char scope_space[8][48], scope_misc[16][48];
+    uint8_t *scope_roles;
+    char language[64];
     char framing[48];
     char layout_prefix[4][8][64]; uint8_t prefix_length[4], prefix_count;
     GCountProgram counts[4]; uint8_t count_count, count_by_column[S_NAMES];
@@ -208,6 +215,7 @@ int layout_says(Layout *l, const char *path, char *tok);
  * finishes all work using a record before closing the window. */
 typedef struct SContext SContext;
 typedef struct SContextStore SContextStore;
+typedef struct SScopeState SScopeState;
 typedef struct {
     const Layout *layout;
     const uint8_t *source;
@@ -218,6 +226,7 @@ typedef struct {
     SayScratch *header_arena;
     SayScratch context_arena;
     SContextStore *contexts;
+    SScopeState *scopes;
     size_t header_mark;
     uint64_t ordinal;
     uint8_t started, done, failed, header_pending, descend;
