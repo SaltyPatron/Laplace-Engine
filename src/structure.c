@@ -103,6 +103,13 @@ void *arena_alloc(SayScratch *arena, size_t bytes){
     return p;
 }
 void *scratch_alloc(size_t bytes){ scratch_ready(); return arena_alloc(&tls_scratch, bytes); }
+SayScratch scratch_enter(SayScratch *arena){
+    scratch_ready(); arena_ready(arena);
+    SayScratch previous = tls_scratch; tls_scratch = *arena; return previous;
+}
+void scratch_leave(SayScratch *arena, SayScratch previous){
+    *arena = tls_scratch; tls_scratch = previous;
+}
 
 /* Transient cursor frames grow from the other end of the same reservation.
  * Releasing an injected parser's stack cannot invalidate decoded field values
@@ -1725,11 +1732,14 @@ static int cursor_record(const Layout *layout, TSNode root, int header, const ui
     HeaderVisitor visitor = {visit, sink, 0, 0};
     if (valid) valid = cursor_project(layout, root, &input, header ? header_visit : visit, header ? &visitor : sink, NULL, 0, 0, 0);
     while (valid && contexts) valid = (visit(sink, S_CLOSE, &context[--contexts]) & S_VISIT_OK) != 0;
+    int retained = 0;
     if (valid) {
         SField end = {.source=root, .range=node_range(root), .arena_begin=mark, .grammar=layout->g.grammar_id};
-        valid = (visit(sink, S_FINISH, &end) & S_VISIT_OK) != 0;
+        int result = visit(sink, S_FINISH, &end);
+        valid = (result & S_VISIT_OK) != 0; retained = valid && (result & S_VISIT_RETAIN);
     }
-    scratch_restore(mark); return valid;
+    if (!retained) scratch_restore(mark);
+    return valid;
 }
 int s_cursor(const Layout *layout, TSNode root, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
     return cursor_record(layout, root, 0, source, length, visit, sink);

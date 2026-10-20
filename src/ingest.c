@@ -45,11 +45,6 @@ static int expand(const lp_id *id, Buf *o){
  * a node an earlier batch staged is marked recorded before the next batch is loaded, so neither it nor anything under
  * it is staged again, and the stage holds each node of the source once. Kept by this process, which forks each batch's
  * writer: it is marked before the fork. */
-static lp_idmap *staged_set; static uint64_t staged_again;
-static void staged_mark(void){
-    if (!staged_set) staged_set = lp_idmap_new();
-    TABLE_EACH(x) { bool fresh; lp_idmap_put(staged_set, &x->id, &fresh); if (!fresh) { x->keep = 2; staged_again++; } }
-}
 static void show_tuple(const lp_id *id);
 static void show_entities(const char *conninfo, int ask){
     uint64_t n = 0; TABLE_EACH(x) n++; if (!n) return;
@@ -369,15 +364,6 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
 }
 static const uint64_t *by_size_of;                                    /* the batch's files, longest first, ties in the order given */
 static int by_size(const void *a, const void *b){ int i = *(const int *)a, j = *(const int *)b; uint64_t x = by_size_of[i], y = by_size_of[j]; return x < y ? 1 : x > y ? -1 : i - j; }
-/* The child writing a batch: waited for, its counts added to the run's. Nonzero when it failed. */
-static int loader_wait(pid_t *pid, int fd, LoadStats *st){
-    LoadStats cs; memset(&cs, 0, sizeof cs); ssize_t got = read(fd, &cs, sizeof cs); close(fd);
-    int status = 0; while (waitpid(*pid, &status, 0) < 0) { } *pid = 0;
-    if (got != (ssize_t)sizeof cs || !WIFEXITED(status) || WEXITSTATUS(status)) { fprintf(stderr, "\n  a batch was not written (its writer exited %d)\n", WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status)); return 1; }
-    uint64_t *a = (uint64_t *)st, *b = (uint64_t *)&cs; for (size_t k = 0; k < offsetof(LoadStats, t_dedup) / sizeof(uint64_t); k++) a[k] += b[k];
-    double *x = &st->t_dedup, *y = &cs.t_dedup; for (size_t k = 0; k < (sizeof(LoadStats) - offsetof(LoadStats, t_dedup)) / sizeof(double); k++) x[k] += y[k];
-    return 0;
-}
 /* Which files are recorded, before any is read (the inventor: "if you have the file's trunk node (and it's hash metadata
  * matches), you know you have everything in that file already"). A file's metadata tree begins with the OS's record of
  * it, one node computed from stat alone (say.c, file_os); the container index gives what holds that node: the file's
@@ -389,14 +375,17 @@ static int ingest_ewkb_point(const uint8_t *e, size_t n, lp_coord *out){
 }
 static int files_recorded(const char *conninfo, File *files, int nfiles){
     lp_id *want = malloc(sizeof(lp_id) * (size_t)(nfiles + 1)); int *of = malloc(sizeof(int) * (size_t)(nfiles + 1)), nw = 0, found = 0;
-    for (int i = 0; i < nfiles; i++) { if (files[i].skipped || files[i].known || !files[i].recipe) continue; Ref os; if (file_os(files[i].recipe, &files[i], &os)) { want[nw] = os.id; of[nw++] = i; } }
+    for (int i = 0; i < nfiles; i++) { if (files[i].skipped || files[i].known) continue; Ref os; if (file_os(files[i].recipe, &files[i], &os)) { want[nw] = os.id; of[nw++] = i; } }
     PGconn *pg = nw ? db_connect(conninfo) : NULL;
     for (int level = 0; level < 8 && nw; level++) {                          /* a metadata tree factored into blocks is a few levels deep */
         lp_idmap *at = lp_idmap_new(); for (int k = 0; k < nw; k++) { bool fresh; lp_idmap_put(at, &want[k], &fresh); }
         int ncap = nw, nn = 0; lp_id *next = malloc(sizeof(lp_id) * (size_t)ncap); int *nof = malloc(sizeof(int) * (size_t)ncap);   /* an ID can be held by many: grown as they come */
         for (int k0 = 0; k0 < nw; k0 += 10000) { int k1 = nw - k0 < 10000 ? nw : k0 + 10000; uint8_t *ab = malloc(20 + 20 * (size_t)(k1 - k0)); size_t al = ids_param(ab, want + k0, (uint32_t)(k1 - k0));
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-            PGresult *r = PQexecParams(pg, "SELECT c.entity, st_asewkb(c.path), c.tier, st_asewkb(e.coord) FROM laplace_containers($1::blake3[], '{}'::smallint[]) c JOIN entity e ON e.id = c.entity", 1, NULL, v, l, f, 1);
+            PGresult *r = PQexecParams(pg, "SELECT c.entity, st_asewkb(c.path), c.tier, st_asewkb(e.coord)"
+                " FROM unnest($1::blake3[]) wanted(id) JOIN public.physicality c"
+                " ON c.path @> ARRAY[wanted.id]::blake3[] JOIN public.entity e ON e.id=c.entity",
+                1, NULL, v, l, f, 1);
             if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "which files are recorded: %s", PQerrorMessage(pg)); PQclear(r); free(ab); break; }
             for (int j = 0; j < PQntuples(r); j++) {
                 lp_vertex vx[2]; size_t nv = lp_path_vertices((const uint8_t *)PQgetvalue(r, j, 1), (size_t)PQgetlength(r, j, 1), vx, 2); if (!nv) continue;
@@ -413,7 +402,7 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
         lp_idmap_free(at); free(want); free(of); want = next; of = nof; nw = 0;
         for (int k = 0; k < nn; k++) if (!files[of[k]].known) { want[nw] = want[k]; of[nw++] = of[k]; }
     }
-    if (pg) PQfinish(pg); free(want); free(of); table_reset();              /* what was composed to ask is composed again for the files that are read */
+    if (pg) PQfinish(pg); free(want); free(of); found = ingest_known(conninfo, files, nfiles); table_reset();              /* what was composed to ask is composed again for the files that are read */
     return found;
 }
 static lp_id witness_trunk, witness_lineage; static double witness_trust; static int has_witness_trunk, has_witness_lineage, witness_supersedes;   /* the source's trunk, the witness: its trust and lineage keyed by it */
@@ -545,8 +534,8 @@ int cmd_ingest(int argc, char **argv){
         return 0;
     }
 
-    /* Whether a file is recorded is not asked of its bytes: it is decomposed, its trunk is computed here, and the
-     * trunk is looked for, trunk to leaf, with everything else (load). */
+    /* Unchanged published files are found from stat metadata before opening
+     * their contents. Novel files are subsequently pruned trunk to leaf. */
     int nknown = 0; ctx_open(threads);
     if (do_load) { double tk = now(); nknown = files_recorded(conninfo, files, nfiles); if (nknown) fprintf(stderr, "  %d files recorded already, found by the OS's record of them, not read (%.2f s)\n", nknown, now() - tk); }
 
@@ -555,8 +544,7 @@ int cmd_ingest(int argc, char **argv){
     t = now();
     uint64_t batch = (uint64_t)(getenv("LAPLACE_BATCH_MB") ? atoll(getenv("LAPLACE_BATCH_MB")) : 1024) << 20;
     uint64_t bytes = 0, nev = 0; int done = 0, exact = 0, mism = 0, batches = 0; double t_dec = 0, t_rec = 0; LoadStats st = { 0 };
-    Fold *fold = fold_new();                                                  /* what the source says, folded over every batch: played once at its end */
-    pid_t loader = 0; int loader_fd = -1;                                     /* the child writing the batch before, if one is */
+    Fold *fold = fold_new();                                                  /* cumulative evidence, updated in PostgreSQL as each batch flows */
     st.known += (uint64_t)nknown;                                            /* found by their OS record, never read */
     uint64_t *size = calloc((size_t)nfiles, 8);
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
@@ -573,66 +561,9 @@ int cmd_ingest(int argc, char **argv){
     /* What was read of a file is kept for its content; a file read to its end gets its trunk. */
     #define WHOLE(F) do { File *f_ = (F); if (!f_->partial) file_close(f_); } while (0)
     for (int a0 = 0; a0 < nfiles; ) {
-        int b0 = a0; uint64_t sum = 0; char boundary = 0;
+        int b0 = a0; uint64_t sum = 0;
         while (b0 < nfiles && (b0 == a0 || (sum + size[b0] <= batch && depth[b0] == depth[a0]))) { sum += size[b0]; b0++; }     /* a batch is a barrier: what refers waits for what is referred to */
         table_size(sum);                                                                                                  /* the table is empty here: room for what this batch makes */
-        if (b0 == a0 + 1 && size[a0] > batch && reads_in_stretches(files[a0].recipe, &boundary)) {
-            table_size(batch);                                                                                    /* a stretch at a time: room for one stretch */
-            /* One long file, a stretch at a time. It is read twice: first for what it is, its trunk, with nothing
-             * recorded; and, if that trunk is not recorded, again to record it. A file already recorded costs its
-             * decomposition and one lookup, and nothing is written.  The first pass ends at the first stretch attesting a
-             * claim that is not recorded: a trunk is written after every claim of every stretch, so that file's is not, and
-             * a new file is read once more, not twice. (Its stretches' parts, the content under the trunk, are not what is
-             * asked: a stretch writes what it attests, and its parts only where they are claims.) */
-            File *f = &files[a0]; int failed = 0;
-            int unrecorded = 0;                                               /* a stretch held something not recorded: the trunk is not looked for */
-            for (int pass = do_load ? 0 : 1; pass < 2 && !failed && !f->known; pass++) {
-                gzFile g = gzopen(f->path, "rb"); if (!g) { f->skipped = 1; break; } gzbuffer(g, 1 << 20);
-                size_t cap = (size_t)batch / 2 + (64u << 20), have = 0; uint8_t *buf = malloc(cap + 1); int first = 1, last = 0;
-                f->bytes = 0; f->records = 0; f->incomplete = 0; f->has_file = 0;
-                while (!last) {
-                    double td = now(); int got; while (have < cap - (1u << 20) && (got = gzread(g, buf + have, (unsigned)((cap - have) > (1u << 30) ? (1u << 30) : (cap - have)))) > 0) have += (size_t)got;
-                    last = have < cap - (1u << 20); size_t end = have;
-                    if (!last) { end = 0; for (size_t i = have; i > 1; i--) if (buf[i - 1] == '\n' && (boundary == 1 || (i >= 2 && buf[i - 2] == '\n') || (i >= 3 && buf[i - 2] == '\r' && buf[i - 3] == '\n'))) { end = i; break; }
-                                 if (!end) { fprintf(stderr, "\n  %s: a record longer than a stretch (%zu MB): the file cannot be read in stretches of this length\n", f->path, cap >> 20); mism++; failed = 1; break; } }
-                    f->partial = !last; f->at = f->bytes;                    /* where this stretch begins: its keys rank after the last's */
-                    #pragma omp parallel
-                    #pragma omp single
-                    decompose_bytes(CTX[omp_get_thread_num()], f, buf, end, first);
-                    int was_first = first; first = 0; f->bytes += end; WHOLE(f); t_dec += now() - td;
-                    if (!pass && !last && f->ev.n) {                                   /* a claim it attests not recorded: its trunk is not (a trunk is written after every claim of every stretch), and it is recorded now */
-                        uint64_t k = 0, want = f->ev.n < 4096 ? f->ev.n : 4096; lp_id *ids = malloc(sizeof(lp_id) * want); uint8_t *tt = malloc(want);
-                        for (uint64_t j = 0; j < f->ev.n && k < want; j++) if (f->ev.e[j].kind != EV_RECORD) { const Node *x = table_find(&f->ev.e[j].claim); if (!x) continue; ids[k] = x->id; tt[k++] = x->tier; }     /* at the tier it is recorded at: the lowest it is composed at */
-                        if (!db_all_recorded(conninfo, ids, tt, k)) {
-                            unrecorded = 1;
-                            if (was_first) { fprintf(stderr, "\n  %s: what it holds is not all recorded: it is recorded now\n", f->path); pass = 1; }
-                        }
-                        free(ids); free(tt); }
-                    if (!pass && was_first && last && f->has_file) {                   /* single-stretch file: check trunk before discarding */
-                        PGconn *pg = db_connect(conninfo); Args a = { 0 }; arg_ids(&a, &f->file.id, 1);
-                        PGresult *r = ask_once(pg, "SELECT 1 FROM entity WHERE id = ANY($1::blake3[])", &a);
-                        if (PQntuples(r)) { f->known = 1; st.known++; }
-                        else pass = 1;
-                        PQclear(r); args_free(&a); PQfinish(pg);
-                    }
-                    if (pass) { bytes += end; nev += f->ev.n; batches++; }
-                    fprintf(stderr, "\r  %s: %s  %.1f MB read  %'llu nodes in this stretch   ", f->path, pass ? "recording" : "its trunk", f->bytes / 1e6, (unsigned long long)table_count());
-                    if (pass) { SHOW(f); if (do_load) { staged_mark(); fold_events(fold, f, 1); } if (do_load && load(conninfo, threads, f, 1, &st)) return 1; }
-                    free(f->ev.e); memset(&f->ev, 0, sizeof f->ev); table_reset();
-                    memmove(buf, buf + end, have - end); have -= end;
-                    if (unrecorded && !pass) { fprintf(stderr, "\n  %s: what it holds is not all recorded: it is recorded now\n", f->path); break; }
-                }
-                gzclose(g); free(buf);
-                if (unrecorded && !pass) { free(f->said); f->said = NULL; f->nsaid = f->csaid = 0; continue; }
-                if (!pass && !failed && f->has_file) {                          /* is its trunk recorded */
-                    PGconn *pg = db_connect(conninfo); Args a = { 0 }; arg_ids(&a, &f->file.id, 1);
-                    PGresult *r = ask_once(pg, "SELECT 1 FROM entity WHERE id = ANY($1::blake3[])", &a);   /* by its ID alone: one partition */
-                    if (PQntuples(r)) { f->known = 1; st.known++; }
-                    PQclear(r); args_free(&a); PQfinish(pg);
-                }
-            }
-            done++; exact++; a0 = b0; continue;
-        }
         double td = now();
         /* the longest first: a long file begun last is decomposed on one core while every other waits for it */
         int *order = malloc(sizeof(int) * (size_t)(b0 - a0)); for (int i = a0; i < b0; i++) order[i - a0] = i;
@@ -653,46 +584,29 @@ int cmd_ingest(int argc, char **argv){
             }
         }
         free(order); t_dec += now() - td; td = now();
-        /* every file recomposed from the node table and compared with its bytes */
-        #pragma omp parallel for schedule(dynamic) reduction(+:exact, mism)
+        /* The provider compared with the original buffer before releasing it.
+         * Verification never opens and reads the source a second time. */
         for (int i = a0; i < b0; i++) {
+            if (files[i].exact < 0) { mism++; continue; }
             if (files[i].known || files[i].skipped) continue;
-            if (files[i].recipe && files[i].recipe->curated) { exact++; continue; }      /* a curated source is not kept as a file */
-            FILE *f = fopen(files[i].path, "rb"); uint8_t *src = malloc(files[i].bytes + 1);
-            size_t got = fread(src, 1, files[i].bytes, f); fclose(f);
-            Buf o = { 0 }; int ok = expand(&files[i].trunk.id, &o) && got == files[i].bytes && o.n == got && !memcmp(o.b, src, got);
-            if (ok) exact++; else { mism++; fprintf(stderr, "  %s: does not recompose\n", files[i].path); }
-            if (getenv("LAPLACE_TRUNKS")) { const uint8_t *b = files[i].trunk.id.b; fprintf(stderr, "  trunk %02x%02x%02x%02x%02x%02x%02x%02x  %s\n", b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7], files[i].path); }
-            free(o.b); free(src);
+            if (files[i].exact) exact++;
+            else { mism++; fprintf(stderr, "  %s: does not recompose\n", files[i].path); }
+            if (getenv("LAPLACE_TRUNKS")) { char id[33]; id_text(&files[i].trunk.id, id); fprintf(stderr, "  trunk %s  %s\n", id, files[i].path); }
         }
         t_rec += now() - td;
         for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
         if (entities) show_entities(conninfo, asking);
-        if (do_load) { staged_mark();                                        /* what an earlier batch staged is not staged again */
-            /* what the batch says, folded with what the source said before it: files whose trunks are recorded say nothing again */
-            ingest_known(conninfo, files + a0, b0 - a0); fold_events(fold, files + a0, b0 - a0);
-            /* The batch before is written and committed first, so this batch's lookups see it. When more batches follow,
-             * this one is written by a child, from its copy of the node table, while this process empties the table and
-             * decomposes the next on every core: the cores and the database work at the same time. */
-            if (loader > 0 && loader_wait(&loader, loader_fd, &st)) return 1;
-#ifdef _WIN32
-            /* No fork on Windows: each batch is written here, as the last one is everywhere, before the next is decomposed. */
-            if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1; }
-#else
-            if (b0 < nfiles) { int pfd[2]; if (pipe(pfd)) { perror("pipe"); return 1; } fflush(NULL); pid_t p = fork();
-                if (p < 0) { perror("fork"); return 1; }
-                if (!p) { close(pfd[0]); LoadStats cs; memset(&cs, 0, sizeof cs); int rc = load(conninfo, threads, files + a0, b0 - a0, &cs);
-                          if (write(pfd[1], &cs, sizeof cs) != (ssize_t)sizeof cs) rc = 1; fflush(NULL); _exit(rc ? 1 : 0); }
-                close(pfd[1]); loader = p; loader_fd = pfd[0]; }
-            else if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1; }
-#endif
+        if (do_load) {
+            ingest_known(conninfo, files + a0, b0 - a0);
+            fold_events(fold, files + a0, b0 - a0);
+            if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1;
+        }
         batches++;
         if (b0 < nfiles) { for (int i = a0; i < b0; i++) { free(files[i].ev.e); memset(&files[i].ev, 0, sizeof files[i].ev); } table_reset(); }
         a0 = b0;
     }
     #undef SHOW
     #undef WHOLE
-    if (loader > 0 && loader_wait(&loader, loader_fd, &st)) return 1;        /* the last batch a child wrote */
     fputc('\n', stderr);
     extern uint64_t table_total(void), table_hits(void);
     printf("\n== decomposition: %d files, %.1f MB, content recomposed byte for byte or curated %d, mismatched %d%s\n", nfiles, bytes / 1e6, exact, mism, batches > 1 ? ", a batch at a time" : "");
@@ -704,7 +618,7 @@ int cmd_ingest(int argc, char **argv){
     printf("\n== phases\n");
     printf("  %-44s %8.2f s   %8.1f MB/s\n", "decompose (all threads)", t_dec, bytes / 1e6 / (t_dec > 0 ? t_dec : 1));
     printf("  %-44s %8.2f s\n", "recompose and compare", t_rec);
-    if (!do_load) return mism ? 1 : 0;
+    if (!do_load) { fold_free(fold); return mism ? 1 : 0; }
     printf("  %-44s %8.2f s   %'llu IDs checked in %llu rounds, %'llu subtrees already recorded\n", "deduplication, trunk to leaf", st.t_dedup,
            (unsigned long long)st.checked, (unsigned long long)st.rounds, (unsigned long long)st.found);
     printf("  %-44s %8.2f s   %'llu entities, %'llu paths (%'.0f rows/s)\n", "COPY into every partition", st.t_copy,
@@ -717,18 +631,13 @@ int cmd_ingest(int argc, char **argv){
       double trust = one && !many ? one->trust : 0; int differs = 0;
       for (int i = 0; i < nfiles; i++) if (!files[i].skipped && !files[i].known) { if (!one || many) { trust = files[i].trust; break; } differs += files[i].trust != one->trust || files[i].has_lineage != !!one->lineage[0]; }
       if (differs && do_load > 0) printf("  %d files are of recipes naming a class or lineage of their own: the witness is the source's trunk, and its are the source's (trust %.3f)\n", differs, trust);
-      if (do_load > 0 && !mism && fold_count(fold)) {                          /* the series the source said, each played once */
-          if (standings_write(conninfo, threads, fold, trust, &st)) return 1;
-          printf("  %-44s %8.2f s   %'llu claims said, %'llu said by the records of %llu files; standings %'llu new, %'llu updated\n", "the series, played once each", st.t_sem,
-                 (unsigned long long)fold_count(fold), (unsigned long long)nev, (unsigned long long)nfiles, (unsigned long long)st.std_new, (unsigned long long)st.std_upd);
-          printf("    %-42s %8.2f s\n    %-42s %8.2f s\n    %-42s %8.2f s\n", "standings read", st.t_read, "series played", st.t_play, "standings staged, every partition", st.t_led); }
       { extern uint64_t records_differ(void), say_unplaced(void); uint64_t rd = records_differ(), un = say_unplaced();
         if (rd) printf("  %'llu records met again said otherwise (another outcome or place for a claim): the first is kept\n", (unsigned long long)rd);
         if (un) printf("  %'llu claims could be put in no record: their provenance is lost\n", (unsigned long long)un); }
       fold_free(fold); fold = NULL;
       if (one && !many && !mism && !of) { table_reset(); table_size(64u << 20);   /* the last batch is written: an empty table for the trunk alone */
           if (source_trunk(one, files, nfiles, &trunk)) { File sf; memset(&sf, 0, sizeof sf); sf.path = one->name; sf.source = one; sf.trunk = trunk; sf.file = trunk; sf.has_file = 1;
-              LoadStats ss = { 0 }; double ts = now(); staged_mark(); if (load(conninfo, threads, &sf, 1, &ss)) return 1;
+              LoadStats ss = { 0 }; double ts = now(); if (load(conninfo, threads, &sf, 1, &ss)) return 1;
               printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded");
               { char hx[33]; id_text(&trunk.id, hx); printf("  %-44s %s\n", "its ID, the witness", hx); }
               witness_trunk = trunk.id; witness_trust = trust; has_witness_trunk = 1; witness_supersedes = one->supersede;
@@ -736,32 +645,24 @@ int cmd_ingest(int argc, char **argv){
           else printf("  the source's trunk: none, since its source file names no record (witness or called): what it says is held by its files' trunks, and no witness holds them\n");
           table_reset(); }
       else if (do_load > 0 && nev) printf("  no source's trunk (%s): what these files say is held by their trunks, and no witness holds them\n", of ? "a part of a source" : many ? "files of several sources, or of none" : "a file did not recompose"); }
-    /* What this ingest staged goes into the real tables now, before anything after it: a source is in once its records
-     * are (the inventor: "decompose and stage all the records necessary... and then we batch that into the real
-     * database"). The next source is read against them, a key a record breaks stops this source and no other, and
-     * what is in can be read while the rest goes in. Each leaf takes what was staged for it by rewriting or by
-     * appending, whichever writes less (merge): a small source appends. */
-    if (do_load > 0 && !mism) { printf("\nmerge\n"); fflush(stdout); if (merge(conninfo, threads)) return 1; }
-    if (do_load > 0 && !mism && has_witness_trunk) {                          /* the source's trunk is the witness: written once it is in */
-        PGconn *pg = db_connect(conninfo); Args a = { 0 }; arg_ids(&a, &witness_trunk, 1); arg_f64(&a, witness_trust); arg_ids(&a, &witness_lineage, has_witness_lineage);
-        PGresult *r = ask_once(pg, "INSERT INTO witness (id, lineage, trust) SELECT ($1::blake3[])[1], ($3::blake3[])[1], $2 WHERE NOT EXISTS (SELECT 1 FROM witness WHERE id = ($1::blake3[])[1])", &a);
-        printf("  %-44s trust %.3f%s%s\n", "the witness: the source's trunk", witness_trust, has_witness_lineage ? ", with its lineage" : "", PQcmdTuples(r)[0] == '0' ? " (recorded already)" : "");
-        PQclear(r); args_free(&a); PQfinish(pg);
-        /* a source that is a working tree (supersede): this whole reading is what it says now, and what only its earlier
-         * readings held (a file's former content, a file no longer there) goes, as laplace forget takes a witness out */
-        if (witness_supersedes) forget_superseded(conninfo, threads, &witness_trunk); }
-    else if (do_load > 0 && !mism && !of && nev) {                            /* user-uploaded files with no single source: each file's trunk witnesses what it says */
-        PGconn *pg = db_connect(conninfo); uint64_t nw = 0;
-        for (int i = 0; i < nfiles; i++) {
-            if (files[i].skipped || files[i].known || files[i].source || !files[i].has_file || !files[i].ev.n) continue;
-            double tr = files[i].trust > 0 ? files[i].trust : 0.5;
-            Args a = { 0 }; arg_ids(&a, &files[i].file.id, 1); arg_f64(&a, tr); arg_ids(&a, &files[i].lineage.id, files[i].has_lineage);
-            PGresult *r = ask_once(pg, "INSERT INTO witness (id, lineage, trust) SELECT ($1::blake3[])[1], ($3::blake3[])[1], $2 WHERE NOT EXISTS (SELECT 1 FROM witness WHERE id = ($1::blake3[])[1])", &a);
-            if (PQcmdTuples(r)[0] != '0') nw++;
-            PQclear(r); args_free(&a);
+    if (do_load > 0 && !mism) {
+        LoadWitness *roots = calloc((size_t)nfiles + 1, sizeof *roots); size_t nr = 0;
+        if (has_witness_trunk) roots[nr++] = (LoadWitness){.id=witness_trunk, .lineage=witness_lineage,
+            .trust=witness_trust, .has_lineage=has_witness_lineage};
+        else if (!of) {
+            lp_idmap *seen = lp_idmap_new();
+            for (int i=0; i<nfiles; i++) {
+                if (files[i].skipped || files[i].source || !files[i].has_file) continue;
+                bool fresh; lp_idmap_put(seen, &files[i].file.id, &fresh); if (!fresh) continue;
+                roots[nr++] = (LoadWitness){.id=files[i].file.id, .lineage=files[i].lineage.id,
+                    .trust=files[i].trust, .has_lineage=files[i].has_lineage};
+            }
+            lp_idmap_free(seen);
         }
-        PQfinish(pg);
-        if (nw) printf("  %-44s %llu file trunk(s) recorded as witness\n", "the witnesses: the files' trunks", (unsigned long long)nw); }
+        if (load_register(conninfo, threads, roots, nr) || merge(conninfo, threads)) { free(roots); return 1; }
+        free(roots);
+        if (has_witness_trunk && witness_supersedes) forget_superseded(conninfo, threads, &witness_trunk);
+    }
     printf("\n== total %.1f s\n", now() - T);
     return mism ? 1 : 0;
 }

@@ -73,7 +73,7 @@ static const TSLanguage *dl_load_grammar(const char *name){
 }
 
 uint16_t grammar_id_for(const char *name){
-    if (!name || !*name || !strcmp(name, "text") || !strcmp(name, "layout") || native_grammar(name)) return 0;
+    if (!name || !*name || !strcmp(name, "text") || !strcmp(name, "layout")) return 0;
     pthread_mutex_lock(&g_mu);
     for (uint16_t i = 0; i < g_nreg; i++) {
         if (!strcmp(g_reg[i].name, name)) {
