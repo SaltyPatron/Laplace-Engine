@@ -50,6 +50,7 @@
  * byte for byte. Leaves are text, decomposed by UAX #29. */
 #define _GNU_SOURCE
 #include "engine.h"
+#include "structure.h"
 #include "os.h"
 #include <tree_sitter/api.h>
 #include <omp.h>
@@ -72,12 +73,9 @@ static void trust_by_number(const char *path, const char *directive){
 }
 
 /* ---- recipes */
+int say_compile(Recipe *r);
 static const TSLanguage *grammar_load(const char *name){
-    const char *dir = laplace_grammars();
-    char p[1024], sym[128]; snprintf(p, sizeof p, "%s/libtree-sitter-%s" OS_DLL_SUFFIX, dir, name); snprintf(sym, sizeof sym, "tree_sitter_%s", name);
-    void *h = os_dl_open(p); if (!h) { fprintf(stderr, "grammar %s: %s\n", name, os_dl_error()); return NULL; }
-    const TSLanguage *(*f)(void) = (const TSLanguage *(*)(void))os_dl_sym(h, sym);
-    return f ? f() : NULL;
+    return grammar_lang(grammar_id_for(name));
 }
 /* A path with $NAME read from the environment. Where the data is kept is the machine's to say (Laplace-Operations'
  * laplace.env: LAPLACE_DATA, LAPLACE_MODELS), never the code's: a variable the environment does not set, or sets
@@ -125,8 +123,11 @@ static int recipe_parse(const char *path, Recipe *r){
     if (r->native) return r->native->done(r, path);                          /* a native grammar reads its files itself */
     if (say_lays(r)) {                                                       /* configured: a grammar named gives the tree, else the layout's tiers do */
         if (r->grammar[0] && strcmp(r->grammar, "layout")) { r->lang = grammar_load(r->grammar); if (!r->lang) return 0; } else snprintf(r->grammar, sizeof r->grammar, "layout");
-        r->curated = 1; return 1; }
+        r->curated = 1;
+        if (!say_compile(r)) { fprintf(stderr, "%s: unresolved compiled grammar rules\n", path); return 0; }
+        return 1; }
     if (r->say && !say_only_disposes(r)) { fprintf(stderr, "%s: it says what parts are, but lays out no tree for them to be parts of (tier, format or node)\n", path); return 0; }
+    if (r->say && !say_compile(r)) { fprintf(stderr, "%s: unresolved compiled metadata rules\n", path); return 0; }
     if (!r->grammar[0]) snprintf(r->grammar, sizeof r->grammar, "text");
     if (strcmp(r->grammar, "text")) { r->lang = grammar_load(r->grammar); if (!r->lang) return 0; }
     return 1;
@@ -338,9 +339,10 @@ Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of){
         }
     }
     if (!best && !of) best = sniff_generic_recipe(r, n, path);
-    if (best && !best->curated && best->grammar[0] && strcmp(best->grammar, "text") != 0 && !best->lang)
-        if (strcmp(best->grammar, "csv") != 0 && strcmp(best->grammar, "tsv") != 0 && strcmp(best->grammar, "psv") != 0)
-            best->lang = grammar_load(best->grammar);
+    if (best && !best->curated && best->grammar[0] && strcmp(best->grammar, "text") != 0 && !best->lang) {
+        best->lang = grammar_load(best->grammar);
+        if (!best->lang) { fprintf(stderr, "recipe %s: required grammar %s is unavailable for %s\n", best->name, best->grammar, path); exit(2); }
+    }
     return best;
 }
 
@@ -366,30 +368,99 @@ Ref string_ref(const uint8_t *s, size_t n){
     return *r;
 }
 
-/* ---- the syntax tree as content. Large nodes decompose their children as parallel tasks. */
-static Ref ast_node(TSNode nd, const uint8_t *src, uint32_t lo, uint32_t hi, int depth){
-    uint32_t nc = ts_node_child_count(nd);
-    if (nc == 0 || depth > 200) return string_ref(src + lo, hi - lo);
-    Ref *kids = malloc(sizeof(Ref) * (2 * (size_t)nc + 1)); uint32_t *cs = malloc(8 * (size_t)nc), *ce = cs + nc;
-    TSNode *cn = malloc(sizeof(TSNode) * nc);                          /* children in one pass: ts_node_child(i) is O(i) */
-    { TSTreeCursor cur = ts_tree_cursor_new(nd); uint32_t i = 0;
-      if (ts_tree_cursor_goto_first_child(&cur)) do { cn[i] = ts_tree_cursor_current_node(&cur); cs[i] = ts_node_start_byte(cn[i]); ce[i] = ts_node_end_byte(cn[i]); i++; } while (i < nc && ts_tree_cursor_goto_next_sibling(&cur));
-      ts_tree_cursor_delete(&cur); }
-    /* slot 2i: the text before child i; slot 2i+1: child i; slot 2nc: the text after the last child */
-    uint8_t *has = calloc(2 * (size_t)nc + 1, 1);
-    if (hi - lo > (4u << 20) && nc >= 16) {
-        #pragma omp taskloop num_tasks(omp_get_num_threads() * 8)
-        for (uint32_t i = 0; i < nc; i++) if (ce[i] > cs[i]) { kids[2 * i + 1] = ast_node(cn[i], src, cs[i], ce[i], depth + 1); has[2 * i + 1] = 1; }
-    } else
-        for (uint32_t i = 0; i < nc; i++) if (ce[i] > cs[i]) { kids[2 * i + 1] = ast_node(cn[i], src, cs[i], ce[i], depth + 1); has[2 * i + 1] = 1; }
+/* ---- syntax tree -> content, directly as the cursor ascends. Only the active
+ * ancestor frames and their already composed children live in the arena. No
+ * projected DOM, copied TSNode array per node, or depth-dependent text fallback.
+ * Gaps and unnamed punctuation are retained so PostgreSQL can realize every byte. */
+typedef struct AstFrame {
+    struct AstFrame *parent;
+    Ref *children;
+    size_t mark;
+    uint32_t end, at, count;
+} AstFrame;
+
+static Ref ast_cursor(TSNode root, const uint8_t *src, uint32_t lo, uint32_t hi);
+
+/* Large sibling sets are independent composition work. The taskgroup implied by
+ * taskloop keeps these arena slots alive until every result has been written. */
+static Ref ast_parallel(TSNode root, const uint8_t *src, uint32_t lo, uint32_t hi, uint32_t count){
+    size_t mark = scratch_mark();
+    TSNode *nodes = scratch_alloc(sizeof(TSNode) * count);
+    Ref *children = scratch_alloc(sizeof(Ref) * (2 * (size_t)count + 1));
+    uint8_t *present = scratch_alloc(2 * (size_t)count + 1);
+    memset(present, 0, 2 * (size_t)count + 1);
+    TSTreeCursor *cursor = lp_tls_cursor(root);
+    if (!cursor) { fputs("syntax composition: cursor pool exhausted\n", stderr); abort(); }
+    uint32_t found = 0;
+    if (ts_tree_cursor_goto_first_child(cursor)) do {
+        nodes[found++] = ts_tree_cursor_current_node(cursor);
+    } while (found < count && ts_tree_cursor_goto_next_sibling(cursor));
+    lp_tls_cursor_release(cursor);
+    #pragma omp taskloop num_tasks(omp_get_num_threads() * 8)
+    for (uint32_t i = 0; i < found; i++) {
+        uint32_t start = ts_node_start_byte(nodes[i]), end = ts_node_end_byte(nodes[i]);
+        if (end > start) { children[2 * i + 1] = ast_cursor(nodes[i], src, start, end); present[2 * i + 1] = 1; }
+    }
     uint32_t at = lo;
-    for (uint32_t i = 0; i < nc; i++) { if (cs[i] > at) { kids[2 * i] = string_ref(src + at, cs[i] - at); has[2 * i] = 1; } if (ce[i] > at) at = ce[i]; }
-    if (hi > at) { kids[2 * nc] = string_ref(src + at, hi - at); has[2 * nc] = 1; }
-    uint32_t k = 0;
-    for (uint32_t i = 0; i <= 2 * nc; i++) if (has[i]) kids[k++] = kids[i];
-    Ref r = compose(kids, k, ref_above(kids, k));
-    free(kids); free(cs); free(has); free(cn);
-    return r;
+    for (uint32_t i = 0; i < found; i++) {
+        uint32_t start = ts_node_start_byte(nodes[i]), end = ts_node_end_byte(nodes[i]);
+        if (start > at) { children[2 * i] = string_ref(src + at, start - at); present[2 * i] = 1; }
+        if (end > at) at = end;
+    }
+    if (hi > at) { children[2 * found] = string_ref(src + at, hi - at); present[2 * found] = 1; }
+    uint32_t used = 0;
+    for (uint32_t i = 0; i <= 2 * found; i++) if (present[i]) children[used++] = children[i];
+    Ref result = compose(children, used, ref_above(children, used));
+    scratch_restore(mark);
+    return result;
+}
+
+static Ref ast_cursor(TSNode root, const uint8_t *src, uint32_t lo, uint32_t hi){
+    TSTreeCursor *cursor = lp_tls_cursor(root);
+    if (!cursor) { fputs("syntax composition: cursor pool exhausted\n", stderr); abort(); }
+    AstFrame *frame = NULL;
+    uint32_t start = lo, end = hi;
+    for (;;) {
+        TSNode node = ts_tree_cursor_current_node(cursor);
+        uint32_t count = ts_node_child_count(node);
+        if (frame && start > frame->at) frame->children[frame->count++] = string_ref(src + frame->at, start - frame->at);
+        Ref result;
+        int present = end > start;
+        if (present && count && end - start > (4u << 20) && count >= 16) {
+            result = ast_parallel(node, src, start, end, count);
+        } else if (present && count) {
+            size_t mark = scratch_mark();
+            AstFrame *next = scratch_alloc(sizeof *next);
+            next->children = scratch_alloc(sizeof(Ref) * (2 * (size_t)count + 1));
+            next->parent = frame; next->mark = mark; next->at = start; next->end = end; next->count = 0;
+            frame = next;
+            ts_tree_cursor_goto_first_child(cursor);
+            node = ts_tree_cursor_current_node(cursor);
+            start = ts_node_start_byte(node); end = ts_node_end_byte(node);
+            continue;
+        } else if (present || !frame) {
+            result = string_ref(src + start, end - start);
+            present = 1;
+        }
+        for (;;) {
+            if (!frame) { lp_tls_cursor_release(cursor); return result; }
+            if (present) frame->children[frame->count++] = result;
+            if (end > frame->at) frame->at = end;
+            if (ts_tree_cursor_goto_next_sibling(cursor)) {
+                node = ts_tree_cursor_current_node(cursor);
+                start = ts_node_start_byte(node); end = ts_node_end_byte(node);
+                break;
+            }
+            ts_tree_cursor_goto_parent(cursor);
+            if (frame->end > frame->at) frame->children[frame->count++] = string_ref(src + frame->at, frame->end - frame->at);
+            result = compose(frame->children, frame->count, ref_above(frame->children, frame->count));
+            end = frame->end;
+            AstFrame *parent = frame->parent;
+            size_t mark = frame->mark;
+            scratch_restore(mark);
+            frame = parent; present = 1;
+        }
+    }
 }
 
 /* ---- what a text writes for what it cannot write plainly: XML references resolved */
@@ -427,22 +498,24 @@ void ev_push(Events *e, const Event *x){                         /* by address: 
 typedef struct { pthread_mutex_t mu; lp_strmap *m; } KStripe;
 static KStripe kstripe[64] = { [0 ... 63] = { PTHREAD_MUTEX_INITIALIZER, NULL } };
 static KStripe *key_at(const char *recipe, const uint8_t *k, size_t n, uint8_t **key, size_t *len, uint8_t *stack, size_t cap){
-    size_t rl = strlen(recipe); *len = rl + 1 + n; *key = *len <= cap ? stack : malloc(*len);
+    size_t rl = strlen(recipe); *len = rl + 1 + n; *key = *len <= cap ? stack : scratch_alloc(*len);
     memcpy(*key, recipe, rl + 1); memcpy(*key + rl + 1, k, n);
     return &kstripe[(lp_hash_bytes(*key, *len) >> 58) & 63];
 }
 typedef struct { Ref x; KeyRank r; } KeyHeld;
 static int rank_before(const KeyRank *a, const KeyRank *b){ return a->file != b->file ? a->file < b->file : a->at != b->at ? a->at < b->at : a->unit < b->unit; }
 void keys_put(const char *recipe, const uint8_t *k, size_t n, Ref x, const KeyRank *rank){
+    size_t mark = scratch_mark();
     uint8_t stack[512], *key; size_t len; KStripe *s = key_at(recipe, k, n, &key, &len, stack, sizeof stack);
     pthread_mutex_lock(&s->mu); if (!s->m) s->m = lp_strmap_sized(sizeof(KeyHeld));
     bool fresh; KeyHeld *h = lp_strmap_get(s->m, key, len, &fresh); if (fresh || rank_before(rank, &h->r)) { h->x = x; h->r = *rank; }     /* the first row to define a key keeps it */
-    pthread_mutex_unlock(&s->mu); if (key != stack) free(key);
+    pthread_mutex_unlock(&s->mu); scratch_restore(mark);
 }
 int keys_get(const char *recipe, const uint8_t *k, size_t n, Ref *out){
+    size_t mark = scratch_mark();
     uint8_t stack[512], *key; size_t len; KStripe *s = key_at(recipe, k, n, &key, &len, stack, sizeof stack);
     pthread_mutex_lock(&s->mu); const KeyHeld *r = s->m ? lp_strmap_lookup(s->m, key, len) : NULL; if (r) *out = r->x;
-    pthread_mutex_unlock(&s->mu); if (key != stack) free(key); return r != NULL;
+    pthread_mutex_unlock(&s->mu); scratch_restore(mark); return r != NULL;
 }
 uint64_t keys_held(void){ uint64_t n = 0; for (int i = 0; i < 64; i++) n += lp_strmap_count(kstripe[i].m); return n; }
 
@@ -494,239 +567,6 @@ void decompose_file(Ctx *c, File *f){
     size_t n; uint8_t *src0 = read_all(f->path, &n); if (!src0) { f->skipped = 1; return; }
     f->bytes = n; decompose_bytes(c, f, src0, n, 1); free(src0);
 }
-/* ---- Generic structural attestation extraction for user uploads & non-curated files ---- */
-typedef struct { Ref *claims; size_t n, cap; } GenRec;
-static void gen_claim_add(GenRec *gr, File *f, const Ref *parts, size_t np){
-    if (np < 2) return;
-    Ref p[8]; if (np > 8) np = 8;
-    for (size_t i = 0; i < np; i++) { if (!parts[i].tier) return; p[i] = parts[i]; p[i].said = 0; }
-    uint32_t pos = gr->n < 254 ? (uint32_t)(gr->n + 1) : 255;
-    Ref cl = compose(p, (uint32_t)np, ref_above(p, np));
-    Event ev = { .claim = cl.id, .witnessed = cl.id, .score = 1.0f, .kind = EV_CLAIM, .run = 1, .position = pos };
-    ev_push(&f->ev, &ev);
-    cl.said = LP_SAID_CLAIM; cl.outcome = (uint8_t)lp_outcome_of(1.0, &cl.spare); cl.position = pos;
-    if (gr->n == gr->cap) { gr->cap = gr->cap ? gr->cap * 2 : 16; gr->claims = xrealloc(gr->claims, gr->cap * sizeof(Ref)); }
-    gr->claims[gr->n++] = cl;
-}
-static void gen_record_flush(GenRec *gr, File *f){
-    if (!gr->n) return;
-    Ref rec = gr->n == 1 ? gr->claims[0] : compose(gr->claims, (uint32_t)gr->n, ref_above(gr->claims, gr->n));
-    rec.said = LP_SAID_RECORD; if (gr->n > 1) { rec.outcome = 0; rec.position = 0; rec.spare = 0; }
-    if (f->nsaid == f->csaid) { f->csaid = f->csaid ? f->csaid * 2 : 64; f->said = xrealloc(f->said, f->csaid * sizeof(Ref)); }
-    f->said[f->nsaid++] = rec;
-    f->records++;
-    gr->n = 0;
-}
-static Ref span_trim_ref(const uint8_t *s, size_t len, int strip_quotes){
-    while (len > 0 && (s[0] == ' ' || s[0] == '\t' || s[0] == '\r' || s[0] == '\n')) { s++; len--; }
-    while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t' || s[len - 1] == '\r' || s[len - 1] == '\n')) len--;
-    if (strip_quotes && len >= 2 && ((s[0] == '"' && s[len - 1] == '"') || (s[0] == '\'' && s[len - 1] == '\''))) { s++; len -= 2; }
-    if (!len) return (Ref){0};
-    return string_ref(s, len);
-}
-static int is_id_key(const uint8_t *s, size_t n){
-    if (n >= 2 && ((s[0] == '"' && s[n - 1] == '"') || (s[0] == '\'' && s[n - 1] == '\''))) { s++; n -= 2; }
-    return (n == 2 && !strncasecmp((const char *)s, "id", 2)) ||
-           (n == 3 && (!strncasecmp((const char *)s, "key", 3) || !strncasecmp((const char *)s, "uri", 3) || !strncasecmp((const char *)s, "uid", 3))) ||
-           (n == 4 && (!strncasecmp((const char *)s, "name", 4) || !strncasecmp((const char *)s, "code", 4) || !strncasecmp((const char *)s, "slug", 4) || !strncasecmp((const char *)s, "uuid", 4))) ||
-           (n == 5 && (!strncasecmp((const char *)s, "title", 5) || !strncasecmp((const char *)s, "label", 5) || !strncasecmp((const char *)s, "about", 5))) ||
-           (n == 7 && !strncasecmp((const char *)s, "subject", 7));
-}
-static int json_scalar_ref(TSNode v, const uint8_t *src, Ref *out){
-    if (ts_node_is_null(v)) return 0;
-    const char *tp = ts_node_type(v);
-    if (!strcmp(tp, "string") || !strcmp(tp, "number") || !strcmp(tp, "true") || !strcmp(tp, "false")) {
-        uint32_t a = ts_node_start_byte(v), b = ts_node_end_byte(v);
-        *out = span_trim_ref(src + a, b - a, 1);
-        return out->tier != 0;
-    }
-    return 0;
-}
-static void attest_json_node(TSNode nd, const uint8_t *src, File *f, GenRec *gr){
-    const char *tp = ts_node_type(nd);
-    if (!strcmp(tp, "object")) {
-        uint32_t nc = ts_node_named_child_count(nd);
-        Ref subj = {0}; int has_subj = 0;
-        for (uint32_t i = 0; i < nc && !has_subj; i++) {
-            TSNode ch = ts_node_named_child(nd, i);
-            if (strcmp(ts_node_type(ch), "pair")) continue;
-            TSNode k = ts_node_child_by_field_name(ch, "key", 3);
-            TSNode v = ts_node_child_by_field_name(ch, "value", 5);
-            if (ts_node_is_null(k) || ts_node_is_null(v)) continue;
-            uint32_t ka = ts_node_start_byte(k), kb = ts_node_end_byte(k);
-            if (is_id_key(src + ka, kb - ka) && json_scalar_ref(v, src, &subj)) has_subj = 1;
-        }
-        gr->n = 0;
-        for (uint32_t i = 0; i < nc; i++) {
-            TSNode ch = ts_node_named_child(nd, i);
-            if (strcmp(ts_node_type(ch), "pair")) continue;
-            TSNode k = ts_node_child_by_field_name(ch, "key", 3);
-            TSNode v = ts_node_child_by_field_name(ch, "value", 5);
-            if (ts_node_is_null(k) || ts_node_is_null(v)) continue;
-            Ref kr = span_trim_ref(src + ts_node_start_byte(k), ts_node_end_byte(k) - ts_node_start_byte(k), 1);
-            Ref vr = {0};
-            if (json_scalar_ref(v, src, &vr)) {
-                if (has_subj && !lp_id_eq(&subj.id, &vr.id)) gen_claim_add(gr, f, (Ref[]){ subj, kr, vr }, 3);
-                else gen_claim_add(gr, f, (Ref[]){ kr, vr }, 2);
-            } else if (!strcmp(ts_node_type(v), "array")) {
-                uint32_t ac = ts_node_named_child_count(v);
-                for (uint32_t j = 0; j < ac; j++) {
-                    Ref avr = {0};
-                    if (json_scalar_ref(ts_node_named_child(v, j), src, &avr)) {
-                        if (has_subj) gen_claim_add(gr, f, (Ref[]){ subj, kr, avr }, 3);
-                        else gen_claim_add(gr, f, (Ref[]){ kr, avr }, 2);
-                    }
-                }
-            }
-        }
-        gen_record_flush(gr, f);
-    }
-    uint32_t nc = ts_node_named_child_count(nd);
-    for (uint32_t i = 0; i < nc; i++) attest_json_node(ts_node_named_child(nd, i), src, f, gr);
-}
-static void attest_xml_node(TSNode nd, const uint8_t *src, File *f, GenRec *gr, Ref parent_subj){
-    const char *tp = ts_node_type(nd);
-    Ref next_subj = parent_subj;
-    if (!strcmp(tp, "element")) {
-        uint32_t nc = ts_node_named_child_count(nd);
-        TSNode tag_parent = {0}; Ref tag_ref = {0}, subj_ref = {0}; int has_subj = 0;
-        for (uint32_t i = 0; i < nc; i++) {
-            TSNode ch = ts_node_named_child(nd, i); const char *ctp = ts_node_type(ch);
-            if (!strcmp(ctp, "STag") || !strcmp(ctp, "EmptyElemTag") || !strcmp(ctp, "start_tag") || !strcmp(ctp, "self_closing_tag")) { tag_parent = ch; break; }
-        }
-        if (!ts_node_is_null(tag_parent)) {
-            uint32_t tc = ts_node_named_child_count(tag_parent);
-            for (uint32_t i = 0; i < tc; i++) {
-                TSNode ch = ts_node_named_child(tag_parent, i); const char *ctp = ts_node_type(ch);
-                if (!tag_ref.tier && (!strcmp(ctp, "Name") || !strcmp(ctp, "tag_name")))
-                    tag_ref = span_trim_ref(src + ts_node_start_byte(ch), ts_node_end_byte(ch) - ts_node_start_byte(ch), 0);
-                else if (!strcmp(ctp, "Attribute") || !strcmp(ctp, "attribute")) {
-                    uint32_t ac = ts_node_named_child_count(ch);
-                    if (ac >= 2) {
-                        TSNode ak = ts_node_named_child(ch, 0), av = ts_node_named_child(ch, 1);
-                        uint32_t ka = ts_node_start_byte(ak), kb = ts_node_end_byte(ak);
-                        if (!has_subj && is_id_key(src + ka, kb - ka)) {
-                            subj_ref = span_trim_ref(src + ts_node_start_byte(av), ts_node_end_byte(av) - ts_node_start_byte(av), 1);
-                            if (subj_ref.tier) has_subj = 1;
-                        }
-                    }
-                }
-            }
-            if (has_subj) next_subj = subj_ref;
-            gr->n = 0;
-            Ref head = has_subj ? subj_ref : tag_ref;
-            for (uint32_t i = 0; i < tc; i++) {
-                TSNode ch = ts_node_named_child(tag_parent, i); const char *ctp = ts_node_type(ch);
-                if (!strcmp(ctp, "Attribute") || !strcmp(ctp, "attribute")) {
-                    uint32_t ac = ts_node_named_child_count(ch);
-                    if (ac >= 2) {
-                        TSNode ak = ts_node_named_child(ch, 0), av = ts_node_named_child(ch, 1);
-                        Ref kr = span_trim_ref(src + ts_node_start_byte(ak), ts_node_end_byte(ak) - ts_node_start_byte(ak), 0);
-                        Ref vr = span_trim_ref(src + ts_node_start_byte(av), ts_node_end_byte(av) - ts_node_start_byte(av), 1);
-                        if (head.tier && kr.tier && vr.tier) {
-                            if (has_subj && lp_id_eq(&head.id, &vr.id)) gen_claim_add(gr, f, (Ref[]){ kr, vr }, 2);
-                            else gen_claim_add(gr, f, (Ref[]){ head, kr, vr }, 3);
-                        }
-                    }
-                }
-            }
-            Ref owner = has_subj ? subj_ref : parent_subj;
-            for (uint32_t i = 0; i < nc; i++) {
-                TSNode ch = ts_node_named_child(nd, i); const char *ctp = ts_node_type(ch);
-                if (!strcmp(ctp, "content")) {
-                    uint32_t cc = ts_node_named_child_count(ch);
-                    for (uint32_t j = 0; j < cc; j++) {
-                        TSNode cch = ts_node_named_child(ch, j);
-                        if (!strcmp(ts_node_type(cch), "CharData")) {
-                            Ref tr = span_trim_ref(src + ts_node_start_byte(cch), ts_node_end_byte(cch) - ts_node_start_byte(cch), 0);
-                            if (tr.tier && tag_ref.tier) {
-                                if (owner.tier) gen_claim_add(gr, f, (Ref[]){ owner, tag_ref, tr }, 3);
-                                else gen_claim_add(gr, f, (Ref[]){ tag_ref, tr }, 2);
-                            }
-                        }
-                    }
-                } else if (!strcmp(ctp, "text")) {
-                    Ref tr = span_trim_ref(src + ts_node_start_byte(ch), ts_node_end_byte(ch) - ts_node_start_byte(ch), 0);
-                    if (tr.tier && tag_ref.tier) {
-                        if (owner.tier) gen_claim_add(gr, f, (Ref[]){ owner, tag_ref, tr }, 3);
-                        else gen_claim_add(gr, f, (Ref[]){ tag_ref, tr }, 2);
-                    }
-                }
-            }
-            gen_record_flush(gr, f);
-        }
-    }
-    uint32_t nc = ts_node_named_child_count(nd);
-    for (uint32_t i = 0; i < nc; i++) attest_xml_node(ts_node_named_child(nd, i), src, f, gr, next_subj);
-}
-static TSNode find_ident(TSNode nd, int depth){
-    if (ts_node_is_null(nd) || depth > 4) return (TSNode){0};
-    const char *tp = ts_node_type(nd);
-    if (!strcmp(tp, "identifier") || !strcmp(tp, "type_identifier") || !strcmp(tp, "field_identifier") || !strcmp(tp, "property_identifier"))
-        return nd;
-    TSNode nm = ts_node_child_by_field_name(nd, "name", 4);
-    if (!ts_node_is_null(nm)) { TSNode r = find_ident(nm, depth + 1); if (!ts_node_is_null(r)) return r; }
-    TSNode dc = ts_node_child_by_field_name(nd, "declarator", 10);
-    if (!ts_node_is_null(dc)) { TSNode r = find_ident(dc, depth + 1); if (!ts_node_is_null(r)) return r; }
-    return (TSNode){0};
-}
-static void attest_code_node(TSNode nd, const uint8_t *src, File *f, GenRec *gr){
-    const char *tp = ts_node_type(nd);
-    if (strstr(tp, "definition") || strstr(tp, "declaration") || strstr(tp, "specifier") || strstr(tp, "item") || !strcmp(tp, "method_declaration") || !strcmp(tp, "class_declaration") || !strcmp(tp, "interface_declaration") || !strcmp(tp, "struct_specifier") || !strcmp(tp, "function_item") || !strcmp(tp, "struct_item") || !strcmp(tp, "enum_item") || !strcmp(tp, "trait_item")) {
-        TSNode id = find_ident(nd, 0);
-        if (!ts_node_is_null(id)) {
-            Ref kind_ref = string_ref((const uint8_t *)tp, strlen(tp));
-            Ref sym_ref = span_trim_ref(src + ts_node_start_byte(id), ts_node_end_byte(id) - ts_node_start_byte(id), 0);
-            if (kind_ref.tier && sym_ref.tier) gen_claim_add(gr, f, (Ref[]){ kind_ref, sym_ref }, 2);
-        }
-    }
-    uint32_t nc = ts_node_named_child_count(nd);
-    for (uint32_t i = 0; i < nc; i++) attest_code_node(ts_node_named_child(nd, i), src, f, gr);
-}
-static void attest_delimited(File *f, const uint8_t *src, size_t n, char sep){
-    size_t pos = 0; if (n >= 3 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF) pos = 3;
-    Ref hdr[256]; int nhdr = 0, first_row = 1;
-    GenRec gr = {0};
-    while (pos < n) {
-        size_t line_end = pos; while (line_end < n && src[line_end] != '\n') line_end++;
-        size_t le = line_end; if (le > pos && src[le - 1] == '\r') le--;
-        if (le > pos && src[pos] != '#') {
-            Ref cells[256]; int nc = 0;
-            size_t c = pos;
-            while (c <= le && nc < 256) {
-                size_t cs = c, ce = c;
-                if (c < le && src[c] == '"') {
-                    cs = ++c;
-                    while (c < le) { if (src[c] == '"') { if (c + 1 < le && src[c + 1] == '"') { c += 2; continue; } break; } c++; }
-                    ce = c; while (c < le && src[c] != sep) c++;
-                } else {
-                    while (c < le && src[c] != sep) c++;
-                    ce = c;
-                }
-                cells[nc++] = span_trim_ref(src + cs, ce - cs, 1);
-                if (c == le) break;
-                c++;
-            }
-            if (first_row) {
-                first_row = 0; nhdr = nc;
-                for (int i = 0; i < nc; i++) hdr[i] = cells[i];
-            } else if (nc > 0) {
-                gr.n = 0;
-                Ref subj = cells[0];
-                for (int i = 0; i < nc; i++) {
-                    if (!cells[i].tier) continue;
-                    Ref col = (i < nhdr && hdr[i].tier) ? hdr[i] : (Ref){0};
-                    if (subj.tier && i > 0 && col.tier) gen_claim_add(&gr, f, (Ref[]){ subj, col, cells[i] }, 3);
-                    else if (col.tier) gen_claim_add(&gr, f, (Ref[]){ col, cells[i] }, 2);
-                    else if (subj.tier && i > 0) gen_claim_add(&gr, f, (Ref[]){ subj, cells[i] }, 2);
-                }
-                gen_record_flush(&gr, f);
-            }
-        }
-        pos = line_end + 1;
-    }
-    free(gr.claims);
-}
 void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
     const Recipe *r = f->recipe;
     if (r && r->curated) {
@@ -737,50 +577,16 @@ void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
             if (l[0]) { f->lineage = text_ref(c, (const uint8_t *)l, strlen(l)); f->has_lineage = 1; } }
         if (r->native) { r->native->read(r, f, src, n); return; }           /* the native grammar the recipe names */
         attest_layout(r, f, src, n); return; }
-    if (r && (!strcmp(r->grammar, "csv") || !strcmp(r->grammar, "tsv") || !strcmp(r->grammar, "psv"))) {
-        f->trunk = text_ref(c, src, n);
-        char sep = !strcmp(r->grammar, "tsv") ? '\t' : (!strcmp(r->grammar, "psv") ? '|' : ',');
-        attest_delimited(f, src, n, sep);
-        return;
-    }
     if (!r || !r->lang) { f->trunk = text_ref(c, src, n); return; }        /* text: UAX #29 */
-    TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, r->lang);     /* content: the file as its syntax tree, byte for byte */
+    if (n > UINT32_MAX) { fprintf(stderr, "%s: Tree-sitter input exceeds its 32-bit byte range\n", f->path); exit(2); }
+    uint16_t gid = grammar_id_for_language(r->lang);
+    TSParser *ps = gid > 0 ? lp_tls_parser(gid) : NULL;
+    if (!ps) { fprintf(stderr, "%s: cannot obtain the registered Tree-sitter parser\n", f->path); exit(2); }
     TSTree *t = ts_parser_parse_string(ps, NULL, (const char *)src, (uint32_t)n);
+    if (!t) { fprintf(stderr, "%s: Tree-sitter could not parse the input\n", f->path); exit(2); }
     TSNode root = ts_tree_root_node(t);
-    f->trunk = ast_node(root, src, 0, (uint32_t)n, 0);
-    GenRec gr = {0};
-    if (!strcmp(r->grammar, "json")) attest_json_node(root, src, f, &gr);
-    else if (!strcmp(r->grammar, "xml") || !strcmp(r->grammar, "html")) attest_xml_node(root, src, f, &gr, (Ref){0});
-    else if (!strcmp(r->grammar, "turtle")) {
-        uint32_t nc = ts_node_named_child_count(root);
-        for (uint32_t i = 0; i < nc; i++) {
-            TSNode st = ts_node_named_child(root, i);
-            if (strcmp(ts_node_type(st), "statement")) continue;
-            TSNode tr = ts_node_named_child(st, 0);
-            if (ts_node_is_null(tr) || strcmp(ts_node_type(tr), "triples")) continue;
-            TSNode s_nd = ts_node_named_child(tr, 0), pol = ts_node_named_child(tr, 1);
-            if (ts_node_is_null(s_nd) || ts_node_is_null(pol)) continue;
-            Ref sr = span_trim_ref(src + ts_node_start_byte(s_nd), ts_node_end_byte(s_nd) - ts_node_start_byte(s_nd), 1);
-            gr.n = 0;
-            uint32_t pc = ts_node_named_child_count(pol);
-            for (uint32_t j = 0; j + 1 < pc; j += 2) {
-                TSNode vb = ts_node_named_child(pol, j), ol = ts_node_named_child(pol, j + 1);
-                Ref vr = span_trim_ref(src + ts_node_start_byte(vb), ts_node_end_byte(vb) - ts_node_start_byte(vb), 1);
-                uint32_t oc = ts_node_named_child_count(ol);
-                for (uint32_t k = 0; k < oc; k++) {
-                    TSNode ob = ts_node_named_child(ol, k);
-                    Ref or_ref = span_trim_ref(src + ts_node_start_byte(ob), ts_node_end_byte(ob) - ts_node_start_byte(ob), 1);
-                    if (sr.tier && vr.tier && or_ref.tier) gen_claim_add(&gr, f, (Ref[]){ sr, vr, or_ref }, 3);
-                }
-            }
-            gen_record_flush(&gr, f);
-        }
-    } else {
-        attest_code_node(root, src, f, &gr);
-        gen_record_flush(&gr, f);
-    }
-    free(gr.claims);
-    ts_tree_delete(t); ts_parser_delete(ps);
+    f->trunk = ast_cursor(root, src, 0, (uint32_t)n);
+    ts_tree_delete(t);
 }
 
 /* ---- laplace tree: a file's syntax tree as its recipe's grammar reads it, for writing recipes
@@ -801,7 +607,7 @@ static void tree_print(TSTreeCursor *cur, const uint8_t *src, int depth, long *l
 }
 int cmd_tree(int argc, char **argv){
     const char *rdir = laplace_recipes(), *grammar = NULL; long long nodes_opt = 400;
-    int a = opts(argc, argv, (const Opt[]){ { "-r", 's', &rdir }, { "-g", 's', &grammar }, { "-n", 'l', &nodes_opt }, { NULL } });
+    int a = opts(argc, argv, (const Opt[]){ { "-r", 's', &rdir, 0 }, { "-g", 's', &grammar, 0 }, { "-n", 'l', &nodes_opt, 0 }, { 0 } });
     long nodes = (long)nodes_opt;
     if (a >= argc) { fprintf(stderr, "usage: laplace tree [-r recipes] [-g grammar] [-n nodes] file\n"); return 2; }
     const TSLanguage *lang = NULL;
