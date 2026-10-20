@@ -292,42 +292,9 @@ void ctx_open(int threads){
     CTX = malloc(sizeof(Ctx *) * (size_t)threads);
     for (int i = 0; i < threads; i++) { CTX[i] = lp_text_new(T0); if (!CTX[i]) { fprintf(stderr, "cannot open ICU's break iterators\n"); exit(1); } }
 }
-static Ref text_blocks(Ref *r, size_t n){
-    if (n == 1) return r[0];
-    if (n <= 64) { Ref x = compose(r, (uint32_t)n, lp_tier_above(r, n)); x.said = 0; return x; }
-    size_t m = (n + 63) / 64; Ref *up = malloc(m * sizeof *up);
-    for (size_t i = 0; i < m; i++) { size_t a = i * 64, k = n - a < 64 ? n - a : 64; up[i] = text_blocks(r + a, k); }
-    Ref out = text_blocks(up, m); free(up); return out;
-}
 Ref text_ref(Ctx *c, const uint8_t *s, size_t n){
-    if (n >= (1u << 18) && omp_in_parallel()) {
-        size_t step = 1u << 17, cap = n / step + 4, *cut = malloc((cap + 1) * sizeof *cut), nc = 0;
-        cut[nc++] = 0;
-        for (size_t target = step; target < n; ) {
-            size_t split = 0;
-            for (size_t i = target; i < n && i < target + step; i++) {
-                if (s[i] != '\n') continue;
-                size_t j = i + 1; while (j < n && (s[j] == ' ' || s[j] == '\t' || s[j] == '\r')) j++;
-                if (j < n && s[j] == '\n') {
-                    while (j < n && (s[j] == '\n' || s[j] == '\r' || s[j] == ' ' || s[j] == '\t')) j++;
-                    if (j < n) { split = j; break; }
-                }
-            }
-            if (!split) for (size_t i = target; i < n && i < target + step; i++) if (s[i] == '\n' && i + 1 < n) { split = i + 1; break; }
-            if (!split) break;
-            if (nc == cap) { cap *= 2; cut = realloc(cut, (cap + 1) * sizeof *cut); }
-            cut[nc++] = split; target = split + step;
-        }
-        cut[nc] = n;
-        if (nc > 1) {
-            Ref *parts = calloc(nc, sizeof *parts);
-            #pragma omp taskloop grainsize(1)
-            for (size_t i = 0; i < nc; i++)
-                parts[i] = lp_text_decompose(CTX[omp_get_thread_num()], s + cut[i], cut[i + 1] - cut[i], compose_sink, NULL);
-            Ref r = text_blocks(parts, nc); free(parts); free(cut); r.said = 0; return r;
-        }
-        free(cut);
-    }
+    /* Native owns the canonical UAX #29 tree. A worker or byte-window boundary
+     * must never introduce a second text decomposition or change its ID. */
     Ref r = lp_text_decompose(c, s, n, compose_sink, NULL); r.said = 0; return r;
 }
 
