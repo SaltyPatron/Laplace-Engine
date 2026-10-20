@@ -214,6 +214,7 @@ static void prune(File *files,int nfiles,LoadStats *st){
         x->keep=lp_idmap_find(writer.known,&x->id)>=0 || lp_tier0_contains(T0,&x->id) ? 2 : 0;
     }
     TABLE_EACH(x) if(x->keep==2) known_tree(x);
+    TABLE_EACH(x) if(x->pin && !x->keep) x->keep=3;
     for(int i=0;i<nfiles;i++){
         File *f=&files[i]; if(f->known || f->skipped) continue;
         if(f->has_file) queue_root(&f->file.id); else {

@@ -237,6 +237,41 @@ static void show_held(const lp_id *id, int depth){
         if (said == LP_SAID_TUPLE) { printf("%*s+ ", depth * 2 + 2, ""); show_tuple(&VTX[c->voff + v].id); putchar('\n'); }
         else if (said == LP_SAID_RECORD) { printf("%*s(\n", depth * 2 + 2, ""); show_held(&VTX[c->voff + v].id, depth + 1); printf("%*s)\n", depth * 2 + 2, ""); } }
 }
+static void show_record_events(const File *file){
+    for (uint64_t i = 0; i < file->ev.n; i++) {
+        const Event *event = &file->ev.e[i];
+        if (tsv_claims) { if (event->kind == EV_RECORD) tsv_held(&event->witnessed, 0); else tsv_tuple("claim", &event->claim, event->position, (double)event->score); continue; }
+        if (event->kind == EV_RECORD) { printf("-- record %u\n", event->position); show_held(&event->witnessed, 0); continue; }
+        if (!table_find(&event->claim)) continue;
+        show_tuple(&event->claim);
+        if (event->position) printf("   #%u", event->position);
+        if (event->score != 1.0f) printf("   score %.3g", (double)event->score);
+        putchar('\n');
+    }
+}
+typedef struct {
+    const char *conninfo; int threads, show; File *file; Fold *fold; LoadStats *stats;
+    uint64_t *events, windows; double database_seconds;
+} StreamLoad;
+static int stream_record_batch(void *context, const Ref *things, size_t n, const Ref *metadata, size_t nm, const Events *events){
+    StreamLoad *stream = context; File *file = stream->file;
+    file_stream_add(file, things, n, metadata, nm, events->n);
+    size_t roots; const Ref *root = file_stream_roots(file, &roots);
+    Events previous = file->ev; Ref *said = file->said; uint64_t nsaid = file->nsaid, csaid = file->csaid;
+    file->ev = *events; file->said = (Ref *)root; file->nsaid = roots; file->csaid = roots;
+    if (stream->show) show_record_events(file);
+    *stream->events += events->n;
+    double begin = now(); fold_events(stream->fold, file, 1);
+    int result = load(stream->conninfo, stream->threads, file, 1, stream->stats);
+    stream->database_seconds += now() - begin;
+    file->ev = previous; file->said = said; file->nsaid = nsaid; file->csaid = csaid;
+    if (!result) {
+        stream->windows++; table_reset();
+        fprintf(stderr, "\r  %'llu record windows, %'llu entities and %'llu paths persisted   ",
+                (unsigned long long)stream->windows, (unsigned long long)stream->stats->ent_rows, (unsigned long long)stream->stats->phy_rows);
+    }
+    return result;
+}
 /* Every source there is, in the order they go in, each in a process of its own with the options given, its output
  * kept in a log of its own. A source none of whose files is here is said so and passed over; a source that fails
  * stops the run, since what comes after it counts on it. What is already recorded is passed over by its bytes, so
@@ -549,22 +584,28 @@ int cmd_ingest(int argc, char **argv){
     uint64_t *size = calloc((size_t)nfiles, 8);
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
         size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
-    #define SHOW(F) do { if (show_claims) for (uint64_t e = 0; e < (F)->ev.n; e++) { const Event *x_ = &(F)->ev.e[e]; \
-        if (tsv_claims) { if (x_->kind == EV_RECORD) tsv_held(&x_->witnessed, 0); else tsv_tuple("claim", &x_->claim, x_->position, (double)x_->score); continue; } \
-        if (x_->kind == EV_RECORD) { printf("-- record %u", x_->position); if (x_->own_witness) { printf("   by "); show_tuple(&x_->witness); } putchar('\n'); show_held(&x_->witnessed, 0); continue; } \
-        if (!table_find(&x_->claim)) continue; \
-        show_tuple(&x_->claim); \
-        if (x_->position) printf("   #%u", x_->position); \
-        if (x_->score != 1.0f) printf("   score %.3g", (double)x_->score); \
-        if (x_->own_witness) { printf("   by "); show_tuple(&x_->witness); } \
-        putchar('\n'); } } while (0)
+    #define SHOW(F) do { if (show_claims) show_record_events(F); } while (0)
     /* What was read of a file is kept for its content; a file read to its end gets its trunk. */
     #define WHOLE(F) do { File *f_ = (F); if (!f_->partial) file_close(f_); } while (0)
     for (int a0 = 0; a0 < nfiles; ) {
         int b0 = a0; uint64_t sum = 0;
-        while (b0 < nfiles && (b0 == a0 || (sum + size[b0] <= batch && depth[b0] == depth[a0]))) { sum += size[b0]; b0++; }     /* a batch is a barrier: what refers waits for what is referred to */
+        int streaming = do_load && !files[a0].known && !files[a0].skipped && recipe_record_streamable(files[a0].recipe);
+        if (streaming) {
+            b0 = a0 + 1;
+            sum = getenv("LAPLACE_RECORD_WINDOW_BYTES") ? strtoull(getenv("LAPLACE_RECORD_WINDOW_BYTES"), NULL, 10) : (UINT64_C(8) << 20);
+        } else while (b0 < nfiles && (b0 == a0 || (sum + size[b0] <= batch && depth[b0] == depth[a0] &&
+                !(do_load && !files[b0].known && !files[b0].skipped && recipe_record_streamable(files[b0].recipe))))) { sum += size[b0]; b0++; }
         table_size(sum);                                                                                                  /* the table is empty here: room for what this batch makes */
         double td = now();
+        StreamLoad stream = {.conninfo=conninfo, .threads=threads, .show=show_claims, .file=&files[a0],
+            .fold=fold, .stats=&st, .events=&nev};
+        if (streaming) {
+            File *file = &files[a0]; file->emit = stream_record_batch; file->emit_context = &stream;
+            file_stream_begin(file); decompose_file(CTX[0], file);
+            file->emit = NULL; file->emit_context = NULL;
+            bytes += file->bytes; done++;
+            t_dec += now() - td - stream.database_seconds;
+        } else {
         /* the longest first: a long file begun last is decomposed on one core while every other waits for it */
         int *order = malloc(sizeof(int) * (size_t)(b0 - a0)); for (int i = a0; i < b0; i++) order[i - a0] = i;
         by_size_of = size; qsort(order, (size_t)(b0 - a0), sizeof(int), by_size);
@@ -583,7 +624,9 @@ int cmd_ingest(int argc, char **argv){
                 }
             }
         }
-        free(order); t_dec += now() - td; td = now();
+        free(order); t_dec += now() - td;
+        }
+        td = now();
         /* The provider compared with the original buffer before releasing it.
          * Verification never opens and reads the source a second time. */
         for (int i = a0; i < b0; i++) {
@@ -594,6 +637,7 @@ int cmd_ingest(int argc, char **argv){
             if (getenv("LAPLACE_TRUNKS")) { char id[33]; id_text(&files[i].trunk.id, id); fprintf(stderr, "  trunk %s  %s\n", id, files[i].path); }
         }
         t_rec += now() - td;
+        if (mism) { fputs("ingest: source verification failed; no witness is published\n", stderr); return 1; }
         for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
         if (entities) show_entities(conninfo, asking);
         if (do_load) {

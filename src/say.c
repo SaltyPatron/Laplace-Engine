@@ -2393,7 +2393,7 @@ int file_os(const Recipe *r, const File *f, Ref *out){
 
 enum { RECORD_WINDOW = 1024, RECORDS_PER_LANE = 16, MAX_RECORD_LANES = RECORD_WINDOW / RECORDS_PER_LANE };
 typedef struct {
-    const Recipe *recipe; File *file; const Say *say; const uint8_t *source; size_t length;
+    const Recipe *recipe; File *file; const Say *say; const uint8_t *source; size_t length; const SInput *input;
     Sink *result, *workers; uint32_t worker_count;
     Ref filename, stem, about; int has_about, failed;
 } RecordPipeline;
@@ -2454,24 +2454,18 @@ static void page_about(RecordPipeline *pipeline, const SRecords *records){
     if (view.failed) pipeline->failed = 1;
     s_records_close(&view);
 }
-static void read_records(RecordPipeline *pipeline){
-    SRecords records;
-    if (!s_records_open(&records, &pipeline->say->lay, pipeline->source, pipeline->length)) {
-        fprintf(stderr, "\n  %s: %s does not parse completely with its compiled packaging grammar\n", pipeline->recipe->name, pipeline->file->path);
-        pipeline->failed = 1; return;
-    }
-    page_about(pipeline, &records);
+static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint64_t byte_at){
     SRecord batch[RECORD_WINDOW];
     struct { SayScratch arena; PreparedRecord *record; uint32_t count; } prepared[MAX_RECORD_LANES] = {0};
     int bind_keys = pipeline->say->nkey != 0;
     while (!pipeline->failed) {
         uint32_t count = 0;
-        while (count < RECORD_WINDOW && s_record_next(&records, &batch[count])) count++;
-        if (records.failed) { pipeline->failed = 1; break; }
+        while (count < RECORD_WINDOW && s_record_next(records, &batch[count])) count++;
+        if (records->failed) { pipeline->failed = 1; break; }
         if (!count) break;
         uint32_t lanes = (count + RECORDS_PER_LANE - 1) / RECORDS_PER_LANE;
         if (lanes > pipeline->worker_count) lanes = pipeline->worker_count;
-        const Layout *layout = records.layout;
+        const Layout *layout = records->layout;
         #pragma omp taskloop grainsize(1) shared(batch, prepared)
         for (uint32_t lane = 0; lane < lanes; lane++) {
             Sink *worker = &pipeline->workers[lane]; reset_record_worker(pipeline, worker);
@@ -2485,7 +2479,7 @@ static void read_records(RecordPipeline *pipeline){
             }
             for (uint32_t i = begin; i < end && !__atomic_load_n(&pipeline->failed, __ATOMIC_ACQUIRE); i++) {
                 size_t mark = scratch_mark(); worker->bindings = (BindingMatrix){0};
-                worker->kr.file = pipeline->file->order; worker->kr.at = pipeline->file->at + batch[i].range.start_byte;
+                worker->kr.file = pipeline->file->order; worker->kr.at = pipeline->file->at + byte_at + batch[i].range.start_byte;
                 RecordCollector collector = {.sink=worker, .layout=layout, .ordinal=batch[i].ordinal,
                     .prepared=bind_keys ? &prepared[lane].record[i - begin] : NULL};
                 int valid = s_cursor_record(layout, &batch[i], pipeline->source, pipeline->length, collect_record, &collector);
@@ -2517,10 +2511,108 @@ static void read_records(RecordPipeline *pipeline){
         for (uint32_t lane = 0; lane < lanes; lane++) prepared[lane].arena.used = prepared[lane].arena.stack_used = 0;
     }
     for (uint32_t lane = 0; lane < MAX_RECORD_LANES; lane++) arena_release(&prepared[lane].arena);
-    s_records_close(&records);
 }
 
-static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw *hw){
+typedef struct { const uint8_t *bytes; size_t length, at; } MemoryInput;
+static size_t memory_input_read(void *context, uint8_t *out, size_t capacity){
+    MemoryInput *input = context; size_t n = input->length - input->at;
+    if (n > capacity) n = capacity;
+    if (n) memcpy(out, input->bytes + input->at, n);
+    input->at += n; return n;
+}
+static int input_fill(const SInput *input, lp_buf *buffer, size_t target, size_t quantum, int *ended){
+    while (!*ended && buffer->n < target) {
+        size_t room = target - buffer->n; if (room > quantum) room = quantum;
+        size_t before = buffer->n; uint8_t *out = lp_buf_room(buffer, room);
+        size_t n = input->read(input->context, out, room);
+        if (n > room) { fputs("record input exceeded its supplied buffer\n", stderr); return 0; }
+        buffer->n = before + n;
+        if (input->error && input->error(input->context)) return 0;
+        if (!n) *ended = 1;
+    }
+    return 1;
+}
+int say_record_streamable(const Recipe *recipe){
+    const Say *say = recipe ? recipe->say : NULL;
+    return say && say->lay.g.compiled && say->lay.g.record_count &&
+        !say->lay.g.record_name_count && !say->lay.g.has_context && !say->has_about;
+}
+static void read_records(RecordPipeline *pipeline){
+    const uint8_t *original_source = pipeline->source; size_t original_length = pipeline->length;
+    MemoryInput memory = {.bytes=original_source, .length=original_length};
+    SInput memory_input = {.context=&memory, .read=memory_input_read};
+    const SInput *input = pipeline->input ? pipeline->input : &memory_input;
+    Layout *layout = malloc(sizeof *layout);
+    if (!layout) { perror("record window layout"); pipeline->failed = 1; return; }
+    *layout = pipeline->say->lay;
+    int independent = say_record_streamable(pipeline->recipe), ended = 0;
+    size_t quantum = (size_t)8 << 20;
+    const char *configured = getenv("LAPLACE_RECORD_WINDOW_BYTES");
+    if (configured && *configured) {
+        char *end; unsigned long long value = strtoull(configured, &end, 10);
+        if (*end || !value || value > UINT32_MAX) { fputs("LAPLACE_RECORD_WINDOW_BYTES must be in 1..UINT32_MAX\n", stderr); exit(2); }
+        quantum = (size_t)value;
+    }
+    uint64_t ordinal = 0, source_row = 0, byte_at = 0;
+    size_t header_mark = 0; int has_header = 0, first = 1;
+    SayScratch headers = {0}; lp_buf buffer = {0};
+    do {
+        size_t target = independent ? quantum : UINT32_MAX;
+        if (first && target < 3) target = 3;
+        if (!input_fill(input, &buffer, target, quantum, &ended)) { pipeline->failed = 1; break; }
+        if (first && pipeline->input && buffer.n >= 3 && buffer.b[0] == 0xef && buffer.b[1] == 0xbb && buffer.b[2] == 0xbf) {
+            memmove(buffer.b, buffer.b + 3, buffer.n - 3); buffer.n -= 3; byte_at = 3;
+        }
+        first = 0; size_t consumed = 0; SRecords records; int status;
+        layout->source_row = source_row;
+        for (;;) {
+            status = independent ? s_records_window(&records, layout, buffer.b, buffer.n, ended, &consumed, &headers) :
+                s_records_open(&records, layout, buffer.b, buffer.n);
+            if (status || ended) break;
+            if (buffer.n > UINT32_MAX - quantum) { status = -1; break; }
+            if (!input_fill(input, &buffer, buffer.n + quantum, quantum, &ended)) { status = -1; break; }
+        }
+        if (status <= 0) {
+            fprintf(stderr, "\n  %s: %s does not parse completely with its compiled packaging grammar at byte %llu\n",
+                    pipeline->recipe->name, pipeline->file->path, (unsigned long long)byte_at);
+            pipeline->failed = 1; break;
+        }
+        if (!independent) consumed = buffer.n;
+        pipeline->source = buffer.b; pipeline->length = buffer.n;
+        records.ordinal = ordinal; page_about(pipeline, &records);
+        if (omp_in_parallel()) read_record_window(pipeline, &records, byte_at);
+        else {
+            #pragma omp parallel
+            {
+                #pragma omp single
+                read_record_window(pipeline, &records, byte_at);
+            }
+        }
+        ordinal = records.ordinal;
+        if (records.file_layout) {
+            Layout *next = records.file_layout; records.file_layout = NULL;
+            if (!has_header) { header_mark = records.header_mark; has_header = 1; }
+            free(layout); layout = next;
+        }
+        if (layout->ntier) { layout->tier[0].header = 0; layout->tier[0].skip = 0; }
+        s_records_close(&records);
+        if (pipeline->file->emit && !pipeline->failed) {
+            Sink *result = pipeline->result;
+            if (pipeline->file->emit(pipeline->file->emit_context, result->things.c, result->things.n,
+                    result->meta.c, result->meta.n, &result->ev)) pipeline->failed = 1;
+            result->things.n = result->meta.n = result->ev.n = 0;
+        }
+        for (size_t i = 0; i < consumed; i++) source_row += buffer.b[i] == '\n';
+        byte_at += consumed;
+        memmove(buffer.b, buffer.b + consumed, buffer.n - consumed); buffer.n -= consumed;
+        if (pipeline->failed || (ended && !buffer.n)) break;
+    } while (1);
+    if (has_header && !independent) scratch_restore(header_mark);
+    arena_release(&headers); lp_buf_free(&buffer); free(layout);
+    pipeline->source = original_source; pipeline->length = original_length;
+}
+
+static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw *hw, const SInput *input){
     Say *sy = xrealloc(NULL, sizeof *sy); *sy = *(const Say *)r->say;      /* the recipe's sayings, a copy for this file: on the heap, as a Say is larger than a thread's stack holds */
     if (!sy->lay.g.compiled || sy->lay.g.unresolved) {
         fprintf(stderr, "%s: semantic grammar was not compiled before record execution\n", r->name); free(sy); exit(2);
@@ -2528,15 +2620,19 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     const char *base = strrchr(f->path, '/'); base = base ? base + 1 : f->path; size_t bl = strlen(base); if (bl > 3 && !strcmp(base + bl - 3, ".gz")) bl -= 3;
     const char *sb = base; if (sy->stemfrom) { const char *f0 = NULL; for (const char *c = base; c < base + bl; c++) if (*c == sy->stemfrom) f0 = c; if (f0) sb = f0 + 1; }
     const char *dot = memchr(sb, sy->stem ? sy->stem : '.', (size_t)(base + bl - sb)); Ref fname = string_ref((const uint8_t *)base, bl), fstem = string_ref((const uint8_t *)sb, dot ? (size_t)(dot - sb) : (size_t)(base + bl - sb));    /* the file's own name, and the part of it {file} stands for */
+    if (f->emit) {
+        table_pin(&fname.id); table_pin(&fstem.id); table_pin(&f->witness.id);
+        if (f->has_lineage) table_pin(&f->lineage.id);
+    }
 
     uint32_t workers = (uint32_t)omp_get_max_threads(); if (!workers) workers = 1;
     if (workers > MAX_RECORD_LANES) workers = MAX_RECORD_LANES;
     size_t nc = 1; Sink *part = calloc(1, sizeof *part), *lanes = calloc(workers, sizeof *lanes);
     if (!part || !lanes) { perror("record workers"); free(part); free(lanes); free(sy); exit(2); }
     part[0].r = r; part[0].s = sy; part[0].hw = hw; sink_buffers(&part[0]);
-    RecordPipeline pipeline = {.recipe=r, .file=f, .say=sy, .source=src, .length=n,
+    RecordPipeline pipeline = {.recipe=r, .file=f, .say=sy, .source=src, .length=n, .input=input,
         .result=&part[0], .workers=lanes, .worker_count=workers, .filename=fname, .stem=fstem};
-    if (omp_in_parallel()) read_records(&pipeline);
+    if (f->emit || omp_in_parallel()) read_records(&pipeline);
     else {
         #pragma omp parallel
         {
@@ -2560,6 +2656,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     { uint64_t unk = 0; for (size_t i = 0; i < nc; i++) unk += part[i].unknown;
       if (unk) { fprintf(stderr, "\n  %s: %llu keys in %s name a type no list of the highway holds, and say nothing; for instance:", r->name, (unsigned long long)unk, f->path);
           for (size_t i = 0, shown = 0; i < nc && shown < 3; i++) for (int j = 0; j < part[i].nunk && shown < 3; j++, shown++) fprintf(stderr, " [%s]", part[i].unknm[j]); fputc('\n', stderr); } }
+    if (f->emit) { file_stream_finish(f); release_sinks(part, nc); free(sy); return; }
     if (hw) {                                                                /* for the highway: what the file says of its types, in the file's order */
         for (size_t i = 0; i < nc; i++) { for (size_t j = 0; j < part[i].nhr; j++) { HwRec *x = &part[i].hr[j]; const HwLine *h = &sy->hw[x->line];
                 if (x->what == 1) hw_type(hw, h->a.list, h->say, x->thing);
@@ -2590,8 +2687,9 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     else if (f->ev.n && nm) { Ref two[1] = { said_metadata(metadata) }; f->file = two[0]; f->file.said = 0; f->has_file = 0; }
     release_sinks(part, nc); free(sy);
 }
-void attest_layout(const Recipe *r, File *f, const uint8_t *src, size_t n){ read_laid(r, f, src, n, NULL); }
-void say_highway(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw *hw){ read_laid(r, f, src, n, hw); }
+void attest_layout(const Recipe *r, File *f, const uint8_t *src, size_t n){ read_laid(r, f, src, n, NULL, NULL); }
+void attest_input(const Recipe *r, File *f, const SInput *input){ read_laid(r, f, NULL, 0, NULL, input); }
+void say_highway(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw *hw){ read_laid(r, f, src, n, hw, NULL); }
 int  say_has_highway(const Recipe *r){ const Say *s = r->say; return s && s->nhw; }
 void say_highway_lists(const Recipe *r, Hw *hw){
     const Say *s = r->say; if (!s) return;
