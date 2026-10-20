@@ -130,7 +130,7 @@ static inline Ref said_claim(Ref r){ r.said = LP_SAID_CLAIM; return r; }
 static inline Ref said_tuple(Ref r){ r.said = LP_SAID_TUPLE; return r; }
 static inline Ref said_metadata(Ref r){ r.said = LP_SAID_METADATA; return r; }
 static inline Ref said_record(Ref r){ if (r.said != LP_SAID_CLAIM && r.said != LP_SAID_TUPLE) r.said = LP_SAID_RECORD; return r; }
-typedef struct { lp_id id; int64_t m[4]; uint64_t voff; uint32_t nv, len; uint8_t tier, keep, kind, live; } Node;   /* kind: bits of what it is said to be (LP_KIND_*), by whatever holds it; live: a node, not a chunk's unused tail */
+typedef struct { lp_id id; int64_t m[4]; uint64_t voff; uint32_t nv, len; uint8_t tier, keep, kind, live, spine; } Node;   /* spine: explicit record-block factoring; never a database probe frontier */
 extern Node *NODE;                                                    /* every node of the table: NODE[0, table_end()), each with live set */
 extern Vtx *VTX;                                                      /* a node's vertices: VTX[voff, voff + nv) */
 uint64_t table_end(void);
@@ -229,7 +229,7 @@ void say_mentions(Recipe *, const char *line);                              /* a
 int  say_stretches(const Recipe *);                                         /* 1: a file it lays out can be read a line at a time; 2: a record ending at an empty line at a time; 0: whole */
 void comment_off(char *line);                                               /* a recipe line without its comment */
 const char *say_refers(const Recipe *, int i);                              /* the i-th recipe whose rows' keys this one's parts refer to, or NULL */
-/* A source's keys across its files: what a key names, kept for the files read after (recipe.c). A key defined more than
+/* A source's keys across its files: what a key names, kept for the files read after (table.c). A key defined more than
  * once is kept as the first in the file's order defines it, whichever thread puts it first: its rank is the file's place
  * in the run, the offset of the part of it read, and the unit's place in that part. */
 typedef struct { uint64_t file, at, unit; } KeyRank;
@@ -270,16 +270,17 @@ void ev_push(Events *, const Event *);
 
 typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, std_new, std_upd, known; double t_dedup, t_copy, t_sem, t_read, t_play, t_led; } LoadStats;
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
+typedef struct { lp_id id, lineage; double trust; int has_lineage; } LoadWitness;
+int load_register(const char *conninfo, int npg, const LoadWitness *, size_t count);
 int files_known(PGconn **pg, int npg, File *files, int nfiles, LoadStats *st);   /* the files whose trunks are recorded: known, saying nothing again */
 int ingest_known(const char *conninfo, File *files, int nfiles);                /* the same, on a connection of its own */
-/* What a source says, folded over every batch of it: each claim's games and their scores, played once at its end as one
- * series a claim, at the witness's trust (db.c) */
+/* Accumulated per-witness claim series, updated in PostgreSQL as each batch flows
+ * through the loader; published atomically with the source witness (db.c). */
 typedef struct Fold Fold;
 Fold *fold_new(void);
 void  fold_free(Fold *);
 uint64_t fold_count(const Fold *);
 void  fold_events(Fold *, const File *files, int nfiles);
-int   standings_write(const char *conninfo, int npg, Fold *, double trust, LoadStats *st);
 /* ---- provenance by containment (provenance.c): who said a claim, how many times and how, by a walk up the container
  * index from it to the records, files and trunks that hold it; a trunk in the witness table is a witness. One row a
  * claim and trunk: games (the records under the trunk that say it), tokens (with the times each says it), the sum of
@@ -372,6 +373,7 @@ static inline int id_parse(const char *s, lp_id *out){ return lp_id_unhex(s, out
 
 /* ---- a file in the DAG (file.c) */
 void file_close(File *);                                              /* the file is whole: its metadata, its content, its trunk */
+int file_matches_bytes(const lp_id *, const uint8_t *, size_t);
 int  source_trunk(const Source *, const File *, int nfiles, Ref *out);  /* the source's trunk: [its record, its files' trunks] */
 const char *source_called(const Source *);                            /* its record: its witness, or its called line */
 size_t file_record(const Recipe *, const File *, Ref *out, size_t cap);   /* the OS's record of a file, its parts as its recipes dispose of them */

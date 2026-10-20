@@ -19,6 +19,27 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Compare the DAG's inverse with the still-live input buffer. This does not
+ * reopen a source or allocate another complete copy of its bytes. */
+static int matches_node(const lp_id *id, const uint8_t *bytes, size_t length, size_t *at){
+    int64_t cp = lp_tier0_codepoint(T0, id);
+    if (cp >= 0) {
+        uint8_t encoded[4]; size_t n = lp_utf8_put((uint32_t)cp, encoded);
+        if (*at > length || n > length - *at || memcmp(bytes + *at, encoded, n)) return 0;
+        *at += n; return 1;
+    }
+    const Node *node = table_find(id); if (!node) return 0;
+    for (uint32_t v = 0; v < node->nv; v++) {
+        const Vtx *vertex = &VTX[node->voff + v];
+        for (uint32_t run = 0; run < VRUN(vertex->m); run++)
+            if (!matches_node(&vertex->id, bytes, length, at)) return 0;
+    }
+    return 1;
+}
+int file_matches_bytes(const lp_id *id, const uint8_t *bytes, size_t length){
+    size_t at = 0; return matches_node(id, bytes, length, &at) && at == length;
+}
+
 
 static Ref recs_of(Ref *r, size_t n){
     if (n == 1) return r[0];
