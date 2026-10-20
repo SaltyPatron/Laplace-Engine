@@ -803,6 +803,7 @@ typedef struct {
     GDecodePlan decode;
     uint32_t physical_base, physical_end, *physical_lines, physical_line_count;
     TSPoint physical_origin;
+    uint64_t source_row;
     uint8_t physical_indexed;
 } GInput;
 /* Custom decoders change the lexer's logical line/column view, while byte
@@ -973,12 +974,16 @@ static const uint8_t *decode_text(const GDecodePlan *plan, const uint8_t *src, u
     }
     *length = used; return out;
 }
+/* Curated admission never consumes a recovered syntax tree. Stop when every
+ * parser stack has entered error recovery, rather than spending unbounded work
+ * trying to repair a malformed record that this pipeline would reject anyway. */
+static bool reject_recovery(TSParseState *state){ return state->has_error; }
 static TSTree *parse_input_tree(const Layout *layout, const GInput *input){
     TSParser *parser = lp_tls_parser(layout->g.grammar_id);
     if (!parser || !ts_parser_set_included_ranges(parser, &input->range, 1)) return NULL;
     const GDecodePlan *saved = active_decode; active_decode = &input->decode;
     TSInput stream = {(void *)input, read_input, input->decode.n ? TSInputEncodingCustom : TSInputEncodingUTF8, decode_input};
-    TSTree *parsed = ts_parser_parse(parser, NULL, stream);
+    TSTree *parsed = ts_parser_parse_with_options(parser, NULL, stream, (TSParseOptions){.progress_callback=reject_recovery});
     active_decode = saved;
     ts_parser_set_included_ranges(parser, NULL, 0);
     if (parsed && ts_node_has_error(ts_tree_root_node(parsed))) { ts_tree_delete(parsed); return NULL; }
@@ -1173,22 +1178,39 @@ static TSRange node_range(TSNode node){
     return (TSRange){ts_node_start_point(node), ts_node_end_point(node), ts_node_start_byte(node), ts_node_end_byte(node)};
 }
 
-int s_records_open(SRecords *records, const Layout *layout, const uint8_t *source, size_t length){
+static int records_open(SRecords *records, const Layout *layout, const uint8_t *source, size_t length, int tail){
     *records = (SRecords){0};
     if (!layout->g.compiled || layout->g.unresolved || length > UINT32_MAX) return 0;
     TSParser *parser = lp_tls_parser(layout->g.grammar_id);
     if (!parser || !ts_parser_set_included_ranges(parser, NULL, 0)) return 0;
-    TSTree *tree = ts_parser_parse_string(parser, NULL, (const char *)source, (uint32_t)length);
-    if (!tree || ts_node_has_error(ts_tree_root_node(tree))) { if (tree) ts_tree_delete(tree); return 0; }
+    size_t prefix = length; TSTree *tree;
+    for (;;) {
+        ts_parser_reset(parser);
+        GInput input = {.src=source, .length=(uint32_t)prefix}; input.range.end_byte = (uint32_t)prefix;
+        TSInput stream = {&input, read_input, TSInputEncodingUTF8, NULL};
+        tree = ts_parser_parse_with_options(parser, NULL, stream, (TSParseOptions){.progress_callback=reject_recovery});
+        if (tree && !ts_node_has_error(ts_tree_root_node(tree))) break;
+        if (tree) ts_tree_delete(tree);
+        if (!tail || prefix < 2) return 0;
+        /* A byte window may end inside a legal quoted field. Probe a smaller
+         * grammar-valid prefix, then retain its last record as lookahead. No
+         * format scanner guesses where a quote, newline or record ends. */
+        prefix /= 2;
+    }
     TSTreeCursor *cursor = lp_tls_cursor(ts_tree_root_node(tree));
     if (!cursor) { ts_tree_delete(tree); return 0; }
-    records->layout = layout; records->source = source; records->length = (uint32_t)length;
+    records->layout = layout; records->source = source; records->length = (uint32_t)prefix;
     records->tree = tree; records->cursor = cursor;
+    records->limit = (uint32_t)prefix;
     records->header_pending = (uint8_t)(layout->ntier && layout->tier[0].header);
     return 1;
 }
+int s_records_open(SRecords *records, const Layout *layout, const uint8_t *source, size_t length){
+    return records_open(records, layout, source, length, 0);
+}
 static int record_policy(const SRecords *records, TSNode node){
     const Layout *layout = records->layout;
+    if (ts_node_end_byte(node) <= records->skip_before) return 0;
     if (ts_node_start_byte(node) == ts_node_end_byte(node)) return 0;
     if (layout->ntier) {
         const STier *tier = &layout->tier[0];
@@ -1204,7 +1226,7 @@ static int record_policy(const SRecords *records, TSNode node){
                                ts_node_is_null(parent) ? 0 : ts_node_symbol(parent));
     return !rule || rule->what != G_SKIP;
 }
-static int record_header(SRecords *records, TSNode node){
+static int record_header_fields(SRecords *records, TSNode node){
     const Layout *layout = records->layout; const GMap *grammar = &layout->g;
     TSSymbol parent = ts_node_symbol(node);
     if (!grammar->column_parents || parent >= grammar->symbol_count || !grammar->column_parents[parent]) {
@@ -1225,6 +1247,7 @@ static int record_header(SRecords *records, TSNode node){
         if (count == S_NAMES) { fputs("header exceeds the compiled column limit\n", stderr); valid = 0; break; }
         const uint8_t *name; uint32_t length; g_text(&worker, child, grammar->padded ? 2 : 0, &name, &length);
         if (grammar->trim) { size_t n = length; name = trimmed(name, &n); length = (uint32_t)n; }
+        uint8_t *owned_name = scratch_alloc(length); if (length) memcpy(owned_name, name, length); name = owned_name;
         columns[count++] = (GColumn){.name = name, .length = length, .flags = S_FIELD_ALIAS};
         if (layout->compile_name) columns[count - 1].bindings = layout->compile_name(layout->name_program, name, length, &tls_scratch);
     } while (ts_tree_cursor_goto_next_sibling(cursor));
@@ -1232,7 +1255,13 @@ static int record_header(SRecords *records, TSNode node){
     if (!valid || !count) return 0;
     file_layout->g.columns = columns; file_layout->g.column_count = count; records->layout = file_layout;
     if (!map_count_columns(&file_layout->g, 0)) return 0;
-    records->header_pending = 0; return 1;
+    records->header_pending = 0; records->skip_before = ts_node_end_byte(node); return 1;
+}
+static int record_header(SRecords *records, TSNode node){
+    if (!records->header_arena) return record_header_fields(records, node);
+    SayScratch previous = scratch_enter(records->header_arena);
+    int valid = record_header_fields(records, node);
+    scratch_leave(records->header_arena, previous); return valid;
 }
 static int record_matches(const SRecords *records, TSNode node){
     const GMap *grammar = &records->layout->g;
@@ -1273,6 +1302,7 @@ int s_record_next(SRecords *records, SRecord *record){
     const GMap *grammar = &records->layout->g;
     for (;;) {
         TSNode node = ts_tree_cursor_current_node(records->cursor); TSSymbol symbol = ts_node_symbol(node);
+        if (ts_node_start_byte(node) >= records->limit) { records->done = 1; return 0; }
         int selected = ts_node_is_named(node) && (!grammar->record_symbols ||
             (symbol < grammar->symbol_count && grammar->record_symbols[symbol])) && record_matches(records, node);
         int header = 0;
@@ -1284,6 +1314,7 @@ int s_record_next(SRecords *records, SRecord *record){
             header = rule && rule->what == G_GROUP && rule->ncontext;
         }
         if (selected || header) {
+            if (ts_node_end_byte(node) > records->limit || ts_node_has_error(node)) { records->done = 1; return 0; }
             if (!record_policy(records, node)) { if (!record_advance(records, 0)) return 0; continue; }
             if (records->header_pending) {
                 if (!record_header(records, node)) { records->done = records->failed = 1; return 0; }
@@ -1299,8 +1330,29 @@ int s_record_next(SRecords *records, SRecord *record){
 void s_records_close(SRecords *records){
     if (records->cursor) lp_tls_cursor_release(records->cursor);
     if (records->tree) ts_tree_delete(records->tree);
-    if (records->file_layout) { free(records->file_layout); scratch_restore(records->header_mark); }
+    if (records->file_layout) {
+        free(records->file_layout);
+        if (records->header_arena) records->header_arena->used = records->header_mark;
+        else scratch_restore(records->header_mark);
+    }
     *records = (SRecords){0};
+}
+int s_records_window(SRecords *records, const Layout *layout, const uint8_t *source, size_t length,
+                     int final, size_t *consumed, SayScratch *headers){
+    *consumed = 0;
+    if (!records_open(records, layout, source, length, !final)) return final ? -1 : 0;
+    records->header_arena = headers;
+    TSNode root = ts_tree_root_node(records->tree);
+    SRecord record; uint32_t last = 0, previous = 0;
+    while (s_record_next(records, &record)) { previous = last; last = record.range.end_byte; }
+    uint32_t prefix = final ? (uint32_t)length : previous;
+    if (records->failed || (!prefix && length)) {
+        s_records_close(records); return final ? -1 : 0;
+    }
+    *consumed = prefix; records->limit = prefix;
+    ts_tree_cursor_reset(records->cursor, root);
+    records->started = records->done = records->failed = records->descend = 0; records->ordinal = 0;
+    return 1;
 }
 
 /* Part names are compiled at load time. Probe exact/prefix hash buckets and
@@ -1583,7 +1635,7 @@ after_rule:
             frame = &frames[count - 1];
             if (frame->counts && frame->counts->remaining) { valid = 0; break; }
             if (frame->close_scope && count == 1 && layout->g.numbered_length && layout->ntier > 1) {
-                char text[24]; size_t length = u64_digits((uint64_t)ts_node_start_point(root).row + 1, text);
+                char text[24]; size_t length = u64_digits(input->source_row + (uint64_t)ts_node_start_point(root).row + 1, text);
                 uint8_t *value = scratch_alloc(length); memcpy(value, text, length);
                 TSPoint point = ts_node_start_point(root); uint32_t byte = ts_node_start_byte(root);
                 SField number = {.range={point, point, byte, byte}, .name=(const uint8_t *)layout->tier[0].numbered,
@@ -1726,6 +1778,7 @@ static int header_visit(void *sink, int event, const SField *field){
 static int cursor_record(const Layout *layout, TSNode root, int header, const uint8_t *source, size_t length, s_visit_fn visit, void *sink){
     if (!layout->g.compiled || layout->g.unresolved || length > UINT32_MAX || !visit || ts_node_is_null(root) || ts_node_has_error(root)) return 0;
     GInput input = {0}; input.src = source; input.length = (uint32_t)length; input.range.end_byte = (uint32_t)length;
+    input.source_row = layout->source_row;
     size_t mark = scratch_mark();
     SField *context; uint32_t contexts;
     int valid = record_context(layout, root, &input, visit, sink, &context, &contexts);

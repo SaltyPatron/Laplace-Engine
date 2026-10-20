@@ -40,6 +40,83 @@ int file_matches_bytes(const lp_id *id, const uint8_t *bytes, size_t length){
     size_t at = 0; return matches_node(id, bytes, length, &at) && at == length;
 }
 
+/* Online form of the recipe's content-defined blocks. The first 4096 parts
+ * remain flat, exactly as blocks_of; larger sequences cut only where an ID
+ * says to cut. No file/read/window size becomes an entity boundary. */
+#define FILE_BLOCK 4096
+typedef struct FileBlock {
+    Ref *part; size_t n, cap; uint64_t total; int split, multiple;
+    struct FileBlock *up;
+} FileBlock;
+struct FileAssembly { FileBlock content, metadata; Ref *roots; size_t capacity; uint64_t events; };
+static int file_cut(const Ref *part){ uint64_t bits; memcpy(&bits, part->id.b + 8, 8); return !(bits & (FILE_BLOCK - 1)); }
+static Ref file_block(Ref *part, size_t n){
+    if (n == 1) { Ref x = part[0]; if (x.said != LP_SAID_TUPLE && x.said != LP_SAID_CLAIM && x.said != LP_SAID_RECORD && x.said != LP_SAID_HOLDS) x.said = 0; return x; }
+    if (n > UINT32_MAX) { fputs("file content block exceeds the Native path cardinality\n", stderr); exit(2); }
+    int records = 0; for (size_t i = 0; i < n; i++) records |= part[i].said == LP_SAID_RECORD || part[i].said == LP_SAID_HOLDS;
+    Ref x = compose(part, (uint32_t)n, ref_above(part, n)); x.said = records ? LP_SAID_HOLDS : 0; return x;
+}
+static void file_block_push(FileBlock *block, Ref part);
+static void file_block_emit(FileBlock *block, Ref *parts, size_t n){
+    if (!block->up) { block->up = calloc(1, sizeof *block->up); if (!block->up) { perror("file block level"); exit(1); } }
+    file_block_push(block->up, file_block(parts, n));
+}
+static void file_block_push(FileBlock *block, Ref part){
+    if (block->n && !file_cut(&block->part[block->n - 1])) block->multiple = 1;
+    if (block->n == block->cap) { block->cap = block->cap ? block->cap * 2 : 64; block->part = xrealloc(block->part, block->cap * sizeof *block->part); }
+    block->part[block->n++] = part; block->total++;
+    if (!block->split && block->total > FILE_BLOCK && block->multiple) {
+        block->split = 1; size_t from = 0;
+        for (size_t i = 0; i < block->n; i++) if (file_cut(&block->part[i])) { file_block_emit(block, block->part + from, i - from + 1); from = i + 1; }
+        block->n -= from; memmove(block->part, block->part + from, block->n * sizeof *block->part);
+    } else if (block->split && file_cut(&part)) { file_block_emit(block, block->part, block->n); block->n = 0; }
+}
+static Ref file_block_finish(FileBlock *block){
+    if (!block->split) return block->total == 1 ? block->part[0] : file_block(block->part, block->n);
+    if (block->n) { file_block_emit(block, block->part, block->n); block->n = 0; }
+    return file_block_finish(block->up);
+}
+static void file_block_free(FileBlock *block){
+    if (block->up) { file_block_free(block->up); free(block->up); }
+    free(block->part);
+}
+void file_stream_begin(File *file){
+    file->assembly = calloc(1, sizeof *file->assembly); if (!file->assembly) { perror("file assembly"); exit(1); }
+    file->partial = file->laid = 1; Ref os;
+    if (file_os(file->recipe, file, &os)) file_block_push(&file->assembly->metadata, os);
+}
+void file_stream_add(File *file, const Ref *things, size_t n, const Ref *metadata, size_t nm, uint64_t events){
+    for (size_t i = 0; i < n; i++) file_block_push(&file->assembly->content, things[i]);
+    for (size_t i = 0; i < nm; i++) { Ref x = metadata[i]; x.said = LP_SAID_TUPLE; file_block_push(&file->assembly->metadata, x); }
+    file->assembly->events += events;
+}
+const Ref *file_stream_roots(File *file, size_t *count){
+    struct FileAssembly *assembly = file->assembly; size_t n = 0;
+    for (int side = 0; side < 2; side++) for (FileBlock *block = side ? &assembly->metadata : &assembly->content; block; block = block->up) {
+        if (block->n > SIZE_MAX - n) { fputs("file assembly root overflow\n", stderr); exit(1); }
+        if (n + block->n > assembly->capacity) { assembly->capacity = n + block->n + 1024; assembly->roots = xrealloc(assembly->roots, assembly->capacity * sizeof *assembly->roots); }
+        if (block->n) memcpy(assembly->roots + n, block->part, block->n * sizeof *block->part);
+        n += block->n;
+    }
+    *count = n; return assembly->roots;
+}
+void file_stream_finish(File *file){
+    struct FileAssembly *assembly = file->assembly;
+    Ref metadata = {0}; int has_metadata = assembly->metadata.total != 0;
+    if (has_metadata) metadata = file_block_finish(&assembly->metadata);
+    if (assembly->content.total) {
+        Ref content = file_block_finish(&assembly->content);
+        if (content.said != LP_SAID_HOLDS && content.said != LP_SAID_RECORD) content.said = 0;
+        if (has_metadata) {
+            Ref parts[2] = {said_metadata(metadata), content}; file->file = compose(parts, 2, ref_above(parts, 2));
+            file->file.said = 0; file->file.outcome = 0; file->file.position = 0; file->file.spare = 0;
+        } else file->file = content;
+        file->has_file = 1; file->trunk = content;
+    } else if (assembly->events && has_metadata) { file->file = metadata; file->file.said = 0; file->has_file = 0; }
+    file->partial = 0; file_block_free(&assembly->content); file_block_free(&assembly->metadata);
+    free(assembly->roots); free(assembly); file->assembly = NULL;
+}
+
 
 static Ref recs_of(Ref *r, size_t n){
     if (n == 1) return r[0];
