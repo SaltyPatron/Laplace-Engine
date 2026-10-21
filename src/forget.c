@@ -1,248 +1,109 @@
-/* laplace forget: what witnesses said, taken back out (Sequence: Maintenance; Semantics: Attestations, Witnesses).
- *   laplace forget [-d conninfo] [-j connections] [--trunk] witness...
- *   laplace forget --except witness...        every witness but these
- * A witness is a source's trunk, [its record, its files' trunks]: named by the source's name its record is, or by its
- * ID (--trunk). Its witness row goes; then, level by level down from the trunk, whatever it alone held goes: its files,
- * their records, and the claims and content no other trunk or path holds, with the standings of the claims that go.
- * Then the standings of every claim its records said and something still holds are played again from the witnesses
- * that hold them (laplace replay's walk, for those claims alone). Atoms always stay.
- * SQL fetches and deletes sets of rows; what to delete is decided here.
- *
- * laplace sweep: whatever nothing holds, removed.
- *   laplace sweep [-d conninfo] [-j connections] [--dry]
- * One pass over every path counts, for every entity, the places that hold it. An entity no path holds goes, unless it is
- * a witness (a trunk), a lineage, or a file whose content is its own; the consensus on it, if there is one, goes with
- * it. What it held is counted down, and goes in turn when its count reaches nothing. */
+/* Forgetting removes witness authority and only the unreferenced part of its
+ * structural closure. All discovery, sweeping and Native series updates share
+ * one database transaction; no partition is exported to client RAM. */
 #include "engine.h"
 #include <locale.h>
-#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* A set of IDs is an ID map with nothing beside each key: its keys, in the order added, are the set as an array. */
-typedef lp_idmap Set;
-static Set *set_new(void){ return lp_idmap_sized(0); }
-static void set_add(Set *s, const lp_id *id){ lp_idmap_put(s, id, NULL); }
-static bool set_has(const Set *s, const lp_id *id){ return lp_idmap_find(s, id) >= 0; }
-
-static void must(PGconn *pg, PGresult *r, ExecStatusType want, const char *what){
-    if (PQresultStatus(r) != want) { fprintf(stderr, "%s: %s", what, PQerrorMessage(pg)); exit(1); }
+static void candidates_open(PGconn *pg){
+    exec(pg,"CREATE TEMP TABLE forget_candidates(id blake3 PRIMARY KEY) ON COMMIT DROP;"
+        " CREATE TEMP TABLE forget_round(id blake3 PRIMARY KEY) ON COMMIT DROP;"
+        " CREATE TEMP TABLE forget_stats(deleted bigint NOT NULL) ON COMMIT DROP;"
+        " INSERT INTO forget_stats VALUES(0)");
 }
-#define CHUNK 50000
-/* One statement over a set of IDs, in chunks, on every connection at once (over_ids). Rows of a fetch go to `each`. */
-static uint64_t over(PGconn **pg, int npg, const lp_id *ids, uint64_t n, const char *sql, Each each, void *into, const char *what){
-    (void)what; Groups one = whole(); return over_ids(pg, npg, ids, n, &one, CHUNK, sql, each, into);
+static uint64_t sweep_candidates(PGconn *pg){
+    exec(pg,"DO $sweep$ DECLARE n bigint; BEGIN LOOP"
+        " TRUNCATE forget_round;"
+        " INSERT INTO forget_round SELECT c.id FROM forget_candidates c"
+        " WHERE NOT EXISTS(SELECT FROM public.witness w WHERE w.id=c.id OR w.lineage=c.id)"
+        " AND NOT EXISTS(SELECT FROM public.physicality p WHERE p.path @> ARRAY[c.id]::blake3[] AND p.entity<>c.id);"
+        " GET DIAGNOSTICS n=ROW_COUNT; EXIT WHEN n=0;"
+        " DELETE FROM public.consensus c USING forget_round d WHERE c.claim=d.id;"
+        " DELETE FROM public.physicality p USING forget_round d WHERE p.entity=d.id;"
+        " DELETE FROM public.entity e USING forget_round d WHERE e.id=d.id;"
+        " DELETE FROM forget_candidates c USING forget_round d WHERE c.id=d.id;"
+        " UPDATE forget_stats SET deleted=deleted+n;"
+        " END LOOP; END $sweep$");
+    PGresult *q=ask_once(pg,"SELECT deleted FROM forget_stats",NULL);uint64_t n=lp_be(PQgetvalue(q,0,0),8);PQclear(q);return n;
 }
-/* The partitions of a table that hold anything, by the first hex digit of the IDs they hold. An ID is looked for, or
- * removed, in the partitions its first digit names, by name: never through the partitioned table, which would probe
- * every partition of every tier for every ID. */
-typedef struct { char name[32][40]; int n; } Parts;
-static void parts_of(PGconn *pg, const char *table, Parts out[16]){
-    char q[256]; snprintf(q, sizeof q, "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname ~ '^%s_[0-9a-f]{2}$' ORDER BY 1", table);
-    PGresult *r = PQexec(pg, q); must(pg, r, PGRES_TUPLES_OK, "partitions"); memset(out, 0, sizeof(Parts) * 16);
-    for (int j = 0; j < PQntuples(r); j++) {
-        const char *name = PQgetvalue(r, j, 0); snprintf(q, sizeof q, "SELECT 1 FROM %s LIMIT 1", name);
-        PGresult *e = PQexec(pg, q); int holds = PQresultStatus(e) == PGRES_TUPLES_OK && PQntuples(e) > 0; PQclear(e); if (!holds) continue;
-        size_t nl = strlen(name); char hx = name[nl - 2];                              /* entity_ab: the IDs whose first hex digit is a */
-        int only = hx <= '9' ? hx - '0' : hx - 'a' + 10;
-        if (out[only].n < 32) snprintf(out[only].name[out[only].n++], 40, "%s", name);
-    }
-    PQclear(r);
+static int forget_ids(PGconn *pg,const lp_id *roots,size_t n){
+    if(!n)return 1;
+    candidates_open(pg);Args args={0};arg_ids(&args,roots,n);
+    PQclear(ask_once(pg,"WITH RECURSIVE below(id) AS (SELECT unnest($1::blake3[]) UNION"
+        " SELECT child FROM below b JOIN public.physicality p ON p.entity=b.id"
+        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) child)"
+        " INSERT INTO forget_candidates SELECT b.id FROM below b JOIN public.entity e ON e.id=b.id",&args));
+    PGresult *q=ask_once(pg,"SELECT p.entity FROM public.physicality p JOIN forget_candidates c ON c.id=p.entity"
+        " WHERE laplace_mask_has_value(p.mask,'kind','claim') AND laplace_path_length(p.path)=3"
+        " UNION SELECT s.claim FROM public.consensus s JOIN forget_candidates c ON c.id=s.claim",NULL);
+    size_t nc=(size_t)PQntuples(q);lp_id *claims=malloc((nc?nc:1)*sizeof *claims);
+    if(!claims){perror("affected claim IDs");exit(1);}
+    for(size_t i=0;i<nc;i++)claims[i]=*col_id(q,(int)i,0);PQclear(q);
+    PQclear(ask_once(pg,"DELETE FROM public.witness WHERE id=ANY($1::blake3[])",&args));args_free(&args);
+    /* The Native solver validates claim paths. Remove witness authority and
+     * recompute while that closure is still present, then sweep its orphans. */
+    uint64_t standing=0,orphaned=0;
+    standings_replay(pg,claims,nc,&standing,&orphaned);free(claims);
+    uint64_t removed=sweep_candidates(pg);
+    printf("  %llu witnesses removed; %llu unreferenced entities removed; %llu remaining standings recomputed; %llu claims without a witness\n",
+        (unsigned long long)n,(unsigned long long)removed,(unsigned long long)standing,(unsigned long long)orphaned);
+    return 0;
 }
-/* One statement per partition over the IDs that partition could hold; %s in the statement is the partition. */
-static int parts_targets(int g, void *parts){ return ((const Parts *)parts)[g].n; }
-static void parts_target(int g, int t, char *out, size_t cap, void *parts){ snprintf(out, cap, "%s", ((const Parts *)parts)[g].name[t]); }
-static int digit(const lp_id *ids, uint64_t i, void *ctx){ (void)ctx; return ids[i].b[0] >> 4; }
-static uint64_t over_parts(PGconn **pg, int npg, const Parts parts[16], const lp_id *ids, uint64_t n, const char *sql, Each each, void *into, const char *what){
-    (void)what; Groups by = { 16, digit, parts_targets, parts_target, (void *)parts }; return over_ids(pg, npg, ids, n, &by, CHUNK, sql, each, into);
+static void begin_maintenance(PGconn *pg){
+    exec(pg,"BEGIN ISOLATION LEVEL REPEATABLE READ;"
+        " SELECT pg_advisory_xact_lock(1279348803,-2);"
+        " LOCK TABLE public.witness IN SHARE ROW EXCLUSIVE MODE");
 }
-
-/* ---- the sweep */
-typedef struct { lp_id id; uint32_t held; uint8_t entity, root, file; } Count;
-/* A file, and the content it is a trunk over: a file whose content is what it witnessed is kept by that content. */
-typedef struct { lp_id file, content; uint8_t curated; } Kept;
-static lp_vec(Kept) kept; static pthread_mutex_t kept_mu = PTHREAD_MUTEX_INITIALIZER;
-typedef struct { pthread_mutex_t mu; lp_idmap *m; } CShard;                /* the counts, by ID: each a Count */
-static CShard cs[256];
-static Count *count_of(CShard *s, const lp_id *id, int add){                /* the shard's lock is held */
-    if (!add) return s->m ? lp_idmap_lookup(s->m, id) : NULL;
-    if (!s->m) s->m = lp_idmap_sized(sizeof(Count)); bool fresh; Count *c = lp_idmap_get(s->m, id, &fresh); if (fresh) c->id = *id; return c;
+int cmd_sweep(int argc,char **argv){
+    const char *conninfo=laplace_db();int limit=0,dry=0;
+    int a=opts(argc,argv,(const Opt[]){{.flag="-d",.kind='s',.at=&conninfo},{.flag="-j",.kind='i',.at=&limit},
+        {.flag="--dry",.kind='b',.at=&dry},{0}});
+    if(a<argc||limit<0){fputs("usage: laplace sweep [-d conninfo] [-j connection-cap] [--dry]\n",stderr);return 2;}
+    PGconn *pg=db_connect(conninfo);begin_maintenance(pg);candidates_open(pg);
+    exec(pg,"INSERT INTO forget_candidates SELECT id FROM public.entity");
+    uint64_t n=sweep_candidates(pg);exec(pg,dry?"ROLLBACK":"COMMIT");
+    printf("laplace sweep   %s   %llu unreferenced entities %s\n",PQdb(pg),(unsigned long long)n,dry?"would be removed":"removed");
+    PQfinish(pg);return 0;
 }
-/* A thread's pending counts, by shard, applied under that shard's lock a batch at a time. what: 0 held once more,
- * 1 it is an entity, 2 it is a root, 3 it is a file. */
-typedef struct { lp_id id; uint8_t what; } Pend;
-typedef struct { Pend *p[256]; uint32_t n[256]; } Batch;
-#define BATCH 2048
-static void batch_flush(Batch *b, int sh){
-    CShard *s = &cs[sh]; pthread_mutex_lock(&s->mu);
-    for (uint32_t i = 0; i < b->n[sh]; i++) { Count *c = count_of(s, &b->p[sh][i].id, 1); uint8_t w = b->p[sh][i].what; if (w == 0) c->held++; else if (w == 1) c->entity = 1; else if (w == 3) c->file = 1; else c->root = 1; }
-    pthread_mutex_unlock(&s->mu); b->n[sh] = 0;
+static lp_id *selected_roots(PGconn *pg,const lp_id *ids,const lp_id *records,size_t n,int except,size_t *count){
+    Args args={0};arg_ids(&args,ids,n);arg_ids(&args,records,n);uint8_t invert=except!=0;arg_raw(&args,&invert,1);
+    PGresult *q=ask_once(pg,"SELECT w.id FROM public.witness w JOIN public.physicality p ON p.entity=w.id"
+        " WHERE (w.id=ANY($1::blake3[]) OR EXISTS(SELECT FROM unnest($2::blake3[]) r(id)"
+        " WHERE laplace_path_starts(p.path,r.id)))<>$3::boolean ORDER BY w.id",&args);
+    size_t nr=(size_t)PQntuples(q);lp_id *roots=malloc((nr?nr:1)*sizeof *roots);if(!roots){perror("witness IDs");exit(1);}
+    for(size_t i=0;i<nr;i++)roots[i]=*col_id(q,(int)i,0);*count=nr;PQclear(q);args_free(&args);return roots;
 }
-static void batch_put(Batch *b, const lp_id *id, uint8_t what){
-    int sh = id->b[0]; if (!b->p[sh]) b->p[sh] = malloc(sizeof(Pend) * BATCH);
-    b->p[sh][b->n[sh]++] = (Pend){ *id, what }; if (b->n[sh] == BATCH) batch_flush(b, sh);
-}
-static void batch_done(Batch *b){ for (int sh = 0; sh < 256; sh++) { if (b->n[sh]) batch_flush(b, sh); free(b->p[sh]); } }
-/* Every row of a statement, one at a time as it arrives. */
-static uint64_t stream(PGconn *c, const char *sql, void (*row)(PGresult *, Batch *), Batch *b){
-    if (!PQsendQueryParams(c, sql, 0, NULL, NULL, NULL, NULL, 1) || !PQsetSingleRowMode(c)) { fprintf(stderr, "%s: %s", sql, PQerrorMessage(c)); exit(1); }
-    PGresult *r; uint64_t n = 0;
-    while ((r = PQgetResult(c))) {
-        if (PQresultStatus(r) == PGRES_SINGLE_TUPLE) { row(r, b); n++; }
-        else if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "%s: %s", sql, PQerrorMessage(c)); exit(1); }
-        PQclear(r);
-    }
-    return n;
-}
-/* A path's vertices, decoded into the thread's own array: kept and refilled row after row. */
-static __thread lp_vec(lp_vertex) vx;
-static lp_vertex *vertices(lp_path p){ lp_vec_reserve(&vx, p.n ? p.n : 1); lp_path_decode(p, vx.v, p.n); return vx.v; }
-static void row_path(PGresult *r, Batch *b){
-    lp_id e = *col_id(r, 0, 0); batch_put(b, &e, 1);
-    lp_path p = col_path(r, 0, 1); lp_vertex *vt = vertices(p);
-    int file = 0; lp_id content; uint8_t curated = 0; memset(&content, 0, sizeof content);
-    for (size_t i = 0; i < p.n; i++) { batch_put(b, &vt[i].id, 0);
-        uint32_t said = vt[i].said; if (said == LP_SAID_METADATA) file = 1; else if (file) { content = vt[i].id; curated = said == LP_SAID_RECORD || said == LP_SAID_CLAIM || said == LP_SAID_HOLDS; } }
-    if (file) {                                                                /* a file: a trunk over its metadata and its content */
-        batch_put(b, &e, 3);
-        pthread_mutex_lock(&kept_mu); lp_push(&kept, (Kept){ e, content, curated }); pthread_mutex_unlock(&kept_mu);
-    }
-}
-static void row_root(PGresult *r, Batch *b){ for (int f = 0; f < PQnfields(r); f++) if (!PQgetisnull(r, 0, f)) batch_put(b, col_id(r, 0, f), 2); }
-/* What an entity that is going held: each counted down; whatever reaches nothing goes next. */
-static void each_release(const PGresult *r, int j, const uint64_t *place, void *into){
-    (void)place;
-    lp_path p = col_path(r, j, 0); lp_vertex *vt = vertices(p);
-    for (size_t i = 0; i < p.n; i++) {
-        Count *c = count_of(&cs[vt[i].id.b[0]], &vt[i].id, 0); if (!c || !c->held) continue;
-        if (!--c->held && c->entity && !c->root) set_add(into, &vt[i].id);
-    }
-}
-/* seed: under containment, a forgotten trunk: what goes is what it alone held, level by level down from it; a file is
- * no root of its own there, since its trunk holds it (the source trunk [record, files]) */
-static uint64_t sweep(PGconn **pg, int npg, int dry, const Set *seed){
-    double T = now(), t = now(); for (int i = 0; i < 256; i++) pthread_mutex_init(&cs[i].mu, NULL);
-    static Parts eparts[16], pparts[16]; parts_of(pg[0], "entity", eparts); parts_of(pg[0], "physicality", pparts);
-    /* every partition of paths, each on a connection; the paths above tier 0 */
-    PGresult *r = PQexec(pg[0], "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' "
-                                "AND c.relname ~ '^physicality_[0-9a-f]{2}$' ORDER BY c.reltuples DESC");
-    must(pg[0], r, PGRES_TUPLES_OK, "partitions"); int nparts = PQntuples(r); uint64_t paths = 0;
-    #pragma omp parallel for num_threads(npg) schedule(dynamic) reduction(+:paths)
-    for (int p = 0; p < nparts; p++) {
-        Batch b = { 0 }; char sql[160]; snprintf(sql, sizeof sql, "SELECT entity, path FROM %s WHERE tier > 0", PQgetvalue(r, p, 0));
-        paths += stream(pg[omp_get_thread_num()], sql, row_path, &b); batch_done(&b);
-    }
-    PQclear(r);
-    printf("  %-52s %'12llu   (%.1f s)\n", "paths read, every holder counted", (unsigned long long)paths, now() - t); fflush(stdout);
-    t = now(); { Batch b = { 0 };
-      stream(pg[0], "SELECT id, lineage FROM witness", row_root, &b); batch_done(&b); }
-    /* files: one whose content is its own stays; one whose content is what a source says (records) is held by its
-     * source's trunk, the witness, and goes when nothing holds it */
-    if (!seed) for (size_t i = 0; i < kept.n; i++) { Count *c = count_of(&cs[kept.v[i].file.b[0]], &kept.v[i].file, 0); if (c && !kept.v[i].curated) c->root = 1; }
-    lp_vec_free(&kept);
-    Set *going = set_new(); uint64_t entities = 0, roots = 0;
-    for (int sh = 0; sh < 256; sh++) for (size_t i = 0; i < lp_idmap_count(cs[sh].m); i++) {
-        Count *c = lp_idmap_at(cs[sh].m, i); entities += c->entity; roots += c->root && c->entity;
-        if (!seed && c->entity && !c->held && !c->root) set_add(going, &c->id);
-        if (seed && c->entity && !c->root && set_has(seed, &c->id)) set_add(going, &c->id);
-    }
-    printf("  %-52s %'12llu   of them witnessed, files and witnesses %'llu   (%.1f s)\n", "entities above tier 0", (unsigned long long)entities, (unsigned long long)roots, now() - t);
-    uint64_t total = 0; int level = 0;
-    for (uint64_t n; (n = lp_idmap_count(going)); ) {
-        t = now(); level++; Set *next = set_new(); const lp_id *ids = lp_idmap_keys(going);
-        if (level == 1) {                                                   /* what is going, shown before it goes */
-            Reader *rd = reader_new(pg[0]); printf("  held by nothing, for example:");
-            for (uint64_t i = 0; i < n && i < 12; i++) { char *tx = reader_text(rd, &ids[i * (n / 12 ? n / 12 : 1) % n], 40); printf("%s \"%s\"", i ? "," : "", tx); free(tx); }
-            printf("\n"); reader_free(rd);
+int cmd_forget(int argc,char **argv){
+    const char *conninfo=laplace_db();int limit=0,except=0,trunk=0;
+    int a=opts(argc,argv,(const Opt[]){{.flag="-d",.kind='s',.at=&conninfo},{.flag="-j",.kind='i',.at=&limit},
+        {.flag="--except",.kind='b',.at=&except},{.flag="--trunk",.kind='b',.at=&trunk},{0}});
+    if((a>=argc&&!except)||limit<0){fputs("usage: laplace forget [-d conninfo] [-j connection-cap] [--except] [--trunk] source-or-trunk...\n",stderr);return 2;}
+    tier0_open(NULL);Ctx *ctx=lp_text_new(T0);size_t n=(size_t)(argc-a);
+    lp_id *ids=calloc(n?n:1,sizeof *ids),*records=calloc(n?n:1,sizeof *records);
+    if(!ids||!records){perror("source selectors");exit(1);}
+    Recipe *recipes=NULL;recipes_load(laplace_recipes(),&recipes);int ns=0;Source *sources=sources_loaded(&ns);
+    for(size_t i=0;i<n;i++){
+        const char *name=argv[a+(int)i];int parsed=id_parse(name,&ids[i]);
+        if(trunk&&!parsed){fprintf(stderr,"%s: not a trunk ID\n",name);free(ids);free(records);lp_text_free(ctx);return 2;}
+        if(!trunk){
+            for(int j=0;j<ns;j++)if(!strcmp(name,sources[j].name)){const char *called=source_called(&sources[j]);if(called)name=called;break;}
+            records[i]=lp_text_decompose(ctx,(const uint8_t *)name,strlen(name),NULL,NULL).id;
         }
-        over_parts(pg, npg, pparts, ids, n, "SELECT path FROM %s WHERE entity = ANY($1::blake3[])", each_release, next, "what they held");
-        if (!dry) { over(pg, npg, ids, n, "DELETE FROM consensus WHERE claim = ANY($1::blake3[])", NULL, NULL, "the consensus on them");
-                    over_parts(pg, npg, pparts, ids, n, "DELETE FROM %s WHERE entity = ANY($1::blake3[])", NULL, NULL, "paths");
-                    over_parts(pg, npg, eparts, ids, n, "DELETE FROM %s WHERE id = ANY($1::blake3[])", NULL, NULL, "entities"); }
-        total += n;
-        printf("  level %d: %'12llu held by nothing%s   (%.1f s)\n", level, (unsigned long long)n, dry ? "" : ", removed", now() - t); fflush(stdout);
-        lp_idmap_free(going); going = next;
     }
-    lp_idmap_free(going);
-    printf("  %-52s %'12llu%s   (%.1f s)\n", "entities nothing held", (unsigned long long)total, dry ? "   (dry: nothing was removed)" : "", now() - T);
-    for (int sh = 0; sh < 256; sh++) { lp_idmap_free(cs[sh].m); cs[sh].m = NULL; }
-    return total;
+    lp_text_free(ctx);PGconn *pg=db_connect(conninfo);begin_maintenance(pg);
+    size_t nr=0;lp_id *roots=selected_roots(pg,ids,records,n,except,&nr);free(ids);free(records);
+    int result=forget_ids(pg,roots,nr);free(roots);
+    exec(pg,result?"ROLLBACK":"COMMIT");
+    if(result)fputs("laplace forget: no registered source trunk matched\n",stderr);
+    PQfinish(pg);return result;
 }
-int cmd_sweep(int argc, char **argv){
-    const char *conninfo = laplace_db(); int npg = 0, dry = 0;
-    if (opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "-j", .kind = 'i', .at = &npg }, { .flag = "--dry", .kind = 'b', .at = &dry }, { 0 } }) < argc) {
-        fprintf(stderr, "usage: laplace sweep [-d conninfo] [-j connections] [--dry]\n"); return 2; }
-    if (npg <= 0) npg = omp_get_num_procs();
-    setlocale(LC_NUMERIC, "en_US.UTF-8"); tier0_open(NULL);
-    PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) pg[i] = db_connect(conninfo);
-    printf("laplace sweep   %s%s\n", PQdb(pg[0]), dry ? "   (dry)" : "");
-    sweep(pg, npg, dry, NULL);
-    for (int i = 0; i < npg; i++) PQfinish(pg[i]);
-    return 0;
-}
-
-/* The witnesses of going, and what they alone held, taken out; the standings they touched played again. 1: none. */
-static int forget_going(PGconn **pg, int npg, Set *going){
-    double t;
-    uint64_t ng = lp_idmap_count(going); const lp_id *gid = lp_idmap_keys(going);
-    printf("laplace forget   %s   %llu witness%s\n", PQdb(pg[0]), (unsigned long long)ng, ng == 1 ? "" : "es");
-    if (!ng) return 1;
-    { Reader *rd = reader_new(pg[0]); for (uint64_t i = 0; i < ng; i++) { char hx[33]; id_text(&gid[i], hx); lp_id first[2]; size_t m = reader_parts(rd, &gid[i], first, 2);
-          char *tx = m ? reader_text(rd, &first[0], 80) : strdup("?"); printf("  %s   %s\n", hx, tx); free(tx); } reader_free(rd); }
-
-    /* what its records say: the claims whose standings it moved, played again below from what still holds them */
-    t = now(); lp_vec(lp_id) touched = { 0 }; Set *tset = set_new();
-    for (uint64_t i = 0; i < ng; i++) { size_t n = 0; lp_id *cl = trunk_claims(pg[0], &gid[i], &n);
-        for (size_t k = 0; k < n; k++) { bool f; lp_idmap_put(tset, &cl[k], &f); if (f) lp_push(&touched, cl[k]); } free(cl); }
-    printf("  %-52s %'12zu   (%.1f s)\n", "claims their records say", touched.n, now() - t); fflush(stdout);
-    /* the witnesses go; what only their trunks held goes with the sweep, down from them */
-    t = now(); over(pg, 1, gid, ng, "DELETE FROM witness WHERE id = ANY($1::blake3[])", NULL, NULL, "the witnesses");
-    printf("  %-52s %'12llu   (%.1f s)\n\n", "witnesses", (unsigned long long)ng, now() - t); fflush(stdout);
-    sweep(pg, npg, 0, going);
-    /* the standings they touched, played again from the witnesses that still hold each, in the order the sources go in */
-    t = now(); uint64_t played = 0, orphaned = 0; standings_replay(pg[0], touched.v, touched.n, &played, &orphaned);
-    printf("\n  %-52s %'12llu   series played again; %'llu claims no witness holds now, without a standing   (%.1f s)\n", "standings they touched", (unsigned long long)played, (unsigned long long)orphaned, now() - t);
-    lp_vec_free(&touched); lp_idmap_free(tset);
-    return 0;
-}
-
-int cmd_forget(int argc, char **argv){
-    const char *conninfo = laplace_db(); int npg = 0, except = 0, trunk = 0;
-    int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "-j", .kind = 'i', .at = &npg }, { .flag = "--except", .kind = 'b', .at = &except }, { .flag = "--trunk", .kind = 'b', .at = &trunk }, { 0 } });
-    if (a >= argc && !except) { fprintf(stderr, "usage: laplace forget [-d conninfo] [-j connections] [--trunk] witness...\n       laplace forget --except witness...   (every witness but these)\n"); return 2; }
-    if (npg <= 0) npg = omp_get_num_procs();
-    setlocale(LC_NUMERIC, "en_US.UTF-8");
-    double T = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0);
-    PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) pg[i] = db_connect(conninfo);
-    /* A witness is a source's trunk, [its record, its files' trunks]: named by its ID (--trunk), or by its record, the
-     * source's name, which every trunk of that source begins with. */
-    Set *named = set_new(), *going = set_new();
-    for (int i = a; i < argc; i++) { lp_id id; if (trunk) { if (!id_parse(argv[i], &id)) { fprintf(stderr, "%s: not an ID\n", argv[i]); return 2; } }
-        else id = lp_text_decompose(c, (const uint8_t *)argv[i], strlen(argv[i]), NULL, NULL).id; set_add(named, &id); }
-    { PGresult *r = ask_once(pg[0], "SELECT id FROM witness", NULL); Reader *rd = reader_new(pg[0]);
-      for (int j = 0; j < PQntuples(r); j++) { const lp_id *w = col_id(r, j, 0); lp_id first[2]; size_t m = reader_parts(rd, w, first, 2);
-          int is = set_has(named, w) || (!trunk && m && set_has(named, &first[0]));
-          if (is != except) set_add(going, w); }
-      PQclear(r); reader_free(rd); }
-    if (forget_going(pg, npg, going)) { printf("  nothing to forget: no witness's trunk is named so\n"); return 1; }
-    printf("\n== total %.1f s\n", now() - T);
-    for (int i = 0; i < npg; i++) PQfinish(pg[i]);
-    return 0;
-}
-
-int forget_superseded(const char *conninfo, int npg, const lp_id *trunk){
-    if (npg <= 0) npg = omp_get_num_procs();
-    PGconn **pg = malloc(sizeof(PGconn *) * (size_t)npg); for (int i = 0; i < npg; i++) pg[i] = db_connect(conninfo);
-    Set *going = set_new(); Reader *rd = reader_new(pg[0]); lp_id mine[2]; size_t mm = reader_parts(rd, trunk, mine, 2);
-    if (mm) { PGresult *r = ask_once(pg[0], "SELECT id FROM witness", NULL);
-        for (int j = 0; j < PQntuples(r); j++) { const lp_id *w = col_id(r, j, 0); if (!memcmp(w, trunk, sizeof *trunk)) continue;
-            lp_id first[2]; size_t m = reader_parts(rd, w, first, 2); if (m && !memcmp(&first[0], &mine[0], sizeof mine[0])) set_add(going, w); }
-        PQclear(r); }
-    reader_free(rd);
-    int none = !lp_idmap_count(going);
-    if (none) printf("  %-44s none\n", "the source's earlier readings");
-    else { printf("\nthe source's earlier readings, superseded: "); fflush(stdout); forget_going(pg, npg, going); }
-    lp_idmap_free(going); for (int i = 0; i < npg; i++) PQfinish(pg[i]); free(pg);
-    return 0;
+int forget_superseded(const char *conninfo,int connection_cap,const lp_id *trunk){
+    (void)connection_cap;PGconn *pg=db_connect(conninfo);begin_maintenance(pg);
+    Reader *reader=reader_new(pg);lp_id first[2];size_t n=reader_parts(reader,trunk,first,2);reader_free(reader);
+    if(!n){exec(pg,"ROLLBACK");PQfinish(pg);return 1;}
+    lp_id unused={{0}};size_t nr=0;lp_id *all=selected_roots(pg,&unused,first,1,0,&nr);size_t kept=0;
+    for(size_t i=0;i<nr;i++)if(!lp_id_eq(&all[i],trunk))all[kept++]=all[i];
+    int result=kept?forget_ids(pg,all,kept):0;free(all);exec(pg,result?"ROLLBACK":"COMMIT");PQfinish(pg);return result;
 }
