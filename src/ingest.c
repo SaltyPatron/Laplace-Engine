@@ -6,6 +6,7 @@
  * trunk in the DAG, over its metadata and its content (file.c); a file whose trunk is recorded already is recorded,
  * and nothing of it is written again. Then new nodes are written, and what was attested is played and recorded. Live counters go to stderr, phase times to stdout. */
 #include "engine.h"
+#include "laplace/highway.h"
 #include <blake3.h>
 #include <arpa/inet.h>
 #include <locale.h>
@@ -169,22 +170,9 @@ static void source_walk(const Source *sc){
         globfree(&g); }
 }
 
-/* A claim or a tuple as text: its parts between brackets, a part that is itself a tuple the same way. A type of the
- * highway has no text: it is its list (<ili>), or, written for a machine (--claims-tsv), its list and its key (ili:i35545),
- * the first key beside the highway naming its slot, or its slot (ili:#12) when none does. */
+/* Claims render composed text directly; cache-only references render their
+ * list and canonical identifier from the same immutable mapping. */
 static int tsv_claims;                                                        /* --claims-tsv: a claim a line, its parts between tabs */
-static char **slot_key;                                                       /* the first key beside the highway of each of its records */
-static void slot_keys(void){
-    if (slot_key || !HW) return;
-    slot_key = calloc(HW->nrec + 1, sizeof *slot_key);
-    char p[4200]; snprintf(p, sizeof p, "%s.keys", HW->path); FILE *f = fopen(p, "rb"); if (!f) return;
-    static char line[1 << 16];
-    while (fgets(line, sizeof line, f)) { if (line[0] == '#') continue;
-        char *k = strchr(line, '\t'), *sl = k ? strrchr(k + 1, '\t') : NULL; if (!sl) continue; *k++ = 0; *sl++ = 0;
-        const lp_list *l = lp_highway_list(HW, line); char *end; unsigned long at = strtoul(sl, &end, 10);
-        if (l && end != sl && at < l->count && l->first + at < HW->nrec && !slot_key[l->first + at]) slot_key[l->first + at] = strdup(k); }
-    fclose(f);
-}
 static void put(Buf *o, const void *s, size_t n){ if (o->n + n > o->cap) { o->cap = (o->n + n) * 2 + 16; o->b = xrealloc(o->b, o->cap); } memcpy(o->b + o->n, s, n); o->n += n; }
 static void part_text(const lp_id *id, Buf *o){
     Buf t = { 0 }; expand(id, &t);
@@ -193,7 +181,8 @@ static void part_text(const lp_id *id, Buf *o){
     int64_t at = lp_highway_slot(HW, NULL, id); const char *ln = "type";
     if (at >= 0) for (size_t i = 0; i < HW->nlists; i++) if ((size_t)at >= HW->list[i].first && (size_t)at < (size_t)HW->list[i].first + HW->list[i].count) ln = HW->list[i].name;
     if (!tsv_claims) { put(o, "<", 1); put(o, ln, strlen(ln)); put(o, ">", 1); return; }
-    slot_keys(); const char *k = at >= 0 && slot_key ? slot_key[at] : NULL;
+    const lp_list *list=at>=0 ? lp_highway_list(HW,ln) : NULL;
+    const char *k=list ? lp_highway_identifier(HW,list,(uint32_t)at-list->first) : NULL;
     put(o, ln, strlen(ln)); put(o, ":", 1);
     if (k) put(o, k, strlen(k));
     else { char h[32]; int hn = snprintf(h, sizeof h, "#%lld", (long long)(at >= 0 ? at - (int64_t)lp_highway_list(HW, ln)->first : -1)); put(o, h, (size_t)hn); }
@@ -483,32 +472,34 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
 static lp_id witness_trunk, witness_lineage; static double witness_trust; static int has_witness_trunk, has_witness_lineage, witness_supersedes;   /* the source's trunk, the witness: its trust and lineage keyed by it */
 /* Explicit admission of an existing artifact. Generation and deployment never call this. */
 static int ingest_highway(const char *conninfo, const char *t0p, int threads, int do_load){
-    /* the highway's contents as entities: a type's content (a definition, a frame's name, a lemma and a roleset's name)
-     * is what a claim that holds the type renders and pulls through, whether or not any file wrote it as content. Each
-     * is recomposed here as the composition laplace highway wrote beside the highway, and its ID checked */
-    char tp[4300]; snprintf(tp, sizeof tp, "%s.nodes", lp_highway_path()); FILE *f = fopen(tp, "r");
-      if (!f) { fprintf(stderr, "cannot read highway contents %s\n", tp); return 1; }
-      double t = now(); tier0_open(t0p); if (threads <= 0) threads = omp_get_max_threads(); omp_set_num_threads(threads); table_init(); ctx_open(threads); char *line = NULL; size_t cap = 0; uint64_t n = 0, wrong = 0, types = 0, unknown = 0; const lp_highway *h = lp_highway_map(NULL); if (!h) { fclose(f); fprintf(stderr, "cannot map the independently generated highway\n"); return 1; }
-        Ref *ch = NULL; size_t cch = 0;
-        while (getline(&line, &cap, f) > 0) { if (line[0] == '#') continue; char *save = NULL, *kind = strtok_r(line, "\t\n", &save); if (!kind) continue;
-            if (!strcmp(kind, "N")) { char *hid = strtok_r(NULL, "\t\n", &save), *tr = strtok_r(NULL, "\t\n", &save), *nv = strtok_r(NULL, "\t\n", &save), *c; if (!hid || !tr || !nv) { wrong++; continue; }
-                size_t k = 0, vertices = 0; int ok = 1;
-                while ((c = strtok_r(NULL, "\t\n", &save))) { vertices++; char *s1 = strchr(c, ':'), *s2 = s1 ? strchr(s1 + 1, ':') : NULL; if (!s2) { ok = 0; break; } *s1 = 0;
-                    Ref r; lp_id id; if (c[0] == 'U') r = atom((uint32_t)strtoul(c + 1, NULL, 16)); else { if (!id_parse(c, &id)) { ok = 0; break; } Node *x = table_find(&id); if (!x) { unknown++; ok = 0; break; } memset(&r, 0, sizeof r); r.id = x->id; memcpy(r.c.m, x->m, sizeof r.c.m); r.tier = x->tier; }
-                    r.said = (uint8_t)atoi(s1 + 1); uint32_t run = (uint32_t)strtoul(s2 + 1, NULL, 10);
-                    for (uint32_t q = 0; q < run; q++) { lp_reserve((void **)&ch, &cch, k + 1, sizeof(Ref)); ch[k++] = r; } }
-                lp_id want; if (!ok || vertices != strtoul(nv, NULL, 10) || !id_parse(hid, &want)) { wrong++; continue; }
-                Ref r = compose(ch, (uint32_t)k, (uint8_t)atoi(tr)); if (memcmp(&r.id, &want, 16)) wrong++; n++; }
-            else if (!strcmp(kind, "S")) { char *ln = strtok_r(NULL, "\t\n", &save), *sl = strtok_r(NULL, "\t\n", &save), *c = strtok_r(NULL, "\t\n", &save); if (!ln || !sl || !c) { wrong++; continue; }
-                lp_id id; if (c[0] == 'U') id = atom((uint32_t)strtoul(c + 1, NULL, 16)).id; else if (!id_parse(c, &id)) { wrong++; continue; }
-                const lp_list *l = h ? lp_highway_list(h, ln) : NULL; const lp_tier0_record *x = l ? lp_highway_at(h, l, (uint32_t)strtoul(sl, NULL, 10)) : NULL; if (!x || memcmp(&x->id, &id, 16)) wrong++; types++; } else wrong++; }
-        int read_error = ferror(f); free(line); free(ch); fclose(f);
-        if (read_error || wrong || unknown || types != h->nrec || !types) { fprintf(stderr, "highway contents rejected before database access: %llu invalid, %llu unknown children, %llu types\n", (unsigned long long)wrong, (unsigned long long)unknown, (unsigned long long)types); return 1; }
-        if (!do_load) { printf("highway contents validated; no database access\n"); return 0; }
+    double t=now(); tier0_open(t0p);
+    if (threads<=0) threads=omp_get_max_threads();
+    omp_set_num_threads(threads); table_init(); ctx_open(threads);
+    const lp_highway *h=lp_highway_map(NULL);
+    if (!h) { fprintf(stderr,"cannot map existing highway at %s; rejected before database access\n",lp_highway_path()); return 1; }
+    uint64_t types=0,wrong=0;
+    /* The canonical Native UAX tree reconstructs every identifier's closure.
+     * No corpus file, private dump, or database is needed for validation. */
+    for (size_t li=0; li<h->nlists; li++) {
+        const lp_list *list=h->list+li;
+        #pragma omp parallel for reduction(+:types,wrong) schedule(dynamic,256)
+        for (uint32_t slot=0; slot<list->count; slot++) {
+            const lp_tier0_record *expected=lp_highway_at(h,list,slot);
+            if (!expected) continue; /* frozen, unassigned tombstone */
+            const char *identifier=lp_highway_identifier(h,list,slot);
+            Ref actual=text_ref(CTX[omp_get_thread_num()],(const uint8_t *)identifier,strlen(identifier));
+            types++;
+            if (!lp_id_eq(&actual.id,&expected->id) || memcmp(actual.c.m,expected->m,sizeof expected->m)
+                || actual.tier!=expected->pad || lp_hilbert4(&actual.c)!=expected->hilbert) wrong++;
+        }
+    }
+    uint64_t n=table_count();
+    if (wrong || !types) { fprintf(stderr,"highway rejected before database access: %llu invalid identifiers\n",(unsigned long long)wrong); return 1; }
+    if (!do_load) { printf("highway contents validated; no database access: %llu identifiers, %llu compositions\n",(unsigned long long)types,(unsigned long long)n); return 0; }
         extern int load_whole; load_whole = 1; File one = { 0 }; one.path = "the highway's contents"; LoadStats st = { 0 };
         if (load(conninfo, threads, &one, 1, &st)) return 1;
         if (merge(conninfo, threads)) return 1;                  /* what the load staged, into the real tables */
-        printf("  %-52s %'llu types, %'llu compositions, %'llu entities new, %'llu not as written%s   %.1f s\n", "the highway's contents, as entities", (unsigned long long)types, (unsigned long long)n, (unsigned long long)st.ent_rows, (unsigned long long)wrong, unknown ? ", some naming a node not written before them" : "", now() - t);
+        printf("  %-52s %'llu types, %'llu compositions, %'llu entities new, %'llu not as written%s   %.1f s\n", "the highway's contents, as entities", (unsigned long long)types, (unsigned long long)n, (unsigned long long)st.ent_rows, (unsigned long long)wrong, "", now() - t);
     return 0;
 }
 

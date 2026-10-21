@@ -17,13 +17,17 @@ content *
 
 # A Turtle predicate is an RDF property, of the source's own relation inventory (RDF 1.1 Turtle, 2.4: "The token 'a'
 # in the predicate position of a Turtle triple represents the IRI http://www.w3.org/1999/02/22-rdf-syntax-ns#type").
-# The relation is kept as the file writes it, a; that it is rdf:type, and the prefixed names' IRIs, are the notation
-# Laplace-Engine#20 resolves.
-value - predicate
+# The notation is resolved to the semantic type/gloss relation; packaging names
+# are not the verbs of the recorded claims.
+when predicate matches ^a$
+relation "is an instance of" predicate
+when predicate matches ^skos:definition$
+relation "is defined as" predicate
 when predicate matches ^(a|skos:definition)$
 relate property predicate to object_list
 always
-pair rdf_literal lang_tag
+relation "language of the definition" lang_tag
+attest rdf_literal lang_tag
 
 types ili "Interlingual index concept" triple
 keyed ili triple subject

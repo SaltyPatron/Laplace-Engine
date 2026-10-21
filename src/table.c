@@ -87,10 +87,28 @@ static void table_size_slots(uint64_t want){
     uint64_t n = 1u << 20; while (n < want && n < SLOTS_MAX) n <<= 1;
     smask = n - 1; node_cap = n - n / 8; grow_at = n / 2;  /* half full, it doubles; past seven eighths, probing is no longer a table */
 }
+static inline uint64_t hkey(const lp_id *id);
+static inline uint64_t tag_of(const lp_id *id);
+uint64_t table_end(void);
 void table_size(uint64_t bytes){
     const char *e = getenv("LAPLACE_NODES_PER_MB");     /* measured: Universal Dependencies made 9,100 a MB */
     uint64_t per = e ? strtoull(e, NULL, 10) : 32768;
-    table_size_slots(2 * ((bytes >> 20) + 1) * per);
+    uint64_t want=2 * ((bytes >> 20) + 1) * per;
+    uint64_t old=smask+1,end=slot ? table_end() : 0;
+    if (want<2*end) want=2*end;
+    table_size_slots(want);
+    if (!end || old==smask+1) return;
+    /* File metadata and lookup keys can already have composed nodes before
+     * the first batch is sized. Changing the mask must preserve their slots.
+     * Callers resize only while record workers are idle. */
+    uint64_t *next=area[!side]; os_discard(next,(smask+1)*sizeof *next);
+    for (uint64_t i=0; i<end; i++) {
+        const Node *node=NODE+i; if (!node->live) continue;
+        uint64_t at=hkey(&node->id)&smask;
+        while (next[at]) at=(at+1)&smask;
+        next[at]=tag_of(&node->id)|(i+1);
+    }
+    os_discard(slot,old*sizeof *slot); slot=next; side=!side;
 }
 void table_init(void){
     if (slot) return;
