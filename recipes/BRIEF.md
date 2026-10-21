@@ -42,10 +42,9 @@ So:
   (Laplace-Engine#22, proven side by side and the attestation table retired): every part a recipe speaks of is a
   record, a path over the claims it says inside its file's content tree, each claim's vertex carrying its run, outcome
   and position; walking up from a claim finds every source trunk that holds it, and the trunk is the witness, with
-  the source's trust and lineage. The `witness` line names the source's record (its trunk's first part); `{dir}`,
-  `{name}` and `{first NAME}` now only name what voices are composed under, and the treebank or file a claim came from
-  is the file's path under the trunk. Who in a record says a claim (`voices`, `by`) is a voice vertex in the record:
-  content of it, never a witness.
+  the source's trust and lineage. The `witness` line names the source's record (its trunk's first part).
+  Directories, lexicon labels and filenames remain content or packaging under that trunk. A person and the
+  judgment, sentence or annotation the source associates with them are content within its records.
 - **The corpus is the trunk, from the trunk to its leaves.** Universal Dependencies is one source trunk, `[source
   record, its files' trunks in path order]`, and one witness. Its treebanks (`UD_English-EWT/`) are directories of
   files: a directory's path is a file's metadata, and a treebank is never a witness of its own. Every file is
@@ -54,14 +53,13 @@ So:
   corpus says of that sentence: the sentence (its `# text`, down to codepoints); its tokens, as UD segments them; its
   UPOS, XPOS, LEMMA and FEATS layers aligned to the tokens; its dependency tree, each DEPREL by its HEAD; its notes
   (`text_en` and the like) as sentence-tier strands; its speaker and annotators as content the corpus attests
-  (`[sentence, speaker, SP]`, `[token, Annotator, Sv]`); and the strands it says of each word (`[forces, NOUN]`,
-  `[forces, force]`, `[forces, Number=Plur]`). Its pointers (`ID`, `HEAD`, `sent_id`, `newdoc`, `newpar`, the MISC
-  ids) resolve into the tree and are not recorded. As built, `universal-dependencies/source` says `witness {dir}`
-  (each treebank its own witness), `conllu.recipe` names `speaker_id` and MISC `Annotator` as witnesses of their own
-  (`own`, `by`), emits claims as events outside the tree without composing the layers, and says
-  `relate row DEPREL to HEAD`, which makes the type-level `[word, nsubj, head word]` and loses the sentence; the
-  READMEs are not read. The Open Multilingual Wordnet is likewise one trunk and one witness, its lexicons files under
-  it; its `witness {first label}` (each lexicon a witness) is the same mistake as built.
+  (`[speaker, sentence]`, `[annotator, sentence]`); and the strands it says of each word (`[forces, NOUN]`,
+  `[forces, force]`, `[forces, [Number, Plur]]`). Its pointers (`ID`, `HEAD`, `sent_id`, `newdoc`, `newpar`, the MISC
+  ids) resolve into the tree and are not recorded. Token keys are scoped to their sentence. The surface is
+  composed from FORM and spacing, including multiword ranges; decimal empty positions participate in the aligned
+  layers and enhanced dependencies. The record retains the layers and dependency tree beside its source-attested
+  claims. Open Multilingual Wordnet, Open English WordNet and the WSD framework each follow the same single-trunk
+  contract; an internal XML lexicon label never registers another witness.
 - **Testimony, not bookkeeping.** A witness provides content and attestations about it: that is what a recipe reads.
   A file's bookkeeping about its own records (dates an entry was made, colours, versions, licences, usage notes,
   templates, who edited a row) is not testimony: name it with `omit`, or leave the column out of `attest`. Never
@@ -104,16 +102,14 @@ So:
 - **Whoever a corpus names is content; the corpus is the witness.** A worker, an annotator, an author, an owner, a
   contributor, a speaker, a member named inside a corpus is content, not a witness. The corpus witnesses what it
   reports of them, and those reports are relations the corpus attests, added explicitly: this annotator labelled this
-  case hateful, this speaker said this sentence, this member added this sentence, this author wrote this book. As
-  built, `own` (`[the source's witness, COLUMN, id]`) names such a person as a witness of its own, `by` (or `voices`,
-  for a column per annotator) attributes what they said to that witness, and what the source says of them is attested
-  `of` them; the target is the corpus as the one witness, with the person and what the corpus reports of them as
-  content and relations under it. "Who edited a row" in the bookkeeping list below means housekeeping about the file's
+  case hateful, this speaker said this sentence, this member added this sentence, this author wrote this book.
+  Record the person and their judgment together as content under the corpus's single witness. What the source
+  states about the person is attested `of` that content identifier. "Who edited a row" in the bookkeeping list below means housekeeping about the file's
   records, never the person whose words or answers the row holds.
 - **A thing is its content.** A word is what the lemma writes; a sentence is its text or its words; a place is its
   name, latitude and longitude; a case or a post is its text. A concept is its highway node: a synset is its ILI, never its word
   list (19,619 of WordNet 3.0's 117,659 synsets list exactly the words another lists; 11 verb synsets are just `drop`).
-  As built, `wn-lmf.recipe` makes a synset the words it lists and reads its `ili` with `type`; the ILI is the target.
+  `wn-lmf.recipe` resolves a synset's ILI to its canonical highway identifier; its word list is content about it.
   Nothing is order-dependent: every node is content-derived, so what two sources say links by entity collision
   whichever is ingested first, and no placeholder waits for another source. A synset whose ILI is `in` (a new concept
   CILI has not yet numbered) is given no stand-in identity; its content-derived nodes link by collision when CILI
@@ -133,36 +129,26 @@ So:
 - **An enumerated value lands where the source asserts it.** "dog is a noun" stands in several shapes, each where a
   source says it. A treebank's sentence carries one layer claim per layer (its UPOS, its relations), a path of slots
   aligned to its tokens; what the treebank says of a word by itself is the claim `[dog, NOUN]`, NOUN a registry slot,
-  the treebank's taggings of it the claim's games, and the bit on `dog`'s row a filter. As built,
-  `attest row LEMMA UPOS XPOS FEATS by MISC.Annotator` (`universal-dependencies/conllu.recipe`) says `[forces, UPOS,
-  NOUN]` of each token row, witnessed by the annotator MISC names or else by the treebank, and no layer claim is
-  composed. WordNet says the concept is a noun and the word lexicalizes it;
+  the treebank's taggings of it the claim's games, and the bit on `dog`'s row a filter. UD records the aligned
+  sentence layer as well as `[forces, NOUN]`; an annotator's identifier is content, and the UD corpus trunk witnesses
+  both. WordNet says the concept is a noun and the word lexicalizes it;
   FrameNet's `dog.n` has the part of speech as a part; a Unicode property is said of the codepoint. Each source's code
   (`n`, `.n`, `NOUN`) is recorded as written and sets the same slot; nothing is blanketed across tiers it was not
   asserted at, and a mask miss is never absence.
-- **A repeat is games, not rows.** If WordNet says a dog is a noun 30 times, that is one attestation with 30 games:
-  a witness that asserts one claim n times gives one attestation of n games with a score, and the client folds the
-  source's repeats and solves that series as one update, so the database takes one update per claim per witness: the
-  rating where the claim's prior standing and the series' score agree (the log posterior is concave, so bisection on
-  its slope converges), with the deviation from the series' games. It is not Glicko-2's single period step, one
-  linearized move that is fine for small moves and wrong for a long series: a 450 player against a 3400 player, 1000
-  games, 100 wins and 100 draws, score 0.15, played game by game converges to 3100 with deviation 15; solved as one
-  update, 3092 with deviation 16; one period step from 450 gives 105,823. Run length is content structure only, identical consecutive children in a path; it attests
-  nothing. A number the source states (a usage count, a sense's order) is content, an observation, never games.
-  Packaging is not the source asserting again: a cross-product layout or an automatic tagger's per-token output
-  repeating one fact is not the source saying it again (UD EWT's README says its UPOS and features were mainly
-  assigned automatically). As built (`db.c`, `standings_write`), what a source says is folded over all its batches,
-  each claim's games the records that say it and its score their mean, and played once, at the source's trust, as one
-  solved series (`lp_attest_series`); a later ingestion of the same files says nothing again.
+- **A repeat is games, not rows.** A witness asserting one claim n times contributes one cumulative series with
+  n games and its mean score. Record-path occurrences retain their run and outcome; `laplace_attested_series`
+  recovers them from containment. `laplace_attest_series` applies the Native solver continuously in PostgreSQL as
+  COPY batches merge. A later ingestion of an already recorded file contributes nothing again. A usage count or
+  sense order written by the source is content, not games. Packaging cross products do not manufacture repeated
+  observations; calculated annotations retain their declared calculation root.
 - **Trust bounds a vote; count is never independence.** Each game's outcome is pulled toward a draw by the witness's
   trust, `s_eff = 0.5 + t(s - 0.5)`, so no repetition takes a source past its trust's ceiling, symmetrically for
   affirmation and refutation, and one witness alone gives a claim only bounded certainty. Witnesses sharing a
   dependence root or a trust class count as one root, capped; a prompt is an observation and attests nothing by being
-  said. A witness's trust is its own rating, from its class's default, earned only through independent agreement and
-  verified outcomes, never by repeating itself. As built, `lp_attest` plays every witness as a fixed 1500 opponent
-  whose trust sets only its deviation, and a claim enters at that deviation, so an affirming series leaves a claim
-  higher the lower the trust (1000 games: trust 0.2 ends at 3235, trust 0.9 at 1884). A recipe says nothing of trust
-  beyond its source's class.
+  said. Independently rooted agreement can raise both the claim's rating and its certainty; repetitions of the same
+  source do not become independent witnesses. The Native finite-source joint posterior owns the rating,
+  deviation and volatility calculation. A recipe declares the source's trust class and any calculated dependence
+  classes; it does not implement its own standing math.
 - **A relation is meaning, never a field name.** A field, column, attribute or layer name never becomes a relation:
   what a claim relates is what the source means, resolved through the road classes. A tagset value is a value of its
   tagset with its attested equivalence to the shared vocabulary (FrameNet's BNC layer `NN1` is a CLAWS C5 singular
@@ -248,9 +234,9 @@ the whole source once at the end.
 
 ## The recipe language
 
-The full reference is the comment at the top of **`/repos/src/Laplace-Engine/src/recipe.c`**; the one decomposer is
-described at the top of `structure.c` and its layout in `structure.h`, and what each part of a file is (content, key,
-omit, attest...) at the top of `say.c`, in the same directory. **Read those comments.**
+The recipe compiler is `src/recipe_compile.c`, with immutable program types in `src/recipe_program.h`.
+The grammar walker is `src/structure.c` and its layout is `src/structure.h`. Selector binding, semantic values,
+record output and streaming have separate `src/record_*.c` owners; `src/say.c` executes statement instructions.
 Working examples to copy from, all under `recipes/`:
 
 | Kind of file | Example |
@@ -258,7 +244,7 @@ Working examples to copy from, all under `recipes/`:
 | table with a header row, every column said of one column's value | `iso-639/iso-639-3.recipe` (`attest *`) |
 | table without a header, predicate in the file's name | `princeton-wordnet/exceptions.recipe` |
 | table whose pointer column other files point at | `tatoeba/sentences.recipe` (`key`), `tatoeba/links.recipe` (`refer`) |
-| table whose column is a source's key that `type` resolves to a highway node | `verbatlas/frame-info.recipe` (`type "prototypical synset" ili`; as built the frame's `va:0001f` is `key` and the frame is its name; the target is the frame as its node `va:0001f`, its name `TOLERATE` a label), `princeton-wordnet/cntlist.recipe` (as built, the row is the lexicalization strand `[lemma, en, ILI]`: `thing row sense_key matching ^([^%]+)% space _ literal en sense_key` with `type sense_key ili`, the sense key's lemma, the language WordNet's documentation names, and the ILI its synset resolves to; translate orders a word's senses by its count) |
+| table whose column resolves to a highway identifier | `verbatlas/frame-info.recipe` (`va:0001f` is the frame identifier, `TOLERATE` its attested label); `princeton-wordnet/cntlist.recipe` resolves sense-key pointers to lexicalizations |
 | table of pairs (nothing written between the two) | `unicode/aliases.recipe` (`pair`) |
 | table whose row is one record, said together | use `together` in the claims block |
 | records of rows (a sentence, a row per word, a tree by heads) | `universal-dependencies/conllu.recipe` |
@@ -291,9 +277,8 @@ Notes:
   write a word of your own as a relation.
 - `match` globs are matched against the file's name only, and the most specific wins. Inside one source make them
   unambiguous.
-- As built, a set can give a witness per file or directory, named with `{dir}` or `{first NAME}` (a treebank, a
-  lexicon or a data set each its own witness). The target is one witness per corpus, its source trunk, with each file
-  under it by its path; write the `witness` line as the corpus names itself.
+- Use one witness per corpus, its source trunk, with each file under it by its path. Write the `witness` line as
+  the corpus names itself; directory and internal-label substitutions are not source identities.
 - Files a source's recipes do not match are simply not read. Your report must list them.
 
 ## What to deliver
@@ -309,12 +294,10 @@ Your final report, in plain text, per set:
 5. Every place you were unsure whether a name was the source's own. Say so plainly; do not guess in the recipe.
 6. Engine features that are missing, each with three raw lines of data that need it.
 
-Do not summarize what the data "means". Do not propose schema changes. As built there are five database tables
-(entity, physicality, witness, attestation, consensus); a physicality is the entity's row, keyed by its ID, with no
-identity of its own, and attestations are of entities only. The target is provenance by containment under the source's
-trunk, with standing stored in one table keyed by the claim (Laplace-Engine#22); the per-claim, per-witness attestation
-rows stay until a working prototype on real data shows containment answers everything they answer with nothing lost. A
-recipe is written the same for both.
+Do not summarize what the data "means" or propose schema changes. The substrate stores entity, physicality,
+witness and consensus. A physicality belongs to its entity and has no independent identity. Provenance is
+containment under the source trunk; `laplace_attested_series` recovers observations from record paths, and
+consensus stores the Native series result keyed by the claim. Recipes do not create separate observation rows.
 
 ## Chained Tree-sitter Grammars, Assembly-Line ETL, Bidirectional Tier Traversal & The Three Proofs
 
