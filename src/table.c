@@ -38,9 +38,13 @@ static uint64_t *area[2]; static int side, resizing;          /* the slots alter
 #define KEY_BUCKETS (UINT64_C(1) << 20)
 #define KEY_CAPACITY (UINT64_C(1) << 29)
 #define KEY_TEXT_CAPACITY (UINT64_C(8) << 30)
-typedef struct { lp_id hash; KeyField field; KeyRank rank; uint64_t next; } KeyEntry;
-typedef struct { uint64_t *head, top, count, revision, text_top; KeyEntry *entry; uint8_t *text; } KeyTable;
+typedef struct { lp_id hash; KeyField field; KeyRank rank; uint64_t next, file_next; } KeyEntry;
+typedef struct { uint64_t *head, *local_head, *file_head, top, count, revision, text_top; KeyEntry *entry; uint8_t *text; } KeyTable;
 static KeyTable keys;
+static uint8_t *key_readers;
+static __thread uint64_t key_reader = UINT64_MAX;
+void keys_reader_file(uint64_t file){ key_reader = file; }
+int keys_file_reads(uint64_t file){ return file<=UINT32_MAX && __atomic_load_n(&key_readers[file],__ATOMIC_ACQUIRE); }
 
 /* Exact executable/perf-cache provenance for a reading. This fingerprint is
  * file metadata, not content identity. Compute it once without opening any
@@ -94,8 +98,11 @@ void table_init(void){
     vtx_cap = SLOTS_MAX * 4;
     NODE = reserve(SLOTS_MAX * sizeof(Node)); VTX = reserve(vtx_cap * sizeof(Vtx));
     keys.head = reserve(KEY_BUCKETS * sizeof *keys.head);
+    keys.local_head = reserve(KEY_BUCKETS * sizeof *keys.local_head);
+    keys.file_head = reserve(KEY_BUCKETS * sizeof *keys.file_head);
     keys.entry = reserve(KEY_CAPACITY * sizeof *keys.entry);
     keys.text = reserve(KEY_TEXT_CAPACITY);
+    key_readers = reserve(UINT64_C(1)<<32);
     table_size_slots(1ull << 26);
 }
 
@@ -126,15 +133,15 @@ static int key_rank_before(const KeyRank *a, const KeyRank *b){
     return a->file != b->file ? a->file < b->file : a->at != b->at ? a->at < b->at :
         a->unit != b->unit ? a->unit < b->unit : a->member < b->member;
 }
-void keys_field_put(const lp_id *domain, const uint8_t *text, size_t length, const KeyField *field, const KeyRank *rank){
-    if (field->has_value) table_pin(&field->value.id);
-    lp_id hash = key_hash(domain, text, length); uint64_t bucket; memcpy(&bucket, hash.b, sizeof bucket);
-    uint64_t *head = &keys.head[bucket & (KEY_BUCKETS - 1)], index = 0;
+static void key_publish(const lp_id *hash, const KeyField *field, const KeyRank *rank, int local){
+    uint64_t bucket; memcpy(&bucket, hash->b, sizeof bucket);
+    if (local) bucket ^= rank->file;
+    uint64_t *head = &(local ? keys.local_head : keys.head)[bucket & (KEY_BUCKETS - 1)], index = 0;
     uint64_t observed = __atomic_load_n(head, __ATOMIC_ACQUIRE);
     for (;;) {
         const KeyEntry *previous = NULL;
         for (uint64_t at = observed; at; at = keys.entry[at - 1].next)
-            if (lp_id_eq(&keys.entry[at - 1].hash, &hash)) { previous = &keys.entry[at - 1]; break; }
+            if (lp_id_eq(&keys.entry[at - 1].hash, hash) && (!local || keys.entry[at - 1].rank.file == rank->file)) { previous = &keys.entry[at - 1]; break; }
         if (previous && !key_rank_before(rank, &previous->rank)) {
             /* A declaration may acquire its native product after the key
              * barrier. A later duplicate must never supply a missing field. */
@@ -153,17 +160,69 @@ void keys_field_put(const lp_id *domain, const uint8_t *text, size_t length, con
                 }
                 memcpy(keys.text + at, field->text, field->length); owned.text = keys.text + at;
             } else owned.text = NULL;
-            keys.entry[index - 1] = (KeyEntry){.hash=hash, .field=owned, .rank=*rank};
+            keys.entry[index - 1] = (KeyEntry){.hash=*hash, .field=owned, .rank=*rank};
         }
         keys.entry[index - 1].next = observed;
         if (__atomic_compare_exchange_n(head, &observed, index, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-            if (!previous) __atomic_fetch_add(&keys.count, 1, __ATOMIC_RELAXED);
-            __atomic_fetch_add(&keys.revision, 1, __ATOMIC_RELEASE);
+            if (local) {
+                uint64_t *file = &keys.file_head[rank->file & (KEY_BUCKETS - 1)];
+                uint64_t seen = __atomic_load_n(file, __ATOMIC_ACQUIRE);
+                do { keys.entry[index - 1].file_next = seen; }
+                while (!__atomic_compare_exchange_n(file, &seen, index, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
+            } else {
+                if (!previous) __atomic_fetch_add(&keys.count, 1, __ATOMIC_RELAXED);
+                __atomic_fetch_add(&keys.revision, 1, __ATOMIC_RELEASE);
+            }
             return;
         }
     }
 }
+void keys_restore(const lp_id *hash, const KeyField *field, const KeyRank *rank){
+    if (field->has_value) table_pin(&field->value.id);
+    key_publish(hash, field, rank, 0);
+}
+void keys_field_put(const lp_id *domain, const uint8_t *text, size_t length, const KeyField *field, const KeyRank *rank){
+    if (field->has_value) table_pin(&field->value.id);
+    lp_id hash = key_hash(domain, text, length);
+    key_publish(&hash, field, rank, 0); key_publish(&hash, field, rank, 1);
+}
+static int binding_order(const void *a, const void *b){
+    const KeyEntry *x = *(KeyEntry *const *)a, *y = *(KeyEntry *const *)b;
+    return memcmp(x->hash.b, y->hash.b, sizeof x->hash.b);
+}
+size_t keys_file_export(uint64_t file, key_binding_fn emit, void *context){
+    KeyEntry **entries = NULL; size_t n = 0, capacity = 0;
+    for (uint64_t at = __atomic_load_n(&keys.file_head[file & (KEY_BUCKETS - 1)], __ATOMIC_ACQUIRE); at; at = keys.entry[at - 1].file_next) {
+        KeyEntry *entry = &keys.entry[at - 1]; if (entry->rank.file != file) continue;
+        uint64_t bucket; memcpy(&bucket, entry->hash.b, sizeof bucket); bucket ^= file;
+        uint64_t latest = __atomic_load_n(&keys.local_head[bucket & (KEY_BUCKETS - 1)], __ATOMIC_ACQUIRE);
+        while (latest && (!lp_id_eq(&keys.entry[latest - 1].hash, &entry->hash) || keys.entry[latest - 1].rank.file != file)) latest = keys.entry[latest - 1].next;
+        if (latest != at) continue;
+        if (n == capacity) { capacity = capacity ? capacity * 2 : 128; entries = xrealloc(entries, capacity * sizeof *entries); }
+        entries[n++] = entry;
+    }
+    if (!n) { free(entries); return 0; }
+    qsort(entries, n, sizeof *entries, binding_order);
+    Ref marker = text_ref(CTX[0], (const uint8_t *)KEY_BINDING_TAG, sizeof KEY_BINDING_TAG - 1);
+    Ref absent = text_ref(CTX[0], (const uint8_t *)"absent", 6);
+    for (size_t i = 0; i < n; i++) {
+        const KeyEntry *entry = entries[i]; const KeyField *field = &entry->field;
+        char key[33], header[256]; id_text(&entry->hash, key);
+        unsigned flags = field->has_value | (field->has_text << 1) | (field->blocked << 2);
+        int length = snprintf(header, sizeof header, "%llu:%llu:%llu:%u:%u:%u:%u:%u:%u",
+            (unsigned long long)entry->rank.at, (unsigned long long)entry->rank.unit, (unsigned long long)entry->rank.member,
+            flags, field->has_value ? field->value.said : 0, field->has_value ? field->value.outcome : 0,
+            field->has_value ? field->value.position : 0, field->has_value ? field->value.spare : 0, field->has_text ? field->length : 0);
+        if (length < 0 || (size_t)length >= sizeof header) { fputs("invalid compiled binding metadata\n", stderr); exit(1); }
+        Ref parts[5] = {marker, text_ref(CTX[0], (const uint8_t *)key, 32), text_ref(CTX[0], (const uint8_t *)header, (size_t)length),
+            field->has_value ? field->value : absent, field->has_text && field->length ? text_ref(CTX[0], field->text, field->length) : absent};
+        for (unsigned p = 0; p < 5; p++) { parts[p].said = parts[p].outcome = 0; parts[p].position = parts[p].spare = 0; }
+        Ref binding = compose(parts, 5, ref_above(parts, 5)); binding.said = 0; emit(context, &binding);
+    }
+    free(entries); return n;
+}
 const KeyField *keys_field_get(const lp_id *domain, const uint8_t *text, size_t length){
+    if (key_reader<=UINT32_MAX) __atomic_store_n(&key_readers[key_reader],1,__ATOMIC_RELEASE);
     lp_id hash = key_hash(domain, text, length); uint64_t bucket; memcpy(&bucket, hash.b, sizeof bucket);
     for (uint64_t at = __atomic_load_n(&keys.head[bucket & (KEY_BUCKETS - 1)], __ATOMIC_ACQUIRE);
          at; at = keys.entry[at - 1].next)

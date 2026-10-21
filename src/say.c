@@ -2177,6 +2177,7 @@ static void records_of(Sink *k, const SemanticRecord *t, int32_t root, uint64_t 
 static void unit(void *sink, const SemanticRecord *t, int32_t root, uint64_t ordinal, int bind_keys){
     size_t record_mark = scratch_mark();
     Sink *k = sink; const Say *s = k->s; k->kr.unit = ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f;
+    keys_reader_file(k->kr.file);
     uint8_t binding_phase = k->binding_phase; k->binding_phase = (uint8_t)(bind_keys == 1 || k->defer_missing);
     sink_buffers(k);
     k->cs_epoch++; k->cs_n = 0; k->rec = root;                               /* a new part: none of its claims made yet, its own record */

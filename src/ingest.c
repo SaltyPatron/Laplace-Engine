@@ -6,6 +6,7 @@
  * trunk in the DAG, over its metadata and its content (file.c); a file whose trunk is recorded already is recorded,
  * and nothing of it is written again. Then new nodes are written, and what was attested is played and recorded. Live counters go to stderr, phase times to stdout. */
 #include "engine.h"
+#include <blake3.h>
 #include <arpa/inet.h>
 #include <locale.h>
 #include <ftw.h>
@@ -282,6 +283,7 @@ typedef struct {
 } SourceCompletion;
 static int source_file_ready(void *context, File *file){
     SourceCompletion *source = context; double start = now();
+    if (!file->partial) file_close(file);
     int streamed = file->emit != NULL;
     if (file->emit) {
         Events empty = {0};
@@ -436,6 +438,7 @@ static int ingest_ewkb_point(const uint8_t *e, size_t n, lp_coord *out){
     if (n < off + 32) return 0; for (int d = 0; d < 4; d++) { double v; memcpy(&v, e + off + 8 * d, 8); out->m[d] = (int64_t)(v * (double)LP_FIXED_ONE); } return 1;
 }
 static int files_recorded(const char *conninfo, File *files, int nfiles){
+    File *candidate=NULL;int *owner=NULL,ncandidate=0,ccandidate=0;
     lp_id *want = malloc(sizeof(lp_id) * (size_t)(nfiles + 1)); int *of = malloc(sizeof(int) * (size_t)(nfiles + 1)), nw = 0, found = 0;
     for (int i = 0; i < nfiles; i++) { if (files[i].skipped || files[i].known) continue; Ref os; if (file_os(files[i].recipe, &files[i], &os)) { want[nw] = os.id; of[nw++] = i; } }
     PGconn *pg = nw ? db_connect(conninfo) : NULL;
@@ -454,17 +457,27 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
                 int64_t k = lp_idmap_find(at, &vx[0].id); if (k < 0) continue;                    /* held, but not first: not its metadata */
                 lp_id c; memcpy(c.b, PQgetvalue(r, j, 0), 16);
                 if (vx[0].said == LP_SAID_METADATA && nv >= 2) {                                   /* the file's trunk */
-                    File *fl = &files[of[k]]; if (fl->known) continue;
                     lp_coord co; if (!ingest_ewkb_point((const uint8_t *)PQgetvalue(r, j, 3), (size_t)PQgetlength(r, j, 3), &co)) continue;
                     uint16_t tier; memcpy(&tier, PQgetvalue(r, j, 2), 2); tier = ntohs(tier);
+                    if(ncandidate==ccandidate){ccandidate=ccandidate?ccandidate*2:128;candidate=xrealloc(candidate,(size_t)ccandidate*sizeof *candidate);owner=xrealloc(owner,(size_t)ccandidate*sizeof *owner);}
+                    owner[ncandidate]=of[k];File *fl=&candidate[ncandidate++];*fl=files[of[k]];
                     memset(&fl->file, 0, sizeof fl->file); fl->file.id = c; fl->file.c = co; fl->file.tier = (uint8_t)tier; fl->file.said = 0;
-                    fl->has_file = 1; fl->known = 1; found++; }
+                    fl->recorded_metadata = vx[0].id;
+                    fl->has_file = 1; fl->known = 1; }
                 else { if (nn == ncap) { ncap *= 2; next = xrealloc(next, sizeof(lp_id) * (size_t)ncap); nof = xrealloc(nof, sizeof(int) * (size_t)ncap); } next[nn] = c; nof[nn++] = of[k]; } }                                         /* a metadata tree it begins: what holds that is next */
             PQclear(r); free(ab); }
         lp_idmap_free(at); free(want); free(of); want = next; of = nof; nw = 0;
         for (int k = 0; k < nn; k++) if (!files[of[k]].known) { want[nw] = want[k]; of[nw++] = of[k]; }
     }
-    if (pg) PQfinish(pg); free(want); free(of); found = ingest_known(conninfo, files, nfiles); table_reset();              /* what was composed to ask is composed again for the files that are read */
+    if (pg) PQfinish(pg); free(want); free(of);
+    validate_file_contexts(conninfo,candidate,ncandidate);
+    uint8_t *stale=calloc((size_t)nfiles,1);if(nfiles && !stale){perror("cached reading contexts");exit(1);}
+    for(int i=0;i<ncandidate;i++)if(candidate[i].known && !files[owner[i]].known){
+        File *fl=&files[owner[i]];fl->file=candidate[i].file;fl->recorded_metadata=candidate[i].recorded_metadata;fl->known=fl->has_file=1;
+    }else if(!candidate[i].known)stale[owner[i]]=1;
+    for(int i=0;i<nfiles;i++)if(stale[i] && !files[i].known)fprintf(stderr,"  source reference context changed; reinterpret %s\n",files[i].path);
+    free(stale);free(candidate);free(owner);
+    found = ingest_known(conninfo, files, nfiles); table_reset();              /* what was composed to ask is composed again for the files that are read */
     return found;
 }
 static lp_id witness_trunk, witness_lineage; static double witness_trust; static int has_witness_trunk, has_witness_lineage, witness_supersedes;   /* the source's trunk, the witness: its trust and lineage keyed by it */
@@ -599,7 +612,24 @@ int cmd_ingest(int argc, char **argv){
     /* Unchanged published files are found from stat metadata before opening
      * their contents. Novel files are subsequently pruned trunk to leaf. */
     int nknown = 0; ctx_open(threads);
+    /* Reading a reference depends on the source's provider estate, not only
+     * this file's bytes. Stat/reader identities suffice to invalidate that
+     * context before any input is opened. Files that never perform a lookup
+     * retain their ordinary file-only precheck. */
+    lp_id *identities=calloc((size_t)nfiles,sizeof *identities);
+    if(nfiles && !identities){perror("source reading context");return 1;}
+    for(int i=0;i<nfiles;i++) if(!files[i].skipped){Ref os;if(file_os(files[i].recipe,&files[i],&os))identities[i]=os.id;}
+    for(int i=0;i<nfiles;i++) {
+        int first=0;while(first<i && files[first].source!=files[i].source)first++;
+        if(first<i){memcpy(files[i].reading_context,files[first].reading_context,32);continue;}
+        blake3_hasher hash;blake3_hasher_init(&hash);
+        for(int j=0;j<nfiles;j++)if(!files[j].skipped && files[j].source==files[i].source)blake3_hasher_update(&hash,identities[j].b,sizeof identities[j].b);
+        blake3_hasher_finalize(&hash,files[i].reading_context,32);
+    }
+    free(identities);
     if (do_load) { double tk = now(); nknown = files_recorded(conninfo, files, nfiles); if (nknown) fprintf(stderr, "  %d files recorded already, found by the OS's record of them, not read (%.2f s)\n", nknown, now() - tk); }
+    int restore_keys = 0;
+    for (int i = 0; i < nfiles; i++) if (!files[i].known && !files[i].skipped) { restore_keys = 1; break; }
 
     /* ---- a batch at a time: decomposed on every core, recomposed and compared, recorded, and the table emptied for
      * the next. A file too long for one batch is read a stretch at a time, if its records can be parted. */
@@ -645,6 +675,9 @@ int cmd_ingest(int argc, char **argv){
             /* Source-rank declarations must arrive in canonical file order.
              * Each file's grammar records still run on all worker lanes. */
             for (int i = a0; i < b0; i++) {
+                if (restore_keys && files[i].known && say_has_keys(files[i].recipe)) {
+                    if (load_file_keys(conninfo, &files[i])) return 1;
+                }
                 if (files[i].known || files[i].skipped) continue;
                 decompose_file(CTX[0], &files[i]); bytes += files[i].bytes; done++;
             }
