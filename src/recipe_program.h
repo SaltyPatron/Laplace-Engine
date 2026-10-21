@@ -11,6 +11,7 @@
 #include <string.h>
 
 enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, D_RANGE, D_OWN };
+enum { DEFAULT_LITERAL = 1, DEFAULT_FIELD };
 /* A key as a resource writes it, matched by a pattern and written as a template (\1: the pattern's first part) where it
  * writes it otherwise than those it points at write it (vn:51.2 for 51.2): the highway's lines, and a type's key. */
 typedef struct KeyProgram KeyProgram;
@@ -39,17 +40,18 @@ typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thi
                  Att together[8]; int ntogether;                             /* a TIER whose claims are said together: one record, witnessed once, its claims within it */
                  char stem, stemfrom;                                        /* what ends the part of the file's name {file} stands for (. unless said), and what it begins after */
                  char split[16][64]; int nsplit;                             /* a long file a grammar reads is parted before each line that begins one of these elements */
-                 char (*perf)[64]; int nperf;                               /* perfcache: the flags' property names, short and as said, folded (UAX44-LM3) */
+                 lp_strmap *perf;                                           /* immutable folded property-name index (UAX44-LM3) */
                  char selfmark;                                              /* what the source writes, in a value, for the code point the part is (UCD: #) */
                  regex_t about_re; int has_about;                            /* a page's lines: the first that matches names what the page is about */
                  struct { regex_t re; int mode; char pred[64]; uint16_t pred_length; } line[8]; int nline;    /* a line that matches says its parts: 0 of what the page is about, 1 the claim itself, 2 a pair, 3 under a name */
                  char *said; size_t nsaid; int laid_line;                                  /* every word the recipe's lines write, each between spaces: a part named nowhere in them is left open (unmentioned); laid_line: the line just said lays the file out, which names its parts and reads none */
                  Dis val[256]; int nval;                                     /* value LIST NAME...: what a part means in a claim; arg: its road class's list, "" for none the highway holds */
+                 Dis defaults[256]; int ndefaults;                           /* indexed field defaults; literals or compiled sibling selectors */
                  Score score[4]; int nscore; Where where[16]; int nwhere; uint32_t whole, now; Pair voice;   /* whole: the conditions on the outermost part (where); now: the ones the lines being read are said under (when) */
                  /* a record's layers down its rows and its tree by head, where the recipe gives them (layers, tree): parts of the
                   * record's path beside the claims it says (record_of) */
                  char lay_tier[32], lay_row[32], layer[16][64]; int nlayer; char tree_tier[32], tree_row[32], tree_head[64], tree_rel[64];
-                 PathProgram *paths; DisProgram *dis_program, *value_program; uint16_t tree_key_index; uint32_t sc_slot; lp_id key_domain; KeyProjection *projections; } Say;
+                 PathProgram *paths; DisProgram *dis_program, *value_program, *default_program; uint16_t tree_key_index; lp_id key_domain; KeyProjection *projections; } Say;
 
 typedef struct { uint64_t key; uint16_t next, rule; uint8_t qualified; } DisEntry;
 struct DisProgram { uint16_t *buckets; DisEntry *entries; size_t capacity, count; uint64_t wildcard_lengths; };
