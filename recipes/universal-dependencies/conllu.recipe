@@ -6,31 +6,65 @@ name conllu
 #   FEATS: "list of morphological features ... separated by |"; each written Name=Value
 # The layout is the file's own: records parted by an empty line, rows by a line's end, fields by a tab.
 match *.conllu
-tier record by \n\n
-tier row by \n
-note hash =
-names ID FORM LEMMA UPOS XPOS FEATS HEAD DEPREL DEPS MISC
-tier field by \t
+format conllu
 empty _
-part FEATS by | is =
-part MISC by | is =
-part DEPS by | is :
 
 # A record is the sentence its text note writes; a row is the word its FORM writes.
-thing record text
+surface record row ID FORM separator " " unless MISC.SpaceAfter No verify text
 thing row FORM
-content text FORM LEMMA XPOS DEPREL FEATS MISC
+layers record row FORM LEMMA UPOS XPOS FEATS DEPREL DEPS MISC
+tree record row HEAD DEPREL
+content text FORM LEMMA XPOS FEATS MISC
 type UPOS upos
+content DEPREL relation
+type base deprel node
+content subtype
+# A subtype preserves its full identifier. Its membership of the core relation
+# family is a calculated observation, not a second curated source assertion
+# (UD format, "Syntactic Annotation": a subtype extends a universal relation).
+value deprel base
+when subtype matches .
+dependence DEPREL DerivedCalculation
+dependence relation DerivedCalculation
+always
+attest DEPREL base of ^
+attest relation base of ^/^/^
 # ID numbers the rows of one record and HEAD points at a row by it: keys, written nowhere.
-key row ID
+key row ID within record
+when HEAD is 0
+omit HEAD
+always
 refer HEAD row
+# Enhanced edges resolve the same sentence-local keys, including decimal IDs.
+# Zero denotes the root, not a missing token. A root edge is its relation.
+when head is 0
+omit head
+always
+refer head row
+thing edge relation head
+thing edge relation
+thing DEPS of edge
+# CopyOf is a reference to the original word, including for an empty position.
+refer MISC.CopyOf row
+pair row MISC.CopyOf
+# Construction elements bind the component word to a role at a sentence-local
+# construction head (EWT/GUM README, Cxn and CxnElt annotations).
+part CxnElt grammar indexed_roles
+refer target row
+content role
+thing binding target role
+thing MISC.CxnElt of binding
+value - MISC.CxnElt
 # A treebank's own keys and positions: where a document, paragraph or sentence is in the treebank, and MISC's identifiers
 # and offsets of a token (its unit, lemma, occurrence, chunk, XML and tree node ids, its alignment to the raw text) are
 # how the treebank points at its own things, written nowhere. SpaceAfter is what the sentence's text already says.
-# Who spoke a sentence ("# speaker_id = SP") and who annotated a token (MISC Annotator=Sv) are witnesses of their own,
-# [the treebank, the name, the value]. The speaker says the sentence; what the treebank writes of the speaker is said
-# of the speaker; the annotator says the token's lemma, tags and features. Where none is named, the treebank says it.
-own note:speaker_id MISC.Annotator
+# Speakers and annotators are content named beside their sentence. The corpus
+# trunk remains the sole witness for every layer and annotation in its files.
+content note:speaker_id note:speaker note:annotator MISC.Annotator
+pair record . of note:speaker_id
+pair record . of note:speaker
+pair record . of note:annotator
+pair row ^ of MISC.Annotator
 omit "newdoc id" "newpar id" sent_id
 omit note:X_ID note:X_IDs note:parallel_id note:original_sent_id note:s_24_sent_id note:orig_file_sentence note:sound_url note:converted_from_file note:corpus_name note:gold_annotation note:auto note:conversation_id
 omit MISC.SpaceAfter MISC.UI MISC.Ref MISC.ref MISC.LId MISC.LemmaId MISC.OccId MISC.ChunkId MISC.XmlId MISC.LvtbNodeId MISC.AlignBegin MISC.AlignEnd MISC.Entity MISC.KID MISC.Bridge
@@ -51,7 +85,7 @@ relation "Language-specific part-of-speech tag" XPOS
 # LEMMA: the format page, "LEMMA: Lemma or stem of word form". Said as that relation, so a word that is its own lemma
 # (the, the) is still said: [the, Lemma or stem of word form, the]
 relation "Lemma or stem of word form" LEMMA
-value deprel DEPREL
+value - DEPREL
 
 # What MISC's keys and the sentence's notes say, where UD's documentation or the treebank's own README says it
 # (Laplace-Engine#32). MISC is for "any additional annotation that data providers want to store at the token level"
@@ -197,12 +231,9 @@ relation "the fluent translation of the sentence to English" note:text_en
 #   is the treebank's own, documented, if at all, in its README: unresolved obligations (Laplace-Engine#27; the
 #   speaker's, #29).
 
-attest row LEMMA UPOS XPOS FEATS by MISC.Annotator
+attest row LEMMA UPOS XPOS FEATS
 attest row MISC
 attest record note:*
-when speaker_id matches .
-itself record by note:speaker_id
-always
 # what the treebank writes of the speaker is said of the speaker; no meaning is given its notes here: unresolved
 # obligations (people as content, Laplace-Engine#29)
 attest record note:speaker note:speaker_role note:speaker_sex note:speaker_age note:speaker_education note:speaker_residence note:speaker_primary_other_language note:speaker_naija_competency note:speaker_birthplace note:speaker_fullname note:speaker_family_social_role note:speaker_gender of note:speaker_id
