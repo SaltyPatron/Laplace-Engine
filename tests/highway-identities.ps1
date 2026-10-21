@@ -21,7 +21,7 @@ foreach($name in @('cili','propbank','verbatlas')) {
     $text=($output | ForEach-Object {$_.ToString()}) -join [Environment]::NewLine
     [IO.File]::WriteAllText((Join-Path $Scratch ($name+'.log')),$text)
     if($text -notmatch ('(?m)^claim\t[^\t]+\t[^\t]+\t'+[regex]::Escape($expected[$name])+'\t')) { throw "$name claims lost their identifier subject" }
-    if($name -eq 'cili' -and ($text -notmatch 'is defined as' -or $text -match '\tskos:definition\t')) { throw 'CILI did not attest a semantic gloss relation' }
+    if($name -eq 'cili' -and ($text -notmatch '\tskos:definition\t' -or $text -notmatch 'eng' -or $text -match 'is defined as|is an instance of|language of the definition')) { throw 'CILI lost its source-native RDF predicate or language-qualified literal' }
     if($name -eq 'verbatlas' -and ($text -notmatch '\tname of a VerbAtlas frame\t' -or $text -notmatch '\tframe definition\t' -or $text -match 'type:#-1')) { throw 'Sizing the first batch lost composed relation text' }
     Write-Host "PASS $name canonical identifier subject $($expected[$name])"
 }
