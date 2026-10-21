@@ -36,7 +36,7 @@ static int forget_ids(PGconn *pg,const lp_id *roots,size_t n){
         " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) child)"
         " INSERT INTO forget_candidates SELECT b.id FROM below b JOIN public.entity e ON e.id=b.id",&args));
     PGresult *q=ask_once(pg,"SELECT p.entity FROM public.physicality p JOIN forget_candidates c ON c.id=p.entity"
-        " WHERE laplace_mask_has_value(p.mask,'kind','claim') AND laplace_path_length(p.path)=3"
+        " WHERE laplace_mask_has_value(p.mask,'kind','claim') AND laplace_path_length(p.path)>=2"
         " UNION SELECT s.claim FROM public.consensus s JOIN forget_candidates c ON c.id=s.claim",NULL);
     size_t nc=(size_t)PQntuples(q);lp_id *claims=malloc((nc?nc:1)*sizeof *claims);
     if(!claims){perror("affected claim IDs");exit(1);}
