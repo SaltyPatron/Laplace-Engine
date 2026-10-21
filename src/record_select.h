@@ -29,6 +29,7 @@ int record_bind_field(BindingMatrix *matrix, const PathProgram *program, uint32_
 int record_field_matches(const SemanticValue *x, const char *name);
 const Dis *record_value_meaning(const Say *s, const SemanticValue *x);
 const Dis *record_field_disposition(const Say *s, const SemanticValue *x);
+int record_field_defaulted(const Say *, const SemanticRecord *, int32_t field);
 int32_t record_path_first(const SemanticRecord *tree, int32_t root, const PathStep *step, const PathStep *stop);
 int32_t record_select_first(const SemanticRecord *tree, int32_t root, const char *name);
 int record_select_all(const SemanticRecord *tree, int32_t root, const char *name, int32_t *out, int capacity);
