@@ -133,12 +133,11 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                     said_as(k, m, S, v); continue; }
                 if (!y->nlen || y->kind == S_TEXT || !record_field_matches(y, s->att[a].name[z])) continue;
                 if (!s->att[a].of[0] && record_names_identity(k, t, (int32_t)g, y)) continue;                         /* a part that names the thing is said already: it is the thing */
+                if (record_field_defaulted(s,t,c)) continue;
                 if (y->kind == S_GROUP && y->join != S_PIECES && strchr(s->att[a].name[z], '*')) continue;      /* a wildcard names the part's values, not the elements inside it, which speak for themselves */
                 if (y->kind == S_GROUP) {                                    /* parts: each KEY IS VALUE the pair [KEY, VALUE] (a feature's Name=Value), or each piece, read as the part is */
                     const Dis *my = record_value_meaning(s, y);
-                    int32_t sc_c = y->nlen == 3 && !memcmp(y->name, "scx", 3) && record_field_first(y) >= 0 && record_field_next(&t->n[record_field_first(y)]) < 0 ? record_slot_first(t, (int32_t)g, s->sc_slot) : -1;
                     for (int32_t q = record_field_first(y); q >= 0; q = record_field_next(&t->n[q])) { const SemanticValue *w = &t->n[q]; if (!w->vlen) continue; Ref v;
-                        if (sc_c >= 0 && t->n[sc_c].vlen == w->vlen && !memcmp(t->n[sc_c].val, w->val, w->vlen)) continue;     /* scx equal to sc alone: the declared default (UAX #44, Laplace-Engine#25) */
                         if (w->kind == S_VALUE && w->nlen && !record_field_named(w, (const char *)y->name, y->nlen)) { const Dis *dw = record_field_disposition(s, w); if (dw && (dw->what == D_OMIT || dw->what == D_METADATA)) continue;      /* the file's bookkeeping says nothing */
                             if (recipe_property_cached(s, (const char *)w->name, w->nlen)) continue;
                             Ref vw; if (!dw || !record_value(k, t, q, &vw, 0)) vw = record_text(w->val, w->vlen);
@@ -151,7 +150,6 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                         if (!my) { if (!wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_ATTEST], y); continue; }
                         said_as(k, my, S, v); } }
                 else { if (recipe_property_cached(s, (const char *)y->name, y->nlen)) continue;
-                    if (y->nlen == 8 && !memcmp(y->name, "kEH_Core", 8) && y->vlen == 1 && y->val[0] == 'N') continue;     /* Unikemet.txt: "Core value: kEH_Core (C for core, L for legacy, default is N)" (Laplace-Engine#25) */
                     Ref v; if (!record_value(k, t, c, &v, 0)) continue;
                     const Dis *m = record_value_meaning(s, y); if (!m) { if (!wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_ATTEST], y); continue; }
                     said_as(k, m, S, v); } }
