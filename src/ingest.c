@@ -486,8 +486,13 @@ static int ingest_highway(const char *conninfo, const char *t0p, int threads, in
         for (uint32_t slot=0; slot<list->count; slot++) {
             const lp_tier0_record *expected=lp_highway_at(h,list,slot);
             if (!expected) continue; /* frozen, unassigned tombstone */
-            const char *identifier=lp_highway_identifier(h,list,slot);
-            Ref actual=text_ref(CTX[omp_get_thread_num()],(const uint8_t *)identifier,strlen(identifier));
+            const char *const *identifier; size_t np=lp_highway_identifier_parts(h,list,slot,&identifier);
+            if (!np) { wrong++; continue; }
+            Ref stack[8],*parts=np<=8 ? stack : malloc(np*sizeof *parts);
+            if (!parts) { wrong++; continue; }
+            for (size_t i=0; i<np; i++) parts[i]=text_ref(CTX[omp_get_thread_num()],(const uint8_t *)identifier[i],strlen(identifier[i]));
+            Ref actual=np==1 ? parts[0] : compose(parts,(uint32_t)np,ref_above(parts,np));
+            if (parts!=stack) free(parts);
             types++;
             if (!lp_id_eq(&actual.id,&expected->id) || memcmp(actual.c.m,expected->m,sizeof expected->m)
                 || actual.tier!=expected->pad || lp_hilbert4(&actual.c)!=expected->hilbert) wrong++;
