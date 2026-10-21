@@ -176,7 +176,7 @@ static void disposition_lookup(const DisProgram *program, const SemanticValue *n
 
 static const Dis *dispatch_dis(const Say *say, const Dis *rules, int count, const SemanticValue *node, int resolve_conditions){
     if (!count) return NULL;
-    const DisProgram *program = rules == say->dis ? say->dis_program : say->value_program;
+    const DisProgram *program = rules == say->dis ? say->dis_program : rules == say->val ? say->value_program : say->default_program;
     if (!program) { fputs("dispositions were not compiled at recipe load\n", stderr); abort(); }
     int32_t root = selected.record && node >= selected.record->n && node < selected.record->n + selected.record->count && node->parent >= 0 ? node->parent : 0;
     const SemanticValue *parent = NULL;
@@ -220,6 +220,29 @@ static const Dis *dis_in(const Say *say, const Dis *rules, int count, const Sema
 static const Dis *match_dis(const Say *s, const SemanticValue *x){ return dis_in(s, s->dis, s->ndis, x); }
 
 const Dis *record_value_meaning(const Say *s, const SemanticValue *x){ return s->nval && x->nlen ? dis_in(s, s->val, s->nval, x) : NULL; }
+
+/* Defaults suppress testimony, not the retained packaging. A singleton split
+ * value is scalar; a set with several values is never equal to one sibling. */
+static const SemanticValue *scalar_field(const SemanticRecord *record, int32_t at){
+    if (at < 0) return NULL;
+    const SemanticValue *value=&record->n[at];
+    while (value->kind == S_GROUP) {
+        int32_t child=record_field_first(value);
+        if (child < 0 || record_field_next(&record->n[child]) >= 0) return NULL;
+        value=&record->n[child];
+    }
+    return value;
+}
+int record_field_defaulted(const Say *say, const SemanticRecord *record, int32_t at){
+    if (!say->ndefaults || at < 0) return 0;
+    const SemanticValue *field=&record->n[at];
+    const Dis *rule=field->nlen ? dis_in(say,say->defaults,say->ndefaults,field) : NULL;
+    const SemanticValue *value=rule ? scalar_field(record,at) : NULL;
+    if (!value) return 0;
+    if (rule->what == DEFAULT_LITERAL) return value->vlen == rule->arg_length && !memcmp(value->val,rule->arg,value->vlen);
+    const SemanticValue *other=scalar_field(record,record_select_first(record,field->parent >= 0 ? field->parent : 0,rule->arg));
+    return other && value->vlen == other->vlen && !memcmp(value->val,other->val,value->vlen);
+}
 
 const Dis *record_field_disposition(const Say *s, const SemanticValue *x){
     if (!selected.dispositions || !selected.record || x < selected.record->n || x >= selected.record->n + selected.record->count) return match_dis(s, x);

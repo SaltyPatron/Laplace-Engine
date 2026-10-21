@@ -24,6 +24,8 @@
  *                              the attest, pair and relate lines after it are said only of the parts that meet it
  *                              (several are met together), up to a line "always"
  *   content NAME...            the part is content, the text it is, the same entity wherever that text stands
+ *   default FIELD VALUE        suppress testimony for the field's declared default, retaining its packaging
+ *   unless_equal FIELD OTHER   suppress a scalar field equal to its sibling; multi-value sets stay distinct
  *   key TIER NAME              the part is the file's key for a TIER: it resolves to the TIER's thing; written nowhere
  *   refer NAME TIER            the part's text is a key of a TIER: it is read as that TIER's thing
  *   type NAME LIST             the part's text is the source's key of a type in the highway's LIST: read as that type
@@ -355,11 +357,11 @@ static void intern_dispositions(PathProgram *program, Dis *rules, int count){
 }
 static void compile_name_slots(Say *say){
     PathProgram *program = say->paths;
-    NameCode sc = compile_name("sc", 2); say->sc_slot = intern_name(program, &sc);
     for (size_t i = 0; i < program->capacity; i++) if (program->entries[i].offset) {
         PathCode *path = program->entries[i].code; intern_name(program, &path->whole); intern_steps(program, path->first);
     }
     intern_dispositions(program, say->dis, say->ndis); intern_dispositions(program, say->val, say->nval);
+    intern_dispositions(program, say->defaults, say->ndefaults);
     for (int i = 0; i < say->nthing; i++) for (int j = 0; j < say->thing[i].n; j++) intern_key_fields(program, &say->thing[i].form[j]);
     for (int i = 0; i < say->nhw; i++) { intern_key_fields(program, &say->hw[i].a); intern_key_fields(program, &say->hw[i].b); }
     program->name_bucket_count = 8;
@@ -431,6 +433,7 @@ static void compile_semantic_paths(Say *say, const char *recipe){
     register_att_paths(say, say->hold, say->nhold); register_att_paths(say, say->itself, say->nitself);
     register_att_paths(say, say->together, say->ntogether); register_att_paths(say, say->voices, say->nvoices);
     for (int i=0; i<say->ndependence; i++) path_register(say,say->dependence[i].tier);
+    for (int i=0; i<say->ndefaults; i++) if (say->defaults[i].what == DEFAULT_FIELD) path_register(say,say->defaults[i].arg);
     for (int i = 0; i < say->nrel; i++) {
         path_register(say, say->rel[i].tier); path_register(say, say->rel[i].rel); path_register(say, say->rel[i].to); path_register(say, say->rel[i].by); path_register(say, say->rel[i].of);
     }
@@ -476,8 +479,8 @@ static size_t perf_fold(const char *in, size_t n, char *out){              /* th
     size_t o = 0; for (size_t i = 0; i < n && o < 63; i++) { char c = in[i]; if (c == '_' || c == '-' || c == ' ') continue; out[o++] = (char)(c >= 'A' && c <= 'Z' ? c + 32 : c); }
     out[o] = 0; return o; }
 int recipe_property_cached(const Say *s, const char *name, size_t n){
-    if (!s->nperf || !n || n >= 64) return 0; char f[64]; perf_fold(name, n, f);
-    for (int i = 0; i < s->nperf; i++) if (!strcmp(s->perf[i], f)) return 1; return 0; }
+    if (!s->perf || !n || n >= 64) return 0; char folded[64]; size_t length=perf_fold(name,n,folded);
+    return lp_strmap_find(s->perf,folded,length) >= 0; }
 static int dis_add(Say *s, const char *path, const char *name, int what, const char *arg){
     if (s->ndis == 256) { fprintf(stderr, "%s: more parts than a recipe disposes of (256)\n", path); return -1; }
     for (int i = 0; i < s->ndis; i++) if (!strcmp(s->dis[i].name, name)) { if (what == D_KEY && s->dis[i].what == D_KEY) return 1;      /* one name may be the key of several kinds of thing (id) */
@@ -583,6 +586,20 @@ int say_says(Recipe *r, const char *path, char *tok){
     if (!strcmp(tok, "content") || !strcmp(tok, "metadata") || !strcmp(tok, "omit")) { int what = tok[0] == 'c' ? D_CONTENT : tok[0] == 'm' ? D_METADATA : D_OMIT; at = strtok(NULL, "\r\n"); int any = 0;
         while (name_next(&at, nm, sizeof nm)) { if (dis_add(s, path, nm, what, NULL) < 0) return -1; any = 1; }
         if (!any) { fprintf(stderr, "%s: %s NAME...\n", path, tok); return -1; } return 1; }
+    if (!strcmp(tok, "default") || !strcmp(tok, "unless_equal")) {
+        char value[64], extra[2]; at = strtok(NULL, "\r\n");
+        if (!name_next(&at, nm, sizeof nm) || !name_next(&at, value, sizeof value) || name_next(&at, extra, sizeof extra) || s->ndefaults == 256) {
+            fprintf(stderr, "%s: %s FIELD %s (at most 256 field defaults)\n", path, tok, tok[0] == 'd' ? "VALUE" : "OTHER_FIELD"); return -1;
+        }
+        for (int i=0; i<s->ndefaults; i++) if (!strcmp(s->defaults[i].name,nm)) {
+            fprintf(stderr,"%s: duplicate default for %s\n",path,nm); return -1;
+        }
+        Dis *rule=&s->defaults[s->ndefaults++];
+        snprintf(rule->name,sizeof rule->name,"%s",nm); dis_parse(rule);
+        snprintf(rule->arg,sizeof rule->arg,"%s",value); rule->arg_length=(uint16_t)strlen(value);
+        rule->what=tok[0] == 'd' ? DEFAULT_LITERAL : DEFAULT_FIELD; rule->when=s->now;
+        return 1;
+    }
     if ((!strcmp(tok, "codepoints") || !strcmp(tok, "range")) && LAID) { int what = tok[0] == 'c' ? D_CODEPOINTS : D_RANGE; at = strtok(NULL, "\r\n"); int any = 0;
         while (name_next(&at, nm, sizeof nm)) { if (dis_add(s, path, nm, what, NULL) < 0) return -1; any = 1; }
         if (!any) { fprintf(stderr, "%s: %s NAME...\n", path, tok); return -1; } return 1; }
@@ -607,8 +624,12 @@ int say_says(Recipe *r, const char *path, char *tok){
     if (!strcmp(tok, "perfcache") && LAID) {                                    /* nothing read from the flags is attested: without them, nothing is read at all */
         const lp_layout *l = lp_flags_map(NULL);
         if (!l) { fprintf(stderr, "%s: perfcache: the flags are not at %s (laplace flags generates them)\n", path, lp_flags_path()); return -1; }
-        s->perf = xrealloc(s->perf, sizeof *s->perf * 2 * l->nfields); s->nperf = 0;
-        for (size_t i = 0; i < l->nfields; i++) { perf_fold(l->field[i].name, strlen(l->field[i].name), s->perf[s->nperf++]); perf_fold(l->field[i].say, strlen(l->field[i].say), s->perf[s->nperf++]); }
+        if (s->perf) lp_strmap_free(s->perf);
+        s->perf=lp_strmap_sized(1);
+        for (size_t i=0; i<l->nfields; i++) {
+            char folded[64]; size_t length=perf_fold(l->field[i].name,strlen(l->field[i].name),folded); lp_strmap_put(s->perf,folded,length,NULL);
+            length=perf_fold(l->field[i].say,strlen(l->field[i].say),folded); lp_strmap_put(s->perf,folded,length,NULL);
+        }
         return 1; }
     if (!strcmp(tok, "attest") && LAID) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->natt == 32) { fprintf(stderr, "%s: attest TIER NAME... [of NAME] [by NAME]\n", path); return -1; }
         Att *x = &s->att[s->natt++]; memset(x, 0, sizeof *x); snprintf(x->tier, sizeof x->tier, "%s", a2); x->when = s->now;
@@ -686,6 +707,7 @@ int say_compile(Recipe *r){
     compile_semantic_paths(s, r->name);
     if (!s->dis_program) s->dis_program = compile_dispositions(s->dis, s->ndis);
     if (!s->value_program) s->value_program = compile_dispositions(s->val, s->nval);
+    if (!s->default_program) s->default_program = compile_dispositions(s->defaults, s->ndefaults);
     if (s->nsplit && !s->lay.g.compiled) {
         s->lay.g.record_name_count = (uint8_t)s->nsplit;
         for (int i = 0; i < s->nsplit; i++) memcpy(s->lay.g.record_names[i].name, s->split[i], sizeof s->split[i]);
