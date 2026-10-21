@@ -240,7 +240,7 @@ static void show_record_events(const File *file){
     }
 }
 typedef struct {
-    const char *conninfo; int threads, show; File *file; Fold *fold; LoadStats *stats;
+    const char *conninfo; int threads, show, loading; File *file; Fold *fold; LoadStats *stats;
     uint64_t *events, windows; double database_seconds, *source_seconds;
 } StreamLoad;
 static int stream_record_batch(void *context, const Ref *things, size_t n, const Ref *metadata, size_t nm, const Events *events){
@@ -254,15 +254,20 @@ static int stream_record_batch(void *context, const Ref *things, size_t n, const
     file->ev = *events; file->said = (Ref *)root; file->nsaid = roots; file->csaid = roots;
     if (stream->show) show_record_events(file);
     *stream->events += events->n;
-    double begin = now(); fold_events(stream->fold, file, 1);
-    int result = load(stream->conninfo, stream->threads, file, 1, stream->stats);
+    double begin = now(); int result = 0;
+    if (stream->loading) {
+        fold_events(stream->fold, file, 1);
+        result = load(stream->conninfo, stream->threads, file, 1, stream->stats);
+    }
     double elapsed = now() - begin; stream->database_seconds += elapsed;
     if (stream->source_seconds) *stream->source_seconds += elapsed;
     file->ev = previous; file->said = said; file->nsaid = nsaid; file->csaid = csaid;
     if (!result) {
         stream->windows++; table_reset();
-        fprintf(stderr, "\r  %'llu record windows, %'llu entities and %'llu paths persisted   ",
+        if (stream->loading) fprintf(stderr, "\r  %'llu record windows, %'llu entities and %'llu paths persisted   ",
                 (unsigned long long)stream->windows, (unsigned long long)stream->stats->ent_rows, (unsigned long long)stream->stats->phy_rows);
+        else fprintf(stderr, "\r  %'llu record windows inspected, %'llu claim events reported   ",
+                (unsigned long long)stream->windows, (unsigned long long)*stream->events);
     }
     return result;
 }
@@ -637,6 +642,12 @@ int cmd_ingest(int argc, char **argv){
     if (nfiles && !streams) { perror("source stream loaders"); return 1; }
     SourceCompletion completion = {.conninfo=conninfo, .threads=threads, .show=show_claims, .loading=do_load,
         .fold=fold, .stats=&st, .events=&nev};
+    /* Inspection has no persisted backing for projected key products. Only
+     * sources without declarations or references can release each window;
+     * entity dumps also need their complete requested graph. */
+    int preview_streaming = show_claims && !entities;
+    for (int i=0; i<nfiles && preview_streaming; i++)
+        if (!files[i].skipped && (say_has_keys(files[i].recipe) || say_refers(files[i].recipe,0))) preview_streaming=0;
     say_source_begin();
     st.known += (uint64_t)nknown;                                            /* found by their OS record, never read */
     uint64_t *size = calloc((size_t)nfiles, 8);
@@ -647,16 +658,16 @@ int cmd_ingest(int argc, char **argv){
     #define WHOLE(F) do { File *f_ = (F); if (!f_->partial) file_close(f_); } while (0)
     for (int a0 = 0; a0 < nfiles; ) {
         int b0 = a0; uint64_t sum = 0;
-        int streaming = do_load && !files[a0].known && !files[a0].skipped && recipe_record_streamable(files[a0].recipe);
+        int streaming = (do_load || preview_streaming) && !files[a0].known && !files[a0].skipped && recipe_record_streamable(files[a0].recipe);
         if (streaming) {
             b0 = a0 + 1;
             sum = getenv("LAPLACE_RECORD_WINDOW_BYTES") ? strtoull(getenv("LAPLACE_RECORD_WINDOW_BYTES"), NULL, 10) : (UINT64_C(8) << 20);
         } else while (b0 < nfiles && (b0 == a0 || (sum + size[b0] <= batch && depth[b0] == depth[a0] &&
-                !(do_load && !files[b0].known && !files[b0].skipped && recipe_record_streamable(files[b0].recipe))))) { sum += size[b0]; b0++; }
+                !((do_load || preview_streaming) && !files[b0].known && !files[b0].skipped && recipe_record_streamable(files[b0].recipe))))) { sum += size[b0]; b0++; }
         table_size(sum);                                                                                                  /* the table is empty here: room for what this batch makes */
         double td = now();
         StreamLoad *stream = &streams[a0];
-        *stream = (StreamLoad){.conninfo=conninfo, .threads=threads, .show=show_claims, .file=&files[a0],
+        *stream = (StreamLoad){.conninfo=conninfo, .threads=threads, .show=show_claims, .loading=do_load, .file=&files[a0],
             .fold=fold, .stats=&st, .events=&nev, .source_seconds=&completion.database_seconds};
         if (streaming) {
             File *file = &files[a0]; file->emit = stream_record_batch; file->emit_context = stream;
