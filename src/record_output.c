@@ -4,6 +4,7 @@
 #define _GNU_SOURCE
 #include "record_output.h"
 #include "record_values.h"
+#include "record_surface.h"
 #include "record_diagnostics.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -121,9 +122,9 @@ static Ref subtree(TNode *tn, int i, int depth, int n){
 }
 
 static uint32_t record_rows(RecordWorker *k, const SemanticRecord *t, int32_t root, Ref *part, uint32_t cap){
-    const Say *s = k->s; uint32_t np = 0, nrow = 0;
+    const Say *s = k->s; uint32_t np = record_surface_parts(k,t,root,part,cap), nrow = 0;
     int lay = s->nlayer && record_field_matches(&t->n[root], s->lay_tier), tree = s->tree_row[0] && record_field_matches(&t->n[root], s->tree_tier);
-    if (!lay && !tree) return 0;
+    if (!lay && !tree) return np;
     size_t mark = scratch_mark();
     uint32_t rcap = t->n[root].arity ? t->n[root].arity : 1;
     int32_t *rows = scratch_alloc(sizeof(int32_t) * rcap);
@@ -150,6 +151,20 @@ static uint32_t record_rows(RecordWorker *k, const SemanticRecord *t, int32_t ro
             Ref x = nroot == 1 ? rt[0] : compose(rt, (uint32_t)nroot, ref_above(rt, (size_t)nroot)); x.said = 0; part[np++] = x; } }
     scratch_restore(mark);
     return np;
+}
+
+void record_emit_layers(RecordWorker *worker, const SemanticRecord *record, int32_t root){
+    const Say *program=worker->s;
+    if (!(program->surface.thing && record_field_matches(&record->n[root],program->surface.tier)) &&
+        !(program->nlayer && record_field_matches(&record->n[root],program->lay_tier)) &&
+        !(program->tree_row[0] && record_field_matches(&record->n[root],program->tree_tier))) return;
+    Ref subject;
+    if (!record_thing(worker,record,root,&subject,0)) return;
+    Ref layers[20]; uint32_t count=record_rows(worker,record,root,layers,20);
+    for (uint32_t i=0; i<count; i++) {
+        if (lp_id_eq(&subject.id,&layers[i].id)) continue;
+        Ref pair[2]={subject,layers[i]}; record_emit_claim(worker,pair,2);
+    }
 }
 
 static int claim_vertex(const Event *e, Ref *out){

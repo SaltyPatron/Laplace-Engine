@@ -88,6 +88,7 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
         Ref S; int has = -1; float sc = score_of(s, t, (int32_t)g); k->score = s->nitself ? 1.0f : sc; k->voiced = 0;      /* the score is the attested tuple's, where there is one; what is said of it is said outright */
         if (s->voice.tier[0] && record_field_named(x, s->voice.tier, strlen(s->voice.tier))) said_by(k, t, (int32_t)g, s->voice.name);     /* who says everything the part says */
         uint64_t e0 = k->ev.n; k->grp.n = 0;
+        record_emit_layers(k,t,(int32_t)g);
         for (int a = 0; a < s->nvoices; a++) { if (!record_field_named(x, s->voices[a].tier, strlen(s->voices[a].tier)) || !record_conditions_match(s, t, (int32_t)g, s->voices[a].when)) continue;   /* each such part a witness of its own: [the source's witness, NAME] */
             if (has < 0) has = record_subject(k, t, (int32_t)g, &S); if (!has) break; int was = k->voiced; Ref wv = k->voice;
             for (int z = 0; z < s->voices[a].n; z++) for (int32_t c = record_field_first(x); c >= 0; c = record_field_next(&t->n[c])) { const SemanticValue *y = &t->n[c]; Ref v; if (!y->nlen || !record_field_matches(y, s->voices[a].name[z]) || !record_value(k, t, c, &v, 0)) continue;
@@ -140,6 +141,7 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                     for (int32_t q = record_field_first(y); q >= 0; q = record_field_next(&t->n[q])) { const SemanticValue *w = &t->n[q]; if (!w->vlen) continue; Ref v;
                         if (w->kind == S_VALUE && w->nlen && !record_field_named(w, (const char *)y->name, y->nlen)) { const Dis *dw = record_field_disposition(s, w); if (dw && (dw->what == D_OMIT || dw->what == D_METADATA)) continue;      /* the file's bookkeeping says nothing */
                             if (recipe_property_cached(s, (const char *)w->name, w->nlen)) continue;
+                            if (record_names_identity(k,t,(int32_t)g,w)) continue;
                             Ref vw; if (!dw || !record_value(k, t, q, &vw, 0)) vw = record_text(w->val, w->vlen);
                             const Dis *mw = record_value_meaning(s, w);                   /* the KEY valued itself (MISC.Translit): [thing, VALUE] */
                             if (mw) { said_as(k, mw, S, vw); continue; }
@@ -147,8 +149,9 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                             Ref kv[2] = { string_ref(w->name, w->nlen), vw }; kv[0].said = 0; if (kv[1].said != LP_SAID_TUPLE) kv[1].said = 0;   /* the pair the record holds: the same entity */
                             Ref pv = said_tuple(compose(kv, 2, ref_above(kv, 2))); record_note_road_value(k, my, &pv); record_statement_count(k, my); Ref p[2] = { S, pv }; record_emit_claim(k, p, 2); continue; }
                         if (!record_value(k, t, q, &v, 0)) continue;
-                        if (!my) { if (!wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_ATTEST], y); continue; }
-                        said_as(k, my, S, v); } }
+                        const Dis *meaning=record_value_meaning(s,w); if (!meaning) meaning=my;
+                        if (!meaning) { if (!wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_ATTEST], w); continue; }
+                        said_as(k, meaning, S, v); } }
                 else { if (recipe_property_cached(s, (const char *)y->name, y->nlen)) continue;
                     Ref v; if (!record_value(k, t, c, &v, 0)) continue;
                     const Dis *m = record_value_meaning(s, y); if (!m) { if (!wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_ATTEST], y); continue; }

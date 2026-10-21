@@ -17,17 +17,22 @@ enum { DEFAULT_LITERAL = 1, DEFAULT_FIELD };
 typedef struct KeyProgram KeyProgram;
 typedef struct DiagnosticLabel DiagnosticLabel;
 typedef struct { char list[32], path[160], as[4][64]; int nas; regex_t re; int has_re, node; KeyProgram *program; } KSpec;     /* as: the templates, tried in order */
-typedef struct { char name[64]; uint16_t length, tier_id; uint8_t within, local; lp_id domain; } TargetCode;
+typedef struct { char name[64]; uint16_t length, tier_id, scope_key; uint8_t within, local; lp_id domain; } TargetCode;
 typedef struct { char name[64]; int what; char arg[64]; KSpec k; uint32_t when;
                  struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; const char *text;
                  TargetCode *targets; uint8_t ntargets; uint16_t name_length, arg_length, text_length;
                  DiagnosticLabel *road_label, *statement_label; uint32_t name_slot, part_slot, parent_slot; } Dis;   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse); text: what a relation line words it as */
-typedef struct { char tier[32], name[64]; uint16_t tier_length, tier_id; lp_id domain, parent_domain; } Pair;
+typedef struct { char tier[32], name[64], scope[32]; uint16_t tier_length, tier_id; lp_id domain, parent_domain; } Pair;
 typedef struct { char tier[32]; char name[64][64]; int n; uint32_t when; char by[64], of[64]; int file; } Att;      /* when: the conditions it is said under, by their places in where[]; by: the part that names who says it; of: the part it is said of; file: a witness stands within the file */
 typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char by[64], of[64]; int alone; } Rel;     /* alone: where what it is to names nothing, the relation alone */
 typedef struct { char tier[32], name[8][160]; int n, within, infile, span, inclusive, of, resolved; char lit[8], space[8]; KSpec form[8]; } Thing;    /* of: the path of the things of its parts of these names, in order (a sentence of its words) */   /* within: its name stands only within the thing it is inside: the pair of that thing and it; infile: only within the file; span: the stretch of a text name[2] between the characters name[0] and name[1] */
 typedef struct { char tier[32], name[64]; double from, to; int mapped; } Score;
 typedef struct { char name[64]; int op; char val[128]; regex_t re; } Where;
+typedef struct {
+    char tier[32], row[32], key[64], form[64], separator[16], adjoining[64], adjoining_value[64], verify[64];
+    uint16_t separator_length, adjoining_length;
+    uint8_t thing;
+} SurfaceProgram;
 typedef struct { char tier[32]; uint32_t when; const lp_trust_class *class; uint16_t length; } Dependence;
 typedef struct { int what; char tier[32], say[64]; KSpec a, b; uint32_t when; } HwLine;       /* what: 1 types, 2 keyed, 3 alias, 4 maps */
 typedef struct PathProgram PathProgram;
@@ -51,6 +56,7 @@ typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thi
                  /* a record's layers down its rows and its tree by head, where the recipe gives them (layers, tree): parts of the
                   * record's path beside the claims it says (record_of) */
                  char lay_tier[32], lay_row[32], layer[16][64]; int nlayer; char tree_tier[32], tree_row[32], tree_head[64], tree_rel[64];
+                 SurfaceProgram surface;
                  PathProgram *paths; DisProgram *dis_program, *value_program, *default_program; uint16_t tree_key_index; lp_id key_domain; KeyProjection *projections; } Say;
 
 typedef struct { uint64_t key; uint16_t next, rule; uint8_t qualified; } DisEntry;
