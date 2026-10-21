@@ -265,7 +265,7 @@ void fold_events(Fold *f, const File *files, int nfiles){
         if (!isfinite(trust) || trust < -1 || trust > 1) { fprintf(stderr,"invalid declared witness trust\n"); exit(1); }
         for (uint64_t i=0;i<file->ev.n;i++) {
             const Event *event=&file->ev.e[i]; Node *node=table_find(&event->claim);
-            if (event->kind!=EV_CLAIM || !node || node->len!=3) continue;
+            if (event->kind!=EV_CLAIM || !node || node->len<2) continue;
             lp_id lineage=file->lineage.id; uint8_t has_lineage=(uint8_t)file->has_lineage; double observation_trust=trust;
             if (event->has_dependence) { lineage=event->dependence; has_lineage=1; observation_trust=event->dependence_trust; }
             uint8_t key[48]={0}; memcpy(key,event->claim.b,16); memcpy(key+16,source.id.b,16);
@@ -422,9 +422,9 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     start_loader(conninfo,npg);table_kinds();
     for(int i=0;i<nfiles;i++)for(uint64_t j=0;j<files[i].ev.n;j++){
         const Event *event=&files[i].ev.e[j];Node *node=table_find(&event->claim);
-        if(node)node->kind|=(uint8_t)(1u<<(event->kind==EV_RECORD?LP_KIND_RECORD:node->len==3?LP_KIND_CLAIM:LP_KIND_TUPLE));
+        if(node)node->kind|=(uint8_t)(1u<<(event->kind==EV_RECORD?LP_KIND_RECORD:node->len>=2?LP_KIND_CLAIM:LP_KIND_TUPLE));
     }
-    TABLE_EACH(x) if(x->len!=3)x->kind&=(uint8_t)~(1u<<LP_KIND_CLAIM);
+    TABLE_EACH(x) if(x->len<2)x->kind&=(uint8_t)~(1u<<LP_KIND_CLAIM);
     double begin=now();prune(files,nfiles,st);st->t_dedup+=now()-begin;begin=now();
     size_t count=0;TABLE_EACH(x)if(x->keep==1 || (x->keep==2 && x->kind))count++;
     Row *rows=malloc((count?count:1)*sizeof *rows);size_t at=0;
@@ -484,7 +484,7 @@ int merge(const char *conninfo,int npg){
         " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) child),"
         " claims AS (SELECT claim FROM %s UNION SELECT b.id FROM below b"
         " JOIN public.physicality p ON p.entity=b.id WHERE laplace_mask_has_value(p.mask,'kind','claim')"
-        " AND laplace_path_length(p.path)=3)"
+        " AND laplace_path_length(p.path)>=2)"
         " SELECT laplace_attest_series('%s'::regclass,array_agg(claim)) FROM claims",
         writer.pending,writer.witnesses,writer.affected,writer.pending);
     /* An unchanged registered source contributes no new evidence on replay.
