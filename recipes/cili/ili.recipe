@@ -5,29 +5,27 @@ name cili
 #   	dc:source	pwn30:00001740-a .
 # A concept is its canonical identifier (i1), the node the highway's interlingual index lists; the WordNet 3.0 synset it
 # was made from (dc:source, pwn30:00001740-a) is WordNet's key of it. What a concept is said to be (a Concept, an
-# Instance) and its skos:definition are attested on it, and so is the language its definition is written in.
+# Instance) and its skos:definition are attested on it; a literal retains the language its definition is written in.
 match ili.ttl
 format turtle
 tier statement by \n\n
 where triple/subject matches ^i[0-9]+$
 
 thing triple subject
+thing rdf_literal value lang_tag
 thing rdf_literal value
+type lang_tag language
 content *
 
 # A Turtle predicate is an RDF property, of the source's own relation inventory (RDF 1.1 Turtle, 2.4: "The token 'a'
 # in the predicate position of a Turtle triple represents the IRI http://www.w3.org/1999/02/22-rdf-syntax-ns#type").
-# The notation is resolved to the semantic type/gloss relation; packaging names
-# are not the verbs of the recorded claims.
-when predicate matches ^a$
-relation "is an instance of" predicate
-when predicate matches ^skos:definition$
-relation "is defined as" predicate
+# These are predicate VALUES in the RDF statement, not XML tags or TSV column
+# names. Retain the source's own relation inventory and the literal's language;
+# do not replace either with English invented by a recipe author.
+value - predicate
 when predicate matches ^(a|skos:definition)$
 relate property predicate to object_list
 always
-relation "language of the definition" lang_tag
-attest rdf_literal lang_tag
 
 types ili "Interlingual index concept" triple
 keyed ili triple subject
