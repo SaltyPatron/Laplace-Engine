@@ -2031,7 +2031,9 @@ static void unit_range(Sink *k, const SemanticRecord *t, uint32_t g0, uint32_t g
             if (path_code(s->rel[a].rel)->special == SELECT_FILE) { if (!wi) note_obligation(k, 'o', &diagnostic_labels[DIAG_RELATE], (const uint8_t *)"{file}", 6, NULL, 0); break; }     /* a file's name is never a relation */
             else { int32_t rc = resolve_node_path(t, (int32_t)g, s->rel[a].rel); if (rc < 0 || !value_of(k, t, rc, &rel, 0)) break;
                 const Dis *m = meaning(s, &t->n[rc]); if (!m) { if (!wi) note_node(k, &diagnostic_labels[DIAG_RELATE], &t->n[rc]); break; }     /* a layer's name, a field's: no relation; one of the source's own inventory, which value names */
-                of_class(k, m, &rel); said_count(k, m); }
+                if (m->what==1) rel=string_ref((const uint8_t *)m->text,m->text_length);
+                else of_class(k, m, &rel);
+                said_count(k, m); }
             if (path_code(s->rel[a].to)->special == SELECT_UNNAMED) {                              /* to each of the parts the file gives no name */
                 for (int32_t c = semantic_first(x); c >= 0; c = semantic_next(&t->n[c])) { const SemanticValue *y = &t->n[c]; if (y->kind != S_TEXT || y->nlen || left_empty(s, y)) continue; o = text_of(y->val, y->vlen); Ref p[3] = { S, rel, o }; claim(k, p, 3); } }
             else if (semantic_child(t, (int32_t)g, s->rel[a].to, semantic_child(t, (int32_t)g, s->rel[a].to, -1)) >= 0) {   /* several parts of that name: the relation to each */
