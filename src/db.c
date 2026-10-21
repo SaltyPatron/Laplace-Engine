@@ -5,6 +5,7 @@
 #include "engine.h"
 #include "laplace/tier0.h"
 #include "laplace/highway.h"
+#include "laplace/geometry.h"
 #include <omp.h>
 #include <math.h>
 #include <stdio.h>
@@ -121,6 +122,125 @@ int files_known(PGconn **pg, int npg, File *files, int nfiles, LoadStats *st){
 }
 int ingest_known(const char *conninfo, File *files, int nfiles){
     PGconn *pg = db_connect(conninfo); int count = files_known(&pg,1,files,nfiles,NULL); PQfinish(pg); return count;
+}
+
+static bool binding_point(void *context, const lp_ewkb_span *span){
+    double point[4]; if (span->count != 1 || !lp_ewkb_vertex(span, 0, point)) return false;
+    lp_coord *coord = context;
+    for (unsigned d = 0; d < 4; d++) {
+        if (!isfinite(point[d]) || fabs(point[d]) > 1.0) return false;
+        coord->m[d] = (int64_t)llrint(point[d] * (double)LP_FIXED_ONE);
+    }
+    return true;
+}
+void validate_file_contexts(const char *conninfo, File *files, int nfiles){
+    size_t count=0;for(int i=0;i<nfiles;i++)if(files[i].known)count++;
+    if(!count)return;
+    lp_id *ids=malloc(count*2*sizeof *ids);if(!ids){perror("recorded reading contexts");exit(1);}
+    size_t at=0;
+    for(int i=0;i<nfiles;i++)if(files[i].known){ids[at]=files[i].file.id;ids[count+at]=file_context_value(&files[i]).id;at++;}
+    Ref tag=text_ref(CTX[0],(const uint8_t *)KEY_CONTEXT_TAG,sizeof KEY_CONTEXT_TAG-1);
+    Args args={0};arg_ids(&args,ids,count);arg_ids(&args,ids+count,count);arg_raw(&args,tag.id.b,sizeof tag.id.b);
+    PGconn *pg=db_connect(conninfo);
+    PGresult *result=ask_once(pg,
+        "WITH RECURSIVE contexts(id,reading) AS ("
+        " SELECT p.entity,k.id FROM public.physicality p"
+        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) k(id)"
+        " WHERE p.path @> ARRAY[$3::blake3] AND laplace_path_starts(p.path,$3::blake3)"
+        " AND laplace_path_length(p.path)=2 AND k.id<>$3::blake3"
+        " UNION SELECT parent.entity,c.reading FROM contexts c"
+        " JOIN public.physicality child ON child.entity=c.id"
+        " JOIN public.physicality parent ON parent.path @> ARRAY[c.id]::blake3[]"
+        " WHERE NOT laplace_mask_has_value(child.mask,'kind','file'))"
+        " SELECT wanted.id FROM unnest($1::blake3[],$2::blake3[]) wanted(id,reading)"
+        " JOIN contexts c ON c.id=wanted.id GROUP BY wanted.id"
+        " HAVING bool_or(c.reading<>wanted.reading)",&args);
+    lp_idmap *invalid=lp_idmap_new();
+    for(int row=0;row<PQntuples(result);row++){lp_id id;bool fresh;memcpy(id.b,PQgetvalue(result,row,0),16);lp_idmap_put(invalid,&id,&fresh);}
+    for(int i=0;i<nfiles;i++)if(files[i].known && lp_idmap_find(invalid,&files[i].file.id)>=0){
+        files[i].known=files[i].has_file=0;
+    }
+    lp_idmap_free(invalid);PQclear(result);PQfinish(pg);args_free(&args);free(ids);
+}
+/* Restore only the compiled index beneath a recorded file's metadata. Entry
+ * vertices terminate the walk: their product targets are not exported into RAM.
+ * One set read restores a provider; none of its source bytes are reopened. */
+int load_file_keys(const char *conninfo, const File *file){
+    if (!file->known || !file->has_file) return 0;
+    Ref marker = text_ref(CTX[0], (const uint8_t *)KEY_BINDING_TAG, sizeof KEY_BINDING_TAG - 1);
+    Args args = {0}; arg_raw(&args, file->recorded_metadata.b, sizeof file->recorded_metadata.b); arg_raw(&args, marker.id.b, sizeof marker.id.b);
+    PGconn *pg = db_connect(conninfo);
+    PGresult *result = ask_once(pg,
+        "WITH RECURSIVE metadata(id) AS ("
+        " SELECT $1::blake3"
+        " UNION SELECT child FROM metadata m JOIN public.physicality p ON p.entity=m.id"
+        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) child"
+        " WHERE NOT laplace_path_starts(p.path,$2::blake3))"
+        " SELECT st_asewkb(p.path) FROM metadata m JOIN public.physicality p ON p.entity=m.id"
+        " WHERE laplace_path_starts(p.path,$2::blake3) AND laplace_path_length(p.path)=5", &args);
+    /* vertex_ids is the GIN key SET. Decode ordered carriers in Native C;
+     * treating the sorted/distinct index keys as an AST loses field order. */
+    size_t count=(size_t)PQntuples(result); lp_id *ids=malloc((count?count:1)*4*sizeof *ids);
+    if (!ids) { perror("recorded reference bindings"); exit(1); }
+    int invalid=0;
+    for (size_t row=0;row<count;row++) {
+        lp_vertex vertex[5]; size_t n=lp_path_vertices((const uint8_t *)PQgetvalue(result,(int)row,0),(size_t)PQgetlength(result,(int)row,0),vertex,5);
+        if (!n || n>5 || !lp_id_eq(&vertex[0].id,&marker.id)) { invalid=1; break; }
+        size_t expanded=0;
+        for (size_t v=0;v<n && !invalid;v++) {
+            uint64_t run=vertex[v].run;
+            if (!run || run>5-expanded) { invalid=1; break; }
+            for (uint64_t r=0;r<run;r++,expanded++) if (expanded) ids[(expanded-1)*count+row]=vertex[v].id;
+        }
+        if (expanded!=5) { invalid=1; break; }
+    }
+    PQclear(result); args_free(&args); args=(Args){0};
+    if (invalid || !count) {
+        free(ids); PQfinish(pg);
+        if (invalid) fprintf(stderr,"%s: invalid compiled reference entry path\n",file->path);
+        else fprintf(stderr,"  restored 0 compiled reference bindings from recorded metadata: %s\n",file->path);
+        return invalid;
+    }
+    for (unsigned col=0;col<4;col++) arg_ids(&args,ids+col*count,count);
+    result=ask_once(pg,
+        "SELECT laplace_text(b.hash),laplace_text(b.header),b.value,st_asewkb(e.coord),e.tier,laplace_text(b.text)"
+        " FROM unnest($1::blake3[],$2::blake3[],$3::blake3[],$4::blake3[]) b(hash,header,value,text)"
+        " LEFT JOIN public.entity e ON e.id=b.value",&args);
+    free(ids);
+    for (int row = 0; row < PQntuples(result); row++) {
+        KeyRank rank = {.file=file->order}; KeyField field = {0}; lp_id hash;
+        unsigned long long at, unit, member; unsigned flags, said, outcome, position, spare, length; int used = 0;
+        if (PQgetisnull(result,row,0) || PQgetlength(result,row,0) != 32 || !id_parse(PQgetvalue(result,row,0),&hash) ||
+            PQgetisnull(result,row,1) || sscanf(PQgetvalue(result,row,1), "%llu:%llu:%llu:%u:%u:%u:%u:%u:%u%n",
+                &at,&unit,&member,&flags,&said,&outcome,&position,&spare,&length,&used) != 9 ||
+            used != PQgetlength(result,row,1) || flags > 7 || said > LP_M_SAID_MASK || outcome > UINT8_MAX ||
+            (!(flags & 2) && length)) { invalid = 1; break; }
+        rank.at=at; rank.unit=unit; rank.member=member;
+        field.has_value=(uint8_t)(flags&1); field.has_text=(uint8_t)((flags>>1)&1); field.blocked=(uint8_t)((flags>>2)&1);
+        if (field.has_value) {
+            if (PQgetisnull(result,row,2) || PQgetlength(result,row,2)!=16) { invalid=1; break; }
+            memcpy(field.value.id.b,PQgetvalue(result,row,2),16);
+            const lp_tier0_record *scalar=lp_tier0_find(T0,&field.value.id);
+            if (scalar) { memcpy(field.value.c.m,scalar->m,sizeof field.value.c.m); field.value.tier=0; }
+            else {
+                lp_ewkb_info info;
+                if (PQgetisnull(result,row,3) || PQgetisnull(result,row,4) || PQgetlength(result,row,4)!=2 ||
+                    !lp_ewkb_visit((const uint8_t *)PQgetvalue(result,row,3),(size_t)PQgetlength(result,row,3),binding_point,&field.value.c,&info) ||
+                    info.type!=LP_POINT || info.vertices!=1) { invalid=1; break; }
+                uint64_t tier=lp_be(PQgetvalue(result,row,4),2);
+                if (tier>UINT8_MAX) { invalid=1; break; } field.value.tier=(uint8_t)tier;
+            }
+            field.value.said=(uint8_t)said; field.value.outcome=(uint8_t)outcome; field.value.position=position; field.value.spare=spare;
+        }
+        if (field.has_text && length) {
+            if (PQgetisnull(result,row,5) || (uint64_t)PQgetlength(result,row,5)!=length) { invalid=1; break; }
+            field.text=(const uint8_t *)PQgetvalue(result,row,5); field.length=length;
+        }
+        keys_restore(&hash,&field,&rank);
+    }
+    if (invalid) fprintf(stderr,"%s: recorded compiled reference metadata is invalid\n",file->path);
+    else fprintf(stderr,"  restored %d compiled reference bindings from recorded metadata: %s\n",PQntuples(result),file->path);
+    PQclear(result); args_free(&args); PQfinish(pg); return invalid;
 }
 
 Fold *fold_new(void){
