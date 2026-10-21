@@ -29,8 +29,43 @@ else()
   target_compile_options(ts_runtime PRIVATE -w -O3 -fPIC)
 endif()
 
-set(ENGINE_SOURCES src/main.c src/op.c src/os.c src/pg.c src/table.c src/recipe.c src/ingest.c src/db.c src/read.c src/fills.c src/pull.c src/firmware.c src/forward.c src/file.c src/structure.c src/say.c src/program.c
-                   src/deploy.c src/forget.c src/tier0.c src/flags.c src/highway.c src/bench.c src/provenance.c src/walk.c src/chess.c src/grammars.c)
+set(ENGINE_SOURCES
+    src/main.c
+    src/op.c
+    src/os.c
+    src/pg.c
+    src/table.c
+    src/recipe.c
+    src/ingest.c
+    src/db.c
+    src/read.c
+    src/fills.c
+    src/pull.c
+    src/firmware.c
+    src/forward.c
+    src/file.c
+    src/structure.c
+    src/say.c
+    src/program.c
+    src/deploy.c
+    src/forget.c
+    src/tier0.c
+    src/flags.c
+    src/highway.c
+    src/bench.c
+    src/provenance.c
+    src/walk.c
+    src/chess.c
+    src/grammars.c
+    src/file_metadata.c
+    src/recipe_compile.c
+    src/record_stream.c
+    src/record_select.c
+    src/record_operands.c
+    src/record_diagnostics.c
+    src/record_values.c
+    src/record_output.c
+)
 if(TARGET laplace_model)
   list(APPEND ENGINE_SOURCES src/model.c)
 else()
