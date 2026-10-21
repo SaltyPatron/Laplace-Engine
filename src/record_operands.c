@@ -23,7 +23,8 @@ static uint32_t semantic_variable(SemanticRecord *record, const PathProgram *pro
         .nlen=field->name_length, .vlen=field->value_length, .extent=id, .parent=parent,
         .kind=field->kind, .tier=(uint8_t)(tier < 255 ? tier : 255),
         .join=(uint8_t)((field->flags & S_FIELD_LIST) ? S_PIECES : (field->flags & S_FIELD_JOIN) != 0),
-        .trim=(uint8_t)((field->flags & S_FIELD_TRIM) != 0), .context=(uint8_t)((field->flags & S_FIELD_CONTEXT) != 0)};
+        .trim=(uint8_t)((field->flags & S_FIELD_TRIM) != 0), .context=(uint8_t)((field->flags & S_FIELD_CONTEXT) != 0),
+        .scalar=(uint8_t)((field->flags & S_FIELD_PAYLOAD) != 0)};
     if (parent >= 0) {
         record->n[id].operand = record_binding_add(record->bindings, (uint32_t)parent, BIND_INPUTS, id);
         record->n[parent].arity++;

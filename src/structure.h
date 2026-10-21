@@ -184,7 +184,8 @@ void layout_bind_names(Layout *layout, s_compile_name_fn compile, const void *pr
  * than retaining the parser's nodes after the callback returns. */
 enum { S_OPEN = 1, S_FIELD, S_CLOSE, S_FINISH };
 enum { S_FIELD_JOIN = 1, S_FIELD_LIST = 2, S_FIELD_TRIM = 4, S_FIELD_ALIAS = 8, S_FIELD_DERIVED = 16,
-       S_FIELD_SAME_TIER = 32, S_FIELD_PARTS = 64, S_FIELD_TIER = 128, S_FIELD_CONTEXT = 256, S_FIELD_RECORD = 512 };
+       S_FIELD_SAME_TIER = 32, S_FIELD_PARTS = 64, S_FIELD_TIER = 128, S_FIELD_CONTEXT = 256, S_FIELD_RECORD = 512,
+       S_FIELD_PAYLOAD = 1024 };
 enum { S_VISIT_OK = 1, S_VISIT_RELEASE = 2, S_VISIT_SKIP = 4, S_VISIT_RETAIN = 8 };
 typedef struct {
     TSNode source;

@@ -1,2 +1,4 @@
 grammar deps
-node edge value name key text value same-tier
+node edge group as edge
+node head text as head
+node relation text as relation grammar ud_relation
