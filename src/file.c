@@ -80,6 +80,24 @@ static void file_block_free(FileBlock *block){
     if (block->up) { file_block_free(block->up); free(block->up); }
     free(block->part);
 }
+static void binding_part(void *context, const Ref *part){ file_block_push(context, *part); }
+Ref file_context_value(const File *file){
+    static const char hex[]="0123456789abcdef"; uint8_t text[64];
+    for (unsigned i=0;i<32;i++) { text[2*i]=hex[file->reading_context[i]>>4]; text[2*i+1]=hex[file->reading_context[i]&15]; }
+    return text_ref(CTX[0],text,sizeof text);
+}
+static int file_binding_metadata(File *file, Ref *out){
+    if (file->bindings_attached) return 0;
+    file->bindings_attached = 1;
+    FileBlock block = {0};
+    size_t count=say_has_keys(file->recipe)?keys_file_export(file->order,binding_part,&block):0;
+    if (keys_file_reads(file->order)) {
+        Ref parts[2]={text_ref(CTX[0],(const uint8_t *)KEY_CONTEXT_TAG,sizeof KEY_CONTEXT_TAG-1),file_context_value(file)};
+        Ref context=compose(parts,2,ref_above(parts,2)); context.said=0; file_block_push(&block,context); count++;
+    }
+    if (!count) { file_block_free(&block); return 0; }
+    *out = file_block_finish(&block); out->said = 0; file_block_free(&block); return 1;
+}
 void file_stream_begin(File *file){
     file->assembly = calloc(1, sizeof *file->assembly); if (!file->assembly) { perror("file assembly"); exit(1); }
     file->partial = file->laid = 1; Ref os;
@@ -102,6 +120,7 @@ const Ref *file_stream_roots(File *file, size_t *count){
 }
 void file_stream_finish(File *file){
     struct FileAssembly *assembly = file->assembly;
+    Ref bindings; if (file_binding_metadata(file, &bindings)) file_block_push(&assembly->metadata, bindings);
     Ref metadata = {0}; int has_metadata = assembly->metadata.total != 0;
     if (has_metadata) metadata = file_block_finish(&assembly->metadata);
     if (assembly->content.total) {
@@ -128,7 +147,22 @@ static Ref recs_of(Ref *r, size_t n){
 
 /* The file is whole: its trunk, over its metadata, its content, and any records its structure attests. */
 void file_close(File *f){
-    if (f->laid) return;                                                   /* its trees came from the recipe's layout */
+    if (f->laid) {
+        /* The provider owns the content. Compiled lookup state belongs beside
+         * it in file metadata, so it can be restored after trunk pruning. */
+        if (!f->has_file || f->partial) return;
+        Ref bindings; if (!file_binding_metadata(f, &bindings)) return;
+        FileBlock metadata = {0}; Ref os;
+        if (file_os(f->recipe, f, &os)) file_block_push(&metadata, os);
+        for (uint64_t i = 0; i < f->nsaid; i++) if (f->said[i].said == LP_SAID_METADATA) {
+            Ref part = f->said[i]; part.said = LP_SAID_TUPLE; file_block_push(&metadata, part);
+        }
+        file_block_push(&metadata, bindings);
+        Ref parts[2] = {said_metadata(file_block_finish(&metadata)), f->trunk};
+        f->file = compose(parts, 2, ref_above(parts, 2)); f->file.said = 0;
+        f->file.outcome = 0; f->file.position = f->file.spare = 0;
+        file_block_free(&metadata); return;
+    }
     Ref os; int has_os = file_os(f->recipe, f, &os);                       /* the OS's record of it, one node (say.c) */
     if (!has_os && !f->nsaid) { f->file = f->trunk; f->file.said = 0; f->has_file = 1; return; }
     Ref part[3]; uint32_t np = 0;

@@ -231,7 +231,7 @@ typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; 
                  uint64_t records;
                  uint32_t order;                       /* its place among the run's files, as ingest orders them */
                  uint64_t at;                          /* where the bytes being read begin in it: a stretch's offset */
-                 int laid;
+                 int laid, bindings_attached; lp_id recorded_metadata; uint8_t reading_context[32];
                  record_batch_fn emit; void *emit_context; struct FileAssembly *assembly;
                  } File;                     /* laid: its trunk, metadata tree and content tree came from the recipe's layout (say.c) */
 void file_stream_begin(File *);
@@ -257,6 +257,19 @@ int  keys_get(const lp_id *domain, const uint8_t *k, size_t n, Ref *out);
 void keys_field_put(const lp_id *domain, const uint8_t *k, size_t n, const KeyField *field, const KeyRank *rank);
 const KeyField *keys_field_get(const lp_id *domain, const uint8_t *k, size_t n);
 uint64_t keys_revision(void);
+/* Compiled lookup metadata: hashes index recipe symbols, never mint content
+ * IDs or retain the source's pointer spellings. Export each file's first local
+ * declaration, including ones shadowed by another file in this reading. */
+#define KEY_BINDING_TAG "compiled reference binding v1"
+#define KEY_CONTEXT_TAG "compiled reference context v1"
+typedef void (*key_binding_fn)(void *, const Ref *);
+size_t keys_file_export(uint64_t file, key_binding_fn, void *);
+void keys_restore(const lp_id *hash, const KeyField *, const KeyRank *);
+int load_file_keys(const char *conninfo, const File *);
+void keys_reader_file(uint64_t file);
+int keys_file_reads(uint64_t file);
+Ref file_context_value(const File *);
+void validate_file_contexts(const char *conninfo, File *, int);
 void attest_layout(const Recipe *, File *, const uint8_t *src, size_t n);             /* records read so far: a stretch's positions go on from the last */
 struct SInput;
 int  say_record_streamable(const Recipe *);
