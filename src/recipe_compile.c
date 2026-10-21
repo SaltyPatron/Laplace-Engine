@@ -301,7 +301,11 @@ static void compile_targets(Say *say, Dis *rules, int count, const char *recipe)
             TargetCode *target = &rule->targets[rule->ntargets++];
             if (rule->what == D_REFER && *at == '^') { target->within = 1; at++; }
             target->length = (uint16_t)(next - at); memcpy(target->name, at, target->length); target->name[target->length] = 0;
-            for (int j = 0; j < say->nkey; j++) if (!strcmp(say->key[j].tier, target->name)) { target->local = 1; target->tier_id = say->key[j].tier_id; break; }
+            for (int j = 0; j < say->nkey; j++) if (!strcmp(say->key[j].tier, target->name)) {
+                target->local = 1; target->tier_id = say->key[j].tier_id;
+                if (say->key[j].scope[0]) target->scope_key=(uint16_t)(j+1);
+                break;
+            }
             keys_domain(target->local ? recipe : target->name, target->local ? target->name : "", target->local && target->within, &target->domain);
             at = next;
         }
@@ -438,7 +442,7 @@ static void compile_semantic_paths(Say *say, const char *recipe){
         path_register(say, say->rel[i].tier); path_register(say, say->rel[i].rel); path_register(say, say->rel[i].to); path_register(say, say->rel[i].by); path_register(say, say->rel[i].of);
     }
     for (int i = 0; i < say->nkey; i++) {
-        Pair *key = &say->key[i]; path_register(say, key->tier); path_register(say, key->name);
+        Pair *key = &say->key[i]; path_register(say, key->tier); path_register(say, key->name); path_register(say,key->scope);
         key->tier_length = (uint16_t)strlen(key->tier); key->tier_id = (uint16_t)(i + 1);
         keys_domain(recipe, key->tier, 0, &key->domain); keys_domain(recipe, key->tier, 1, &key->parent_domain);
         for (int j = 0; j < i; j++) if (!strcmp(say->key[j].tier, key->tier)) { key->tier_id = say->key[j].tier_id; break; }
@@ -452,6 +456,9 @@ static void compile_semantic_paths(Say *say, const char *recipe){
     path_register(say, say->lay_tier); path_register(say, say->lay_row); path_register(say, say->tree_tier); path_register(say, say->tree_row);
     path_register(say, say->tree_head); path_register(say, say->tree_rel); path_register(say, say->voice.tier); path_register(say, say->voice.name);
     for (int i = 0; i < say->nlayer; i++) path_register(say, say->layer[i]);
+    path_register(say, say->surface.tier); path_register(say, say->surface.row);
+    path_register(say, say->surface.key); path_register(say, say->surface.form);
+    path_register(say, say->surface.adjoining); path_register(say, say->surface.verify);
     compile_targets(say, say->dis, say->ndis, recipe); compile_targets(say, say->val, say->nval, recipe);
     compile_diagnostics(say->dis, say->ndis); compile_diagnostics(say->val, say->nval);
     for (int i = 0; i < say->nline; i++) say->line[i].pred_length = (uint16_t)strlen(say->line[i].pred);
@@ -483,9 +490,10 @@ int recipe_property_cached(const Say *s, const char *name, size_t n){
     return lp_strmap_find(s->perf,folded,length) >= 0; }
 static int dis_add(Say *s, const char *path, const char *name, int what, const char *arg){
     if (s->ndis == 256) { fprintf(stderr, "%s: more parts than a recipe disposes of (256)\n", path); return -1; }
-    for (int i = 0; i < s->ndis; i++) if (!strcmp(s->dis[i].name, name)) { if (what == D_KEY && s->dis[i].what == D_KEY) return 1;      /* one name may be the key of several kinds of thing (id) */
+    for (int i = 0; i < s->ndis; i++) if (!strcmp(s->dis[i].name, name)) { if (what == D_KEY && s->dis[i].what == D_KEY && s->dis[i].when==s->now) return 1;      /* one name may be the key of several kinds of thing (id) */
+        if (s->dis[i].when && s->dis[i].when!=s->now) continue; /* ordered conditional cases, followed by at most one fallback */
         fprintf(stderr, "%s: the part %s is given two dispositions\n", path, name); return -1; }
-    Dis *d = &s->dis[s->ndis++]; snprintf(d->name, sizeof d->name, "%s", name); dis_parse(d); d->what = what; snprintf(d->arg, sizeof d->arg, "%s", arg ? arg : ""); return 1;
+    Dis *d = &s->dis[s->ndis++]; snprintf(d->name, sizeof d->name, "%s", name); dis_parse(d); d->what = what; d->when=s->now; snprintf(d->arg, sizeof d->arg, "%s", arg ? arg : ""); return 1;
 }
 /* A recipe's line, if it lays the file out or disposes of a part: 1, or 0 for something else, or -1 when written wrong. */
 /* A recipe's line, its comment off, as written: each word of it kept, so that a part the recipe names nowhere is known to be
@@ -550,7 +558,15 @@ int say_says(Recipe *r, const char *path, char *tok){
         if (!x->n) { fprintf(stderr, "%s: holds TIER NAME...\n", path); return -1; } return 1; }
     if (!strcmp(tok, "key") && LAID) { at = strtok(NULL, "\r\n");
         if (!name_next(&at, a2, sizeof a2) || !name_next(&at, nm, sizeof nm) || s->nkey == S_TIERS) { fprintf(stderr, "%s: key TIER NAME\n", path); return -1; }
-        Pair *p = &s->key[s->nkey++]; snprintf(p->tier, sizeof p->tier, "%s", a2); snprintf(p->name, sizeof p->name, "%s", nm);
+        Pair *p = &s->key[s->nkey]; char keyword[32], extra[32];
+        if (name_next(&at,keyword,sizeof keyword) &&
+            (strcmp(keyword,"within") || !name_next(&at,p->scope,sizeof p->scope) || name_next(&at,extra,sizeof extra))) {
+            fprintf(stderr,"%s: key TIER NAME [within SCOPE]\n",path); return -1;
+        }
+        for (int i=0; i<s->nkey; i++) if (!strcmp(s->key[i].tier,a2) && strcmp(s->key[i].scope,p->scope)) {
+            fprintf(stderr,"%s: keys of tier %s must share one declared scope\n",path,a2); return -1;
+        }
+        s->nkey++; snprintf(p->tier, sizeof p->tier, "%s", a2); snprintf(p->name, sizeof p->name, "%s", nm);
         return dis_add(s, path, nm, D_KEY, a2); }
     if (!strcmp(tok, "pair") && LAID) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->npair == 8) { fprintf(stderr, "%s: pair TIER NAME...\n", path); return -1; }
         Att *x = &s->pair[s->npair++]; memset(x, 0, sizeof *x); snprintf(x->tier, sizeof x->tier, "%s", a2); x->when = s->now;
@@ -569,6 +585,27 @@ int say_says(Recipe *r, const char *path, char *tok){
      *                                    empty stands as the file writes empty
      * tree TIER ROW HEAD REL             the ROWs' tree by HEAD (a row's key, or 0 for none), each subtree the path of its
      *                                    dependents' subtrees and [REL, the row's thing] in the rows' order */
+    if (!strcmp(tok, "surface") && LAID) {
+        SurfaceProgram *program=&s->surface; char keyword[32], extra[32]; at=strtok(NULL,"\r\n");
+        if (program->thing || s->nthing==32 ||
+            !name_next(&at,program->tier,sizeof program->tier) || !name_next(&at,program->row,sizeof program->row) ||
+            !name_next(&at,program->key,sizeof program->key) || !name_next(&at,program->form,sizeof program->form) ||
+            !name_next(&at,keyword,sizeof keyword) || strcmp(keyword,"separator") ||
+            !name_next(&at,program->separator,sizeof program->separator) ||
+            !name_next(&at,keyword,sizeof keyword) || strcmp(keyword,"unless") ||
+            !name_next(&at,program->adjoining,sizeof program->adjoining) ||
+            !name_next(&at,program->adjoining_value,sizeof program->adjoining_value) ||
+            !name_next(&at,keyword,sizeof keyword) || strcmp(keyword,"verify") ||
+            !name_next(&at,program->verify,sizeof program->verify) || name_next(&at,extra,sizeof extra)) {
+            fprintf(stderr,"%s: surface TIER ROW ID FORM separator TEXT unless FIELD VALUE verify FIELD (one per recipe)\n",path); return -1;
+        }
+        program->separator_length=(uint16_t)strlen(program->separator);
+        program->adjoining_length=(uint16_t)strlen(program->adjoining_value);
+        Thing *thing=&s->thing[s->nthing++]; memset(thing,0,sizeof *thing);
+        snprintf(thing->tier,sizeof thing->tier,"%s",program->tier);
+        snprintf(thing->name[0],sizeof thing->name[0],"%s",program->verify); thing->n=1;
+        program->thing=(uint8_t)s->nthing; return 1;
+    }
     if (!strcmp(tok, "layers") && LAID) { at = strtok(NULL, "\r\n");
         if (!name_next(&at, s->lay_tier, sizeof s->lay_tier) || !name_next(&at, s->lay_row, sizeof s->lay_row)) { fprintf(stderr, "%s: layers TIER ROW NAME...\n", path); return -1; }
         while (s->nlayer < 16 && name_next(&at, s->layer[s->nlayer], sizeof s->layer[0])) s->nlayer++;
@@ -723,9 +760,10 @@ int say_stretches(const Recipe *r){ const Say *s = r->say; if (!s || !s->lay.nti
     for (int z = 0; z < s->ndis; z++) if (s->dis[z].what == D_REFER)
         for (uint8_t i = 0; i < s->dis[z].ntargets; i++) if (s->dis[z].targets[i].local) return 0;
     if (!strcmp(s->lay.tier[0].sep, "\n")) return 1; if (!strcmp(s->lay.tier[0].sep, "\n\n")) return 2; return 0; }
-static int is_tier(const Say *s, const char *name){ for (int i = 0; i < s->lay.ntier; i++) if (!strcmp(s->lay.tier[i].name, name)) return 1; return 0; }
-const char *say_refers(const Recipe *r, int i){ const Say *s = r->say; if (!s) return NULL;
-    for (int z = 0; z < s->ndis; z++) if (s->dis[z].what == D_REFER && !is_tier(s, s->dis[z].arg) && !i--) return s->dis[z].arg;
+const char *say_refers(const Recipe *r, int i){ const Say *s = r ? r->say : NULL; if (!s) return NULL;
+    for (int z=0; z<s->ndis; z++) if (s->dis[z].what==D_REFER)
+        for (uint8_t target=0; target<s->dis[z].ntargets; target++)
+            if (!s->dis[z].targets[target].local && !i--) return s->dis[z].targets[target].name;
     return NULL; }
 static int static_name_matches(const NameCode *pattern, const uint8_t *name, uint32_t length){
     return !pattern->note && pattern->length <= length && (pattern->wildcard || pattern->length == length) &&
@@ -751,7 +789,10 @@ void say_program_hash(const Recipe *recipe, uint8_t out[32]){
 
 int say_only_disposes(const Recipe *r){ const Say *s = r->say; return s && s->ndis && !s->nthing && !s->natt && !s->nrel && !s->nhw && !s->npair && !s->nhold && !s->nkey; }
 
-int say_has_keys(const Recipe *recipe){ const Say *say = recipe ? recipe->say : NULL; return say && say->nkey != 0; }
+int say_has_keys(const Recipe *recipe){ const Say *say = recipe ? recipe->say : NULL;
+    for (int i=0; say && i<say->nkey; i++) if (!say->key[i].scope[0]) return 1;
+    return 0;
+}
 
 int  say_has_highway(const Recipe *r){ const Say *s = r->say; return s && s->nhw; }
 

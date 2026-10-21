@@ -64,6 +64,7 @@ set(ENGINE_SOURCES
     src/record_operands.c
     src/record_diagnostics.c
     src/record_values.c
+    src/record_surface.c
     src/record_output.c
 )
 if(TARGET laplace_model)

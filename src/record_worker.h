@@ -29,7 +29,7 @@ typedef struct {
     const uint8_t *name, *val;
     uint32_t nlen, vlen, arity, extent, operand;
     int32_t parent;
-    uint8_t kind, tier, join, trim, context;
+    uint8_t kind, tier, join, trim, context, scalar;
     uint32_t dropped_first;
     TextRun *text;
 } SemanticValue;
@@ -52,7 +52,7 @@ typedef struct {
     uint8_t a[48], b[40], a_length, b_length, has_b;
     char what;
 } Obligation;
-typedef struct { const uint8_t *bytes; uint64_t hash; uint32_t length; int32_t node; uint16_t tier; } LocalKey;
+typedef struct { const uint8_t *bytes; uint64_t hash; uint32_t length; int32_t node, scope; uint16_t tier; } LocalKey;
 typedef struct HwRec { int what, line; Ref thing; char *a, *b; } HwRec;     /* what: 1 a type, 2 a key of one, 3 a key naming what another names, 4 an edge */
 typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; uint64_t open[256]; float er, ed, score; uint64_t ordinal; Ref fw, voice; int voiced; char opennm[16][64]; uint8_t open_length[16]; int nopen; uint64_t unknown; char unknm[8][96]; int nunk; Refs grp; Ref fname, fstem;
                  Ref dependence; const lp_trust_class *dependence_class;
