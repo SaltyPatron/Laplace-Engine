@@ -17,6 +17,8 @@
  *   pair TIER NAME...          of a TIER's thing, a part the file writes beside it with nothing between: [thing, value]
  *   score TIER NAME [from A to B]
  *                              the score the TIER gives what it attests, on the scale the source writes it on
+ *   dependence TIER CLASS      observations in this TIER use the named native trust class's canonical dependence
+ *                              root and prior; the corpus trunk remains the witness. Applies under when/always.
  *   where NAME is VALUE | is-not VALUE | matches PATTERN
  *                              the outermost parts the recipe speaks of; another is in the file's tree and attests nothing
  *   when NAME is VALUE | is-not VALUE | matches PATTERN
@@ -46,9 +48,10 @@
  *                              the meaning of; a part that is itself KEY IS VALUE parts says each [KEY, VALUE]: [thing,
  *                              [KEY, VALUE]] (a feature's Name=Value), or, where KEY itself is valued, [thing, VALUE]
  *   holds TIER NAME... [via]   of a TIER's thing, the things of those names inside it that value names: [thing, other]
- *   relate TIER NAME to NAME   of a TIER's thing, its relation (the first part's value, which value names: a relation
+ *   relate TIER NAME to NAME [of PATH]
+ *                              of a TIER's thing (or the explicit subject PATH), its relation (the first part's value, which value names: a relation
  *                              of the source's own inventory) to what the second part is: [thing, relation, other];
- *                              where the second names nothing, the pair [thing, relation]
+ *                              to . names the whole TIER thing; where the second names nothing, the pair [thing, relation]
  *   relation "TEXT" NAME...    each part NAME states a relation of the thing to its value, which the source's own
  *                              documentation words as TEXT (quoted there, cited in the recipe; never the field's own
  *                              name, which is refused): [thing, TEXT, value]. TEXT is content the source writes, in its
@@ -90,16 +93,18 @@ typedef struct { char name[64]; int what; char arg[64]; KSpec k; uint32_t when;
                  DiagnosticLabel *road_label, *statement_label; uint32_t name_slot, part_slot, parent_slot; } Dis;   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse); text: what a relation line words it as */
 typedef struct { char tier[32], name[64]; uint16_t tier_length, tier_id; lp_id domain, parent_domain; } Pair;
 typedef struct { char tier[32]; char name[64][64]; int n; uint32_t when; char by[64], of[64]; int file; } Att;      /* when: the conditions it is said under, by their places in where[]; by: the part that names who says it; of: the part it is said of; file: a witness stands within the file */
-typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char by[64]; int alone; } Rel;     /* alone: where what it is to names nothing, the relation alone */
+typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char by[64], of[64]; int alone; } Rel;     /* alone: where what it is to names nothing, the relation alone */
 typedef struct { char tier[32], name[8][160]; int n, within, infile, span, inclusive, of, resolved; char lit[8], space[8]; KSpec form[8]; } Thing;    /* of: the path of the things of its parts of these names, in order (a sentence of its words) */   /* within: its name stands only within the thing it is inside: the pair of that thing and it; infile: only within the file; span: the stretch of a text name[2] between the characters name[0] and name[1] */
 typedef struct { char tier[32], name[64]; double from, to; int mapped; } Score;
 typedef struct { char name[64]; int op; char val[128]; regex_t re; } Where;
+typedef struct { char tier[32]; uint32_t when; const lp_trust_class *class; uint16_t length; } Dependence;
 typedef struct { int what; char tier[32], say[64]; KSpec a, b; uint32_t when; } HwLine;       /* what: 1 types, 2 keyed, 3 alias, 4 maps */
 typedef struct PathProgram PathProgram;
 typedef struct DisProgram DisProgram;
 typedef struct KeyProjection KeyProjection;
 typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thing thing[32]; int nthing; Pair key[32]; int nkey; Att att[32]; int natt; Att pair[8]; int npair; Att hold[16]; int nhold; Rel rel[16]; int nrel;
                  Att itself[8]; int nitself;                                 /* a TIER's thing is itself what is attested: a tuple is the claim it is */
+                 Dependence dependence[8]; int ndependence;
                  Att voices[8]; int nvoices;                                 /* parts each of which is a witness of its own, saying its field of the thing */
                  Att together[8]; int ntogether;                             /* a TIER whose claims are said together: one record, witnessed once, its claims within it */
                  char stem, stemfrom;                                        /* what ends the part of the file's name {file} stands for (. unless said), and what it begins after */
@@ -515,8 +520,9 @@ static void compile_semantic_paths(Say *say, const char *recipe){
     register_att_paths(say, say->att, say->natt); register_att_paths(say, say->pair, say->npair);
     register_att_paths(say, say->hold, say->nhold); register_att_paths(say, say->itself, say->nitself);
     register_att_paths(say, say->together, say->ntogether); register_att_paths(say, say->voices, say->nvoices);
+    for (int i=0; i<say->ndependence; i++) path_register(say,say->dependence[i].tier);
     for (int i = 0; i < say->nrel; i++) {
-        path_register(say, say->rel[i].tier); path_register(say, say->rel[i].rel); path_register(say, say->rel[i].to); path_register(say, say->rel[i].by);
+        path_register(say, say->rel[i].tier); path_register(say, say->rel[i].rel); path_register(say, say->rel[i].to); path_register(say, say->rel[i].by); path_register(say, say->rel[i].of);
     }
     for (int i = 0; i < say->nkey; i++) {
         Pair *key = &say->key[i]; path_register(say, key->tier); path_register(say, key->name);
@@ -598,6 +604,16 @@ int say_says(Recipe *r, const char *path, char *tok){
     Say *s = r->say; if (!s) s = r->say = calloc(1, sizeof(Say)); s->laid_line = 0;
     char nm[160], a2[64], *at;
     #define LAID (s->lay.ntier || s->lay.g.n)
+    if (!strcmp(tok,"dependence") && LAID) {
+        at=strtok(NULL,"\r\n"); char label[128],extra[8];
+        if (s->ndependence==8 || !name_next(&at,a2,sizeof a2) || !name_next(&at,label,sizeof label) || name_next(&at,extra,sizeof extra)) {
+            fprintf(stderr,"%s: dependence TIER CLASS\n",path); return -1;
+        }
+        const lp_trust_class *c=lp_trust_class_named(label);
+        if (!c) { fprintf(stderr,"%s: dependence class %s is not in the trust registry\n",path,label); return -1; }
+        Dependence *d=&s->dependence[s->ndependence++]; snprintf(d->tier,sizeof d->tier,"%s",a2); d->class=c; d->when=s->now; d->length=(uint16_t)strlen(c->label);
+        return 1;
+    }
     if (!strcmp(tok, "format")) {                                            /* the format's own lines, kept once for every recipe of that format: recipes/formats/NAME.format */
         char *fn = strtok(NULL, " \t\r\n"), fp[4400], line[2048]; if (!fn) { fprintf(stderr, "%s: format NAME\n", path); return -1; }
         snprintf(fp, sizeof fp, "%s/formats/%s.format", laplace_recipes(), fn); FILE *f = fopen(fp, "r"); if (!f) { perror(fp); return -1; }
@@ -762,7 +778,7 @@ int say_says(Recipe *r, const char *path, char *tok){
         if (!name_next(&at, a2, sizeof a2) || !name_next(&at, nm, sizeof nm) || !name_next(&at, to, sizeof to) || strcmp(to, "to") || !name_next(&at, b, sizeof b) || s->nrel == 16) { fprintf(stderr, "%s: relate TIER NAME to NAME\n", path); return -1; }
         Rel *x = &s->rel[s->nrel++]; memset(x, 0, sizeof *x); x->when = s->now; snprintf(x->tier, sizeof x->tier, "%s", a2); snprintf(x->rel, sizeof x->rel, "%s", nm); snprintf(x->to, sizeof x->to, "%s", b);
         char w1[8], w2[64]; while (name_next(&at, w1, sizeof w1)) { if (!strcmp(w1, "alone")) { x->alone = 1; continue; }
-            if (strcmp(w1, "by") || !name_next(&at, w2, sizeof w2)) { fprintf(stderr, "%s: relate TIER NAME to NAME [alone] [by NAME]\n", path); return -1; } snprintf(x->by, sizeof x->by, "%s", w2); }
+            if ((strcmp(w1, "by") && strcmp(w1, "of")) || !name_next(&at, w2, sizeof w2)) { fprintf(stderr, "%s: relate TIER NAME to NAME [alone] [by NAME] [of PATH]\n", path); return -1; } snprintf(w1[0]=='b' ? x->by : x->of, sizeof x->by, "%s", w2); }
         return 1; }
     s->laid_line = 1; return layout_says(&s->lay, path, tok);
 }
@@ -832,7 +848,6 @@ typedef struct {
     uint8_t kind, tier, join, trim, context;
     uint32_t dropped_first;
     TextRun *text;
-    const Ref *product;
 } SemanticValue;
 typedef struct {
     const uint8_t *name;
@@ -1010,11 +1025,12 @@ static void push(Refs *a, const Ref *x){
     a->c[a->n++] = *x;
 }
 typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; uint64_t open[256]; float er, ed, score; uint64_t ordinal; Ref fw, voice; int voiced; char opennm[16][64]; uint8_t open_length[16]; int nopen; uint64_t unknown; char unknm[8][96]; int nunk; Refs grp; Ref fname, fstem;
+                 Ref dependence; const lp_trust_class *dependence_class;
                  const SemanticRecord *ix_tree; uint32_t ix_count; LocalKey *local_keys; size_t local_capacity, local_count;
                  BindingMatrix bindings;
                  uint64_t blocked; uint8_t binding_phase, defer_missing, reserve_declarations;
                  SayScratch output;
-                 const SemanticRecord *tc_tree; uint32_t tc_n; Ref *tc; uint8_t *ts, *uk;
+                 const SemanticRecord *tc_tree; uint32_t tc_n; Ref *tc, *text_products; uint8_t *ts, *uk, *text_ready;
                  long selfcp;                                                /* the code point the part being read is, or -1 */
                  Ref fabout; int has_fabout;                                 /* what the page is about, where its about line names it */
                  Hw *hw; struct HwRec *hr; size_t nhr, chr; int worker; int32_t wide_of; KeyRank kr; int16_t *dm;
@@ -1210,12 +1226,15 @@ static int named_as(const SemanticValue *x, const char *name){
 }
 
 static Ref text_of(const uint8_t *bytes, size_t length);
-static Ref semantic_text_ref(const SemanticValue *value){
-    if (!value->product) {
-        Ref *product = scratch_alloc(sizeof *product); *product = text_of(value->val, value->vlen);
-        ((SemanticValue *)value)->product = product;
+static Ref semantic_text_ref(Sink *sink, const SemanticValue *value){
+    if (value->owner != sink->tc_tree) { fputs("text product has no record cache\n", stderr); abort(); }
+    size_t at = (size_t)(value - value->owner->n);
+    if (at >= sink->tc_n) { fputs("text product is outside its record\n", stderr); abort(); }
+    if (!sink->text_ready[at]) {
+        sink->text_products[at] = text_of(value->val, value->vlen);
+        sink->text_ready[at] = 1;
     }
-    return *value->product;
+    return sink->text_products[at];
 }
 
 /* The tree being read, for a name scoped to what holds it (ELEMENT.NAME: that part of that element only). */
@@ -1474,7 +1493,7 @@ static int value_of(Sink *k, const SemanticRecord *t, int32_t c, Ref *out, int d
             uint8_t *o = scratch_alloc((size_t)x->vlen * 8 + 8); size_t j = 0;
             for (uint32_t i = 0; i < x->vlen; i++) { if (x->val[i] == (uint8_t)s->selfmark) { memcpy(o + j, hex, hl); j += hl; } else o[j++] = x->val[i]; }
             *out = text_of(o, j); scratch_restore(mark); return 1; }
-        *out = semantic_text_ref(x); return 1; }
+        *out = semantic_text_ref(k, x); return 1; }
     if (d->what == D_OWN) { Ref w[3] = { k->fw, string_ref(x->name, x->nlen), string_ref(x->val, x->vlen) }; w[0].said = 0; *out = said_tuple(compose(w, 3, ref_above(w, 3))); return 1; }
     if (d->what == D_TYPE) {                                                 /* by the source's key of it; or the type whose content this text is; a text that is neither is left open */
         const uint8_t *kp = x->val; size_t kn = x->vlen;
@@ -1580,6 +1599,17 @@ static int referred_field(Sink *k, const SemanticRecord *t, int32_t g, const cha
     if (k->binding_phase) k->blocked++;
     return 0;
 }
+static Ref thing_scope(Sink *k,const SemanticRecord *t,int32_t g,const Thing *th,Ref value,int depth){
+    if (th->within && depth<8) {
+        Ref parent; int32_t up=t->n[g].parent;
+        while (up>=0 && !thing_of(k,t,up,&parent,depth+1)) up=t->n[up].parent;
+        if (up>=0) { Ref parts[]={parent,value}; for (unsigned i=0; i<2; i++) if (parts[i].said!=LP_SAID_TUPLE) parts[i].said=0;
+            value=said_tuple(compose(parts,2,ref_above(parts,2))); }
+    }
+    if (th->infile) { Ref parts[]={k->fname,value}; for (unsigned i=0; i<2; i++) if (parts[i].said!=LP_SAID_TUPLE) parts[i].said=0;
+        value=said_tuple(compose(parts,2,ref_above(parts,2))); }
+    return value;
+}
 /* A part as one way its kind is named: 0 when it is not named that way. */
 static int one_thing(Sink *k, const SemanticRecord *t, int32_t g, const Thing *th, Ref *out, int depth){
     const SemanticValue *x = &t->n[g]; Ref p[8]; {
@@ -1590,8 +1620,9 @@ static int one_thing(Sink *k, const SemanticRecord *t, int32_t g, const Thing *t
             Ref *pc = scratch_alloc(sizeof(Ref) * max_k); size_t np = 0;
             for (int32_t c = semantic_first(x); c >= 0; c = semantic_next(&t->n[c])) { int hit = 0; for (int z = 0; z < th->n && !hit; z++) hit = named_as(&t->n[c], th->name[z]); if (!hit) continue;
                 Ref v; if (!(t->n[c].kind == S_GROUP ? thing_of(k, t, c, &v, depth + 1) : value_of(k, t, c, &v, depth))) continue;
-                if (np < max_k) { v.said = 0; pc[np++] = v; } }
-            if (!np) { scratch_restore(mark); return 0; } *out = np == 1 ? pc[0] : compose(pc, (uint32_t)np, ref_above(pc, np)); out->said = 0; scratch_restore(mark); return 1; }
+                if (np < max_k) { if (v.said!=LP_SAID_TUPLE) v.said=0; pc[np++] = v; } }
+            if (!np) { scratch_restore(mark); return 0; } Ref value=np==1 ? pc[0] : said_tuple(compose(pc,(uint32_t)np,ref_above(pc,np)));
+            *out=thing_scope(k,t,g,th,value,depth); scratch_restore(mark); return 1; }
         if (th->span) {                                                      /* the stretch of the text of TEXT, found in what it is inside, from the character START to END */
             int32_t a = resolve_node_path(t, g, th->name[0]), b = resolve_node_path(t, g, th->name[1]); if (a < 0 || b < 0 || !t->n[a].vlen || !t->n[b].vlen || t->n[a].vlen > 11 || t->n[b].vlen > 11) return 0;
             char za[16], zb[16]; memcpy(za, t->n[a].val, t->n[a].vlen); za[t->n[a].vlen] = 0; memcpy(zb, t->n[b].val, t->n[b].vlen); zb[t->n[b].vlen] = 0; char *e1, *e2; long lo = strtol(za, &e1, 10), hi = strtol(zb, &e2, 10);
@@ -1618,8 +1649,7 @@ static int one_thing(Sink *k, const SemanticRecord *t, int32_t g, const Thing *t
                 note_obligation(k, 'o', &diagnostic_labels[DIAG_UNRESOLVED_KEY], (const uint8_t *)th->name[z], path_code(th->name[z])->source_length, NULL, 0); }     /* said, never dropped */
             if (!np) return 0;
             Ref X = np == 1 ? p[0] : said_tuple(compose(p, np, ref_above(p, np)));
-            if (th->infile) { Ref two[2] = { k->fname, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, ref_above(two, 2))); }
-            *out = X; return 1; }
+            *out = thing_scope(k,t,g,th,X,depth); return 1; }
         for (int z = 0; z < th->n; z++) {
             if (th->lit[z]) { p[z] = text_of((const uint8_t *)th->name[z], strlen(th->name[z])); p[z].said = 0; continue; }      /* a text the recipe writes */
             if (th->name[z][0] == '>') {
@@ -1655,11 +1685,7 @@ static int one_thing(Sink *k, const SemanticRecord *t, int32_t g, const Thing *t
         }
             p[z].said = 0; }
         Ref X = th->n == 1 ? p[0] : said_tuple(compose(p, (uint32_t)th->n, ref_above(p, (size_t)th->n)));      /* named by several parts together: the path of them */
-        if (th->within && depth < 8) {                                       /* its name stands only within what it is inside: the pair of the two */
-            Ref P; int32_t up = x->parent; while (up >= 0 && !thing_of(k, t, up, &P, depth + 1)) up = t->n[up].parent;
-            if (up >= 0) { Ref two[2] = { P, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, ref_above(two, 2))); } }
-        if (th->infile) { Ref two[2] = { k->fname, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, ref_above(two, 2))); }      /* its name stands only within the file: [the file's name, it] */
-        *out = X; return 1; }
+        *out = thing_scope(k,t,g,th,X,depth); return 1; }
 }
 /* A part as the thing it is: the first of the ways its kind is named that names it (a code point, or a range). */
 static int thing_compose(Sink *k, const SemanticRecord *t, int32_t g, Ref *out, int depth){
@@ -1709,7 +1735,7 @@ static int entity_of(Sink *k, const SemanticRecord *t, int32_t c, Ref *out){
             if (x->nlen && value_of(k, t, c, out, 0)) return 1;                 /* a piece read as its part is (a type, a code point) */
             *out = string_ref(x->val, x->vlen); return 1; }
         const Dis *d = x->nlen ? dis_of(s, x) : NULL;
-        if (!d) { if (x->nlen && x->kind != S_TEXT) { left_open(k, x); return 0; } *out = semantic_text_ref(x); return 1; }     /* a text is the text it is */
+        if (!d) { if (x->nlen && x->kind != S_TEXT) { left_open(k, x); return 0; } *out = semantic_text_ref(k, x); return 1; }     /* a text is the text it is */
         if (d->what == D_OMIT || d->what == D_METADATA) return 0;
         if (d->what == D_KEY) return 0;                                      /* the file's own numbering: in no record */
         return value_of(k, t, c, out, 0);                                    /* a reference: the thing it names, or nothing */
@@ -1746,7 +1772,7 @@ static int whos(const Say *s, const SemanticRecord *t, int32_t g, const char *by
  * part being read alone (cs_epoch: a new part, an empty set, nothing cleared): the pair itself, so no two pairs share a slot
  * by a mix of their IDs. Said again, it is the same statement said once more: its run in the record (ev: the event that
  * says it, in this sink). */
-struct CSeen { lp_id claim, voice; uint64_t epoch, ev; };
+struct CSeen { lp_id claim, voice, dependence; uint64_t epoch, ev; };
 static int said_already(Sink *k, const lp_id *c){
     if (!k->cs_epoch) k->cs_epoch = 1;                                      /* a slot never used is of epoch 0: no part's */
     lp_id voice; memset(&voice, 0, sizeof voice); if (k->voiced) voice = k->voice.id;     /* the source's own voice: no ID */
@@ -1754,18 +1780,19 @@ static int said_already(Sink *k, const lp_id *c){
         struct CSeen *o = k->cs; uint64_t oc = k->cs_cap; k->cs_cap = oc ? oc * 2 : 256;
         if (k->cs_cap < oc || k->cs_cap > SIZE_MAX / sizeof(struct CSeen)) { fputs("claim index exceeds the output arena\n", stderr); abort(); }
         k->cs = arena_alloc(&k->output, (size_t)k->cs_cap * sizeof *k->cs); memset(k->cs, 0, (size_t)k->cs_cap * sizeof *k->cs);
-        for (uint64_t i = 0; i < oc; i++) if (o[i].epoch == k->cs_epoch) { uint64_t h, w; memcpy(&h, o[i].claim.b, 8); memcpy(&w, o[i].voice.b + 8, 8); uint64_t s = (h ^ w) & (k->cs_cap - 1);
+        for (uint64_t i = 0; i < oc; i++) if (o[i].epoch == k->cs_epoch) { uint64_t h, w, d; memcpy(&h, o[i].claim.b, 8); memcpy(&w, o[i].voice.b + 8, 8); memcpy(&d,o[i].dependence.b,8); uint64_t s = (h ^ w ^ d) & (k->cs_cap - 1);
             while (k->cs[s].epoch == k->cs_epoch) s = (s + 1) & (k->cs_cap - 1); k->cs[s] = o[i]; }
     }
-    uint64_t h, w; memcpy(&h, c->b, 8); memcpy(&w, voice.b + 8, 8); uint64_t s = (h ^ w) & (k->cs_cap - 1);
-    while (k->cs[s].epoch == k->cs_epoch) { if (!memcmp(&k->cs[s].claim, c, 16) && !memcmp(&k->cs[s].voice, &voice, 16)) {
+    uint64_t h, w, d; memcpy(&h, c->b, 8); memcpy(&w, voice.b + 8, 8); memcpy(&d,k->dependence.id.b,8); uint64_t s = (h ^ w ^ d) & (k->cs_cap - 1);
+    while (k->cs[s].epoch == k->cs_epoch) { if (!memcmp(&k->cs[s].claim, c, 16) && !memcmp(&k->cs[s].voice, &voice, 16) && lp_id_eq(&k->cs[s].dependence,&k->dependence.id)) {
             uint64_t e = k->cs[s].ev; if (e < k->ev.n && k->ev.e[e].run < (1u << LP_M_RUN_BITS) - 1) k->ev.e[e].run++; return 1; }
         s = (s + 1) & (k->cs_cap - 1); }
-    k->cs[s].claim = *c; k->cs[s].voice = voice; k->cs[s].epoch = k->cs_epoch; k->cs[s].ev = k->ev.n; k->cs_n++; return 0;
+    k->cs[s].claim = *c; k->cs[s].voice = voice; k->cs[s].dependence=k->dependence.id; k->cs[s].epoch = k->cs_epoch; k->cs[s].ev = k->ev.n; k->cs_n++; return 0;
 }
 /* A claim said by the part being read: an event, in the record being read (rec), said once (run 1) so far. */
 static void said(Sink *k, const lp_id *c, float score){
     Event x = {.claim=*c, .witnessed=*c, .score=score, .enter_rating=k->er, .enter_deviation=k->ed, .kind=EV_CLAIM, .run=1, .rec=k->rec};
+    if (k->dependence_class) { x.has_dependence=1; x.dependence=k->dependence.id; x.dependence_trust=k->dependence_class->prior; }
     if (k->voiced) { x.own_witness = 1; x.witness = k->voice.id; } sink_event(k, &x);
 }
 static void claim(Sink *k, Ref *part, int n){
@@ -1930,6 +1957,14 @@ static void unit_range(Sink *k, const SemanticRecord *t, uint32_t g0, uint32_t g
             if (d && d->what == D_METADATA && !left_empty(s, x)) { Ref p[2] = { string_ref(x->name, x->nlen), text_of(x->val, x->vlen) }; Ref m = said_tuple(compose(p, 2, ref_above(p, 2))); push(&k->meta, &m); }
             continue; }
         if (x->kind != S_GROUP || !speaks) continue;
+        k->dependence_class=NULL; memset(&k->dependence,0,sizeof k->dependence);
+        for (int32_t up=(int32_t)g; up>=0 && !k->dependence_class; up=t->n[up].parent) {
+            for (int a=0; a<s->ndependence; a++) { const Dependence *d=&s->dependence[a];
+                if (named_as(&t->n[up],d->tier) && spoken_of(s,t,up,d->when)) {
+                    k->dependence_class=d->class; k->dependence=text_of((const uint8_t *)d->class->label,d->length); break;
+                }
+            }
+        }
         if (x->nlen) { const Dis *dg = dis_of(s, x); if (dg && dg->what == D_OMIT) { g = (uint32_t)subtree_end(t, (int32_t)g); continue; } }     /* the file's bookkeeping: nothing inside it is read */
         k->selfcp = -1;
         if (s->selfmark) { Ref X; if (spoken_thing(k, t, (int32_t)g, &X) && X.tier == 0) k->selfcp = (long)lp_tier0_codepoint(T0, &X.id); }     /* the code point the part speaks of, for the source's mark */
@@ -2024,7 +2059,9 @@ static void unit_range(Sink *k, const SemanticRecord *t, uint32_t g0, uint32_t g
                 if (sp + nk <= scap) { size_t i = sp + nk; for (int32_t q = semantic_first(y); q >= 0; q = semantic_next(&t->n[q])) stack[--i] = q; sp += nk; } }
             scratch_restore(mark); }
         for (int a = 0; a < s->nrel; a++) { if (!named_as(x, s->rel[a].tier) || !spoken_of(s, t, (int32_t)g, s->rel[a].when)) continue;
-            if (has < 0) has = spoken_thing(k, t, (int32_t)g, &S); if (!has) break;
+            Ref subject;
+            if (s->rel[a].of[0]) { int32_t at=resolve_node_path(t,(int32_t)g,s->rel[a].of); if (at<0 || !value_of(k,t,at,&subject,0)) continue; }
+            else { if (has < 0) has = spoken_thing(k, t, (int32_t)g, &S); if (!has) break; subject=S; }
             int was = k->voiced; Ref wv = k->voice; int32_t who[WHO]; int nw = whos(s, t, (int32_t)g, s->rel[a].by, who);
             for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !voice_of(k, t, who[wi])) continue;
             Ref rel, o;
@@ -2034,15 +2071,18 @@ static void unit_range(Sink *k, const SemanticRecord *t, uint32_t g0, uint32_t g
                 if (m->what==1) rel=string_ref((const uint8_t *)m->text,m->text_length);
                 else of_class(k, m, &rel);
                 said_count(k, m); }
-            if (path_code(s->rel[a].to)->special == SELECT_UNNAMED) {                              /* to each of the parts the file gives no name */
-                for (int32_t c = semantic_first(x); c >= 0; c = semantic_next(&t->n[c])) { const SemanticValue *y = &t->n[c]; if (y->kind != S_TEXT || y->nlen || left_empty(s, y)) continue; o = text_of(y->val, y->vlen); Ref p[3] = { S, rel, o }; claim(k, p, 3); } }
+            if (path_code(s->rel[a].to)->special == SELECT_SELF) {
+                if (value_of(k,t,(int32_t)g,&o,0)) { Ref p[]={subject,rel,o}; claim(k,p,3); }
+            }
+            else if (path_code(s->rel[a].to)->special == SELECT_UNNAMED) {                              /* to each of the parts the file gives no name */
+                for (int32_t c = semantic_first(x); c >= 0; c = semantic_next(&t->n[c])) { const SemanticValue *y = &t->n[c]; if (y->kind != S_TEXT || y->nlen || left_empty(s, y)) continue; o = text_of(y->val, y->vlen); Ref p[3] = { subject, rel, o }; claim(k, p, 3); } }
             else if (semantic_child(t, (int32_t)g, s->rel[a].to, semantic_child(t, (int32_t)g, s->rel[a].to, -1)) >= 0) {   /* several parts of that name: the relation to each */
-                for (int32_t oc = semantic_child(t, (int32_t)g, s->rel[a].to, -1); oc >= 0; oc = semantic_child(t, (int32_t)g, s->rel[a].to, oc)) if (value_of(k, t, oc, &o, 0)) { Ref p[3] = { S, rel, o }; claim(k, p, 3); } }
+                for (int32_t oc = semantic_child(t, (int32_t)g, s->rel[a].to, -1); oc >= 0; oc = semantic_child(t, (int32_t)g, s->rel[a].to, oc)) if (value_of(k, t, oc, &o, 0)) { Ref p[3] = { subject, rel, o }; claim(k, p, 3); } }
             else { int32_t oc = resolve_node_path(t, (int32_t)g, s->rel[a].to);
                 if (oc >= 0 && t->n[oc].kind == S_GROUP && semantic_first(&t->n[oc]) >= 0 && semantic_next(&t->n[semantic_first(&t->n[oc])]) >= 0) {      /* several: the relation to each */
-                    for (int32_t q = semantic_first(&t->n[oc]); q >= 0; q = semantic_next(&t->n[q])) if (value_of(k, t, q, &o, 0)) { Ref p[3] = { S, rel, o }; claim(k, p, 3); } }
-                else if (oc >= 0 && value_of(k, t, oc, &o, 0)) { Ref p[3] = { S, rel, o }; claim(k, p, 3); }
-                else if (s->rel[a].alone && oc >= 0) { Ref p[2] = { S, rel }; claim(k, p, 2); } }      /* to what names nothing (a treebank's root): the relation alone, where the recipe says so; otherwise no claim */
+                    for (int32_t q = semantic_first(&t->n[oc]); q >= 0; q = semantic_next(&t->n[q])) if (value_of(k, t, q, &o, 0)) { Ref p[3] = { subject, rel, o }; claim(k, p, 3); } }
+                else if (oc >= 0 && value_of(k, t, oc, &o, 0)) { Ref p[3] = { subject, rel, o }; claim(k, p, 3); }
+                else if (s->rel[a].alone && oc >= 0) { Ref p[2] = { subject, rel }; claim(k, p, 2); } }      /* to what names nothing (a treebank's root): the relation alone, where the recipe says so; otherwise no claim */
             }
             k->voiced = was; k->voice = wv; }
         for (int a = 0; a < s->ntogether; a++) if (semantic_named(x, s->together[a].tier, strlen(s->together[a].tier)) && spoken_of(s, t, (int32_t)g, s->together[a].when)) {
@@ -2155,7 +2195,7 @@ static void records_of(Sink *k, const SemanticRecord *t, int32_t root, uint64_t 
     for (uint64_t e = 0; e < n; e++) at[of[e] + 1]++;
     for (size_t i = 0; i < nr; i++) at[i + 1] += at[i];
     { uint64_t *fill = scratch_alloc(sizeof(uint64_t) * (nr + 1)); memcpy(fill, at, sizeof(uint64_t) * (nr + 1)); for (uint64_t e = 0; e < n; e++) ord[fill[of[e]]++] = ev0 + e; }
-    uint64_t most = 0; for (size_t i = 0; i < nr; i++) { uint64_t need = 24; for (uint64_t j = at[i]; j < at[i + 1]; j++) need += (k->ev.e[ord[j]].run ? k->ev.e[ord[j]].run : 1) + 1; if (need > most) most = need; }
+    uint64_t most = 0; for (size_t i = 0; i < nr; i++) { uint64_t need = 24; for (uint64_t j = at[i]; j < at[i + 1]; j++) need += (k->ev.e[ord[j]].run ? k->ev.e[ord[j]].run : 1) + 2; if (need > most) most = need; }
     Ref *part = scratch_alloc(sizeof(Ref) * (most ? most : 24));              /* each claim said run times, and a voice before it */
     for (size_t ri = 0; ri < nr; ri++) { int32_t r = recs[ri]; uint32_t np = 0; int mine = r == root;
         int t_claim = 0;                                                      /* the thing is itself a claim it says: that claim's vertex stands for it */
@@ -2166,8 +2206,12 @@ static void records_of(Sink *k, const SemanticRecord *t, int32_t root, uint64_t 
         for (uint64_t j = at[ri]; j < at[ri + 1]; j++) { const Event *x = &k->ev.e[ord[j]]; if (x->kind != EV_CLAIM) continue;
             Ref c; if (!claim_vertex(x, &c)) continue;
             if (x->own_witness) { int ok; Ref v = ref_of_id(&x->witness, &ok); if (ok) { v.said = LP_SAID_VOICE; v.outcome = 0; v.position = 0; v.spare = 0; part[np++] = v; } }
+            if (x->has_dependence) { int ok; Ref v=ref_of_id(&x->dependence,&ok);
+                if (!ok) { fputs("dependence class is missing from its record\n",stderr); abort(); }
+                v.said=LP_SAID_DEPENDENCE; v.outcome=v.position=v.spare=0; part[np++]=v;
+            }
             uint32_t run = x->run ? x->run : 1; for (uint32_t z = 0; z < run; z++) part[np++] = c;    /* said run times: one vertex, the run in M */
-            nclaims++; ones += run == 1 && !x->own_witness; }
+            nclaims++; ones += run == 1 && !x->own_witness && !x->has_dependence; }
         if (!np) continue;
         Ref R;
         if (np == 1 && nclaims == 1 && ones == 1) { R = part[0]; R.said = LP_SAID_RECORD; }      /* one claim said once: the claim, its own record */
@@ -2179,6 +2223,7 @@ static void records_of(Sink *k, const SemanticRecord *t, int32_t root, uint64_t 
 static void unit(void *sink, const SemanticRecord *t, int32_t root, uint64_t ordinal, int bind_keys){
     size_t record_mark = scratch_mark();
     Sink *k = sink; const Say *s = k->s; k->kr.unit = ordinal; uint64_t ev0 = k->ev.n; k->score = 1.0f;
+    k->dependence_class=NULL; memset(&k->dependence,0,sizeof k->dependence);
     keys_reader_file(k->kr.file);
     uint8_t binding_phase = k->binding_phase; k->binding_phase = (uint8_t)(bind_keys == 1 || k->defer_missing);
     sink_buffers(k);
@@ -2187,6 +2232,10 @@ static void unit(void *sink, const SemanticRecord *t, int32_t root, uint64_t ord
     k->lo = scratch_alloc(t->count); memset(k->lo, 0, t->count); k->lo_tree = t;
     k->tc = scratch_alloc(sizeof(Ref) * t->count); k->ts = scratch_alloc(t->count); k->uk = scratch_alloc(t->count);
     k->tc_tree = t; k->tc_n = t->count; memset(k->ts, 0, t->count); memset(k->uk, 0, t->count);
+    /* Products must outlive every nested composition's scratch restore. Keep
+     * this cache in the record frame, never behind pointers into child frames. */
+    k->text_products = scratch_alloc(sizeof(Ref) * t->count);
+    k->text_ready = scratch_alloc(t->count); memset(k->text_ready, 0, t->count);
     Tls previous = tls_save(t, k->dm, s, &k->bindings);
     index_keys(k, t);
     if (bind_keys) { keep_keys(k, t, root, bind_keys == 3); k->binding_phase = binding_phase; tls_back(&previous); scratch_restore(record_mark); return; }
@@ -2332,14 +2381,12 @@ typedef struct {
     size_t things_at, things_count, meta_at, meta_count; uint8_t ready, reserve;
 } PreparedRecord;
 static void prepared_clear(PreparedRecord *record){
-    for (uint32_t i = 0; i < record->record.count; i++) record->record.n[i].product = NULL;
     for (uint32_t i = 0; i < record->record.dropped_count; i++) record->record.dropped[i].seen = 0;
 }
 static void prepared_keys_mode(Sink *sink, PreparedRecord *record, int final){
     sink->kr = record->rank; sink->bindings = record->bindings;
     unit(sink, &record->record, 0, record->ordinal, record->reserve || sink->reserve_declarations ? 3 : final ? 2 : 1);
-    /* Cached native products belong to unit's temporary frame. The retained
-     * compiled operands must not keep those pointers between barrier rounds. */
+    /* Diagnostic marks belong to this evaluation, not later barrier rounds. */
     prepared_clear(record);
 }
 static void prepared_keys(Sink *sink, PreparedRecord *record){ prepared_keys_mode(sink, record, 0); }
@@ -2497,7 +2544,11 @@ void file_record_stock(const Recipe *r){ stock_file = r; }
 int say_only_disposes(const Recipe *r){ const Say *s = r->say; return s && s->ndis && !s->nthing && !s->natt && !s->nrel && !s->nhw && !s->npair && !s->nhold && !s->nkey; }
 static const Dis *dis_named(const Say *s, const char *name){
     if (!s) return NULL; SemanticValue x; memset(&x, 0, sizeof x); x.kind = S_VALUE; x.name = (const uint8_t *)name; x.nlen = (uint32_t)strlen(name); x.parent = -1;
-    const SemanticRecord *was = TT; TT = NULL; const Dis *d = match_dis(s, &x); TT = was; return d;
+    const SemanticRecord *was = TT; TT = NULL; const Dis *d = match_dis(s, &x); TT = was;
+    /* A corpus-wide content default describes its product fields. It must not
+     * erase the stock OS metadata that identifies the unopened file. Explicit
+     * metadata/omit wildcards still configure the packaging record itself. */
+    return d && d->whole.wild && d->what != D_METADATA && d->what != D_OMIT ? NULL : d;
 }
 static uint64_t record_open;                                                  /* the parts no recipe disposed of, said once */
 /* Whether a part of the OS's record is kept in the metadata tree. Asked before its value is made: a value is composed
@@ -2652,7 +2703,7 @@ static int64_t journal_operands(DeferredRecords *deferred, const PreparedRecord 
     for (uint32_t i = 0; i < record->count; i++) {
         const SemanticValue *value = &record->n[i];
         if (value->text) { fputs("unfinished text entered the deferred operand journal\n", stderr); exit(2); }
-        SemanticValue saved = *value; saved.owner = NULL; saved.name = saved.val = NULL; saved.product = NULL;
+        SemanticValue saved = *value; saved.owner = NULL; saved.name = saved.val = NULL;
         journal_write(file, &saved, sizeof saved);
         journal_write(file, value->name, value->nlen); journal_write(file, value->val, value->vlen);
     }

@@ -266,10 +266,13 @@ void fold_events(Fold *f, const File *files, int nfiles){
         for (uint64_t i=0;i<file->ev.n;i++) {
             const Event *event=&file->ev.e[i]; Node *node=table_find(&event->claim);
             if (event->kind!=EV_CLAIM || !node || node->len!=3) continue;
-            uint8_t key[32]; memcpy(key,event->claim.b,16); memcpy(key+16,source.id.b,16);
+            lp_id lineage=file->lineage.id; uint8_t has_lineage=(uint8_t)file->has_lineage; double observation_trust=trust;
+            if (event->has_dependence) { lineage=event->dependence; has_lineage=1; observation_trust=event->dependence_trust; }
+            uint8_t key[48]={0}; memcpy(key,event->claim.b,16); memcpy(key+16,source.id.b,16);
+            if (has_lineage) memcpy(key+32,lineage.b,16);
             bool fresh; Series *s=lp_strmap_get(f->series,key,sizeof key,&fresh);
-            if (fresh) *s=(Series){.claim=event->claim,.witness=source.id,.lineage=file->lineage.id,
-                .trust=trust,.has_lineage=(uint8_t)file->has_lineage};
+            if (fresh) *s=(Series){.claim=event->claim,.witness=source.id,.lineage=lineage,
+                .trust=observation_trust,.has_lineage=has_lineage};
             if (s->games==UINT64_C(9007199254740992)) { fprintf(stderr,"series exceeds exact Native game range\n"); exit(1); }
             s->games++; s->sum+=lp_score_carried(event->score); s->dirty=1;
         }
@@ -292,9 +295,9 @@ static void flush_series(Fold *f, LoadStats *st){
     if(n){
         snprintf(sql,sizeof sql,
             "UPDATE %s p SET games=d.games,score=d.score,trust=d.trust,lineage=d.lineage FROM %s d"
-            " WHERE p.claim=d.claim AND p.witness=d.witness;"
+            " WHERE p.claim=d.claim AND p.witness=d.witness AND p.lineage IS NOT DISTINCT FROM d.lineage;"
             "INSERT INTO %s SELECT d.* FROM %s d WHERE NOT EXISTS"
-            " (SELECT FROM %s p WHERE p.claim=d.claim AND p.witness=d.witness);TRUNCATE %s",
+            " (SELECT FROM %s p WHERE p.claim=d.claim AND p.witness=d.witness AND p.lineage IS NOT DISTINCT FROM d.lineage);TRUNCATE %s",
             writer.pending,writer.delta,writer.pending,writer.delta,writer.pending,writer.delta);
         statement(writer.series,sql);
         Args a={0}; arg_text(&a,writer.pending); arg_ids(&a,lp_idmap_keys(changed),n);
@@ -398,8 +401,14 @@ static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
         if(x->nv>capacity){capacity=x->nv;ids=xrealloc(ids,capacity*sizeof *ids);runs=xrealloc(runs,capacity*sizeof *runs);spare=xrealloc(spare,capacity*sizeof *spare);}
         for(uint32_t j=0;j<x->nv;j++){const Vtx *v=&VTX[x->voff+j];ids[j]=v->id;runs[j]=v->m;spare[j]=v->spare;}
         size_t size=lp_ewkb_runs_spare(ids,runs,spare,x->nv,NULL,0);
+        if (!size) {
+            char id[33]; id_text(&x->id,id); fprintf(stderr,"invalid native path before COPY: entity=%s vertices=%u\n",id,x->nv);
+            for (uint32_t j=0; j<x->nv; j++) if (runs[j]>(UINT64_C(1)<<53)-1 || (spare[j]>>LP_SPARE_BITS))
+                fprintf(stderr,"  vertex=%u M=%llu spare=%u\n",j,(unsigned long long)runs[j],spare[j]);
+            exit(1);
+        }
         if(size>path_capacity){path_capacity=size;path=xrealloc(path,path_capacity);}
-        lp_ewkb_runs_spare(ids,runs,spare,x->nv,path,size);
+        if (lp_ewkb_runs_spare(ids,runs,spare,x->nv,path,size)!=size) { fputs("native path size changed during COPY\n",stderr); exit(1); }
         uint8_t mask[12]={0};mask[3]=64;
         for(int bit=0;bit<8;bit++)if(x->kind&(1u<<bit))mask[4+(bit>>3)]|=(uint8_t)(0x80u>>(bit&7));
         lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);

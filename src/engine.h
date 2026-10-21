@@ -7,6 +7,7 @@
 #define LAPLACE_ENGINE_H
 
 #include "laplace/laplace.h"
+#include "laplace/consensus.h"
 #include <libpq-fe.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -216,7 +217,8 @@ int     recipes_broken(const Recipe *r, int n, const Source *of);             /*
  * trunk, which is the witness. run: how many times the record says it; rec: the node of the file's tree that is its
  * record; witness: who in the record says it (a voice), where the source names one for this statement. */
 enum { EV_CLAIM = 0, EV_RECORD = 1, EV_MEMBER = 2 };      /* a claim that is its own record; a record; a claim within the record before it */
-typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviation; uint32_t position; uint8_t kind, own_witness; lp_id witness; uint32_t run; int32_t rec; } Event;
+typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviation; uint32_t position; uint8_t kind, own_witness; lp_id witness; uint32_t run; int32_t rec;
+                 lp_id dependence; double dependence_trust; uint8_t has_dependence; } Event;
 typedef struct { Event *e; uint64_t n, cap; } Events;
 typedef int (*record_batch_fn)(void *, const Ref *, size_t, const Ref *, size_t, const Events *);
 struct FileAssembly;
