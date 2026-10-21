@@ -91,7 +91,7 @@ int cmd_replay(int argc,char **argv){
     exec(pg,"BEGIN ISOLATION LEVEL REPEATABLE READ");
     exec(pg,"CREATE TEMP TABLE replay_claims(claim blake3 PRIMARY KEY) ON COMMIT DROP;"
         " INSERT INTO replay_claims SELECT entity FROM public.physicality"
-        " WHERE laplace_mask_has_value(mask,'kind','claim') AND laplace_path_length(path)=3"
+        " WHERE laplace_mask_has_value(mask,'kind','claim') AND laplace_path_length(path)>=2"
         " UNION SELECT claim FROM public.consensus;"
         " CREATE TEMP TABLE replay_before ON COMMIT DROP AS SELECT * FROM public.consensus");
     if(out){
@@ -104,9 +104,9 @@ int cmd_replay(int argc,char **argv){
         exec(pg,"CLOSE replay_export");fclose(out);
     }
     exec(pg,"DELETE FROM public.consensus c WHERE NOT EXISTS(SELECT FROM public.physicality p"
-        " WHERE p.entity=c.claim AND laplace_mask_has_value(p.mask,'kind','claim') AND laplace_path_length(p.path)=3);"
+        " WHERE p.entity=c.claim AND laplace_mask_has_value(p.mask,'kind','claim') AND laplace_path_length(p.path)>=2);"
         " DELETE FROM replay_claims c WHERE NOT EXISTS(SELECT FROM public.physicality p"
-        " WHERE p.entity=c.claim AND laplace_mask_has_value(p.mask,'kind','claim') AND laplace_path_length(p.path)=3)");
+        " WHERE p.entity=c.claim AND laplace_mask_has_value(p.mask,'kind','claim') AND laplace_path_length(p.path)>=2)");
     char table[96],sql[1800];replay_open(pg,table);
     snprintf(sql,sizeof sql,
         "DO $rebuild$ DECLARE batch blake3[]; last_id blake3; BEGIN LOOP"
