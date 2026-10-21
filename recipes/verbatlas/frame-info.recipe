@@ -25,7 +25,8 @@ relation "name of a VerbAtlas frame" name
 relation "frame definition" definition
 relation "the synset that roughly represents the frame" "prototypical synset"
 relation "small definition of the frame" "small definition"
-relation "is defined as" "definition of the prototypical synset"
+# The prose itself is attested on its synset; its column address is no verb.
+value - "definition of the prototypical synset"
 attest row name definition "prototypical synset" "small definition"
 attest row "definition of the prototypical synset" of "prototypical synset"
 
