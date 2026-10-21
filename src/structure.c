@@ -870,6 +870,7 @@ size_t lp_utf8_put(uint32_t cp, uint8_t out[4]);
 typedef struct { uint8_t mode[G_DECODE_DEPTH], n, escaped[G_DECODE_DEPTH], quoted[G_DECODE_DEPTH]; } GDecodePlan;
 typedef struct {
     const uint8_t *src;
+    const Layout *parts;
     uint32_t length;
     TSRange range;
     GDecodePlan decode;
@@ -1594,7 +1595,10 @@ static int cursor_injection(GW *worker, TSNode payload, const Layout *inner, int
         int valid = cursor_project(inner, ts_tree_root_node(tree), &input, visit, sink, NULL, 0, 0, 1);
         ts_tree_delete(tree); return valid;
     }
-    field.kind = S_GROUP; field.value = NULL; field.value_length = 0; field.flags |= S_FIELD_LIST;
+    /* A typed identifier still denotes the complete decoded field. Its inner
+     * grammar exposes structure without discarding separators from identity. */
+    g_text(worker,payload,raw,&field.value,&field.value_length);
+    field.kind = S_GROUP; field.flags |= S_FIELD_LIST | S_FIELD_PAYLOAD;
     int action = visit(sink, S_OPEN, &field);
     if (!(action & S_VISIT_OK)) return 0;
     if (action & S_VISIT_SKIP) return close_field(visit, sink, &field);
@@ -1612,7 +1616,7 @@ static int cursor_injection(GW *worker, TSNode payload, const Layout *inner, int
 static int part_piece(const SPart *part, const GInput *input, SField field, TSRange range, TSNode assignment,
                       s_visit_fn visit, void *sink){
     field.range = source_range(input, range); field.kind = S_TEXT;
-    field.flags = (uint8_t)((field.flags & ~(S_FIELD_LIST | S_FIELD_PARTS | S_FIELD_JOIN | S_FIELD_TRIM)) | S_FIELD_SAME_TIER);
+    field.flags = (uint16_t)((field.flags & ~(S_FIELD_LIST | S_FIELD_PARTS | S_FIELD_JOIN | S_FIELD_TRIM)) | S_FIELD_SAME_TIER);
     if (!ts_node_is_null(assignment)) {
         uint32_t length = ts_node_start_byte(assignment) - range.start_byte;
         field.name = decode_text(&input->decode, input->src + range.start_byte, &length);
@@ -1710,6 +1714,7 @@ static int count_group_range(const Layout *layout, TSNode parent, TSNode first, 
 
 static int cursor_project(const Layout *layout, TSNode root, const GInput *input, s_visit_fn visit, void *sink,
                           const uint8_t *name, uint32_t name_length, int list, int flatten){
+    GInput scoped=*input; if (!scoped.parts) scoped.parts=layout; input=&scoped;
     if (layout->g.scope_count && ts_node_is_null(ts_node_parent(root))) {
         if (!scope_validate(layout, root, input)) return 0;
         return cursor_scope_project(layout, root, node_range(root), input, visit, sink);
@@ -1810,7 +1815,8 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
                 } else if (field.name && !(rule->alias_tier && rule->alias_tier <= layout->ntier)) field.kind = S_VALUE;
                 else if (!field.name && !frame->unnamed) { field.name = frame->context_name; field.name_length = frame->context_length; }
                 if (rule->join) field.flags |= S_FIELD_JOIN;
-                const SPart *part = field.name ? part_at(layout, field.name, field.name_length) : NULL;
+                const SPart *part = field.name ? part_at(input->parts, field.name, field.name_length) : NULL;
+                if (!part && field.name && input->parts!=layout) part=part_at(layout,field.name,field.name_length);
                 if (part && !s_empty(layout, field.value, field.value_length)) {
                     if (!cursor_parts(&worker, payload, part, text_mode, field, visit, sink)) { valid = 0; break; }
                 } else if (!visit(sink, S_FIELD, &field)) { valid = 0; break; }
