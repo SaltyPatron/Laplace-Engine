@@ -1,4 +1,4 @@
-/* The Highway contains canonical identifier text, its Tier-0 composition,
+/* The Highway contains canonical identifier components, their Tier-0 composition,
  * frozen enum banks, lookup aliases and crosswalk edges in one mapped file.
  * Corpus prose belongs to source-attested claims, never to cache identity. */
 #define _GNU_SOURCE
@@ -122,6 +122,16 @@ static Frozen *frozen_read(const char *list, size_t *n){
         if (p2) snprintf(z->p2, sizeof z->p2, "%s", p2); }
     fclose(f); return fz;
 }
+static unsigned frozen_parts(const Frozen *slot,const char *fallback,const char **parts){
+    parts[0]=slot && slot->p1[0] ? slot->p1 : fallback;
+    if (slot && slot->p2[0]) { parts[1]=slot->p2; return 2; }
+    return parts[0] && *parts[0] ? 1 : 0;
+}
+static Ref identifier_ref(const char *const *parts,unsigned n){
+    Ref child[2];
+    for (unsigned i=0; i<n; i++) child[i]=text_ref(CTX[0],(const uint8_t *)parts[i],strlen(parts[i]));
+    return n==1 ? child[0] : compose(child,n,ref_above(child,n));
+}
 /* Slots retain their positions even when an old prose-derived ID is corrected.
  * Aliases are redirected in one pass, rather than rescanning all keys per slot. */
 static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
@@ -142,7 +152,9 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
                 memset(t+n,0,sizeof *t); t[n++].tier=UINT8_MAX; (*retired)++; continue;
             }
             if (!*key) { fprintf(stderr,"%s slot %zu has no identifier\n",l->name,slot); exit(1); }
-            Ref value=text_ref(CTX[0],(const uint8_t *)key,strlen(key)); t[n++]=value;
+            const char *parts[2]; unsigned np=frozen_parts(fz+slot,key,parts);
+            Ref value=identifier_ref(parts,np); t[n++]=value;
+            if (!lp_id_eq(&value.id,&fz[slot].id)) { fprintf(stderr,"%s slot %zu: frozen ID disagrees with its identifier components\n",l->name,slot); exit(1); }
             *(lp_id *)lp_idmap_at(remap,lp_idmap_put(remap,&fz[slot].id,NULL))=value.id;
             Key *entry=key_find(h,li,key);
             int64_t old=entry ? slot_in(l,&entry->id) : slot_in(l,&fz[slot].id);
@@ -157,6 +169,7 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
             if (at<0) { fprintf(stderr,"%s: an unkeyed identifier cannot be appended\n",l->name); exit(1); }
             const char *key=*(const char **)lp_idmap_at(first,(size_t)at);
             Ref value=text_ref(CTX[0],(const uint8_t *)key,strlen(key)); t[n++]=value;
+            if (!lp_id_eq(&value.id,&l->t[old].id)) { fprintf(stderr,"%s: register the structured identifier components before appending key %s\n",l->name,key); exit(1); }
             *(lp_id *)lp_idmap_at(remap,lp_idmap_put(remap,&l->t[old].id,NULL))=value.id; (*added)++;
         }
         for (size_t k=0; k<lp_strmap_count(h->keys); k++) {
@@ -341,7 +354,9 @@ int cmd_highway(int argc, char **argv){
                 if (key->list==i && lp_id_eq(&key->id,&list->t[slot].id)) { size_t bytes; identifier=lp_strmap_key(hw.keys,k,&bytes)+sizeof(int); break; }
             }
             if (!identifier || (!*identifier && list->t[slot].tier!=UINT8_MAX)) { fprintf(stderr,"%s slot %zu has no identifier\n",list->name,slot); return 1; }
-            append(&identifiers,identifier,strlen(identifier)+1);
+            const char *parts[2]; unsigned np=frozen_parts(slot<nz ? frozen+slot : NULL,identifier,parts);
+            uint8_t count[4]={(uint8_t)np,0,0,0}; append(&identifiers,count,sizeof count);
+            for (unsigned p=0; p<np; p++) append(&identifiers,parts[p],strlen(parts[p])+1);
         }
         free(frozen);
     }
