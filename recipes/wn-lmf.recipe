@@ -1,8 +1,8 @@
 name wn-lmf
 # A wordnet in WN-LMF (globalwordnet.github.io/schemas, WN-LMF-1.3.dtd). Read for each wordnet that is written in it
 # (Open English WordNet, the Open Multilingual Wordnet's lexicons), each recipe naming its own witness.
-#   A lexicon is its label. A lexical entry is its lemma's written form. A synset is the words it lists, in the order
-#   listed (so every wordnet listing the same members lands on one entity); a sense is the lexicalization
+#   A lexicon is its label. A lexical entry is its lemma's written form. A synset is its source identifier,
+#   shared with the highway; its member list and definitions are assertions about that identifier. A sense is the lexicalization
 #   [lemma, language, ILI], or, where its synset names no concept the highway holds, the word with its synset.
 #   A syntactic behaviour is its frame, as written.
 #   ids are the wordnet's keys: how it points at its things. Each resolves to the thing; members, synset, target and
@@ -31,10 +31,7 @@ thing Sense ^LexicalEntry/Lemma/writtenForm ^Lexicon/language >synset/ili
 # a sense whose synset names no concept the highway holds (ili="in", a concept CILI has not numbered yet) is given no
 # stand-in identity: it is the word with its synset, and its synset links by collision when CILI states its ILI
 thing Sense synset within
-thing Synset members
-# a synset that lists no members (a concept the language does not lexicalize, lexicalized="false") is the concept
-# its ili names
-thing Synset ili
+thing Synset id
 thing SyntacticBehaviour subcategorizationFrame
 part members by space
 part senses by space
@@ -50,13 +47,15 @@ part subcat by space
 refer subcat SyntacticBehaviour
 type ili ili
 type lexfile lexfile
+type language language
 content label language writtenForm partOfSpeech relType subcategorizationFrame Definition ILIDefinition Example Pronunciation variety script Tag category Count ref lexicalized
 # a file's bookkeeping, read by nothing: who made it, under what licence, at what version, how confident
 # n (a sense's place among its entry's senses) and index (an entry's place among its homographs) number what the file
 # already holds in order: the order is the path's, and the numbers are not read
 omit n index
-# dc:source names who said it: an example's author (W.B.Yeats), a synset's source (Colloquial WordNet): a witness
-own dc:source
+# Authors and cited resources are content of this source's records. They do not
+# create extra witnesses beside the one corpus trunk.
+content dc:source
 content adjposition
 omit dc:* xmlns:* status note confidenceScore version url email license citation logo lexicographer
 
@@ -145,8 +144,7 @@ attest Sense synset subcat lexicalized adjposition
 attest Count .
 relate SenseRelation relType to target
 # an ili written "in" is WN-LMF's mark for a concept proposed to CILI and not yet in it: it names no concept, and is said so
-attest Synset ili partOfSpeech lexfile lexicalized Definition ILIDefinition by dc:source
-# an example is said by its own author, where the file names one
-attest Example . by dc:source
+attest Synset ili partOfSpeech lexfile lexicalized Definition ILIDefinition
+attest Example .
 relate SynsetRelation relType to target
 attest SyntacticBehaviour senses

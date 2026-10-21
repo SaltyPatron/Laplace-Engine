@@ -1580,6 +1580,17 @@ static int referred_field(Sink *k, const SemanticRecord *t, int32_t g, const cha
     if (k->binding_phase) k->blocked++;
     return 0;
 }
+static Ref thing_scope(Sink *k,const SemanticRecord *t,int32_t g,const Thing *th,Ref value,int depth){
+    if (th->within && depth<8) {
+        Ref parent; int32_t up=t->n[g].parent;
+        while (up>=0 && !thing_of(k,t,up,&parent,depth+1)) up=t->n[up].parent;
+        if (up>=0) { Ref parts[]={parent,value}; for (unsigned i=0; i<2; i++) if (parts[i].said!=LP_SAID_TUPLE) parts[i].said=0;
+            value=said_tuple(compose(parts,2,ref_above(parts,2))); }
+    }
+    if (th->infile) { Ref parts[]={k->fname,value}; for (unsigned i=0; i<2; i++) if (parts[i].said!=LP_SAID_TUPLE) parts[i].said=0;
+        value=said_tuple(compose(parts,2,ref_above(parts,2))); }
+    return value;
+}
 /* A part as one way its kind is named: 0 when it is not named that way. */
 static int one_thing(Sink *k, const SemanticRecord *t, int32_t g, const Thing *th, Ref *out, int depth){
     const SemanticValue *x = &t->n[g]; Ref p[8]; {
@@ -1590,8 +1601,9 @@ static int one_thing(Sink *k, const SemanticRecord *t, int32_t g, const Thing *t
             Ref *pc = scratch_alloc(sizeof(Ref) * max_k); size_t np = 0;
             for (int32_t c = semantic_first(x); c >= 0; c = semantic_next(&t->n[c])) { int hit = 0; for (int z = 0; z < th->n && !hit; z++) hit = named_as(&t->n[c], th->name[z]); if (!hit) continue;
                 Ref v; if (!(t->n[c].kind == S_GROUP ? thing_of(k, t, c, &v, depth + 1) : value_of(k, t, c, &v, depth))) continue;
-                if (np < max_k) { v.said = 0; pc[np++] = v; } }
-            if (!np) { scratch_restore(mark); return 0; } *out = np == 1 ? pc[0] : compose(pc, (uint32_t)np, ref_above(pc, np)); out->said = 0; scratch_restore(mark); return 1; }
+                if (np < max_k) { if (v.said!=LP_SAID_TUPLE) v.said=0; pc[np++] = v; } }
+            if (!np) { scratch_restore(mark); return 0; } Ref value=np==1 ? pc[0] : said_tuple(compose(pc,(uint32_t)np,ref_above(pc,np)));
+            *out=thing_scope(k,t,g,th,value,depth); scratch_restore(mark); return 1; }
         if (th->span) {                                                      /* the stretch of the text of TEXT, found in what it is inside, from the character START to END */
             int32_t a = resolve_node_path(t, g, th->name[0]), b = resolve_node_path(t, g, th->name[1]); if (a < 0 || b < 0 || !t->n[a].vlen || !t->n[b].vlen || t->n[a].vlen > 11 || t->n[b].vlen > 11) return 0;
             char za[16], zb[16]; memcpy(za, t->n[a].val, t->n[a].vlen); za[t->n[a].vlen] = 0; memcpy(zb, t->n[b].val, t->n[b].vlen); zb[t->n[b].vlen] = 0; char *e1, *e2; long lo = strtol(za, &e1, 10), hi = strtol(zb, &e2, 10);
@@ -1618,8 +1630,7 @@ static int one_thing(Sink *k, const SemanticRecord *t, int32_t g, const Thing *t
                 note_obligation(k, 'o', &diagnostic_labels[DIAG_UNRESOLVED_KEY], (const uint8_t *)th->name[z], path_code(th->name[z])->source_length, NULL, 0); }     /* said, never dropped */
             if (!np) return 0;
             Ref X = np == 1 ? p[0] : said_tuple(compose(p, np, ref_above(p, np)));
-            if (th->infile) { Ref two[2] = { k->fname, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, ref_above(two, 2))); }
-            *out = X; return 1; }
+            *out = thing_scope(k,t,g,th,X,depth); return 1; }
         for (int z = 0; z < th->n; z++) {
             if (th->lit[z]) { p[z] = text_of((const uint8_t *)th->name[z], strlen(th->name[z])); p[z].said = 0; continue; }      /* a text the recipe writes */
             if (th->name[z][0] == '>') {
@@ -1655,11 +1666,7 @@ static int one_thing(Sink *k, const SemanticRecord *t, int32_t g, const Thing *t
         }
             p[z].said = 0; }
         Ref X = th->n == 1 ? p[0] : said_tuple(compose(p, (uint32_t)th->n, ref_above(p, (size_t)th->n)));      /* named by several parts together: the path of them */
-        if (th->within && depth < 8) {                                       /* its name stands only within what it is inside: the pair of the two */
-            Ref P; int32_t up = x->parent; while (up >= 0 && !thing_of(k, t, up, &P, depth + 1)) up = t->n[up].parent;
-            if (up >= 0) { Ref two[2] = { P, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, ref_above(two, 2))); } }
-        if (th->infile) { Ref two[2] = { k->fname, X }; two[0].said = two[1].said = 0; X = said_tuple(compose(two, 2, ref_above(two, 2))); }      /* its name stands only within the file: [the file's name, it] */
-        *out = X; return 1; }
+        *out = thing_scope(k,t,g,th,X,depth); return 1; }
 }
 /* A part as the thing it is: the first of the ways its kind is named that names it (a code point, or a range). */
 static int thing_compose(Sink *k, const SemanticRecord *t, int32_t g, Ref *out, int depth){

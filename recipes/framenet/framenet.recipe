@@ -5,8 +5,8 @@ name framenet
 # the types the highway lists, and their numbers (ID) are FrameNet's keys of them: where FrameNet points at one by its
 # number (frameID, feID, luID, subID, supID, a member, required or excluded frame element) the number is read as the
 # type it is the key of. The numbers of sentences, annotation sets, corpora and documents are keys. The user who made
-# an entry (cBy, on a frame, a frame element, a lexical unit and a label) is the witness of what that entry says:
-# [FrameNet, cBy, the user]; where an entry names no user, FrameNet says it. Every other name and value is as the files
+# an entry (cBy, on a frame, a frame element, a lexical unit and a label) is content of FrameNet's record;
+# FrameNet is the source witness. Every other name and value is as the files
 # write them. What is no thing speaks of the nearest thing it is inside.
 match *.xml
 format xml
@@ -29,6 +29,7 @@ type excludesFE.ID fnfe
 type frameID fnframe
 type feID fnfe
 type luID fnlu
+type lexUnit.ID fnlu
 type frameRelation.subID fnframe
 type frameRelation.supID fnframe
 type FERelation.subID fnfe
@@ -41,15 +42,25 @@ thing superType superTypeName
 thing corpus name
 thing document name within
 thing sentence text
-# a label speaks of the stretch of its sentence's text from start to end; FrameNet's end is the last character
-thing label span start end text inclusive
+# An annotation is of its lexical unit at the source's target span. A layer is
+# ONE ordered bundle of span labels in that context. Offsets are source codepoint
+# offsets, with an inclusive end; retain them, including null instantiations.
+# The layer name (PENN, BNC, FE, ...) identifies the tagset in the bundle. It is
+# content, never a relation applied independently to every word it annotates.
+thing annotationSet luID layer[name=Target]/label/start layer[name=Target]/label/end
+thing annotationSet ^lexUnit/ID layer[name=Target]/label/start layer[name=Target]/label/end
+thing layer of name rank label within
+thing label start end name feID
+thing label start end name
+thing label itype name feID
+thing label itype name
 
-# who made an entry: a witness of its own
-own cBy
+# Who made an entry is content of this source's record, not a new witness.
+content cBy start end rank
 # the file's bookkeeping, read by nothing: when an entry was made, display colours, annotation status and counts,
 # where a sentence sat in its corpus, the schema declaration; and the numbers that are keys
 omit cDate mDate bgColor fgColor status totalAnnotated numAnnotInstances hasAnnotation XMLCreated sentNo paragNo aPos sentenceCount header xmlns xmlns:* xsi:* ID corpID docID lemmaID
-omit start end rank total cxnID order
+omit total cxnID order
 # a semantic type's supertype is named beside its number (superTypeName); the number is its key
 omit superType.supID
 # the lexicon's own numbering of its lemmas, lexeme entries and word forms, and the lists of those numbers: keys,
@@ -114,9 +125,9 @@ relation "abbreviated" FE.abbrev
 holds frame FE lexUnit semType
 holds FE requiresFE excludesFE semType
 holds lexUnit semType sentence
-attest frame definition by cBy
-attest FE coreType abbrev definition by cBy
-attest lexUnit POS definition incorporatedFE by cBy
+attest frame definition
+attest FE coreType abbrev definition
+attest lexUnit POS definition incorporatedFE
 attest lu POS
 attest lexeme name POS breakBefore headword
 attest semType superType
@@ -125,10 +136,9 @@ relate FERelation ^/^/name to supID
 relate frameRelation type to relatedFrame
 attest valenceUnit GF PT FE
 together valenceUnit
-relate label ^/name to name by cBy
-# an FE label names its frame element by FrameNet's number (feID): an internal pointer, in no claim (no meaning given)
-attest label itype feID by cBy
-attest annotationSet cxnName luName frameName
+# One sentence-level statement per layer, preserving its complete aligned bundle.
+# The source's tagset values and annotation context are in that bundle.
+pair layer . of ^sentence/text
 
 # the highway: frames, frame elements and lexical units, by their numbers and (a frame) by its name, as VerbNet and
 # PropBank write it; a frame element (as its frame defines it: with its core type) and a lexical unit map to their frame
