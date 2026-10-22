@@ -3,6 +3,11 @@
 name: Laplace-Engine
 on:
   workflow_dispatch:
+    inputs:
+      verify_estate:
+        description: "Audit every installed corpus and compare full ISO ingestion with the published monorepo"
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
@@ -131,6 +136,9 @@ jobs:
   # source's root and matches its files to recipes, without the database, and fails on a source whose root is unset, at
   # none of its roots or holding no files. Its own job: what it finds is the data's, and does not hold the deploy.
   plan:
+    # Corpus availability is an estate audit, not a software build requirement.
+    # PRs qualify all recipes plus actual ingestion on scoped database fixtures.
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.verify_estate)
     needs: engine
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
@@ -161,7 +169,7 @@ jobs:
   # dispatch; after plan, so the short job does not wait out the long one on the one runner.
   parity:
     needs: [engine, plan]
-    if: ${{ !cancelled() && needs.engine.result == 'success' && needs.engine.outputs.parity == 'true' }}
+    if: ${{ !cancelled() && needs.engine.result == 'success' && needs.engine.outputs.parity == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.verify_estate)) }}
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
       - name: Select this run's canonical cache closure
