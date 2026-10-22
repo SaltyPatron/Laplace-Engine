@@ -167,7 +167,7 @@ void record_emit_layers(RecordWorker *worker, const SemanticRecord *record, int3
     }
 }
 
-static int claim_vertex(const Event *e, Ref *out){
+int record_claim_vertex(const Event *e, Ref *out){
     int ok; Ref c = ref_of_id(&e->claim, &ok); if (!ok) { __atomic_fetch_add(&claims_unplaced, 1, __ATOMIC_RELAXED); return 0; }
     c.said = LP_SAID_CLAIM; c.outcome = (uint8_t)lp_outcome_of((double)e->score, &c.spare); c.position = e->position; *out = c; return 1;
 }
@@ -213,7 +213,7 @@ void record_build_provenance(RecordWorker *k, const SemanticRecord *t, int32_t r
         if (mine) np += record_rows(k, t, root, part + np, 20);
         uint32_t nclaims = 0, ones = 0;
         for (uint64_t j = at[ri]; j < at[ri + 1]; j++) { const Event *x = &k->ev.e[ord[j]]; if (x->kind != EV_CLAIM) continue;
-            Ref c; if (!claim_vertex(x, &c)) continue;
+            Ref c; if (!record_claim_vertex(x, &c)) continue;
             uint32_t first=np;
             if (x->has_qualifier) {
                 int ok; Ref v=ref_of_id(&x->qualifier,&ok);

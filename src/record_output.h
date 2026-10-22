@@ -5,6 +5,7 @@
 #include "record_worker.h"
 
 void record_emit_event(RecordWorker *, const lp_id *, float score);
+int record_claim_vertex(const Event *,Ref *);
 
 void record_emit_claim(RecordWorker *k, Ref *part, int n);
 void record_group_claims(RecordWorker *k, uint64_t e0, const Ref *about);

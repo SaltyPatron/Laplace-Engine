@@ -171,6 +171,7 @@ static inline int s_empty(const Layout *l, const uint8_t *v, uint32_t n){ if (!n
 
 /* Precompile grammar rules and chained sub-grammars into integer symbol/field IDs at recipe load time */
 int layout_compile_grammar(Layout *l, const char *grammar_name);
+const Layout *layout_format(const char *name);
 int layout_compile_parts(Layout *l);
 /* Compile declarative tier syntax into an owned outer grammar and the same
  * integer dispatch used by explicit .format files. No input bytes are read. */

@@ -1,8 +1,11 @@
 name chess-com-games
 match *.pgn
-# PGN (the PGN standard, 8.1 tag pairs, 8.2 movetext), read by chess.c: every game a record [line, tags, layer]; its
+# PGN packaging uses formats/pgn.format; chess.c applies the legal board rules.
+# Every game is a record [line, tags, layer]; its
 # line the trajectory of positions and moves, replayed under firmware/chess.firmware by the Variant it names; every
 # tag a statement [name, value] as written; its clock comments ([%clk]) its layer. chess.com's archive is of games
 # played: a record with variations or NAGs would be an annotator's study and is said as one.
 grammar pgn
 records played
+# Completed played games attest [position_before, canonical_move, position_after]
+# with the result scored for the side making the move; * attests no outcome.
