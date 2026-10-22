@@ -2,7 +2,7 @@
 # A layout's counted groups (Laplace-Engine#70): a part that is a count, in any radix, of the groups that follow it,
 # each group the next parts under the member names the layout gives, the names after the count going on after the last
 # group; and a remark kept as a named text (wndb.5's gloss after |). Read by `laplace structure`, which prints the tree
-# a layout parts a file into.
+# its compiled Tree-sitter grammar projects from a file.
 #   tests/layout-counted.sh path/to/laplace
 set -euo pipefail
 L=${1:?usage: tests/layout-counted.sh path/to/laplace}; here=$(cd "$(dirname "$0")" && pwd)
@@ -27,9 +27,46 @@ grep -q '^    value word  "w10"$' <<<"$r1" || fail "row 1: the tenth word is not
 [ "$(count '^  group pointer$' "$r1")" = 1 ] || fail "row 1: not one pointer: $r1"
 [ "$(count '^  group frame$' "$r1")" = 2 ] || fail "row 1: not two frames: $r1"
 grep -q '^    value w_num  "01"$' <<<"$r1" || fail "row 1: the second frame's w_num: $r1"
-# a count written as no number of its radix counts nothing: the next part takes the next name
-! grep -q 'group word' <<<"$r2" || fail "row 2: zz counted groups: $r2"
-grep -q '^  value p_cnt  "alone"$' <<<"$r2" || fail "row 2: after a count of nothing the next name is not p_cnt: $r2"
+# A valid non-verb record still enforces its hexadecimal word count and zero pointers.
+[ "$(count '^  group word
+# a radix out of 2..36, or a group with no members, is refused
+bad=$(mktemp "${TMPDIR:-/tmp}/layout-counted.XXXXXX"); trap 'rm -f "$bad"' EXIT
+printf 'tier row by \\n\nnames n\ncounted n radix 37 g a\ntier field by space\n' >"$bad"
+set +e; o=$("$L" structure "$bad" "$here/layout/data.sample" 2>&1); c=$?; set -e
+[ "$c" = 2 ] && grep -q 'radix 2 to 36' <<<"$o" || fail "radix 37 not refused (exit $c): $o"
+printf 'tier row by \\n\nnames n\ncounted n g\ntier field by space\n' >"$bad"
+set +e; o=$("$L" structure "$bad" "$here/layout/data.sample" 2>&1); c=$?; set -e
+[ "$c" = 2 ] || fail "a counted group with no members not refused (exit $c): $o"
+echo "layout-counted: ok" "$r2")" = 1 ] || fail "row 2: not one adjective word: $r2"
+[ "$(count '^  group pointer
+# a radix out of 2..36, or a group with no members, is refused
+bad=$(mktemp "${TMPDIR:-/tmp}/layout-counted.XXXXXX"); trap 'rm -f "$bad"' EXIT
+printf 'tier row by \\n\nnames n\ncounted n radix 37 g a\ntier field by space\n' >"$bad"
+set +e; o=$("$L" structure "$bad" "$here/layout/data.sample" 2>&1); c=$?; set -e
+[ "$c" = 2 ] && grep -q 'radix 2 to 36' <<<"$o" || fail "radix 37 not refused (exit $c): $o"
+printf 'tier row by \\n\nnames n\ncounted n g\ntier field by space\n' >"$bad"
+set +e; o=$("$L" structure "$bad" "$here/layout/data.sample" 2>&1); c=$?; set -e
+[ "$c" = 2 ] || fail "a counted group with no members not refused (exit $c): $o"
+echo "layout-counted: ok" "$r2")" = 0 ] || fail "row 2: unexpected pointers: $r2"
+grep -q '^  value p_cnt  "000"
+# a radix out of 2..36, or a group with no members, is refused
+bad=$(mktemp "${TMPDIR:-/tmp}/layout-counted.XXXXXX"); trap 'rm -f "$bad"' EXIT
+printf 'tier row by \\n\nnames n\ncounted n radix 37 g a\ntier field by space\n' >"$bad"
+set +e; o=$("$L" structure "$bad" "$here/layout/data.sample" 2>&1); c=$?; set -e
+[ "$c" = 2 ] && grep -q 'radix 2 to 36' <<<"$o" || fail "radix 37 not refused (exit $c): $o"
+printf 'tier row by \\n\nnames n\ncounted n g\ntier field by space\n' >"$bad"
+set +e; o=$("$L" structure "$bad" "$here/layout/data.sample" 2>&1); c=$?; set -e
+[ "$c" = 2 ] || fail "a counted group with no members not refused (exit $c): $o"
+echo "layout-counted: ok" <<<"$r2" || fail "row 2: the pointer count is misplaced: $r2"
+
+# The compiled grammar rejects malformed counts and truncated counted groups.
+invalid=$(mktemp "${TMPDIR:-/tmp}/layout-record.XXXXXX")
+for change in 's/a 01 alone/a zz alone/' 's/n 01 entity/n 02 entity/' 's/003 ~/004 ~/'; do
+  sed "$change" "$here/layout/data.sample" > "$invalid"
+  set +e; o=$("$L" structure "$here/layout/wndb.layout" "$invalid" 2>&1); c=$?; set -e
+  [ "$c" = 2 ] && grep -q 'does not parse completely' <<<"$o" || { rm -f "$invalid"; fail "malformed counted record accepted (exit $c): $o"; }
+done
+rm -f "$invalid"
 
 # a radix out of 2..36, or a group with no members, is refused
 bad=$(mktemp "${TMPDIR:-/tmp}/layout-counted.XXXXXX"); trap 'rm -f "$bad"' EXIT

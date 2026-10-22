@@ -1,21 +1,56 @@
-#!/bin/sh
-# Compile every tree-sitter grammar under $1 into $2/libtree-sitter-<name>.so (.dll on Windows, from MSYS2's shell in
-# the oneAPI dev shell), exporting tree_sitter_<name>.
-# A grammar directory holds src/parser.c (and optionally src/scanner.c), directly or one level down (xml/, tsv/, ...).
-# Without arguments, the machine's own declaration (Laplace-Operations laplace.env): LAPLACE_GRAMMAR_SRC and LAPLACE_GRAMMARS.
-SRC=${1:-${LAPLACE_GRAMMAR_SRC:?LAPLACE_GRAMMAR_SRC is not set: source Laplace-Operations/laplace.env, or name the sources}}
-OUT=${2:-${LAPLACE_GRAMMARS:?LAPLACE_GRAMMARS is not set: source Laplace-Operations/laplace.env, or name the output}}; mkdir -p "$OUT"
-case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) win=1; ext=dll; CC=${CC:-icx-cc} ;; *) win=; ext=so; CC=${CC:-icx} ;; esac
-find "$SRC" -path '*/src/parser.c' -not -path '*/node_modules/*' | while read -r p; do
-  d=$(dirname "$(dirname "$p")")
-  name=$(sed -n 's/.*TSLanguage \*tree_sitter_\([A-Za-z0-9_]*\)(void).*/\1/p' "$p" | head -1)
-  [ -n "$name" ] || continue
-  so="$OUT/libtree-sitter-$name.$ext"; [ "$so" -nt "$p" ] && continue
-  sc=""; [ -f "$d/src/scanner.c" ] && sc="$d/src/scanner.c"
-  echo "$name"
-  if [ -n "$win" ]; then                                # nothing is exported unless named; the DLL C runtime, as the engine's
-    $CC -O2 -shared -w -fms-runtime-lib=dll -Wl,/NODEFAULTLIB:libcmt,/EXPORT:tree_sitter_$name -I"$d/src" -I"$(dirname "$d")/common" -o "$so" "$p" $sc 2>/dev/null
+#!/usr/bin/env bash
+# Compile prepared external parsers and Engine-owned grammar definitions.
+# Generated sources stay in the declared build tree; libraries are replaced by rename.
+set -euo pipefail
+SRC=${1:-${LAPLACE_GRAMMAR_SRC:?Declare grammar sources}}
+OUT=${2:-${LAPLACE_GRAMMARS:?Declare grammar output}}
+SRC=$(cd "$SRC" && pwd)
+mkdir -p "$OUT"
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) win=1; ext=dll; CC=${CC:-icx-cc} ;;
+  *) win=; ext=so; CC=${CC:-icx} ;;
+esac
+
+compile() {
+  local parser=$1 scanner_root=$2 common=$3 name binary fresh
+  name=$(sed -n 's/.*TSLanguage \*tree_sitter_\([A-Za-z0-9_]*\)(void).*/\1/p' "$parser" | head -1)
+  [[ -n "$name" ]] || { echo "No exported language in $parser" >&2; return 1; }
+  binary="$OUT/libtree-sitter-$name.$ext"
+  fresh="$binary.$$.tmp"
+  local -a sources=("$parser") flags=(-O2 -shared -w "-I$(dirname "$parser")" "-I$scanner_root" "-I$common")
+  for scanner in scanner.c scanner.cc scanner.cpp; do
+    [[ ! -f "$scanner_root/$scanner" ]] || sources+=("$scanner_root/$scanner")
+  done
+  if [[ -n "$win" ]]; then
+    flags+=(-fms-runtime-lib=dll "-Wl,/NODEFAULTLIB:libcmt,/EXPORT:tree_sitter_$name")
   else
-    $CC -O2 -fPIC -shared -w -I"$d/src" -I"$(dirname "$d")/common" -o "$so" "$p" $sc 2>/dev/null
-  fi || { echo "  failed: $name" >&2; rm -f "$so"; }
-done
+    flags+=(-fPIC)
+  fi
+  "$CC" "${flags[@]}" -o "$fresh" "${sources[@]}" || { rm -f "$fresh"; return 1; }
+  mv -f "$fresh" "$binary"
+  echo "Built grammar $name"
+}
+
+generator=
+while IFS= read -r -d '' definition; do
+  package=$(dirname "$definition")
+  [[ ! -f "$package/src/parser.c" ]] || continue
+  if [[ -z "$generator" ]]; then
+    generator=${LAPLACE_TREESITTER_CLI:-$(command -v tree-sitter || true)}
+    if [[ -z "$generator" ]] || ! "$generator" --version >/dev/null 2>&1; then
+      runtime=${LAPLACE_TREESITTER:-${LAPLACE_DEPSRC:?Declare pinned dependency sources}/tree-sitter}
+      target="${LAPLACE_BUILD:?Declare the build root}/deps/tree-sitter-cli"
+      cargo build --locked --release --package tree-sitter-cli --manifest-path "$runtime/Cargo.toml" --target-dir "$target"
+      generator="$target/release/tree-sitter"
+    fi
+  fi
+  generated="${LAPLACE_BUILD:?Declare the build root}/deps/grammars/$(basename "$package")/src"
+  mkdir -p "$generated"
+  "$generator" generate "$definition" --output "$generated" --abi 15 --js-runtime native
+  compile "$generated/parser.c" "$package/src" "$(dirname "$package")/common"
+done < <(find "$SRC" -name grammar.js -not -path '*/node_modules/*' -print0)
+
+while IFS= read -r -d '' parser; do
+  package=$(dirname "$(dirname "$parser")")
+  compile "$parser" "$(dirname "$parser")" "$(dirname "$package")/common"
+done < <(find "$SRC" -path '*/src/parser.c' -not -path '*/node_modules/*' -print0)

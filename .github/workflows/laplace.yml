@@ -24,6 +24,11 @@ jobs:
     outputs:
       parity: ${{ steps.changes.outputs.parity }}
     steps:
+      - name: Select this run's canonical cache closure
+        run: |
+          echo "LAPLACE_TIER0=$RUNNER_TEMP/engine/inputs/tier0.bin" >> "$GITHUB_ENV"
+          echo "LAPLACE_FLAGS=$RUNNER_TEMP/engine/inputs/tier0.flags" >> "$GITHUB_ENV"
+          echo "LAPLACE_HIGHWAY=$RUNNER_TEMP/engine/inputs/highway.bin" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with: { path: Laplace-Engine }
       # Whether this change can move what an ingest records (tools/ci/parity-needed.sh says which paths can); the parity
@@ -61,6 +66,23 @@ jobs:
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
           mkdir -p "$RUNNER_TEMP/engine" && cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace" "$RUNNER_TEMP/engine/laplace"
           sha256sum "$RUNNER_TEMP/engine/laplace" | tee "$RUNNER_TEMP/engine/laplace.sha256"
+      - name: Provide the pinned Rust compiler for the Tree-sitter generator
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: 1.90.0
+
+      - name: Compile the recipe grammars from this revision
+        run: |
+          . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
+          bash Laplace-Engine/tools/build_grammars.sh Laplace-Engine/recipes/formats/grammars "$LAPLACE_GRAMMARS"
+      - name: Prepare canonical caches for this run from local Unicode and frozen manifests
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$LAPLACE_TIER0")"
+          ucd="${LAPLACE_UCD:-/vault/Data/UCD}/Public/UCD/latest"
+          "$RUNNER_TEMP/engine/laplace" tier0 -u "$ucd" -o "$LAPLACE_TIER0"
+          "$RUNNER_TEMP/engine/laplace" flags -u "$ucd" -o "$LAPLACE_FLAGS"
+          LAPLACE_MANIFEST="$GITHUB_WORKSPACE/Laplace-Native/manifest" "$RUNNER_TEMP/engine/laplace" highway -o "$LAPLACE_HIGHWAY"
       # The run's binary, for its plan and parity jobs: a later run's build cannot replace it (one name per run; a job run
       # again replaces it with its own build).
       - uses: actions/upload-artifact@v4
@@ -104,6 +126,11 @@ jobs:
     needs: engine
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
+      - name: Select this run's canonical cache closure
+        run: |
+          echo "LAPLACE_TIER0=$RUNNER_TEMP/engine/inputs/tier0.bin" >> "$GITHUB_ENV"
+          echo "LAPLACE_FLAGS=$RUNNER_TEMP/engine/inputs/tier0.flags" >> "$GITHUB_ENV"
+          echo "LAPLACE_HIGHWAY=$RUNNER_TEMP/engine/inputs/highway.bin" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with: { path: Laplace-Engine }
       - uses: actions/checkout@v4
@@ -129,6 +156,11 @@ jobs:
     if: ${{ !cancelled() && needs.engine.result == 'success' && needs.engine.outputs.parity == 'true' }}
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
+      - name: Select this run's canonical cache closure
+        run: |
+          echo "LAPLACE_TIER0=$RUNNER_TEMP/engine/inputs/tier0.bin" >> "$GITHUB_ENV"
+          echo "LAPLACE_FLAGS=$RUNNER_TEMP/engine/inputs/tier0.flags" >> "$GITHUB_ENV"
+          echo "LAPLACE_HIGHWAY=$RUNNER_TEMP/engine/inputs/highway.bin" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with: { path: Laplace-Engine }
       - uses: actions/checkout@v4
