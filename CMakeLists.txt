@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
+if(POLICY CMP0207)
+  cmake_policy(SET CMP0207 NEW) # Normalize Windows paths before excluding OS libraries.
+endif()
 project(LaplaceEngine VERSION 0.2.0 LANGUAGES C CXX ASM)
 
 # Laplace-Engine: Laplace itself, one program. Laplace-Native is built as part of it; recipes load tree-sitter grammars
@@ -9,7 +12,9 @@ if(DEFINED ENV{LAPLACE_NATIVE} AND NOT "$ENV{LAPLACE_NATIVE}" STREQUAL "")
 else()
   set(LAPLACE_NATIVE "${CMAKE_CURRENT_SOURCE_DIR}/../Laplace-Native" CACHE PATH "Laplace-Native sources")
 endif()
-add_subdirectory(${LAPLACE_NATIVE} native EXCLUDE_FROM_ALL)
+if(NOT TARGET laplace_static)
+  add_subdirectory(${LAPLACE_NATIVE} native EXCLUDE_FROM_ALL)
+endif()
 include(${LAPLACE_NATIVE}/cmake/LaplacePaths.cmake)
 include(${LAPLACE_NATIVE}/cmake/LaplaceFlags.cmake)
 find_package(OpenMP REQUIRED)
@@ -148,4 +153,57 @@ else()
 endif()
 
 include(GNUInstallDirs)
-install(TARGETS laplace_engine RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# One relocatable recipe runtime is consumed by the modular CLI and managed hosts.
+# Its executable is the canonical Engine, with the same compiled grammars and estate.
+install(TARGETS laplace_engine
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LaplaceRecipeRuntime)
+if(WIN32)
+  file(REAL_PATH "${CMAKE_C_COMPILER}" _recipe_compiler)
+  get_filename_component(_recipe_compiler_bin "${_recipe_compiler}" DIRECTORY)
+  # MKL loads CPU dispatch kernels dynamically; they are absent from import tables.
+  file(GLOB _recipe_mkl_dispatch "$ENV{MKLROOT}/bin/mkl_*.dll")
+  set(_recipe_runtime_search "${LAPLACE_ICU_DIR}/bin64;${LAPLACE_ICU_DIR}/bin;${LAPLACE_PG_DIR}/bin;${_recipe_compiler_bin};$ENV{MKLROOT}/bin;$ENV{TBBROOT}/bin")
+  set(_recipe_runtime_install [=[
+    if(POLICY CMP0207)
+      cmake_policy(SET CMP0207 NEW)
+    endif()
+    file(GET_RUNTIME_DEPENDENCIES EXECUTABLES "$<TARGET_FILE:laplace_engine>"
+         RESOLVED_DEPENDENCIES_VAR _libraries UNRESOLVED_DEPENDENCIES_VAR _missing
+         DIRECTORIES @_recipe_runtime_search@
+         PRE_EXCLUDE_REGEXES "^api-ms-" "^ext-ms-"
+         POST_EXCLUDE_REGEXES "[Ww][Ii][Nn][Dd][Oo][Ww][Ss]/[Ss][Yy][Ss][Tt][Ee][Mm]32/")
+    if(_missing)
+      message(FATAL_ERROR "Unresolved Native recipe runtime libraries: ${_missing}")
+    endif()
+    list(APPEND _libraries @_recipe_mkl_dispatch@)
+    file(MAKE_DIRECTORY "${CMAKE_INSTALL_PREFIX}/bin")
+    foreach(_library IN LISTS _libraries)
+      get_filename_component(_name "${_library}" NAME)
+      # Preserve the imported DLL name while copying the symlink's bytes.
+      # Ordinary Windows publishing does not need symlink creation privileges.
+      file(COPY_FILE "${_library}" "${CMAKE_INSTALL_PREFIX}/bin/${_name}" ONLY_IF_DIFFERENT)
+    endforeach()
+  ]=])
+  # Normalize and quote paths before embedding them in the install script.
+  file(TO_CMAKE_PATH "${_recipe_runtime_search}" _recipe_runtime_search)
+  file(TO_CMAKE_PATH "${_recipe_mkl_dispatch}" _recipe_mkl_dispatch)
+  string(REPLACE ";" "\" \"" _recipe_runtime_search "${_recipe_runtime_search}")
+  set(_recipe_runtime_search "\"${_recipe_runtime_search}\"")
+  string(REPLACE ";" "\" \"" _recipe_mkl_dispatch "${_recipe_mkl_dispatch}")
+  set(_recipe_mkl_dispatch "\"${_recipe_mkl_dispatch}\"")
+  string(CONFIGURE "${_recipe_runtime_install}" _recipe_runtime_install @ONLY)
+  install(CODE "${_recipe_runtime_install}" COMPONENT LaplaceRecipeRuntime)
+endif()
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/recipes/"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/laplace/recipes" COMPONENT LaplaceRecipeRuntime
+        FILES_MATCHING PATTERN "*.recipe" PATTERN "*.format" PATTERN "source" PATTERN "order")
+install(CODE "
+  foreach(_grammar xml lp_words)
+    if(NOT EXISTS \"${LAPLACE_GRAMMARS}/libtree-sitter-\${_grammar}${CMAKE_SHARED_LIBRARY_SUFFIX}\")
+      message(FATAL_ERROR \"Native recipe grammar bundle is incomplete: ${LAPLACE_GRAMMARS}/libtree-sitter-\${_grammar}${CMAKE_SHARED_LIBRARY_SUFFIX}\")
+    endif()
+  endforeach()
+" COMPONENT LaplaceRecipeRuntime)
+install(DIRECTORY "${LAPLACE_GRAMMARS}/" DESTINATION "${CMAKE_INSTALL_BINDIR}/grammars"
+        COMPONENT LaplaceRecipeRuntime FILES_MATCHING
+        PATTERN "libtree-sitter-*.dll" PATTERN "libtree-sitter-*.so" PATTERN "libtree-sitter-*.dylib")
