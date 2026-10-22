@@ -1,0 +1,16 @@
+name opensubtitles-en-zh_tw-zh_tw
+# The aligned partner of OpenSubtitles.en-zh_tw.en; README calls these
+# "translated movie subtitles" with sentence alignment. Both languages belong
+# to the translation strand. The line pointer is resolved, never recorded.
+match OpenSubtitles.en-zh_tw.zh_tw
+
+tier sentence by \n
+numbered aligned
+names text
+tier field by \t
+
+thing sentence text literal zho
+content text
+refer aligned opensubtitles-en-zh_tw-en
+relation "translated" aligned
+attest sentence aligned
