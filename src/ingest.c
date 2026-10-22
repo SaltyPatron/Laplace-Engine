@@ -555,7 +555,7 @@ int cmd_ingest(int argc, char **argv){
     if (tsv_claims && entities) { fprintf(stderr, "--claims-tsv writes claims, not entities\n"); return 2; }
     if (entities || tsv_claims) show_claims = 1;
     if (show_claims) do_load = 0;
-    if (a < argc && argv[a][0] == '-') { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] [--claims-tsv] [--entities] file...\n"); return 2; }
+    if (a < argc && argv[a][0] == '-') { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] [--claims-tsv] [--entities] source|file...\n       laplace ingest [--catalog | --list-sources] [-r recipes]\n"); return 2; }
     /* what a recipe would say is shown of files: of nothing named it is no ingest of every source, and --entities, which
      * asks the database of every composition, is of files only, never a source by its name */
     if (show_claims && a >= argc) { fprintf(stderr, "--claims and --entities show what files would record: name the files\n"); return 2; }
