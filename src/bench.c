@@ -21,7 +21,89 @@ static void row(const char *what, double ops, double secs, double bytes){
 static uint64_t rng = 0x9E3779B97F4A7C15ull;
 static uint64_t next(void){ rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; return rng; }
 
+/* Corpus independence is the terminal declared source lineage. Multiple
+ * records or trust scopes in one corpus cannot mint additional witnesses. */
+static int highway_joins(const char *conninfo){
+    static const char *names[8]={"ili","Synset","fnframe","fnfe","fnlu","vnclass","pbroleset","vaframe"};
+    const lp_highway *highway=lp_highway_map(lp_highway_path());
+    if(!highway){fprintf(stderr,"cannot map highway: %s\n",lp_highway_path());return 2;}
+    char counts[8][16];const char *parameters[8];
+    for(size_t i=0;i<8;i++){
+        const lp_list *list=lp_highway_list(highway,names[i]);
+        if(!list){fprintf(stderr,"highway namespace missing: %s\n",names[i]);return 2;}
+        snprintf(counts[i],sizeof counts[i],"%u",list->count);parameters[i]=counts[i];
+    }
+    uint8_t digest[32];char fingerprint[65];static const char hex[]="0123456789abcdef";
+    lp_highway_fingerprint(highway,digest);
+    for(size_t i=0;i<32;i++){fingerprint[2*i]=hex[digest[i]>>4];fingerprint[2*i+1]=hex[digest[i]&15];}fingerprint[64]=0;
+    PGconn *pg=db_read(conninfo);PGresult *result=PQexec(pg,"SELECT laplace_highway_fingerprint()");
+    if(PQresultStatus(result)!=PGRES_TUPLES_OK || PQntuples(result)!=1 || PQgetisnull(result,0,0) || strcmp(PQgetvalue(result,0,0),fingerprint)){
+        fprintf(stderr,"highway fingerprint differs between client and database: %s",PQerrorMessage(pg));PQclear(result);PQfinish(pg);return 2;
+    }
+    PQclear(result);
+    /* Native performs geometry decoding, cache lookup and containment walks.
+     * SQL groups complete sets; provenance calls use bounded claim arrays. */
+    static const char sql[]=
+      "WITH RECURSIVE namespaces(ord,name,slots) AS (VALUES "
+      "(1,'ili',$1::int),(2,'Synset',$2::int),(3,'fnframe',$3::int),(4,'fnfe',$4::int),"
+      "(5,'fnlu',$5::int),(6,'vnclass',$6::int),(7,'pbroleset',$7::int),(8,'vaframe',$8::int)),"
+      "members AS MATERIALIZED (SELECT n.name,i slot,laplace_type_id(n.name,i) id FROM namespaces n "
+      "CROSS JOIN LATERAL generate_series(0,n.slots-1) i),"
+      "joined AS MATERIALIZED (SELECT DISTINCT m.name,m.id,c.claim FROM consensus c "
+      "JOIN physicality p ON p.entity=c.claim CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) v(id) "
+      "JOIN members m ON m.id=v.id),"
+      "numbered AS (SELECT claim,(row_number() OVER(ORDER BY claim)-1)/4096 batch FROM (SELECT DISTINCT claim FROM joined) q),"
+      "batches AS (SELECT array_agg(claim ORDER BY claim) claims FROM numbered GROUP BY batch),"
+      "observed AS MATERIALIZED (SELECT DISTINCT a.claim,a.trunk,coalesce(w.lineage,a.trunk) initial FROM batches b "
+      "CROSS JOIN LATERAL laplace_attested_series(b.claims) a JOIN witness w ON w.id=a.trunk WHERE a.witness AND a.games>0),"
+      "ancestry(initial,root) AS (SELECT DISTINCT initial,initial FROM observed UNION "
+      "SELECT a.initial,w.lineage FROM ancestry a JOIN witness w ON w.id=a.root WHERE w.lineage IS NOT NULL AND w.lineage<>a.root),"
+      "terminal AS (SELECT a.initial,a.root FROM ancestry a LEFT JOIN witness w ON w.id=a.root "
+      "WHERE w.id IS NULL OR w.lineage IS NULL OR w.lineage=a.root),"
+      "invalid AS (SELECT count(*) n FROM (SELECT DISTINCT initial FROM observed) o WHERE NOT EXISTS(SELECT FROM terminal t WHERE t.initial=o.initial)),"
+      "support AS MATERIALIZED (SELECT DISTINCT j.name,j.id,t.root FROM joined j JOIN observed o ON o.claim=j.claim "
+      "JOIN terminal t ON t.initial=o.initial),"
+      "supported AS (SELECT name,id,count(*) roots FROM support GROUP BY name,id),"
+      /* Cache edges describe correspondences, not additional attestations.
+       * One hop is explicit: never flood a connected component with support. */
+      "edges AS MATERIALIZED (SELECT DISTINCT s.name,s.id,n.name target,laplace_type_id(n.name,e.slot) target_id "
+      "FROM supported s JOIN members m ON m.name=s.name AND m.id=s.id CROSS JOIN namespaces n "
+      "CROSS JOIN LATERAL unnest(laplace_type_edges(s.name,m.slot,n.name)) e(slot)),"
+      "reachable AS (SELECT name,id,root FROM support UNION "
+      "SELECT e.target,e.target_id,s.root FROM edges e JOIN support s ON s.name=e.name AND s.id=e.id),"
+      "crosswalk AS (SELECT name,id,count(DISTINCT root) roots FROM reachable WHERE id IS NOT NULL GROUP BY name,id),"
+      "hops AS (SELECT name,count(*) FILTER(WHERE roots>=2) ge2,count(*) FILTER(WHERE roots>=3) ge3,"
+      "count(*) FILTER(WHERE roots>=4) ge4 FROM crosswalk GROUP BY name) "
+      "SELECT n.name,n.slots,count(s.id),count(s.id) FILTER(WHERE s.roots>=2),count(s.id) FILTER(WHERE s.roots>=3),"
+      "count(s.id) FILTER(WHERE s.roots>=4),invalid.n,coalesce(h.ge2,0),coalesce(h.ge3,0),coalesce(h.ge4,0) "
+      "FROM namespaces n LEFT JOIN supported s ON s.name=n.name LEFT JOIN hops h ON h.name=n.name CROSS JOIN invalid "
+      "GROUP BY n.ord,n.name,n.slots,invalid.n,h.ge2,h.ge3,h.ge4 ORDER BY n.ord";
+    result=PQexecParams(pg,sql,8,NULL,parameters,NULL,NULL,0);
+    if(PQresultStatus(result)!=PGRES_TUPLES_OK || PQntuples(result)!=8){
+        fprintf(stderr,"highway joins: %s",PQerrorMessage(pg));PQclear(result);PQfinish(pg);return 2;
+    }
+    if(strcmp(PQgetvalue(result,0,6),"0")){
+        fputs("highway joins: cyclic source lineage has no terminal root\n",stderr);PQclear(result);PQfinish(pg);return 2;
+    }
+    printf("highway joins   fingerprint=%s   independence=terminal-source-lineage\n",fingerprint);
+    puts("crosswalk columns count source reachability over existing cache edges; they do not add attestations or change standings");
+    puts("namespace\tcached\tattested\tindependent_ge2\tindependent_ge3\tindependent_ge4\tcrosswalk_1hop_ge2\tcrosswalk_1hop_ge3\tcrosswalk_1hop_ge4");
+    for(int r=0;r<8;r++){
+        for(int c=0;c<10;c++){if(c==6)continue;printf("%s%s",c?"\t":"",PQgetvalue(result,r,c));}putchar('\n');
+    }
+    PQclear(result);PQfinish(pg);return 0;
+}
+int cmd_highway_joins(int argc,char **argv){
+    const char *conninfo=laplace_db();
+    for(int i=1;i<argc;i++){
+        if(!strcmp(argv[i],"--joins"))continue;
+        if(!strcmp(argv[i],"-d") && i+1<argc){conninfo=argv[++i];continue;}
+        fprintf(stderr,"usage: laplace %s --joins [-d conninfo]\n",argv[0]);return 2;
+    }
+    return highway_joins(conninfo);
+}
 int cmd_bench(int argc, char **argv){
+    for(int i=1;i<argc;i++)if(!strcmp(argv[i],"--joins"))return cmd_highway_joins(argc,argv);
     uint32_t f = lp_cpu_features();
     printf("laplace bench   cpu: %s   dispatch: %s\n\n", lp_cpu_describe(f), lp_cpu_describe(lp_cpu_active()));
     double t;
