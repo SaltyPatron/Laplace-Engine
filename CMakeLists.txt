@@ -103,6 +103,30 @@ set_target_properties(laplace_engine PROPERTIES OUTPUT_NAME laplace)
 target_include_directories(laplace_engine PRIVATE src ${LAPLACE_NATIVE}/src ${LAPLACE_BLAKE3_DIR} ${LAPLACE_ICU_DIR}/include ${LAPLACE_PG_DIR}/include)
 target_link_directories(laplace_engine PRIVATE ${LAPLACE_PG_DIR}/lib)
 target_compile_options(laplace_engine PRIVATE ${LP_C_FLAGS} -Wno-missing-field-initializers)
+# A reading contract identifies source, not a compiler's executable bytes (PE/ELF
+# timestamps, linkage and build paths differ between standalone and embedded builds).
+# Watch all reader/native inputs, normalize checkout line endings, and frame each
+# relative pathname and digest so a source change still invalidates the OS precheck.
+set(_reader_contract "")
+foreach(_reader_root IN ITEMS "${CMAKE_CURRENT_SOURCE_DIR}" "${LAPLACE_NATIVE}" "${LAPLACE_TREESITTER}/lib")
+  file(GLOB_RECURSE _reader_inputs CONFIGURE_DEPENDS RELATIVE "${_reader_root}"
+       "${_reader_root}/src/*.c" "${_reader_root}/src/*.h"
+       "${_reader_root}/include/*.h" "${_reader_root}/manifest/*.tsv" "${_reader_root}/manifest/*.toml")
+  list(SORT _reader_inputs)
+  foreach(_reader_input IN LISTS _reader_inputs)
+    set(_reader_path "${_reader_root}/${_reader_input}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_reader_path}")
+    file(READ "${_reader_path}" _reader_text)
+    string(REPLACE "\r\n" "\n" _reader_text "${_reader_text}")
+    string(SHA256 _reader_digest "${_reader_text}")
+    string(LENGTH "${_reader_input}" _reader_length)
+    string(APPEND _reader_contract "${_reader_length}:${_reader_input}:${_reader_digest}\n")
+  endforeach()
+  string(APPEND _reader_contract "\n")
+endforeach()
+string(SHA256 LAPLACE_READER_SOURCE_ID "${_reader_contract}")
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/laplace_reader_source.h"
+     CONTENT "#define LAPLACE_READER_SOURCE_ID \"${LAPLACE_READER_SOURCE_ID}\"\n")
 configure_file(src/config.h.in ${CMAKE_CURRENT_BINARY_DIR}/laplace_config.h @ONLY)
 target_include_directories(laplace_engine PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 if(WIN32)
