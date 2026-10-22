@@ -308,6 +308,7 @@ typedef struct NativeGrammar {
     int  (*says)(Recipe *, const char *path, char *tok);                     /* a line of a recipe of this grammar: 1 said, -1 written wrong */
     int  (*done)(Recipe *, const char *path);                                /* the recipe, read to its end: 1 it loads */
     void (*read)(const Recipe *, File *, const uint8_t *src, size_t n);    /* a file: its records, what they attest, its trunk */
+    void (*input)(const Recipe *, File *, const struct SInput *);          /* grammar-bounded windows from a single input stream */
 } NativeGrammar;
 const NativeGrammar *native_grammar(const char *name);                       /* the native grammar of that name, or NULL */
 int  reads_in_stretches(const Recipe *, char *boundary);                    /* whether a file of this recipe can be: 1 at a line's end, 2 at an empty line */
