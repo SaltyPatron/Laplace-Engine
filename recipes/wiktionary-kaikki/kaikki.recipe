@@ -20,6 +20,9 @@ thing record lang_code word pos
 thing senses glosses
 thing forms form
 thing examples text
+thing sounds ipa
+thing sounds enpr
+thing sounds audio-ipa
 thing * lang_code word
 thing * word
 thing redirect title
@@ -69,6 +72,9 @@ relation "coordinate term" coordinate_terms
 relation "descendant" descendants
 #   "examples - list of usage examples"
 relation "usage example" examples
+# README, Pronunciation: each sounds object carries a pronunciation and its
+# own regional/context tags. The transcription is content, not a JSON key.
+relation "pronunciation" sounds
 #   "alt_of - list of words that his sense is an alternative form of"
 relation "alternative form of" alt_of
 #   "form_of - list of words that this sense is an inflected form of"
