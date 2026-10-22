@@ -803,7 +803,7 @@ int cmd_ingest(int argc, char **argv){
         }
         if (load_register(conninfo, threads, roots, nr) || merge(conninfo, threads)) { free(roots); return 1; }
         free(roots);
-        if (has_witness_trunk && witness_supersedes) forget_superseded(conninfo, threads, &witness_trunk);
+        if (has_witness_trunk && witness_supersedes && forget_superseded(conninfo, threads, &witness_trunk)) return 1;
     }
     printf("\n== total %.1f s\n", now() - T);
     return mism ? 1 : 0;
