@@ -12,8 +12,8 @@ name conceptnet-assertions
 # relation IsA (/r/dbpedia/genre, the relation dbpedia/genre).
 #
 # (Edges) The edge is the claim [start, relation, end]: the line is that claim. "sources: the sources that, when
-# combined, say that this assertion should be true": each contributor among them is a witness of its own and says
-# the edge; an edge that names no contributor is said by ConceptNet. What else the JSON says of the edge (its weight,
+# combined, say that this assertion should be true": contributors are content
+# beside their judgments; ConceptNet remains the witness. What else the JSON says of the edge (its weight,
 # the sentence it was read from and the surface forms of its two ends) ConceptNet says of the edge. The edge's own
 # URI is its start, relation and end again; the dataset, licence, process and activity are ConceptNet's bookkeeping.
 match assertions.csv
@@ -35,10 +35,10 @@ where rel is-not /r/ExternalURL
 # not: they are not read.
 omit uri dataset license process activity surfaceStart surfaceEnd
 content rel start end weight surfaceText
-own contributor
+content contributor
 
 thing edge start/3 rel/2 end/3
-itself edge by json/sources/contributor
+itself edge with json/sources/contributor
 # What the JSON says of the edge, in the words of ConceptNet's page "Edges" (Laplace-Engine#32): never the member's name.
 #   "weight: the strength with which this edge expresses this assertion. A typical weight is 1, but weights can be
 #   higher or lower. All weights are positive."
