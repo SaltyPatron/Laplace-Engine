@@ -13,7 +13,8 @@ name social-bias-frames-annotations
 #   dataSource: source of the post
 # A line is one worker's reading of one post. What the worker answered of the post, the worker says, of the post;
 # what the line holds of the worker is said of the worker; where the post was said (dataSource), the set says.
-# A post is its text; the HITId is the crowdsourcing task's key. A worker stands within the set: [the set, WorkerId, the id].
+# A post is its text; HITId is the task's pointer. The worker's hashed ID remains
+# content beside their judgments, which the Social Bias Frames corpus witnesses.
 # Each field states a relation in the README's words above; the answers are numbers (1.0, 0.5, 0.0) or free text.
 match SBIC.v2.trn.csv SBIC.v2.dev.csv SBIC.v2.tst.csv
 
@@ -24,7 +25,7 @@ tier field by ,
 
 thing row post
 key row HITId
-own WorkerId
+content WorkerId
 content post whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype annotator* dataSource
 
 relation "group vs. individual target" whoTarget
@@ -43,7 +44,7 @@ relation "political leaning of the MTurk worker" annotatorPolitics
 relation "race of the MTurk worker" annotatorRace
 relation "age of the MTurk worker" annotatorAge
 relation "source of the post" dataSource
-attest row whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype by WorkerId
+attest row whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype with WorkerId
 attest row annotator* of WorkerId
 # where the post was said ("source of the post (t/...: means Twitter, r/...: means a subreddit)"), the set says
 attest row dataSource
