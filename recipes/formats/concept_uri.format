@@ -1,0 +1,8 @@
+grammar concept_uri
+node concept group as concept
+node lexicalization group as lexicalization
+node language text as language
+node lemma text as lemma
+node pos text as pos
+node qualifier text as qualifier
+node external text as external

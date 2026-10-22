@@ -543,6 +543,11 @@ int say_says(Recipe *r, const char *path, char *tok){
             if (!strcmp(nm, "matching") && p->n && !p->lit[p->n - 1]) { char pat[160]; KSpec *ks = &p->form[p->n - 1];
                 if (!name_next(&at, pat, sizeof pat) || regcomp(&ks->re, pat, REG_EXTENDED)) { fprintf(stderr, "%s: thing TIER NAME matching PATTERN (it must compile)\n", path); return -1; } ks->has_re = 1; continue; }
             if (!strcmp(nm, "space") && p->n && !p->lit[p->n - 1]) { char ch[8]; if (!name_next(&at, ch, sizeof ch) || strlen(ch) != 1) { fprintf(stderr, "%s: thing TIER NAME space CHAR\n", path); return -1; } p->space[p->n - 1] = ch[0]; continue; }
+            if (!strcmp(nm,"required")) {
+                if (!p->resolved || !p->n || p->lit[p->n-1]) { fprintf(stderr,"%s: required follows a resolved selector\n",path); return -1; }
+                p->required[p->n-1]=1; continue;
+            }
+            if (!strcmp(nm,"preserve")) { p->preserve=1; continue; }
             if (!strcmp(nm, "span")) { p->span = 1; continue; } if (!strcmp(nm, "inclusive")) { p->inclusive = 1; continue; } if (!strcmp(nm, "of")) { p->of = 1; continue; } if (!strcmp(nm, "resolved")) { p->resolved = 1; continue; } if (p->n < 8) snprintf(p->name[p->n++], sizeof p->name[0], "%s", nm); }
         if (p->span && p->n != 3) { fprintf(stderr, "%s: thing TIER span START END TEXT [inclusive]\n", path); return -1; }
         if (!p->n) { fprintf(stderr, "%s: thing TIER NAME... [within]\n", path); return -1; } return 1; }
