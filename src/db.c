@@ -220,8 +220,9 @@ int load_file_keys(const char *conninfo, const File *file){
         if (field.has_value) {
             if (PQgetisnull(result,row,2) || PQgetlength(result,row,2)!=16) { invalid=1; break; }
             memcpy(field.value.id.b,PQgetvalue(result,row,2),16);
-            const lp_tier0_record *scalar=lp_tier0_find(T0,&field.value.id);
-            if (scalar) { memcpy(field.value.c.m,scalar->m,sizeof field.value.c.m); field.value.tier=0; }
+            const lp_tier0_record *cached=lp_tier0_find(T0,&field.value.id); int floor=cached!=NULL;
+            if (!cached) cached=lp_highway_find(HW,&field.value.id);
+            if (cached) { memcpy(field.value.c.m,cached->m,sizeof field.value.c.m); field.value.tier=floor ? 0 : (uint8_t)cached->pad; }
             else {
                 lp_ewkb_info info;
                 if (PQgetisnull(result,row,3) || PQgetisnull(result,row,4) || PQgetlength(result,row,4)!=2 ||

@@ -338,6 +338,15 @@ int layout_says(Layout *l, const char *path, char *tok){
                 if (!*w || *end || index >= S_TIERS) { fprintf(stderr, "%s: invalid alias tier\n", path); return -1; }
                 r->alias_tier = (uint8_t)(index + 1); into = 0; continue;
             }
+            if (into == 9) { str_set(r->numbered,sizeof r->numbered,w); r->number_length=(uint8_t)strlen(r->numbered); into=0; continue; }
+            if (into == 10 || into == 11) {
+                char *end; unsigned long value=strtoul(w,&end,10);
+                if (!*w || *end || (into==10 ? value<2 || value>36 : value<1 || value>64)) {
+                    fprintf(stderr,"%s: numbered radix 2..36, width 1..64\n",path); return -1;
+                }
+                if (into==10) r->number_radix=(uint8_t)value; else r->number_width=(uint8_t)value;
+                into=0; continue;
+            }
             if (!strcmp(w, "context")) { into = 8; continue; }
             if (into == 8) {
                 if (r->ncontext == 4) { fprintf(stderr, "%s: at most four context paths per group\n", path); return -1; }
@@ -349,6 +358,9 @@ int layout_says(Layout *l, const char *path, char *tok){
             else if (!strcmp(w, "field")) into = 4; else if (!strcmp(w, "under")) into = 5;
             else if (!strcmp(w, "as")) into = 6;
             else if (!strcmp(w, "tier")) into = 7;
+            else if (!strcmp(w,"numbered")) into=9;
+            else if (!strcmp(w,"radix")) into=10;
+            else if (!strcmp(w,"width")) into=11;
             else if (!strcmp(w, "same-tier")) r->compiled.flags |= 1u;
             else if (!strcmp(w, "raw")) r->raw = 1; else if (!strcmp(w, "join")) r->join = 1; else if (!strcmp(w, "list")) r->list = 1; else if (!strcmp(w, "kind")) r->kind = 1; else if (!strcmp(w, "trim")) r->trim = 1;
             else if (into == 1 && r->nname < 4) str_set(r->name[r->nname++], 64, w); else if (into == 2) str_set(r->text, sizeof r->text, w);
@@ -357,6 +369,9 @@ int layout_says(Layout *l, const char *path, char *tok){
         if (r->ncontext && r->what != G_GROUP) { fprintf(stderr, "%s: context paths require a group\n", path); return -1; }
         if ((r->what == G_VALUE || r->what == G_MEMBER || r->what == G_NOTE) && (!r->nname || !r->text[0])) { fprintf(stderr, "%s: node %s %s name PATH %s PATH\n", path, ty, wh, r->what == G_MEMBER ? "value" : "text"); return -1; }
         if ((r->alias[0] || r->alias_tier) && r->what != G_GROUP && r->what != G_TEXT) { fprintf(stderr, "%s: node %s: an alias applies to a group or text rule\n", path, ty); return -1; }
+        if ((r->numbered[0] && r->what!=G_GROUP) || ((!r->numbered[0]) && (r->number_radix || r->number_width))) {
+            fprintf(stderr,"%s: numbered applies to a group rule\n",path); return -1;
+        }
         if (r->alias[0] && r->alias_tier) { fprintf(stderr, "%s: node %s: use an explicit alias or a tier alias\n", path, ty); return -1; }
         return 1; }
     if (!strcmp(tok, "empty")) { char *v; int any = 0;
@@ -640,6 +655,10 @@ void layout_bind_names(Layout *layout, s_compile_name_fn compile, const void *pr
     layout->compile_name = compile; layout->name_program = program;
     if (!compile) return;
     if (layout->record_inner) layout_bind_names(layout->record_inner, compile, program);
+    for (int i=0;i<layout->g.n;i++) {
+        GRule *rule=&layout->g.rule[i];
+        if (rule->numbered[0]) rule->number_bindings=compile(program,(const uint8_t *)rule->numbered,(uint32_t)strlen(rule->numbered),NULL);
+    }
     for (uint32_t i = 0; i < layout->g.column_count; i++) {
         GColumn *column = &layout->g.columns[i]; column->bindings = compile(program, column->name, column->length, NULL);
     }
@@ -1241,6 +1260,7 @@ typedef struct {
     uint8_t context_list, close_scope, route, name_flags, unnamed;
     SField closing;
     CountFrame *counts;
+    uint32_t *ordinals;
     uint8_t count_input, count_member, count_omitted;
 } CursorFrame;
 
@@ -1833,6 +1853,22 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
             if (!(action & S_VISIT_OK)) { valid = 0; break; }
             frame->closing = field; frame->close_scope = 1;
             if (action & S_VISIT_SKIP) { children = 0; goto after_rule; }
+            if (rule->numbered[0]) {
+                if (count<2) { valid=0; break; }
+                CursorFrame *parent=&frames[count-2];
+                if (!parent->ordinals) { parent->ordinals=scratch_stack_alloc((size_t)layout->g.n*sizeof *parent->ordinals); memset(parent->ordinals,0,(size_t)layout->g.n*sizeof *parent->ordinals); }
+                uint32_t *ordinal=&parent->ordinals[rule-layout->g.rule];
+                if (*ordinal==UINT32_MAX) { valid=0; break; }
+                uint32_t value=++*ordinal; unsigned radix=rule->number_radix ? rule->number_radix : 10;
+                uint8_t text[64]; size_t length=0;
+                do { unsigned digit=value%radix; text[length++]=(uint8_t)(digit<10 ? '0'+digit : 'a'+digit-10); value/=radix; } while (value);
+                while (length<rule->number_width) text[length++]='0';
+                uint8_t *bytes=scratch_alloc(length); for (size_t i=0;i<length;i++) bytes[i]=text[length-i-1];
+                SField number={.source=frame->node,.range=field.range,.name=(const uint8_t *)rule->numbered,
+                    .name_length=rule->number_length,.value=bytes,.value_length=(uint32_t)length,
+                    .bindings=rule->number_bindings,.grammar=layout->g.grammar_id,.kind=S_VALUE,.flags=S_FIELD_DERIVED};
+                if (!visit(sink,S_FIELD,&number)) { valid=0; break; }
+            }
             frame->context_name = field.name; frame->context_length = field.name_length; frame->context_list = (uint8_t)rule->list;
             if (!ts_node_named_child_count(frame->node)) {
                 g_text(&worker, frame->node, 0, &field.value, &field.value_length); field.kind = S_TEXT;
