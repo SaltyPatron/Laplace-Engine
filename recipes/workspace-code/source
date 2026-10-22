@@ -10,6 +10,7 @@ files $LAPLACE_SRC/Laplace
 files $LAPLACE_SRC/Laplace-Native
 files $LAPLACE_SRC/Laplace-postgres
 files $LAPLACE_SRC/Laplace-Engine
+files $LAPLACE_SRC/Laplace-Prototype
 files $LAPLACE_SRC/Laplace-MCP
 files $LAPLACE_SRC/Laplace-UCI
 files $LAPLACE_SRC/Laplace-Operations
@@ -20,4 +21,4 @@ ignore .gitignore
 # changed or removed since leaves nothing of its former content that only those readings held
 supersede
 after unicode
-reads text json xml c cpp cuda c_sharp python javascript typescript tsx bash powershell css html cmake make dockerfile rust go java ruby
+reads text json xml cuda javascript tsx bash powershell css html cmake make dockerfile rust go java ruby

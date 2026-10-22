@@ -1,0 +1,33 @@
+name workspace-c_sharp
+match *.cs *.csx
+format code_c_sharp
+content source name parameters implementation signature_source members_source
+thing packaging source
+thing class_declaration source
+thing struct_declaration source
+thing method_declaration source
+thing constructor_declaration source
+thing record_declaration source
+thing property_declaration source
+thing interface_declaration source
+thing enum_declaration source
+thing delegate_declaration source
+relation "declared identifier" name
+relation "parameter signature" parameters
+relation "implemented by" implementation
+relation "declaration signature" signature.signature_source
+relation "declared identifier" signature.name
+relation "parameter signature" signature.parameters
+relation "declared members" members.members_source
+relation "declared identifier" members.name
+relation "declared members" members_source
+attest class_declaration name parameters implementation signature members members_source
+attest struct_declaration name parameters implementation signature members members_source
+attest method_declaration name parameters implementation signature members members_source
+attest constructor_declaration name parameters implementation signature members members_source
+attest record_declaration name parameters implementation
+attest property_declaration name parameters implementation
+attest interface_declaration name parameters implementation
+attest enum_declaration name parameters implementation
+attest delegate_declaration name parameters implementation
+

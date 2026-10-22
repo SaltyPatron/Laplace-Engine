@@ -1,0 +1,19 @@
+name workspace-python
+match *.py *.pyi
+format code_python
+content source name parameters implementation signature_source members_source
+thing packaging source
+thing function_definition source
+thing class_definition source
+relation "declared identifier" name
+relation "parameter signature" parameters
+relation "implemented by" implementation
+relation "declaration signature" signature.signature_source
+relation "declared identifier" signature.name
+relation "parameter signature" signature.parameters
+relation "declared members" members.members_source
+relation "declared identifier" members.name
+relation "declared members" members_source
+attest function_definition name parameters implementation signature members members_source
+attest class_definition name parameters implementation signature members members_source
+
