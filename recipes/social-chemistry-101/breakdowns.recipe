@@ -19,9 +19,9 @@ thing row rot
 key row rot-id
 key row situation-short-id
 # rot-worker-id, "The worker who _wrote this rule of thumb_", and breakdown-worker-id, "The worker who _did this RoT
-# breakdown_" (README): each a witness of their own, [the set, the column, the id]. The author says the rule of thumb
-# of its situation; the breakdown worker gives every "Worker answer" of it; the area and the characters the set says.
-own rot-worker-id breakdown-worker-id
+# breakdown_" (README): participant identifiers beside their respective judgments.
+# The corpus witnesses the author's rule and the breakdown worker's answers.
+content rot-worker-id breakdown-worker-id
 # m, the README: "How many workers did the RoT Breakdown for this RoT. Roughly corresponds to the split, but not
 # exactly." A count of workers: the set's bookkeeping, read by nothing.
 omit split n-characters rot-bad
@@ -58,6 +58,6 @@ value - rot-categorization rot-moral-foundations action-agency action-legal acti
 # rot-char-targeting and action-char-involved: obligations. Their answer char-N "means that the worker picked
 # character N, a 0-index into the `characters` column": a pointer into the row's own list, to be resolved to the
 # character it names, never recorded as written (Laplace-Engine#20).
-attest row situation by rot-worker-id
-attest row rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical by breakdown-worker-id
+attest row situation with rot-worker-id
+attest row rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical with breakdown-worker-id
 attest row area characters
