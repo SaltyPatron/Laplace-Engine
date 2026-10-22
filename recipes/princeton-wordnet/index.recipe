@@ -6,6 +6,7 @@ name wordnet-index
 # "p_cnt: Number of different pointers that lemma has in all synsets containing it"; the field names are wndb.5's,
 # this recipe's handles, in no claim.
 match index.noun index.verb index.adj index.adv
+format wndb
 
 tier line by \n
 comment space

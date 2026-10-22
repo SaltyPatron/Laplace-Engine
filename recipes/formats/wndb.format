@@ -15,11 +15,12 @@ node sense_record group kind tier 0
 node exc_record group kind tier 0
 node frame_record group kind tier 0
 node sentidx_record group kind tier 0
-node word group kind
+node word group kind numbered word_index radix 16 width 2
 node pointer group kind
 node frame group kind
 node index_pointer group kind
 node field text trim
+node template_text text raw
 node gloss text raw
 node header skip
 node words_end skip

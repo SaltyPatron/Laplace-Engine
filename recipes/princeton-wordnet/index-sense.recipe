@@ -6,6 +6,7 @@ name wordnet-index-sense
 # letter of its type (00001740-a). The highway keeps every sense key, written with its last :: and without it (as
 # VerbNet writes them), as a key of the concept the synset is. Nothing else is said here: the tag counts are cntlist's.
 match index.sense
+format wndb
 
 tier line by \n
 names sense_key synset_offset sense_number tag_cnt

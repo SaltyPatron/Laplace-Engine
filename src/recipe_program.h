@@ -18,11 +18,12 @@ typedef struct KeyProgram KeyProgram;
 typedef struct DiagnosticLabel DiagnosticLabel;
 typedef struct { char list[32], path[160], as[4][64]; int nas; regex_t re; int has_re, node; KeyProgram *program; } KSpec;     /* as: the templates, tried in order */
 typedef struct { char name[64]; uint16_t length, tier_id, scope_key; uint8_t within, local; lp_id domain; } TargetCode;
-typedef struct { char name[64]; int what; char arg[64]; KSpec k; uint32_t when;
+typedef struct { char name[64]; int what; char arg[64], under[64]; uint8_t key_radix; KSpec k; uint32_t when;
                  struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; const char *text;
                  TargetCode *targets; uint8_t ntargets; uint16_t name_length, arg_length, text_length;
                  DiagnosticLabel *road_label, *statement_label; uint32_t name_slot, part_slot, parent_slot; } Dis;   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse); text: what a relation line words it as */
-typedef struct { char tier[32], name[64], scope[32]; uint16_t tier_length, tier_id; lp_id domain, parent_domain; } Pair;
+enum { KEY_PARENT = 1, KEY_CONTENT_SCOPE = 2, KEY_NUMERIC = 4 }; /* transient binding namespaces */
+typedef struct { char tier[32], name[64], scope[32], under[64]; uint8_t key_radix; uint16_t tier_length, tier_id; lp_id source_domain, domain, parent_domain; } Pair;
 typedef struct { char tier[32]; char name[64][64]; int n; uint32_t when; char with[64], of[64]; int file; } Att; /* with: content qualifying a judgment; file: a field identifier is local to its source file */
 typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char with[64], of[64]; int alone; } Rel;     /* alone: where what it is to names nothing, the relation alone */
 typedef struct { char tier[32], name[8][160]; int n, within, infile, span, inclusive, of, resolved; char lit[8], space[8]; KSpec form[8]; } Thing;    /* of: the path of the things of its parts of these names, in order (a sentence of its words) */   /* within: its name stands only within the thing it is inside: the pair of that thing and it; infile: only within the file; span: the stretch of a text name[2] between the characters name[0] and name[1] */

@@ -5,6 +5,7 @@
  * vertices go in two arrays reserved once and filled a thread's chunk at a time, so nothing is reallocated while
  * another thread reads. 256 locked shards made every thread composing the same new node wait on one lock. */
 #include "engine.h"
+#include "laplace/highway.h"
 #include <omp.h>
 #include <stdlib.h>
 #include <string.h>
@@ -125,11 +126,11 @@ void table_init(void){
 }
 
 /* This hash indexes a recipe-local symbol, never mints a content entity ID. */
-void keys_domain(const char *recipe, const char *tier, int within, lp_id *out){
-    blake3_hasher hash; blake3_hasher_init(&hash); uint8_t parent = within != 0;
+void keys_domain(const char *recipe, const char *tier, uint8_t key_namespace, lp_id *out){
+    blake3_hasher hash; blake3_hasher_init(&hash);
     blake3_hasher_update(&hash, recipe, strlen(recipe) + 1);
     blake3_hasher_update(&hash, tier, strlen(tier) + 1);
-    blake3_hasher_update(&hash, &parent, 1);
+    blake3_hasher_update(&hash, &key_namespace, 1);
     blake3_hasher_finalize(&hash, out->b, sizeof out->b);
 }
 /* A compiled field selector has its own namespace underneath a declaration.
@@ -473,11 +474,12 @@ void table_reset(void){
 }
 uint64_t table_total(void){ return nodes_before + table_count(); }
 uint64_t table_hits(void){ return hits_before + seen_sum(0); }
-/* What an ID is as a reference: its node's coordinate and tier, or the codepoint's from tier 0. ok = 0 when it is
- * neither in the table nor a codepoint. */
+/* The active node table and immutable caches own canonical reference geometry. */
 Ref ref_of_id(const lp_id *id, int *ok){
     Ref r; memset(&r, 0, sizeof r); *ok = 1;
     Node *x = table_find(id); if (x) { r.id = *id; memcpy(r.c.m, x->m, 32); r.tier = x->tier; return r; }
     int64_t cp = lp_tier0_codepoint(T0, id); if (cp >= 0) return atom((uint32_t)cp);
+    const lp_tier0_record *cached=lp_highway_find(HW,id);
+    if (cached) { r.id=*id; memcpy(r.c.m,cached->m,sizeof r.c.m); r.tier=(uint8_t)cached->pad; return r; }
     *ok = 0; r.id = *id; return r;
 }

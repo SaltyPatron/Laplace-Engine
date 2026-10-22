@@ -5,6 +5,7 @@ name wordnet-sentidx
 # A sense key is the highway's key of the concept its synset is (index-sense.recipe); each number is sents.vrb's key
 # of a template, said of the concept. No sense key and no number is content.
 match sentidx.vrb
+format wndb
 
 tier line by \n
 names sense_key templates

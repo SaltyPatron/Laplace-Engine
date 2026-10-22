@@ -306,7 +306,8 @@ static void compile_targets(Say *say, Dis *rules, int count, const char *recipe)
                 if (say->key[j].scope[0]) target->scope_key=(uint16_t)(j+1);
                 break;
             }
-            keys_domain(target->local ? recipe : target->name, target->local ? target->name : "", target->local && target->within, &target->domain);
+            int space=(target->local && target->within ? KEY_PARENT : 0) | (rule->under[0] ? KEY_CONTENT_SCOPE : 0) | (rule->key_radix ? KEY_NUMERIC : 0);
+            keys_domain(target->local ? recipe : target->name, target->local ? target->name : "", space, &target->domain);
             at = next;
         }
     }
@@ -443,16 +444,18 @@ static void compile_semantic_paths(Say *say, const char *recipe){
         path_register(say, say->rel[i].tier); path_register(say, say->rel[i].rel); path_register(say, say->rel[i].to); path_register(say, say->rel[i].with); path_register(say, say->rel[i].of);
     }
     for (int i = 0; i < say->nkey; i++) {
-        Pair *key = &say->key[i]; path_register(say, key->tier); path_register(say, key->name); path_register(say,key->scope);
+        Pair *key = &say->key[i]; path_register(say, key->tier); path_register(say, key->name); path_register(say,key->scope); path_register(say,key->under);
         key->tier_length = (uint16_t)strlen(key->tier); key->tier_id = (uint16_t)(i + 1);
-        keys_domain(recipe, key->tier, 0, &key->domain); keys_domain(recipe, key->tier, 1, &key->parent_domain);
+        int space=(key->under[0] ? KEY_CONTENT_SCOPE : 0) | (key->key_radix ? KEY_NUMERIC : 0);
+        keys_domain(recipe,"",space,&key->source_domain);
+        keys_domain(recipe, key->tier, space, &key->domain); keys_domain(recipe, key->tier, space|KEY_PARENT, &key->parent_domain);
         for (int j = 0; j < i; j++) if (!strcmp(say->key[j].tier, key->tier)) { key->tier_id = say->key[j].tier_id; break; }
         if (!strcmp(key->tier, say->tree_row)) say->tree_key_index = (uint16_t)(i + 1);
     }
     for (int i = 0; i < say->nwhere; i++) path_register(say, say->where[i].name);
     for (int i = 0; i < say->nscore; i++) { path_register(say, say->score[i].tier); path_register(say, say->score[i].name); }
     for (int i = 0; i < say->nhw; i++) { path_register(say, say->hw[i].tier); path_register(say, say->hw[i].a.path); path_register(say, say->hw[i].b.path); compile_key_forms(&say->hw[i].a); compile_key_forms(&say->hw[i].b); }
-    for (int i = 0; i < say->ndis; i++) compile_key_forms(&say->dis[i].k);
+    for (int i = 0; i < say->ndis; i++) { compile_key_forms(&say->dis[i].k); path_register(say,say->dis[i].under); }
     for (int i = 0; i < say->nval; i++) compile_key_forms(&say->val[i].k);
     path_register(say, say->lay_tier); path_register(say, say->lay_row); path_register(say, say->tree_tier); path_register(say, say->tree_row);
     path_register(say, say->tree_head); path_register(say, say->tree_rel);
@@ -556,12 +559,22 @@ int say_says(Recipe *r, const char *path, char *tok){
         if (!x->n) { fprintf(stderr, "%s: holds TIER NAME...\n", path); return -1; } return 1; }
     if (!strcmp(tok, "key") && LAID) { at = strtok(NULL, "\r\n");
         if (!name_next(&at, a2, sizeof a2) || !name_next(&at, nm, sizeof nm) || s->nkey == S_TIERS) { fprintf(stderr, "%s: key TIER NAME\n", path); return -1; }
-        Pair *p = &s->key[s->nkey]; char keyword[32], extra[32];
-        if (name_next(&at,keyword,sizeof keyword) &&
-            (strcmp(keyword,"within") || !name_next(&at,p->scope,sizeof p->scope) || name_next(&at,extra,sizeof extra))) {
-            fprintf(stderr,"%s: key TIER NAME [within SCOPE]\n",path); return -1;
+        Pair *p = &s->key[s->nkey]; char keyword[32];
+        while (name_next(&at,keyword,sizeof keyword)) {
+            if (!strcmp(keyword,"radix")) {
+                char number[16],*end; unsigned long radix;
+                if (!name_next(&at,number,sizeof number) || (radix=strtoul(number,&end,10))<2 || radix>36 || *end || p->key_radix) {
+                    fprintf(stderr,"%s: key radix must be 2..36\n",path); return -1;
+                }
+                p->key_radix=(uint8_t)radix; continue;
+            }
+            char *scope = !strcmp(keyword,"within") ? p->scope : !strcmp(keyword,"under") ? p->under : NULL;
+            size_t capacity = scope==p->scope ? sizeof p->scope : sizeof p->under;
+            if (!scope || p->scope[0] || p->under[0] || !name_next(&at,scope,capacity)) {
+                fprintf(stderr,"%s: key TIER NAME [within SCOPE | under CONTENT_PATH] [radix N]\n",path); return -1;
+            }
         }
-        for (int i=0; i<s->nkey; i++) if (!strcmp(s->key[i].tier,a2) && strcmp(s->key[i].scope,p->scope)) {
+        for (int i=0; i<s->nkey; i++) if (!strcmp(s->key[i].tier,a2) && (strcmp(s->key[i].scope,p->scope) || strcmp(s->key[i].under,p->under) || !!s->key[i].key_radix != !!p->key_radix)) {
             fprintf(stderr,"%s: keys of tier %s must share one declared scope\n",path,a2); return -1;
         }
         s->nkey++; snprintf(p->tier, sizeof p->tier, "%s", a2); snprintf(p->name, sizeof p->name, "%s", nm);
@@ -647,11 +660,19 @@ int say_says(Recipe *r, const char *path, char *tok){
                 if (!strcmp(more, "node")) { ks.node = 1; continue; }
                 size_t l = strlen(a2); snprintf(a2 + l, sizeof a2 - l, " %s", more); }
             int rv = dis_add(s, path, nm, D_TYPE, a2); if (rv > 0) s->dis[s->ndis - 1].k = ks; return rv; }
-        else { char more[64], targets[64]; snprintf(targets, sizeof targets, "%s", a2);       /* refer NAME TIER [within] [TIER [within]]...: the first that holds the key; within: the thing that TIER is inside */
+        else { char more[64], targets[64], under[64]=""; uint8_t key_radix=0; snprintf(targets, sizeof targets, "%s", a2);       /* under qualifies a transient pointer by canonical parent content */
             while (name_next(&at, more, sizeof more)) { size_t l = strlen(targets);
-                if (!strcmp(more, "within")) { char *last = strrchr(targets, ' '); last = last ? last + 1 : targets; memmove(last + 1, last, strlen(last) + 1); *last = '^'; }
+                if (!strcmp(more,"under")) {
+                    if (under[0] || !name_next(&at,under,sizeof under)) { fprintf(stderr,"%s: refer NAME TIER... [under CONTENT_PATH]\n",path); return -1; }
+                } else if (!strcmp(more,"radix")) {
+                    char number[16],*end; unsigned long radix;
+                    if (!name_next(&at,number,sizeof number) || (radix=strtoul(number,&end,10))<2 || radix>36 || *end || key_radix) {
+                        fprintf(stderr,"%s: refer radix must be 2..36\n",path); return -1;
+                    }
+                    key_radix=(uint8_t)radix;
+                } else if (!strcmp(more, "within")) { char *last = strrchr(targets, ' '); last = last ? last + 1 : targets; memmove(last + 1, last, strlen(last) + 1); *last = '^'; }
                 else snprintf(targets + l, sizeof targets - l, " %s", more); }
-            snprintf(a2, sizeof a2, "%s", targets); }
+            int rv=dis_add(s,path,nm,D_REFER,targets); if (rv>0) { Dis *rule=&s->dis[s->ndis-1]; snprintf(rule->under,sizeof rule->under,"%s",under); rule->key_radix=key_radix; } return rv; }
         return dis_add(s, path, nm, tok[0] == 'r' ? D_REFER : D_TYPE, a2); }
     if (!strcmp(tok, "perfcache") && LAID) {                                    /* nothing read from the flags is attested: without them, nothing is read at all */
         const lp_layout *l = lp_flags_map(NULL);
@@ -757,7 +778,7 @@ int say_stretches(const Recipe *r){ const Say *s = r->say; if (!s || !s->lay.nti
 const char *say_refers(const Recipe *r, int i){ const Say *s = r ? r->say : NULL; if (!s) return NULL;
     for (int z=0; z<s->ndis; z++) if (s->dis[z].what==D_REFER)
         for (uint8_t target=0; target<s->dis[z].ntargets; target++)
-            if (!s->dis[z].targets[target].local && !i--) return s->dis[z].targets[target].name;
+            if (!s->dis[z].targets[target].local && strcmp(s->dis[z].targets[target].name,r->name) && !i--) return s->dis[z].targets[target].name;
     return NULL; }
 static int static_name_matches(const NameCode *pattern, const uint8_t *name, uint32_t length){
     return !pattern->note && pattern->length <= length && (pattern->wildcard || pattern->length == length) &&
