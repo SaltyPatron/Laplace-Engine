@@ -15,7 +15,7 @@ export LAPLACE_WORK=$scratch LAPLACE_DATA=$scratch
 fail(){ echo "source-after: $*" >&2; exit 1; }
 
 # the sources a plan of SOURCE takes in, by name, one on a line: the rows of the plan's table
-takes(){ set +e; local out; out=$("$L" ingest --plan "$1" 2>&1); set -e
+takes(){ set +e; local out; out=$(env -u LAPLACE_INGEST_ONE "$L" ingest --plan "$1" 2>&1); set -e
          awk '$1 ~ /^[0-9]+$/ && $2 != "sources" {print $2}' <<<"$out" | sort; }
 
 got=$(takes conceptnet | tr '\n' ' '); want="conceptnet iso-639 unicode "

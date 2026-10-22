@@ -44,19 +44,19 @@ LAPLACE_HIGHWAY=$scratch/highway.bin "$L" highway --fingerprint | grep -Eq '^fin
 fx(){ LAPLACE_HIGHWAY=$scratch/highway.bin LAPLACE_DATA=$scratch/nothing "$L" ingest --claims -s princeton-wordnet "$here/wordnet/$1" 2>&1 | tr -d '\r'; }
 
 v=$(fx data.verb) || fail "data.verb did not read: $v"
-[ "$(grep -c '^\[<ili>, generic verb sentence frames for words in the synset, <wnframe>\]$' <<<"$v")" = 2 ] || fail "the synset frames (w_num 00) are not relations to wnframe: $v"
-grep -q '^\[\[melt off, eng, <ili>\], generic verb sentence frames for words in the synset, <wnframe>\]$' <<<"$v" || fail "frame 8 is not bound to the selected English sense: $v"
+[ "$(grep -c '^\[<ili>, generic verb sentence frames for words in the synset, [28]\]$' <<<"$v")" = 2 ] || fail "the synset frames (w_num 00) did not resolve: $v"
+grep -q '^\[\[melt off, eng, <ili>\], generic verb sentence frames for words in the synset, 8\]$' <<<"$v" || fail "frame 8 is not bound to the selected English sense: $v"
 grep -q 'name a type no list of the highway holds' <<<"$v" && grep -q '\[target 01\]' <<<"$v" || fail "missing lexical target bindings were not diagnosed: $v"
 vt=$(LAPLACE_HIGHWAY=$scratch/highway.bin LAPLACE_DATA=$scratch/nothing "$L" ingest --claims-tsv -s princeton-wordnet "$here/wordnet/data.verb" 2>&1 | tr -d '\r') || fail "data.verb TSV did not read: $vt"
-grep -Pq '\twnframe:8$' <<<"$vt" || fail "frame 8 did not resolve from the embedded index: $vt"
+grep -Pq '\t8$' <<<"$vt" || fail "frame 8 did not resolve to its canonical identifier text: $vt"
 ! grep -q 'left open' <<<"$v" || fail "data.verb leaves a part open: $v"
 
 x=$(fx sentidx.vrb) || fail "sentidx.vrb did not read: $x"
-[ "$(grep -c '^\[<ili>, example sentences illustrating the use of the verb sense, <wnsentence>\]$' <<<"$x")" = 2 ] || fail "abash's templates 126 and 127 are not relations to wnsentence: $x"
+[ "$(grep -c '^\[<ili>, example sentences illustrating the use of the verb sense, 12[67]\]$' <<<"$x")" = 2 ] || fail "abash's templates 126 and 127 did not resolve: $x"
 grep -q 'unresolved obligations: 0 ' <<<"$x" || fail "sentidx.vrb leaves obligations: $x"
 xt=$(LAPLACE_HIGHWAY=$scratch/highway.bin LAPLACE_DATA=$scratch/nothing "$L" ingest --claims-tsv -s princeton-wordnet "$here/wordnet/sentidx.vrb" 2>&1 | tr -d '\r') || fail "sentidx.vrb TSV did not read: $xt"
 for key in 126 127; do
-  grep -Pq "\twnsentence:$key$" <<<"$xt" || fail "sentence $key did not resolve from the embedded index: $xt"
+  grep -Pq "\t$key$" <<<"$xt" || fail "sentence $key did not resolve to its canonical identifier text: $xt"
 done
 ! grep -Eq '%[1-5]:' <<<"$(grep '^\[' <<<"$x")" || fail "a sense key is content: $x"
 
