@@ -1,0 +1,14 @@
+name chess-openings
+match a.tsv b.tsv c.tsv d.tsv e.tsv
+tier opening by \n
+header
+tier field by \t
+part pgn grammar pgn_moves
+content eco name source move commentary annotation
+# The ordered SAN sequence is the opening's content. ECO is a classification,
+# not an identity or a game result. No win/loss evidence is invented.
+thing moves of move
+thing opening pgn/moves
+relation "opening name" name
+relation "Encyclopaedia of Chess Openings code" eco
+attest opening name eco

@@ -1,0 +1,11 @@
+name brown-tagged
+match c[a-z][0-9][0-9]
+format brown_tagged
+content word tag
+# Words share canonical content; sentence records contain their annotations.
+thing token word
+thing sentence of token
+thing paragraph of sentence
+layers sentence token word tag
+relation "part of speech annotation" tag
+attest token tag
