@@ -1390,6 +1390,21 @@ static int records_open(SRecords *records, const Layout *layout, const uint8_t *
          * format scanner guesses where a quote, newline or record ends. */
         prefix /= 2;
     }
+    /* `levels` names successive mapping members. A syntactically valid scalar,
+     * list, or missing document cannot satisfy that declared input contract.
+     * Inspect the compiled node disposition once at the document boundary; no
+     * corpus name, JSON scanner, or runtime node-name comparison is involved. */
+    if (layout->nlevels) {
+        GW worker = {.l=layout, .src=source}; TSNode root = ts_tree_root_node(tree);
+        const GRule *rule = rule_at(&worker, root, 0, 0);
+        while (!rule && ts_node_named_child_count(root) == 1) {
+            root = ts_node_named_child(root, 0); rule = rule_at(&worker, root, 0, 0);
+        }
+        if (!rule || rule->what != G_GROUP || rule->list) {
+            fputs("named mapping levels require an object document\n", stderr);
+            ts_tree_delete(tree); return 0;
+        }
+    }
     GInput scope_input = {.src=source, .length=(uint32_t)prefix}; scope_input.range.end_byte = (uint32_t)prefix;
     if (scopes && layout->g.scope_count && !scope_validate(layout, ts_tree_root_node(tree), &scope_input)) { ts_tree_delete(tree); return 0; }
     TSTreeCursor *cursor = lp_tls_cursor(ts_tree_root_node(tree));
