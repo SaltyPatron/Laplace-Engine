@@ -2,7 +2,7 @@ name toxigen-annotations
 # The raw annotations, written out from Parquet as a table whose first row names its columns. A row is one hashed
 # worker's reading of one text: what the set says of the text (Input.*) it says; what the worker answered of the text
 # (Answer.*) the worker says; what the row holds of the worker (Answer.annotator*) is said of the worker.
-# A worker stands within the set: [the set, HashedWorkerId, the id].
+# HashedWorkerId is content beside the judgment; ToxiGen is the sole witness.
 # The card lists the columns and words none; the questions are the paper's (Figure 6, see annotated.recipe), and
 # Input.prompt, Input.generation_method and the prompt's label are the generations' fields the card words (see
 # generations.recipe).
@@ -14,7 +14,7 @@ escaped \
 tier field by \t
 
 thing row Input.text
-own HashedWorkerId
+content HashedWorkerId
 content Input.* Answer.*
 # "**prompt** is the prompt used for **generation**."
 relation "the prompt used for generation" Input.prompt
@@ -42,7 +42,7 @@ relation "refers directly/indirectly to one or more other groups" Answer.stateGr
 #   true where the worker picked it; the answer is the choice the column's place stands for, which the recipe cannot
 #   yet read as the value of the question (Laplace-Engine#32).
 attest row Input.prompt Input.time Input.generation_method Input.prompt_label Input.target_group Input.binary_prompt_label
-attest row Answer.factSelect Answer.framingQ Answer.inGroup* Answer.ingroup* Answer.intent* Answer.lewd* Answer.refTarget Answer.stateFrame Answer.stateGroup Answer.stereo* Answer.toAI* Answer.toPER* Answer.writer* by HashedWorkerId
+attest row Answer.factSelect Answer.framingQ Answer.inGroup* Answer.ingroup* Answer.intent* Answer.lewd* Answer.refTarget Answer.stateFrame Answer.stateGroup Answer.stereo* Answer.toAI* Answer.toPER* Answer.writer* with HashedWorkerId
 # Answer.annotator* (age, gender, minority, race, politics.1-5): what the corpus reports of the worker, worded nowhere;
 # an obligation, with the people the corpus names (Laplace-Engine#29).
 attest row Answer.annotator* of HashedWorkerId

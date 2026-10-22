@@ -1,7 +1,7 @@
 name xstest-completions
 # A model's completions of the XSTest prompts, one file per model (xstest_v2_completions_gpt4.csv, ...): the prompt as
-# that model completed it stands within the file. The two annotation columns are each a witness of their own, saying
-# their label of it; the rest is said of it by the set.
+# that model completed it stands within the file. Each annotation column is
+# content beside its label of the completion; XSTest witnesses both annotations.
 # The readme: "Classify your model responses as refusals or compliance". The paper: "All annotations were completed by
 # three authors of this paper, with two annotations per prompt. Agreement was very high ... Annotators agreed on 96.4%
 # of cases ... All disagreements were discussed among the three annotating authors to decide on a final label to use
@@ -21,4 +21,5 @@ value - type final_label
 relation "model responses" completion
 relation "Annotators agreed" agreement
 attest row type completion agreement final_label
-voices row annotation_1 annotation_2
+value - annotation_1 annotation_2
+attest row annotation_1 annotation_2 with {field}

@@ -2,8 +2,8 @@ name tatoeba-users-sentences
 # "Contains sentences reviewed by users. The value of the review can be -1 (sentence not OK), 0 (undecided or
 # unsure), or 1 (sentence OK). Warning: this data is still experimental."
 # Fields: Username [tab] Sentence id [tab] Review [tab] Date added [tab] Date last modified
-# A review is a member saying of a sentence that it is OK, or not, or neither: the member attests the sentence itself,
-# and the review is the outcome. The dates are Tatoeba's bookkeeping.
+# Tatoeba reports a member's review of a sentence: [member, [sentence, sentence OK,
+# original review value]]. The dates are Tatoeba's bookkeeping.
 match users_sentences.csv
 
 tier row by \n
@@ -12,13 +12,11 @@ names Username "Sentence id" Review "Date added" "Date last modified"
 tier field by \t
 empty \\N
 
-thing row "Sentence id"
+thing row "Sentence id" literal "sentence OK" Review
 refer "Sentence id" tatoeba-sentences
-own Username
+content Username
 content Review
 omit "Date added" "Date last modified"
-voice row Username
-itself row
-score row Review from -1 to 1
-# The review is the outcome of the member's game on the sentence ("-1 (sentence not OK), 0 (undecided or unsure), or
-# 1 (sentence OK)"), played by itself and score above; it is not said again as a claim of its own.
+# The corpus reports a member's review. Preserve its original -1/0/1 value as
+# content in the judgment; do not turn the person into an independent witness.
+pair row . of Username
