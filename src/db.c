@@ -377,12 +377,33 @@ static void prune(File *files,int nfiles,LoadStats *st){
     }
 }
 
-typedef struct { Node *node; uint64_t hilbert; } Row;
+typedef struct { Node *node; uint64_t hilbert; lp_mask lexical; } Row;
+/* A tuple containing an explicit frozen lexical class carries that class.
+ * This caches its own constituents, not a claim's inferred subject standing.
+ * Conflicting classes have no single enum summary; retain the full path. */
+static lp_mask tuple_mask(const Node *node){
+    lp_mask mask=0,ambiguous=0;
+    if (!HW || !(node->kind&(1u<<LP_KIND_TUPLE))) return 0;
+    for (uint32_t i=0;i<node->nv;i++) {
+        int32_t slot; const lp_bank *bank=lp_highway_bank_of(HW,&VTX[node->voff+i].id,&slot);
+        if (!bank || strcmp(bank->carrier,"entity") || slot<0) continue;
+        lp_mask field=lp_mask_field(bank);
+        if (ambiguous&field) continue;
+        if (!lp_mask_add_id(HW,&mask,&VTX[node->voff+i].id)) {
+            mask&=~field; ambiguous|=field;
+        }
+    }
+    return mask;
+}
+static void carrier_bytes(lp_mask value,uint8_t out[12]){
+    memset(out,0,12);out[3]=64;
+    for(unsigned bit=0;bit<64;bit++) if(value&(UINT64_C(1)<<bit)) out[4+(bit>>3)]|=(uint8_t)(0x80u>>(bit&7));
+}
 static int hilbert_order(const void *a,const void *b){
     const Row *x=a,*y=b;return x->hilbert<y->hilbert?-1:x->hilbert>y->hilbert?1:memcmp(x->node->id.b,y->node->id.b,16);
 }
 static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
-    lp_copy copy={0}; char sql[256]; uint8_t geometry[128],zero[12]={0}; zero[3]=64;
+    lp_copy copy={0}; char sql[256]; uint8_t geometry[128],mask[12];
     statement(pg,"BEGIN");
     snprintf(sql,sizeof sql,"COPY %s (id,tier,coord,hilbert,mask) FROM STDIN (FORMAT binary)",writer.entity);
     copy_open(&copy,pg,sql);
@@ -391,7 +412,8 @@ static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
         for(int axis=0;axis<4;axis++)point[axis]=(double)x->m[axis]/LP_FIXED_ONE;
         size_t size=lp_ewkb_point4(point,geometry,sizeof geometry);
         lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
-        lp_copy_field(&copy,geometry,(uint32_t)size);lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));lp_copy_field(&copy,zero,sizeof zero);
+        carrier_bytes(rows[i].lexical,mask);
+        lp_copy_field(&copy,geometry,(uint32_t)size);lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));lp_copy_field(&copy,mask,sizeof mask);
     }
     copy_close(&copy);lp_buf_free(&copy.buf);copy=(lp_copy){0};
     snprintf(sql,sizeof sql,"COPY %s (entity,tier,hilbert,path,mask) FROM STDIN (FORMAT binary)",writer.path);
@@ -410,8 +432,7 @@ static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
         }
         if(size>path_capacity){path_capacity=size;path=xrealloc(path,path_capacity);}
         if (lp_ewkb_runs_spare(ids,runs,spare,x->nv,path,size)!=size) { fputs("native path size changed during COPY\n",stderr); exit(1); }
-        uint8_t mask[12]={0};mask[3]=64;
-        for(int bit=0;bit<8;bit++)if(x->kind&(1u<<bit))mask[4+(bit>>3)]|=(uint8_t)(0x80u>>(bit&7));
+        carrier_bytes(x->kind,mask);
         lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
         lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));
         lp_copy_field(&copy,path,(uint32_t)size);lp_copy_field(&copy,mask,sizeof mask);
@@ -429,7 +450,7 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     double begin=now();prune(files,nfiles,st);st->t_dedup+=now()-begin;begin=now();
     size_t count=0;TABLE_EACH(x)if(x->keep==1 || (x->keep==2 && x->kind))count++;
     Row *rows=malloc((count?count:1)*sizeof *rows);size_t at=0;
-    TABLE_EACH(x)if(x->keep==1 || (x->keep==2 && x->kind)){lp_coord c;memcpy(c.m,x->m,sizeof c.m);rows[at++]=(Row){x,lp_hilbert4(&c)};}
+    TABLE_EACH(x)if(x->keep==1 || (x->keep==2 && x->kind)){lp_coord c;memcpy(c.m,x->m,sizeof c.m);rows[at++]=(Row){x,lp_hilbert4(&c),tuple_mask(x)};}
     qsort(rows,count,sizeof *rows,hilbert_order);
     if(count){
         int lanes=writer.ncopy;if((size_t)lanes>count)lanes=(int)count;
