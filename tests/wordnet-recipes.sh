@@ -13,16 +13,16 @@ fail(){ echo "wordnet-recipes: $*" >&2; exit 1; }
 claims(){ LAPLACE_DATA=$scratch "$L" ingest --claims -s princeton-wordnet "$here/wordnet/$1" 2>&1 | tr -d '\r'; }
 
 d=$(claims data.noun) || fail "data.noun did not read: $d"
-grep -q ', words in the synset, entity\]$' <<<"$d" || fail "entity is not a word of its synset: $d"
-grep -q ', words in the synset, abstract entity\]$' <<<"$d" || fail "abstract_entity is not written with its space: $d"
-grep -q ', @, that which is perceived or known' <<<"$d" || fail "physical_entity's hypernym is not entity's concept: $d"
+grep -q ', words in the synset, \[entity, eng, <ili>\]\]$' <<<"$d" || fail "entity is not the English sense of its synset: $d"
+grep -q ', words in the synset, \[abstract entity, eng, <ili>\]\]$' <<<"$d" || fail "abstract_entity is not the English sense written with its space: $d"
+grep -q '^\[<ili>, @, <ili>\]$' <<<"$d" || fail "physical_entity's hypernym is not a concept: $d"
 [ "$(grep -c ', ~, ' <<<"$d")" -ge 10 ] || fail "the hyponym pointers are not relations between concepts: $d"
 grep -q 'name a type no list of the highway holds' <<<"$d" && grep -q '99999999' <<<"$d" || fail "an offset CILI does not key is not said: $d"
-! grep -q ', words in the synset, nothing\]$' <<<"$d" || fail "a synset no concept is says something: $d"
+! grep -q ', words in the synset, \[nothing, eng, <ili>\]\]$' <<<"$d" || fail "an unknown synset emitted an English sense: $d"
 ! grep -Eq '[0-9]{8}-[nvasr]|%[1-5]:' <<<"$(grep '^\[' <<<"$d")" || fail "an offset or a sense key is content: $d"
-# A lexical pointer (source/target not 0000) names a word of the target synset, which no list keys yet: an unresolved
-# obligation, said, not passed over.
-grep -q 'unresolved obligations: 1 ' <<<"$d" && grep -Eq 'attest target +1$' <<<"$d" || fail "data.noun's lexical pointer is not an unresolved obligation: $d"
+# The fixture lacks the lexical target word. Its missing scoped binding must
+# be diagnosed alongside the unknown synset, rather than becoming a claim.
+grep -q '2 keys in ' <<<"$d" && grep -q '\[target 01\]' <<<"$d" || fail "the unresolved lexical pointer was not diagnosed: $d"
 
 i=$(claims index.adj) || fail "index.adj did not read: $i"
 [ "$(grep -c '^\[able, synset containing lemma, ' <<<"$i")" = 4 ] || fail "able's four synsets are not its concepts: $i"
@@ -30,29 +30,34 @@ grep -q '^\[dissilient, synset containing lemma, ' <<<"$i" || fail "a satellite 
 grep -q '^\[able, type of pointer that lemma has in all synsets containing it, !\]$' <<<"$i" || fail "able's pointer types: $i"
 grep -q '^\[able, a\]$' <<<"$i" || fail "able's syntactic category: $i"
 # The verb frames and sentence templates are highway lists (wnframe, wnsentence) whose slots the Native manifest freezes.
-# A highway is built here from a copy of that manifest and a fixture data root (CILI's concepts for the fixture synsets,
-# frames.vrb, sents.vrb, one index.sense line), every other list from its slots, so the lists are read before any
-# installed highway carries them.
+# Build the self-contained highway from frozen identifiers with no raw corpus
+# root. Frame and sentence keys must resolve through its embedded index.
 native=${LAPLACE_MANIFEST:-$here/../../Laplace-Native/manifest}
 [ -f "$native/banks.tsv" ] || fail "no Native manifest at $native (set LAPLACE_MANIFEST)"
 cp -R "$native" "$scratch/manifest"; mkdir -p "$scratch/nothing"
-LAPLACE_MANIFEST=$scratch/manifest LAPLACE_DATA=$here/wordnet-highway LAPLACE_MODELS=$scratch/nothing \
+LAPLACE_MANIFEST=$scratch/manifest LAPLACE_DATA=$scratch/nothing LAPLACE_MODELS=$scratch/nothing \
   "$L" highway -o "$scratch/highway.bin" >"$scratch/highway.log" 2>&1 || fail "the fixture highway did not build: $(cat "$scratch/highway.log")"
-keys=$(tr -d '\r' <"$scratch/highway.bin.keys")
-grep -Pq '^wnframe\t8\t' <<<"$keys" || fail "frame 8 is not a key of wnframe"
-grep -Pq '^wnsentence\t126\t' <<<"$keys" || fail "sentence 126 is not a key of wnsentence"
+for extension in keys layout nodes; do
+  [ ! -e "$scratch/highway.bin.$extension" ] || fail "highway requires an external $extension sidecar"
+done
+LAPLACE_HIGHWAY=$scratch/highway.bin "$L" highway --fingerprint | grep -Eq '^fingerprint [0-9a-f]{64}$' || fail "the embedded highway index did not validate"
 fx(){ LAPLACE_HIGHWAY=$scratch/highway.bin LAPLACE_DATA=$scratch/nothing "$L" ingest --claims -s princeton-wordnet "$here/wordnet/$1" 2>&1 | tr -d '\r'; }
 
 v=$(fx data.verb) || fail "data.verb did not read: $v"
 [ "$(grep -c '^\[<ili>, generic verb sentence frames for words in the synset, <wnframe>\]$' <<<"$v")" = 2 ] || fail "the synset frames (w_num 00) are not relations to wnframe: $v"
-grep -q 'unresolved obligations: 3 ' <<<"$v" || fail "data.verb's obligations: $v"
-grep -Eq 'attest f_num +1$' <<<"$v" || fail "a frame of one word is not an unresolved obligation: $v"
-grep -Eq 'attest target +2$' <<<"$v" || fail "the lexical pointers are not unresolved obligations: $v"
+grep -q '^\[\[melt off, eng, <ili>\], generic verb sentence frames for words in the synset, <wnframe>\]$' <<<"$v" || fail "frame 8 is not bound to the selected English sense: $v"
+grep -q 'name a type no list of the highway holds' <<<"$v" && grep -q '\[target 01\]' <<<"$v" || fail "missing lexical target bindings were not diagnosed: $v"
+vt=$(LAPLACE_HIGHWAY=$scratch/highway.bin LAPLACE_DATA=$scratch/nothing "$L" ingest --claims-tsv -s princeton-wordnet "$here/wordnet/data.verb" 2>&1 | tr -d '\r') || fail "data.verb TSV did not read: $vt"
+grep -Pq '\twnframe:8$' <<<"$vt" || fail "frame 8 did not resolve from the embedded index: $vt"
 ! grep -q 'left open' <<<"$v" || fail "data.verb leaves a part open: $v"
 
 x=$(fx sentidx.vrb) || fail "sentidx.vrb did not read: $x"
 [ "$(grep -c '^\[<ili>, example sentences illustrating the use of the verb sense, <wnsentence>\]$' <<<"$x")" = 2 ] || fail "abash's templates 126 and 127 are not relations to wnsentence: $x"
 grep -q 'unresolved obligations: 0 ' <<<"$x" || fail "sentidx.vrb leaves obligations: $x"
+xt=$(LAPLACE_HIGHWAY=$scratch/highway.bin LAPLACE_DATA=$scratch/nothing "$L" ingest --claims-tsv -s princeton-wordnet "$here/wordnet/sentidx.vrb" 2>&1 | tr -d '\r') || fail "sentidx.vrb TSV did not read: $xt"
+for key in 126 127; do
+  grep -Pq "\twnsentence:$key$" <<<"$xt" || fail "sentence $key did not resolve from the embedded index: $xt"
+done
 ! grep -Eq '%[1-5]:' <<<"$(grep '^\[' <<<"$x")" || fail "a sense key is content: $x"
 
 for f in frames.vrb sents.vrb; do
