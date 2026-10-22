@@ -115,7 +115,7 @@ jobs:
         run: |
           . Laplace-Operations/laplace.env
           export LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native
-          python3 Laplace-Engine/tests/staging-role.py
+          python3 Laplace-Engine/tests/staging-role.py "$RUNNER_TEMP/engine/laplace"
       - name: a working tree's whole reading supersedes the readings before it
         run: |
           . Laplace-Operations/laplace.env
