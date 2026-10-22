@@ -26,7 +26,10 @@ enum { KEY_PARENT = 1, KEY_CONTENT_SCOPE = 2, KEY_NUMERIC = 4 }; /* transient bi
 typedef struct { char tier[32], name[64], scope[32], under[64]; uint8_t key_radix; uint16_t tier_length, tier_id; lp_id source_domain, domain, parent_domain; } Pair;
 typedef struct { char tier[32]; char name[64][64]; int n; uint32_t when; char with[64], of[64]; int file; } Att; /* with: content qualifying a judgment; file: a field identifier is local to its source file */
 typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char with[64], of[64]; int alone; } Rel;     /* alone: where what it is to names nothing, the relation alone */
-typedef struct { char tier[32], name[8][160]; int n, within, infile, span, inclusive, of, resolved; char lit[8], space[8]; KSpec form[8]; } Thing;    /* of: the path of the things of its parts of these names, in order (a sentence of its words) */   /* within: its name stands only within the thing it is inside: the pair of that thing and it; infile: only within the file; span: the stretch of a text name[2] between the characters name[0] and name[1] */
+/* of: constituent things in source order; resolved: selectors in recipe order.
+ * required rejects an unresolved operand; preserve retains nested tuple roles. */
+typedef struct { char tier[32], name[8][160]; int n, within, infile, span, inclusive, of, resolved, preserve;
+                 char lit[8], space[8], required[8]; KSpec form[8]; } Thing;
 typedef struct { char tier[32], name[64]; double from, to; int mapped; } Score;
 typedef struct { char name[64]; int op; char val[128]; regex_t re; } Where;
 typedef struct {
