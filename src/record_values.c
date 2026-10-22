@@ -42,6 +42,20 @@ static Ref semantic_text_ref(RecordWorker *sink, const SemanticValue *value){
 
 static inline int composing(int32_t g){ for (int i = busy_base; i < nbusy; i++) if (busy[i] == g) return 1; return 0; }
 
+/* Numeric pointers compare by value, regardless of hexadecimal letter case
+ * or zero padding. The explicit recipe radix leaves ordinary keys literal. */
+static int numeric_key(const uint8_t *bytes,size_t length,unsigned radix,uint8_t out[8]){
+    if (!length) return 0; uint64_t value=0;
+    for (size_t i=0;i<length;i++) {
+        unsigned digit=bytes[i]>='0' && bytes[i]<='9' ? bytes[i]-'0' :
+            bytes[i]>='a' && bytes[i]<='z' ? bytes[i]-'a'+10 :
+            bytes[i]>='A' && bytes[i]<='Z' ? bytes[i]-'A'+10 : radix;
+        if (digit>=radix || value>(UINT64_MAX-digit)/radix) return 0;
+        value=value*radix+digit;
+    }
+    for (unsigned i=0;i<8;i++) out[i]=(uint8_t)(value>>(8*i));
+    return 1;
+}
 static uint64_t local_key_hash(uint16_t tier, int32_t scope, const uint8_t *bytes, size_t length){
     return selector_hash(bytes, length) ^ ((uint64_t)tier * UINT64_C(0x9e3779b97f4a7c15)) ^
         ((uint64_t)((uint32_t)scope+1) * UINT64_C(0xbf58476d1ce4e5b9));
@@ -75,22 +89,27 @@ void record_index_keys(RecordWorker *sink, const SemanticRecord *tree){
     for (uint32_t group = 0; group < tree->count; group++) {
         const SemanticValue *node = &tree->n[group]; if (node->context || node->kind != S_GROUP || !node->nlen) continue;
         for (int i = 0; i < say->nkey; i++) {
-            const Pair *key = &say->key[i]; if (!record_field_named(node, key->tier, key->tier_length)) continue;
+            const Pair *key = &say->key[i]; if (key->under[0] || !record_field_named(node, key->tier, key->tier_length)) continue;
             int32_t field = record_select_first(tree, (int32_t)group, key->name);
             if (field < 0 || !tree->n[field].vlen) continue;
             const SemanticValue *value = &tree->n[field];
+            const uint8_t *bytes=value->val; size_t length=value->vlen;
+            if (key->key_radix) {
+                uint8_t number[8]; if (!numeric_key(bytes,length,key->key_radix,number)) continue;
+                uint8_t *copy=scratch_alloc(sizeof number); memcpy(copy,number,sizeof number); bytes=copy; length=sizeof number;
+            }
             if ((sink->local_count + 1) * 2 >= sink->local_capacity) local_key_grow(sink);
             int32_t scope=key_scope(sink,tree,(int32_t)group,key);
-            uint64_t hash = local_key_hash(key->tier_id, scope, value->val, value->vlen);
+            uint64_t hash = local_key_hash(key->tier_id, scope, bytes, length);
             size_t at = (hash ^ (hash >> 32)) & (sink->local_capacity - 1);
             while (sink->local_keys[at].tier) {
                 const LocalKey *entry = &sink->local_keys[at];
-                if (entry->hash == hash && entry->tier == key->tier_id && entry->scope == scope && entry->length == value->vlen &&
-                    !memcmp(entry->bytes, value->val, value->vlen)) break;
+                if (entry->hash == hash && entry->tier == key->tier_id && entry->scope == scope && entry->length == length &&
+                    !memcmp(entry->bytes, bytes, length)) break;
                 at = (at + 1) & (sink->local_capacity - 1);
             }
             if (!sink->local_keys[at].tier) {
-                sink->local_keys[at] = (LocalKey){.bytes=value->val,.hash=hash,.length=value->vlen,.node=(int32_t)group,.scope=scope,.tier=key->tier_id}; sink->local_count++;
+                sink->local_keys[at] = (LocalKey){.bytes=bytes,.hash=hash,.length=(uint32_t)length,.node=(int32_t)group,.scope=scope,.tier=key->tier_id}; sink->local_count++;
             }
         }
     }
@@ -134,6 +153,22 @@ static void record_unknown_key(RecordWorker *k, const SemanticRecord *t, int32_t
 }
 
 Ref record_text(const uint8_t *p, size_t n){ return n > 256 ? text_ref(CTX[omp_get_thread_num()], p, n) : string_ref(p, n); }
+
+/* A positional pointer is local to its canonical parent. These bytes are an
+ * index key only; they never mint an entity or survive as corpus content. */
+static const uint8_t *scoped_key(RecordWorker *k, const SemanticRecord *t, int32_t at,
+                                 const char *under, unsigned radix, const uint8_t *raw, size_t *length, int depth){
+    if (!under[0] && !radix) return raw;
+    uint8_t number[8];
+    if (radix) { if (!numeric_key(raw,*length,radix,number)) return NULL; raw=number; *length=sizeof number; }
+    if (!under[0]) { uint8_t *bytes=scratch_alloc(*length); memcpy(bytes,raw,*length); return bytes; }
+    int32_t parent=record_select_first(t,at,under); Ref scope;
+    if (parent<0 || !record_value(k,t,parent,&scope,depth+1)) return NULL;
+    if (*length>SIZE_MAX-sizeof scope.id.b) { fputs("scoped pointer exceeds arena\n",stderr); abort(); }
+    uint8_t *bytes=scratch_alloc(sizeof scope.id.b+*length);
+    memcpy(bytes,scope.id.b,sizeof scope.id.b); memcpy(bytes+sizeof scope.id.b,raw,*length);
+    *length+=sizeof scope.id.b; return bytes;
+}
 
 static size_t hex_upper(unsigned long cp, char *out){
     static const char hd[] = "0123456789ABCDEF";
@@ -197,18 +232,21 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
         uint8_t buf[512]; size_t l; if (!codepoints_text(p, n, buf, sizeof buf, &l)) { if (!n) return 0; *out = record_text(p, n); return 1; }
         *out = string_ref(buf, l); return 1; }
     if (d->what == D_REFER && depth < 16) {                                  /* the first of its targets that holds the key */
+        size_t key_length=x->vlen;
+        const uint8_t *key=scoped_key(k,t,c,d->under,d->key_radix,x->val,&key_length,depth);
+        if (!key) { if (k->binding_phase) k->blocked++; else record_unknown_key(k,t,c,x); return 0; }
         for (uint8_t i = 0; i < d->ntargets; i++) {
             const TargetCode *target = &d->targets[i];
             /* Published keys obey source-order rank, including duplicate
              * declarations outside this record. Local bindings also bootstrap
              * products while their declarations are still being evaluated. */
-            const KeyField *declaration = target->scope_key ? NULL : keys_field_get(&target->domain, x->val, x->vlen);
+            const KeyField *declaration = target->scope_key ? NULL : keys_field_get(&target->domain, key, key_length);
             if (declaration && declaration->has_value) { *out = declaration->value; return 1; }
             if (declaration && declaration->blocked) {
                 k->blocked++; if (!k->binding_phase) record_unknown_key(k, t, c, x); return 0;
             }
-            if (target->local) {
-                int32_t g = keyed(k, t, target, c, x->val, x->vlen);
+            if (target->local && !d->under[0]) {
+                int32_t g = keyed(k, t, target, c, key, key_length);
                 if (g >= 0) {
                     if (target->within) { for (int32_t up = t->n[g].parent; up >= 0; up = t->n[up].parent) if (record_thing(k, t, up, out, depth + 1)) return 1; }
                     else if (record_thing(k, t, g, out, depth + 1)) return 1;
@@ -261,13 +299,16 @@ static int referred_field(RecordWorker *k, const SemanticRecord *t, int32_t g, c
     const Dis *d = record_field_disposition(k->s, &t->n[c]); const SemanticValue *x = &t->n[c];
     if (x->kind == S_GROUP && record_field_first(x) >= 0 && record_field_next(&t->n[record_field_first(x)]) < 0 && t->n[record_field_first(x)].kind == S_TEXT) x = &t->n[record_field_first(x)];     /* a part that holds only its text */
     if (!d || d->what != D_REFER || !x->vlen) return 0;
+    size_t key_length=x->vlen;
+    const uint8_t *key=scoped_key(k,t,c,d->under,d->key_radix,x->val,&key_length,depth);
+    if (!key) return 0;
     for (uint8_t i = 0; i < d->ntargets; i++) {
         const TargetCode *target = &d->targets[i];
         if (target->within || !target->local) continue;
         for (const KeyProjection *p = projection->targets; p; p = p->next) if (p->tier == target->tier_id) {
-            const KeyField *field = target->scope_key ? NULL : keys_field_get(&p->domain, x->val, x->vlen);
+            const KeyField *field = target->scope_key ? NULL : keys_field_get(&p->domain, key, key_length);
             if (field) { *out = *field; if (field->blocked) k->blocked++; return 1; }
-            int32_t r = keyed(k, t, target, c, x->val, x->vlen); if (r < 0) break;
+            int32_t r = d->under[0] ? -1 : keyed(k, t, target, c, key, key_length); if (r < 0) break;
             *out = projected_field(k, t, record_path_first(t, r, p->field, NULL), depth); return 1;
         }
     }
@@ -474,11 +515,13 @@ void record_publish_keys(RecordWorker *k, const SemanticRecord *t, int32_t root,
         for (int i = 0; i < s->nkey; i++) if (!s->key[i].scope[0] && record_field_named(x, s->key[i].tier, s->key[i].tier_length)) {
             int32_t field = record_field_child(t, g, s->key[i].name, -1); if (field < 0 || !t->n[field].vlen) continue;
             const Pair *key = &s->key[i]; KeyRank rank = k->kr; rank.member = (uint64_t)g;
-            keys_field_put(&s->key_domain, t->n[field].val, t->n[field].vlen, &waiting, &rank);
-            keys_field_put(&key->domain, t->n[field].val, t->n[field].vlen, &waiting, &rank);
-            keys_field_put(&key->parent_domain, t->n[field].val, t->n[field].vlen, &waiting, &rank);
+            size_t length=t->n[field].vlen;
+            const uint8_t *bytes=scoped_key(k,t,g,key->under,key->key_radix,t->n[field].val,&length,0); if (!bytes) continue;
+            keys_field_put(&key->source_domain, bytes, length, &waiting, &rank);
+            keys_field_put(&key->domain, bytes, length, &waiting, &rank);
+            keys_field_put(&key->parent_domain, bytes, length, &waiting, &rank);
             if (reserve) for (const KeyProjection *projection = s->projections; projection; projection = projection->all_next)
-                if (projection->tier == key->tier_id) keys_field_put(&projection->domain, t->n[field].val, t->n[field].vlen, &waiting, &rank);
+                if (projection->tier == key->tier_id) keys_field_put(&projection->domain, bytes, length, &waiting, &rank);
         }
     }
     if (reserve) return;
@@ -486,22 +529,24 @@ void record_publish_keys(RecordWorker *k, const SemanticRecord *t, int32_t root,
         for (int i = 0; i < s->nkey; i++) if (!s->key[i].scope[0] && record_field_named(x, s->key[i].tier, s->key[i].tier_length)) { int32_t kc = record_field_child(t, g, s->key[i].name, -1); Ref S;
             if (kc >= 0 && t->n[kc].vlen) {
                 const Pair *key = &s->key[i];
+                size_t length=t->n[kc].vlen;
+                const uint8_t *bytes=scoped_key(k,t,g,key->under,key->key_radix,t->n[kc].val,&length,0); if (!bytes) continue;
                 KeyRank rank = k->kr; rank.member = (uint64_t)g;
                 for (const KeyProjection *projection = s->projections; projection; projection = projection->all_next) if (projection->tier == key->tier_id) {
                     KeyField field = projected_field(k, t, record_path_first(t, g, projection->field, NULL), 0);
-                    keys_field_put(&projection->domain, t->n[kc].val, t->n[kc].vlen, &field, &rank);
+                    keys_field_put(&projection->domain, bytes, length, &field, &rank);
                 }
                 uint64_t blocked = k->blocked; KeyField declaration = {0};
                 if (record_thing(k, t, g, &S, 0)) { declaration.value = S; declaration.has_value = 1; }
                 declaration.blocked = (uint8_t)(blocked != k->blocked);
-                keys_field_put(&s->key_domain, t->n[kc].val, t->n[kc].vlen, &declaration, &rank);
-                keys_field_put(&key->domain, t->n[kc].val, t->n[kc].vlen, &declaration, &rank);
+                keys_field_put(&key->source_domain, bytes, length, &declaration, &rank);
+                keys_field_put(&key->domain, bytes, length, &declaration, &rank);
                 blocked = k->blocked; declaration = (KeyField){0};
                 for (int32_t up = x->parent; up >= 0; up = t->n[up].parent) if (record_thing(k, t, up, &S, 0)) {
                     declaration.value = S; declaration.has_value = 1; break;
                 }
                 declaration.blocked = (uint8_t)(blocked != k->blocked);
-                keys_field_put(&key->parent_domain, t->n[kc].val, t->n[kc].vlen, &declaration, &rank);
+                keys_field_put(&key->parent_domain, bytes, length, &declaration, &rank);
             } } }
 }
 

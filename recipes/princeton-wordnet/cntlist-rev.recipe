@@ -22,9 +22,10 @@ tier row by \n
 names sense_key sense_number tag_cnt
 tier field by space
 
-thing row sense_key matching ^([^%]+)% space _ literal en sense_key
+# Canonical ISO 639-3 English hub, shared with WN-LMF lexicalizations.
+thing row sense_key matching ^([^%]+)% space _ literal eng sense_key
 type sense_key ili
-key row sense_number
+omit sense_number
 content tag_cnt
 # cntlist.5: "tag_cnt is the decimal number of times the sense is tagged in the corresponding semantic concordance": a
 # number the file states of the sense, an observation, said of the lexicalization.
