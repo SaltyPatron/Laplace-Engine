@@ -2,10 +2,7 @@ name unicode-named-sequences
 # NamedSequences.txt / NamedSequencesProv.txt define name; codepoint sequence.
 # Use the same canonical sequence and predicate as ucd.recipe's XML records.
 match NamedSequences.txt NamedSequencesProv.txt
-tier row by \n
-comment hash
-remark hash
-padded
+format commented_table
 names name sequence
 tier field by ;
 thing row sequence

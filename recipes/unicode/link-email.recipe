@@ -1,0 +1,10 @@
+name unicode-link-email
+# UTS #58 LinkEmail.txt lists the positive ranges of the binary Link_Email
+# property. Unlisted codepoints have the declared No default, not testimony.
+match LinkEmail.txt
+format commented_table
+names codepoint
+tier field by ;
+range codepoint
+thing row codepoint literal Link_Email
+itself row
