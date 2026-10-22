@@ -44,6 +44,8 @@ static const Param
     WHOLE    = { "whole", "--whole", ARG_FLAG, NULL, "after a run that was cut off: every node is looked for" },
     NO_LOAD  = { "no_load", "--no-load", ARG_FLAG, NULL, "no-load" },
     PLAN     = { "plan", "--plan", ARG_FLAG, NULL, "plan" },
+    CATALOG  = { "catalog", "--catalog", ARG_FLAG, NULL, "all available sources, aliases, content locations, recipes and formats as JSON; no database or cache" },
+    LIST_SOURCES = { "list_sources", "--list-sources", ARG_FLAG, NULL, "every canonical recipe source name; no database or cache" },
     CLAIMS   = { "claims", "--claims", ARG_FLAG, NULL, "what the recipes attest, as text; nothing is loaded" },
     CLAIMS_TSV = { "claims_tsv", "--claims-tsv", ARG_FLAG, NULL, "--claims for a machine: a claim a line, kind, position, score and its parts between tabs (LIST:KEY for a type of the highway)" },
     ENTITIES = { "entities", "--entities", ARG_FLAG, NULL, "every composition a sample makes, its tier, parts and text, new or recorded; nothing is loaded" },
@@ -74,10 +76,11 @@ static const Param
 #define END { NULL, 0, NULL, NULL }
 #define O(p) { &(p), 0, NULL, NULL }
 static const Arg A_NONE[] = { END };
+static const Arg A_SOURCES[] = { O(CATALOG), END };
 static const Arg A_TIER0[] = { O(UCD), O(OUT_T0), END };
 static const Arg A_FLAGS[] = { O(UCD), O(OUT_FL), END };
 static const Arg A_HIGHWAY[] = { O(OUT_HW), O(FINGERPRINT), END };
-static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(HIGHWAY), O(WHOLE), O(NO_LOAD), O(PLAN), O(CLAIMS), O(CLAIMS_TSV), O(ENTITIES),
+static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(HIGHWAY), O(WHOLE), O(NO_LOAD), O(PLAN), O(CATALOG), O(LIST_SOURCES), O(CLAIMS), O(CLAIMS_TSV), O(ENTITIES),
                                 { &WHAT, ARG_MANY, NULL, NULL }, END };
 static const Arg A_MERGE[] = { O(CONNINFO), { &JOBS, 0, NULL, "every processor" }, END };
 static const Arg A_FORGET[] = { O(CONNINFO), O(JOBS), O(EXCEPT), O(TRUNK), { &WITNESS, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
@@ -109,7 +112,7 @@ const Op OPS[] = {
     { "flags",     cmd_flags,     "generate the flags that go with tier 0, from the standard's own lists", A_FLAGS, W_F, "text" },
     { "highway",   cmd_highway,   "generate the highway: the types, from the resources that list them, and the mappings between them", A_HIGHWAY, W_F, "text" },
     { "deploy",    cmd_deploy,    "make a database a Laplace database", A_NONE, W_DB | R_F, "text" },
-    { "sources",   cmd_sources,   "the sources there are recipes for, in the order they go in", A_NONE, R_DB | R_F, "text" },
+    { "sources",   cmd_sources,   "the sources there are recipes for, in the order they go in", A_SOURCES, R_DB | R_F, "text" },
     { "ingest",    cmd_ingest,    "a source by its name, or files, through their recipes", A_INGEST, W_DB | R_F, "text" },
     { "merge",     cmd_merge,     "what the ingest staged, into the real tables at once", A_MERGE, W_DB, "text" },
     { "forget",    cmd_forget,    "what one witness said, taken back out: its trunk, what it alone holds, and the standings it touched played again", A_FORGET, W_DB | EFFECT_DESTROYS, "text" },
