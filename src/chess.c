@@ -55,6 +55,8 @@
  *                    ID under it from its constituents with BLAKE3 alone, every leaf a codepoint, and replays every
  *                    line: each position the one its move makes of the one before */
 #include "engine.h"
+#include "structure.h"
+#include "record_output.h"
 #include "blake3.h"
 #include <omp.h>
 #include <stdio.h>
@@ -282,98 +284,103 @@ static Ref r_move(RefCache *rc, const Bd *b, const Mv *m){
 }
 static Ref r_text(const uint8_t *s, size_t n){ Ref r = n > 256 ? text_ref(CTX[omp_get_thread_num()], s, n) : string_ref(s, n); r.said = 0; return r; }
 
-/* ---- the PGN grammar: a game's tags and its movetext, the movetext a tree of lines */
+/* Compiled PGN symbols feed the chess state machine; no byte scanner parses
+ * packaging. The game work arena is reused for each bounded input window. */
+enum { PG_TAG=1, PG_SAN, PG_NAG, PG_ANNOTATION, PG_VARIATION, PG_COMMENT, PG_LINE_COMMENT, PG_RESULT };
+enum { K_PLAYED = 0, K_STUDY, K_PUZZLE };
+typedef struct { int records; const Layout *layout; uint8_t *dispatch; uint32_t symbols; TSFieldId name, value; } ChessRecipe;
+static __thread SayScratch chess_arena;
+static void *chess_grow(const void *old,size_t bytes,size_t next){
+    void *p=arena_alloc(&chess_arena,next); if(bytes)memcpy(p,old,bytes); return p;
+}
 typedef struct Line Line;
 typedef struct { uint8_t kind; const char *t; uint32_t n; Line *var; } Ann;         /* kind: 1 a comment, 2 a NAG, 3 a variation */
 typedef struct { const char *san; uint32_t n; Ann *ann; int nann, cann; } Ply;
 struct Line { Ply *p; int n, cap; Ann *lead; int nlead, clead; };
 typedef struct { const char *name, *val; uint32_t nl, vl; char *unesc; } Tag;
 typedef struct { Tag *tag; int ntag, ctag; Line main; const char *mt; size_t mtn; char result[8]; int has_result; int bad; } Game;
-static void ann_push(Ann **a, int *n, int *c, Ann x){ if (*n == *c) { *c = *c ? *c * 2 : 4; *a = xrealloc(*a, sizeof(Ann) * (size_t)*c); } (*a)[(*n)++] = x; }
-static void line_free(Line *l){
-    for (int i = 0; i < l->n; i++) { for (int j = 0; j < l->p[i].nann; j++) if (l->p[i].ann[j].var) { line_free(l->p[i].ann[j].var); free(l->p[i].ann[j].var); } free(l->p[i].ann); }
-    for (int j = 0; j < l->nlead; j++) if (l->lead[j].var) { line_free(l->lead[j].var); free(l->lead[j].var); }
-    free(l->p); free(l->lead); memset(l, 0, sizeof *l);
+static void ann_push(Ann **a, int *n, int *c, Ann x){ if (*n == *c) { int next=*c?*c*2:4; *a=chess_grow(*a,sizeof(Ann)*(size_t)*n,sizeof(Ann)*(size_t)next);*c=next; } (*a)[(*n)++] = x; }
+static uint8_t pgn_role(const ChessRecipe *recipe,TSNode node){
+    TSSymbol symbol=ts_node_symbol(node); return symbol<recipe->symbols?recipe->dispatch[symbol]:0;
 }
-static void game_free(Game *g){ for (int i = 0; i < g->ntag; i++) free(g->tag[i].unesc); free(g->tag); line_free(&g->main); memset(g, 0, sizeof *g); }
-static int is_result(const char *s, size_t n){ return (n == 3 && (!memcmp(s, "1-0", 3) || !memcmp(s, "0-1", 3))) || (n == 7 && !memcmp(s, "1/2-1/2", 7)) || (n == 1 && *s == '*'); }
-/* One game from s[*at]: its tag pairs, then its movetext up to its termination marker. 0: nothing more. */
-static int pgn_game(const char *s, size_t n, size_t *at, Game *g){
-    memset(g, 0, sizeof *g); size_t i = *at;
-    for (;;) {                                                                /* the tag pairs, and what stands around them */
-        while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) i++;
-        if (i < n && s[i] == '%' && (i == 0 || s[i - 1] == '\n')) { while (i < n && s[i] != '\n') i++; continue; }      /* an escaped line (8.2.6): not the game's */
-        if (i >= n || s[i] != '[') break;
-        size_t a = i + 1; while (a < n && (s[a] == ' ' || s[a] == '\t')) a++; size_t nb = a; while (nb < n && s[nb] != ' ' && s[nb] != '\t' && s[nb] != '"' && s[nb] != ']') nb++;
-        size_t q = nb; while (q < n && s[q] != '"' && s[q] != ']' && s[q] != '\n') q++;
-        Tag t = { s + a, NULL, (uint32_t)(nb - a), 0, NULL };
-        if (q < n && s[q] == '"') { size_t v = q + 1, e = v; int esc = 0; while (e < n && s[e] != '"' && s[e] != '\n') { if (s[e] == '\\' && e + 1 < n) { esc = 1; e++; } e++; }
-            if (esc) { t.unesc = malloc(e - v + 1); size_t k = 0; for (size_t z = v; z < e; z++) { if (s[z] == '\\' && z + 1 < e) z++; t.unesc[k++] = s[z]; } t.val = t.unesc; t.vl = (uint32_t)k; }
-            else { t.val = s + v; t.vl = (uint32_t)(e - v); }
-            q = e; }
-        while (q < n && s[q] != ']' && s[q] != '\n') q++; if (q < n && s[q] == ']') q++;
-        if (g->ntag == g->ctag) { g->ctag = g->ctag ? g->ctag * 2 : 32; g->tag = xrealloc(g->tag, sizeof(Tag) * (size_t)g->ctag); } g->tag[g->ntag++] = t;
-        i = q; }
-    /* the movetext: tokens to the termination marker at the outermost level */
-    Line *stack[64]; int depth = 0; stack[0] = &g->main; size_t m0 = i; int any = g->ntag > 0;
-    while (i < n) {
-        char c = s[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { i++; continue; }
-        if (c == '%' && (i == 0 || s[i - 1] == '\n')) { while (i < n && s[i] != '\n') i++; continue; }
-        if (c == '[' && depth == 0 && (i == 0 || s[i - 1] == '\n')) break;               /* the next game's tags: this one had no marker */
-        any = 1; Line *L = stack[depth];
-        if (c == '{' || c == ';') { size_t a = i + 1, e = a; if (c == '{') { while (e < n && s[e] != '}') e++; } else { while (e < n && s[e] != '\n' && s[e] != '\r') e++; }
-            Ann x = { 1, s + a, (uint32_t)(e - a), NULL }; if (L->n) ann_push(&L->p[L->n - 1].ann, &L->p[L->n - 1].nann, &L->p[L->n - 1].cann, x); else ann_push(&L->lead, &L->nlead, &L->clead, x);
-            i = c == '{' && e < n ? e + 1 : e; continue; }
-        if (c == '(') { Line *v = calloc(1, sizeof(Line)); Ann x = { 3, NULL, 0, v };
-            if (L->n) ann_push(&L->p[L->n - 1].ann, &L->p[L->n - 1].nann, &L->p[L->n - 1].cann, x); else { g->bad = 1; ann_push(&L->lead, &L->nlead, &L->clead, x); }
-            if (depth < 63) stack[++depth] = v; else g->bad = 1; i++; continue; }
-        if (c == ')') { if (depth) depth--; else g->bad = 1; i++; continue; }
-        size_t a = i; while (i < n && !strchr(" \t\r\n{}();[]", s[i])) i++;
-        const char *t = s + a; size_t tl = i - a;
-        if (!tl) { i++; continue; }                                            /* a character no token begins with (a stray brace): passed over */
-        if (depth == 0 && is_result(t, tl)) { memcpy(g->result, t, tl); g->result[tl] = 0; g->has_result = 1; break; }
-        if (*t == '$') { Ann x = { 2, t, (uint32_t)tl, NULL }; if (L->n) ann_push(&L->p[L->n - 1].ann, &L->p[L->n - 1].nann, &L->p[L->n - 1].cann, x); else ann_push(&L->lead, &L->nlead, &L->clead, x); continue; }
-        size_t d = 0; while (d < tl && isdigit((unsigned char)t[d])) d++;
-        if (d) { size_t e = d; while (e < tl && t[e] == '.') e++; if (e == tl && e > d) continue; if (e > d) { t += e; tl -= e; } else if (d == tl) continue; }   /* a move number, with the move written against it or not */
-        while (tl && *t == '.') { t++; tl--; } if (!tl) continue;
-        size_t sl = tl; while (sl && (t[sl - 1] == '!' || t[sl - 1] == '?')) sl--;          /* suffix annotations (8.2.3.8): an annotation of the move */
-        if (L->n == L->cap) { L->cap = L->cap ? L->cap * 2 : 128; L->p = xrealloc(L->p, sizeof(Ply) * (size_t)L->cap); }
-        Ply *p = &L->p[L->n++]; memset(p, 0, sizeof *p); p->san = t; p->n = (uint32_t)sl;
-        if (sl < tl) { Ann x = { 2, t + sl, (uint32_t)(tl - sl), NULL }; ann_push(&p->ann, &p->nann, &p->cann, x); } }
-    g->mt = s + m0; g->mtn = (i > m0 ? i : m0) - m0;
-    if (depth) g->bad = 1;
-    *at = i; return any;
+static void pgn_annotation(Line *line,Ann annotation){
+    if(line->n){Ply *ply=&line->p[line->n-1];ann_push(&ply->ann,&ply->nann,&ply->cann,annotation);}
+    else ann_push(&line->lead,&line->nlead,&line->clead,annotation);
+}
+static void pgn_tag(const ChessRecipe *recipe,TSNode node,const char *source,Game *game){
+    TSNode name=ts_node_child_by_field_id(node,recipe->name),value=ts_node_child_by_field_id(node,recipe->value);
+    if(ts_node_is_null(name) || ts_node_is_null(value)){game->bad=1;return;}
+    if(game->ntag==game->ctag){int next=game->ctag?game->ctag*2:16;game->tag=chess_grow(game->tag,sizeof(Tag)*(size_t)game->ntag,sizeof(Tag)*(size_t)next);game->ctag=next;}
+    Tag *tag=&game->tag[game->ntag++];memset(tag,0,sizeof *tag);
+    tag->name=source+ts_node_start_byte(name);tag->nl=ts_node_end_byte(name)-ts_node_start_byte(name);
+    uint32_t start=ts_node_start_byte(value)+1,end=ts_node_end_byte(value)-1;
+    char *decoded=arena_alloc(&chess_arena,(size_t)(end-start)+1);uint32_t count=0;
+    for(uint32_t j=start;j<end;j++){if(source[j]=='\\' && j+1<end)j++;decoded[count++]=source[j];}
+    decoded[count]=0;tag->val=decoded;tag->vl=count;game->mt=source+ts_node_end_byte(node);
+}
+static void pgn_line(const ChessRecipe *recipe,TSNode node,const char *source,Game *game,Line *line,unsigned depth){
+    if(depth>64){game->bad=1;return;}
+    TSTreeCursor *cursor=lp_tls_cursor(node);int more=ts_tree_cursor_goto_first_child(cursor);
+    while(more){
+        TSNode child=ts_tree_cursor_current_node(cursor);uint8_t role=pgn_role(recipe,child);
+        const char *text=source+ts_node_start_byte(child);uint32_t length=ts_node_end_byte(child)-ts_node_start_byte(child);
+        if(role==PG_TAG && !depth)pgn_tag(recipe,child,source,game);
+        else if(role==PG_SAN){
+            uint32_t san=length;while(san && (text[san-1]=='!' || text[san-1]=='?'))san--;
+            if(line->n==line->cap){int next=line->cap?line->cap*2:128;line->p=chess_grow(line->p,sizeof(Ply)*(size_t)line->n,sizeof(Ply)*(size_t)next);line->cap=next;}
+            line->p[line->n++]=(Ply){.san=text,.n=san};
+            if(san<length)pgn_annotation(line,(Ann){2,text+san,length-san,NULL});
+        }else if(role==PG_COMMENT || role==PG_LINE_COMMENT){
+            uint32_t trim=role==PG_COMMENT?2:1;
+            if(length>=trim)pgn_annotation(line,(Ann){1,text+1,length-trim,NULL});
+        }else if(role==PG_NAG || role==PG_ANNOTATION)pgn_annotation(line,(Ann){2,text,length,NULL});
+        else if(role==PG_VARIATION){
+            Line *variation=arena_alloc(&chess_arena,sizeof *variation);memset(variation,0,sizeof *variation);
+            if(!line->n)game->bad=1;
+            pgn_annotation(line,(Ann){3,NULL,0,variation});pgn_line(recipe,child,source,game,variation,depth+1);
+        }else if(role==PG_RESULT && !depth){
+            if(length>=sizeof game->result)game->bad=1;
+            else {memcpy(game->result,text,length);game->result[length]=0;game->has_result=1;}
+        }
+        more=ts_tree_cursor_goto_next_sibling(cursor);
+    }
+    lp_tls_cursor_release(cursor);
+}
+static void pgn_game(const ChessRecipe *recipe,TSNode node,const char *source,Game *game){
+    memset(game,0,sizeof *game);game->mt=source+ts_node_start_byte(node);
+    pgn_line(recipe,node,source,game,&game->main,0);
+    game->mtn=(size_t)(source+ts_node_end_byte(node)-game->mt);
 }
 
 /* ---- a game composed */
 typedef struct { Ref *c; size_t n, cap; } RV;
-static void rv(RV *a, Ref x){ if (a->n == a->cap) { a->cap = a->cap ? a->cap * 2 : 64; a->c = xrealloc(a->c, sizeof(Ref) * a->cap); } a->c[a->n++] = x; }
+static void rv(RV *a, Ref x){ if (a->n == a->cap) { a->cap = a->cap ? a->cap * 2 : 64; a->c = chess_grow(a->c, sizeof(Ref) * a->n, sizeof(Ref) * a->cap); } a->c[a->n++] = x; }
 static Ref comp(const Ref *k, size_t n){ Ref x = n == 1 ? k[0] : compose(k, (uint32_t)n, ref_above(k, n)); x.said = 0; return x; }
-typedef struct { RefCache *rc; RV nags; long errs; char err[160]; uint64_t plies, castles; } Rd;     /* nags: [position, move, NAG], three Refs each */
+typedef struct { RefCache *rc; RV nags, transitions; long errs; char err[160]; uint64_t plies, castles; } Rd;
 /* A line replayed from b0: its trajectory, and its layer where it has annotations (has_layer). 0: a move that is not
  * legal there, said in r->err. */
 static int replay(Rd *r, const Line *L, const Bd *b0, Ref *line, Ref *layer, int *has_layer){
     Bd b = *b0; RV traj = { 0 }, lay = { 0 }; int annotated = L->nlead > 0; Ref P = r_position(r->rc, &b); rv(&traj, P);
     if (L->nlead) { RV e = { 0 }; rv(&e, P);
         for (int j = 0; j < L->nlead; j++) { const Ann *x = &L->lead[j]; if (x->kind == 3) continue; rv(&e, r_text((const uint8_t *)x->t, x->n)); }
-        rv(&lay, comp(e.c, e.n)); free(e.c); }
+        rv(&lay, comp(e.c, e.n)); }
     for (int i = 0; i < L->n; i++) { const Ply *p = &L->p[i];
         Mv all[256]; int na = gen(&b, all); char tok[32]; size_t tl = p->n < 31 ? p->n : 31; memcpy(tok, p->san, tl); tok[tl] = 0;
         size_t z = tl; while (z && (tok[z - 1] == '+' || tok[z - 1] == '#')) tok[--z] = 0;
         int k = z ? san_match(&b, tok, all, na) : -1;
-        if (k < 0) { snprintf(r->err, sizeof r->err, "%.*s is no legal move at ply %d", (int)p->n, p->san, i + 1); free(traj.c); free(lay.c); return 0; }
+        if (k < 0) { snprintf(r->err, sizeof r->err, "%.*s is no legal move at ply %d", (int)p->n, p->san, i + 1); return 0; }
         Ref M = r_move(r->rc, &b, &all[k]); Bd before = b; Ref Pb = P; make(&b, &all[k]); P = r_position(r->rc, &b); rv(&traj, M); rv(&traj, P); r->plies++; r->castles += all[k].castle;
+        rv(&r->transitions,Pb);rv(&r->transitions,M);rv(&r->transitions,P);
         if (!p->nann) { rv(&lay, M); continue; }
         annotated = 1; RV e = { 0 }; rv(&e, M);
         for (int j = 0; j < p->nann; j++) { const Ann *x = &p->ann[j];
             if (x->kind == 1) rv(&e, r_text((const uint8_t *)x->t, x->n));
             else if (x->kind == 2) { Ref nag = r_text((const uint8_t *)x->t, x->n); rv(&e, nag); rv(&r->nags, Pb); rv(&r->nags, M); rv(&r->nags, nag); }
-            else if (x->var && x->var->n) { Ref vl, vy; int hv = 0; if (!replay(r, x->var, &before, &vl, &vy, &hv)) { free(e.c); free(traj.c); free(lay.c); return 0; }
+            else if (x->var && x->var->n) { Ref vl, vy; int hv = 0; if (!replay(r, x->var, &before, &vl, &vy, &hv)) { return 0; }
                 if (hv) { Ref two[2] = { vl, vy }; rv(&e, comp(two, 2)); } else rv(&e, vl); } }
-        rv(&lay, comp(e.c, e.n)); free(e.c); }
+        rv(&lay, comp(e.c, e.n)); }
     *line = comp(traj.c, traj.n); *has_layer = annotated; if (annotated) *layer = comp(lay.c, lay.n);
-    free(traj.c); free(lay.c); return 1;
+    return 1;
 }
 static int has_study_marks(const Line *L){
     for (int i = 0; i < L->n; i++) for (int j = 0; j < L->p[i].nann; j++) if (L->p[i].ann[j].kind != 1) return 1;
@@ -382,8 +389,7 @@ static int has_study_marks(const Line *L){
 }
 
 /* ---- the recipe: grammar pgn, and what its records are */
-enum { K_PLAYED = 0, K_STUDY, K_PUZZLE };
-typedef struct { int records; } ChessRecipe;
+
 static int chess_says(Recipe *r, const char *path, char *tok){
     if (!r->native_recipe) r->native_recipe = calloc(1, sizeof(ChessRecipe));
     ChessRecipe *c = r->native_recipe;
@@ -394,8 +400,20 @@ static int chess_says(Recipe *r, const char *path, char *tok){
     fprintf(stderr, "%s: \"%s\" is not something a PGN recipe says (records)\n", path, tok); return -1;
 }
 static int chess_recipe(Recipe *r, const char *path){
-    (void)path; if (!r->native_recipe) r->native_recipe = calloc(1, sizeof(ChessRecipe));
-    r->curated = 1; r->lang = NULL; return 1;
+    if (!r->native_recipe) r->native_recipe = calloc(1, sizeof(ChessRecipe));
+    ChessRecipe *recipe=r->native_recipe;recipe->layout=layout_format("pgn");
+    if(!recipe->layout){fprintf(stderr,"%s: PGN packaging format is unavailable\n",path);return 0;}
+    const TSLanguage *language=grammar_lang(recipe->layout->g.grammar_id);r->lang=language;
+    recipe->symbols=ts_language_symbol_count(language);recipe->dispatch=calloc(recipe->symbols,1);
+    const char *names[]={"tag_pair","san","nag","annotation","variation","comment","line_comment","result"};
+    for(uint8_t i=0;i<sizeof names/sizeof names[0];i++){
+        TSSymbol symbol=ts_language_symbol_for_name(language,names[i],(uint32_t)strlen(names[i]),true);
+        if(!symbol){fprintf(stderr,"%s: unresolved PGN symbol %s\n",path,names[i]);return 0;}
+        recipe->dispatch[symbol]=(uint8_t)(i+1);
+    }
+    recipe->name=ts_language_field_id_for_name(language,"name",4);recipe->value=ts_language_field_id_for_name(language,"value",5);
+    if(!recipe->name || !recipe->value)return 0;
+    r->curated=1;return 1;
 }
 
 /* The content a file holds, in its order: blocks factored from the content alone, as say.c's blocks_of does. */
@@ -411,21 +429,25 @@ static Ref blocks(Ref *r, size_t n){
 static void member(File *f, Ref rec, Ref *part, int n, uint32_t *pos){
     for (int i = 0; i < n; i++) if (part[i].said != LP_SAID_TUPLE) part[i].said = 0;
     Ref c = n == 1 ? part[0] : compose(part, (uint32_t)n, ref_above(part, (size_t)n)); c = said_claim(c);
-    Event e = { .claim = c.id, .witnessed = rec.id, .score = 1.0f, .enter_rating = 1500.0f, .position = ++*pos, .kind = EV_MEMBER }; ev_push(&f->ev, &e);
+    Event e = { .claim = c.id, .witnessed = rec.id, .score = 1.0f, .enter_rating = 1500.0f, .position = ++*pos, .kind = EV_CLAIM, .run=1 }; ev_push(&f->ev, &e);
 }
 /* A PGN file, read: every game a record, in the file's order; its trunk [the OS's record, its records]. */
-static void chess_read(const Recipe *rcp, File *f, const uint8_t *src, size_t n){
-    const ChessRecipe *cr = rcp->native_recipe; RefCache *rc = calloc(1, sizeof(RefCache)); Rd rd = { rc, { 0 }, 0, "", 0, 0 };
-    RV recs = { 0 }; size_t at = 0; uint64_t games = 0, played = 0, study = 0, puzzle = 0, unread = 0, unfinished = 0, c960 = 0, zero = 0, nomarker = 0, mismatch = 0;
-    Game g; uint32_t ordinal = 0;
-    while (pgn_game((const char *)src, n, &at, &g)) {
+static void chess_records(const Recipe *rcp, File *f, const uint8_t *src, SRecords *records){
+    size_t mark=chess_arena.used;
+    const ChessRecipe *cr = rcp->native_recipe; RefCache *rc = calloc(1, sizeof(RefCache)); Rd rd = {.rc=rc};
+    RV recs = { 0 }; uint64_t games = 0, played = 0, study = 0, puzzle = 0, unread = 0, unfinished = 0, c960 = 0, zero = 0, nomarker = 0, mismatch = 0;
+    Game g; uint32_t ordinal = (uint32_t)f->records;SRecord record;
+    while (s_record_next(records,&record)) {
+        pgn_game(cr,record.node,(const char *)src,&g);
         games++; ordinal++;
         const char *variant = NULL, *fen = NULL, *result = NULL; size_t vl = 0, fl = 0, rl = 0;
         for (int i = 0; i < g.ntag; i++) { const Tag *t = &g.tag[i];
             if (t->nl == 7 && !memcmp(t->name, "Variant", 7)) { variant = t->val; vl = t->vl; }
             else if (t->nl == 3 && !memcmp(t->name, "FEN", 3)) { fen = t->val; fl = t->vl; }
             else if (t->nl == 6 && !memcmp(t->name, "Result", 6)) { result = t->val; rl = t->vl; } }
-        if (!g.has_result) nomarker++; else if (result && (rl != strlen(g.result) || memcmp(result, g.result, rl))) mismatch++;
+        int result_mismatch=g.has_result && result && (rl!=strlen(g.result) || memcmp(result,g.result,rl));
+        if (!g.has_result) nomarker++;else if(result_mismatch)mismatch++;
+        if(!result && g.has_result){result=g.result;rl=strlen(g.result);}
         /* the tags: each [name, value] as written; an empty value, the name alone */
         RV tags = { 0 };
         for (int i = 0; i < g.ntag; i++) { const Tag *t = &g.tag[i]; Ref nm = r_text((const uint8_t *)t->name, t->nl);
@@ -436,20 +458,27 @@ static void chess_read(const Recipe *rcp, File *f, const uint8_t *src, size_t n)
         Bd b0; int ok = rules != NULL, kind = cr->records == K_PLAYED && has_study_marks(&g.main) ? K_STUDY : cr->records;
         if (ok) { if (fen) ok = board_fen(&b0, fen, fl, rules->c960); else board_start(&b0); }
         if (variant && rules && rules->c960) c960++;
-        Ref line, layer; int has_layer = 0; rd.nags.n = 0;
+        Ref line, layer; int has_layer = 0; rd.nags.n = rd.transitions.n = 0;
         if (ok && !g.bad) ok = replay(&rd, &g.main, &b0, &line, &layer, &has_layer); else if (ok) { ok = 0; snprintf(rd.err, sizeof rd.err, "its variations are not closed"); }
         else if (!rules) snprintf(rd.err, sizeof rd.err, "its variant %.*s is in no rules (firmware/chess.firmware)", (int)vl, variant); else snprintf(rd.err, sizeof rd.err, "its FEN is no position");
         RV part = { 0 }; Ref rec;
         if (ok) { rv(&part, line); if (tags.n) rv(&part, T); if (has_layer) rv(&part, layer); }
         else { if (tags.n) rv(&part, T); if (g.mtn) rv(&part, r_text((const uint8_t *)g.mt, g.mtn));
                unread++; if (unread <= 5) fprintf(stderr, "\n  %s: game %u is kept as its text and not replayed: %s", f->path, ordinal, rd.err); }
-        if (!part.n) { free(part.c); free(tags.c); game_free(&g); continue; }
-        rec = comp(part.c, part.n); free(part.c);
+        if (!part.n) continue;
+        rec = comp(part.c, part.n);
+        uint64_t event_begin=f->ev.n;
         Event e = { .claim = rec.id, .witnessed = rec.id, .score = 1.0f, .enter_rating = 1500.0f, .position = ordinal, .kind = EV_RECORD }; ev_push(&f->ev, &e);
-        uint32_t pos = 0; int outcome = !result || !(rl == 1 && *result == '*');
+        uint32_t pos = 0; int outcome = result && !result_mismatch &&
+            ((rl==3 && (!memcmp(result,"1-0",3) || !memcmp(result,"0-1",3))) || (rl==7 && !memcmp(result,"1/2-1/2",7)));
         if (ok && (!g.main.n)) zero++;
         if (!outcome) unfinished++;
         if (ok && kind == K_PLAYED) { Ref p2[2] = { rec, line }; member(f, rec, p2, 2, &pos); played++; }
+        if(ok && kind==K_PLAYED && outcome)for(size_t i=0;i+2<rd.transitions.n;i+=3){
+            int side=(b0.side+(int)(i/3))&1;
+            float score=rl==7?0.5f:((result[0]=='1')==(side==0)?1.0f:0.0f);
+            member(f,rec,&rd.transitions.c[i],3,&pos);f->ev.e[f->ev.n-1].score=score;
+        }
         if (ok && kind == K_PUZZLE) { Ref p1[1] = { line }; member(f, rec, p1, 1, &pos); puzzle++; }
         if (ok && kind == K_STUDY) study++;
         for (size_t i = 0; i < tags.n; i++) { const Tag *t = &g.tag[i];
@@ -458,19 +487,58 @@ static void chess_read(const Recipe *rcp, File *f, const uint8_t *src, size_t n)
             Ref p2[2] = { rec, tags.c[i] }; member(f, rec, p2, 2, &pos); }
         if (ok && has_layer && kind == K_PLAYED) { Ref p2[2] = { rec, layer }; member(f, rec, p2, 2, &pos); }
         if (ok && kind != K_PLAYED) for (size_t i = 0; i + 2 < rd.nags.n; i += 3) member(f, rec, &rd.nags.c[i], 3, &pos);
-        rec.said = LP_SAID_RECORD; rv(&recs, rec); free(tags.c); game_free(&g); }
-    f->records = games; f->incomplete += unread;
-    if (recs.n) { Ref content = blocks(recs.c, recs.n); content.said = 0; f->trunk = content; }
-    f->laid = 0;
-    char hex[33] = ""; if (recs.n) lp_id_hex(&f->trunk.id, hex);
-    fprintf(stderr, "\n  %s: %llu games: %llu played, %llu studies, %llu puzzles, %llu kept as text; %llu without an outcome (*), %llu of no moves, %llu Chess960; %llu plies, %llu castlings; %llu without a termination marker, %llu whose marker is not their Result; content %s\n",
+        RV provenance={0};rv(&provenance,rec);
+        for(uint64_t i=event_begin;i<f->ev.n;i++)if(f->ev.e[i].kind==EV_CLAIM){
+            Ref claim;if(!record_claim_vertex(&f->ev.e[i],&claim)){fputs("chess claim has no product\n",stderr);exit(2);}rv(&provenance,claim);
+        }
+        Ref held=comp(provenance.c,provenance.n);held.said=LP_SAID_RECORD;
+        f->ev.e[event_begin].claim=f->ev.e[event_begin].witnessed=held.id;
+        rv(&recs,held); }
+    f->records += games; f->incomplete += unread;
+    if (f->emit) {
+        if(f->emit(f->emit_context,recs.c,recs.n,NULL,0,&f->ev)){fputs("PGN output window failed\n",stderr);exit(2);}
+        f->ev.n=0;
+    }else{if (recs.n) { Ref content = blocks(recs.c, recs.n); content.said = 0; f->trunk = content; }f->laid = 0;}
+    fprintf(stderr, "\n  %s: window of %llu games: %llu played, %llu studies, %llu puzzles, %llu kept as text; %llu without an outcome (*), %llu of no moves, %llu Chess960; %llu plies, %llu castlings; %llu without a termination marker, %llu whose marker is not their Result\n",
             f->path, (unsigned long long)games, (unsigned long long)played, (unsigned long long)study, (unsigned long long)puzzle, (unsigned long long)unread, (unsigned long long)unfinished,
-            (unsigned long long)zero, (unsigned long long)c960, (unsigned long long)rd.plies, (unsigned long long)rd.castles, (unsigned long long)nomarker, (unsigned long long)mismatch, hex);
-    free(recs.c); free(rd.nags.c); free(rc);
+            (unsigned long long)zero, (unsigned long long)c960, (unsigned long long)rd.plies, (unsigned long long)rd.castles, (unsigned long long)nomarker, (unsigned long long)mismatch);
+    free(rc);chess_arena.used=mark;
 }
 
-/* PGN as a grammar a recipe names (grammar pgn), listed in grammars.c */
-const NativeGrammar chess_pgn = { "pgn", chess_says, chess_recipe, chess_read };
+static void chess_read(const Recipe *recipe,File *file,const uint8_t *source,size_t length){
+    const ChessRecipe *compiled=recipe->native_recipe;SRecords records;
+    if(!s_records_open(&records,compiled->layout,source,length)){fprintf(stderr,"%s: invalid PGN packaging\n",file->path);exit(2);}
+    chess_records(recipe,file,source,&records);s_records_close(&records);
+}
+static void chess_input(const Recipe *recipe,File *file,const SInput *input){
+    const ChessRecipe *compiled=recipe->native_recipe;lp_buf buffer={0};SayScratch headers={0};
+    size_t quantum=(size_t)8<<20;const char *configured=getenv("LAPLACE_RECORD_WINDOW_BYTES");
+    if(configured && *configured){char *end;unsigned long long value=strtoull(configured,&end,10);
+        if(*end || !value || value>UINT32_MAX){fputs("invalid PGN record window\n",stderr);exit(2);}quantum=(size_t)value;}
+    int ended=0;uint64_t offset=0;
+    table_pin(&file->witness.id);if(file->has_lineage)table_pin(&file->lineage.id);
+    while(!ended || buffer.n){
+        SRecords records;size_t consumed=0;int status=0;
+        while(!status){
+            if(!ended){if(buffer.n>UINT32_MAX-quantum){fputs("PGN game exceeds parser byte range\n",stderr);exit(2);}
+                lp_reserve((void **)&buffer.b,&buffer.cap,buffer.n+quantum,1);size_t got=input->read(input->context,buffer.b+buffer.n,quantum);buffer.n+=got;
+                if(!got){ended=1;if(input->error && input->error(input->context)){fputs("PGN input read failed\n",stderr);exit(2);}}
+            }
+            if(!buffer.n && ended)break;
+            status=s_records_window(&records,compiled->layout,buffer.b,buffer.n,ended,&consumed,&headers);
+            if(status<0){fprintf(stderr,"%s: invalid PGN packaging at byte %llu\n",file->path,(unsigned long long)offset);exit(2);}
+        }
+        if(!status)break;
+        chess_records(recipe,file,buffer.b,&records);s_records_close(&records);
+        if(!consumed){fputs("PGN framing made no progress\n",stderr);exit(2);}
+        memmove(buffer.b,buffer.b+consumed,buffer.n-consumed);buffer.n-=consumed;offset+=consumed;file->at=offset;
+    }
+    lp_buf_free(&buffer);arena_release(&headers);arena_release(&chess_arena);
+    if(file->emit)file_stream_finish(file);
+}
+
+/* PGN packaging uses the shared compiled grammar/framer; C owns chess rules. */
+const NativeGrammar chess_pgn = { "pgn", chess_says, chess_recipe, chess_read, chess_input };
 
 /* ---- laplace pgn: the read edge. Everything under the IDs named, fetched a level at a time, then written as PGN */
 typedef struct { lp_id id; uint32_t first, n; uint8_t mask0, got; } DNode;            /* got: 1 fetched, 2 not recorded */
@@ -615,7 +683,11 @@ static void tags_pgn(Db *d, const lp_id *tags, Str *o, char *result, char *fen, 
 }
 /* A record as PGN: its tags, a blank line, its movetext and its result. */
 static void record_pgn(Db *d, const lp_id *rec, Str *o, Stat *st, Seen *sn){
-    const lp_id *k; size_t n = kids(d, rec, &k); if (!n) return; st->records++;
+    const lp_id *k; size_t n = kids(d, rec, &k); if (!n) return;
+    int envelope=n>1;
+    for(size_t i=1;i<n && envelope;i++){const DNode *claim=dn(d,&k[i]);if(!claim || !(claim->mask0&(0x80u>>LP_KIND_CLAIM)))envelope=0;}
+    if(envelope){record_pgn(d,&k[0],o,st,sn);return;}
+    st->records++;
     const lp_id *line = NULL, *tags = NULL, *layer = NULL, *text = NULL;
     if (is_line(d, rec)) line = rec;                                                     /* a record of no tags and no annotations is its line */
     else if (is_line(d, &k[0])) { line = &k[0]; if (n > 1) tags = &k[1]; if (n > 2) layer = &k[2]; }
