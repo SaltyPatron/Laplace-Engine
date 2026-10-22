@@ -165,7 +165,8 @@ out=$(tl chien fr en)
 [[ $(concepts "$out") == 2 ]] || fail "chien fr en: not chien's two concepts (i46360, i46361): $out"
 l=$(line en "$(block "$dog" "$out")"); grep -q 'domestic dog' <<<"$l" || fail "chien fr en: i46360 has no domestic dog: $out"
 out=$(tl dog fr en); grep -q 'no lexicalization of it is attested in a language written fr' <<<"$out" || fail "dog fr en: dog is no French word: $out"
-out=$(tl 'unnumbered concept' en en); grep -q 'no lexicalization of it' <<<"$out" || fail "a sense whose synset has no ILI was given a stand-in concept: $out"
+out=$(tl 'unnumbered concept' en en)
+[[ $(concepts "$out") == 1 && $(grep ' ± ' <<<"$out") == *oewn-99999999-n* ]] && grep -q 'unnumbered concept' <<<"$(line en "$out")" || fail "a sense whose synset has no ILI did not retain its source's synset identity: $out"
 "$L" hop -d "$conn" 'unnumbered concept' 2>&1 | grep -q 'nothing recorded' && fail "the sense whose synset has no ILI was not read"
 echo "translate: chien fr en goes back to English; a sense of a synset CILI has not numbered is the word with its synset"
 
