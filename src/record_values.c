@@ -328,6 +328,10 @@ static Ref thing_scope(RecordWorker *k,const SemanticRecord *t,int32_t g,const T
     return value;
 }
 
+static Ref thing_operand(const Thing *thing,Ref value){
+    if (!thing->preserve || value.said!=LP_SAID_TUPLE) value.said=0;
+    return value;
+}
 static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const Thing *th, Ref *out, int depth){
     if (k->s->surface.thing==(uint8_t)(th-k->s->thing+1)) return record_surface_text(k,t,g,out);
     const SemanticValue *x = &t->n[g]; Ref p[8]; {
@@ -357,13 +361,15 @@ static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const 
             for (int z = 0; z < th->n; z++) { int ref = th->name[z][0] == '>';
                 if (ref) {
                     KeyField field;
-                    if (referred_field(k, t, g, th->name[z] + 1, &field, depth) && field.has_value) { p[np] = field.value; p[np++].said = 0; }
+                    if (referred_field(k, t, g, th->name[z] + 1, &field, depth) && field.has_value) p[np++]=thing_operand(th,field.value);
+                    else if (th->required[z]) return 0;
                     continue;
                 }
-                int32_t c = record_select_first(t, g, th->name[z]); if (c < 0) continue;
+                int32_t c = record_select_first(t, g, th->name[z]); if (c < 0) { if (th->required[z]) return 0; continue; }
                 const SemanticValue *cn = &t->n[c]; if (cn->kind == S_GROUP && record_field_first(cn) >= 0 && record_field_next(&t->n[record_field_first(cn)]) < 0 && t->n[record_field_first(cn)].kind == S_TEXT) cn = &t->n[record_field_first(cn)];
-                if (record_value_empty(k->s, cn) || (cn->kind != S_GROUP && !cn->vlen)) continue;            /* what the source leaves empty: in no path, and creates no obligation */
-                if (record_value(k, t, c, &p[np], depth)) { p[np].said = 0; np++; continue; }
+                if (record_value_empty(k->s, cn) || (cn->kind != S_GROUP && !cn->vlen)) { if (th->required[z]) return 0; continue; }
+                if (record_value(k, t, c, &p[np], depth)) { p[np]=thing_operand(th,p[np]); np++; continue; }
+                if (th->required[z]) return 0;
                 record_obligation_note(k, 'o', &record_diagnostic_labels[DIAG_UNRESOLVED_KEY], (const uint8_t *)th->name[z], record_selector_code(th->name[z])->source_length, NULL, 0); }     /* said, never dropped */
             if (!np) return 0;
             Ref X = np == 1 ? p[0] : said_tuple(compose(p, np, ref_above(p, np)));
@@ -381,7 +387,7 @@ static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const 
                     char *text = form.k[0]; if (th->space[z]) for (char *q = text; *q; q++) if (*q == th->space[z]) *q = ' ';
                     p[z] = record_text((const uint8_t *)text, strlen(text));
                 } else { if (!field.has_value) return 0; p[z] = field.value; }
-                p[z].said = 0; continue;
+                p[z]=thing_operand(th,p[z]); continue;
             }
             int32_t c = record_select_first(t, g, th->name[z]); if (c < 0) return 0;
             if (th->form[z].has_re || th->space[z]) {                        /* the part's text as the source's notation parts it: what it writes, never what it is disposed as */
@@ -401,7 +407,7 @@ static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const 
                 if (cn->kind == S_TEXT && cn->vlen) p[z] = record_text(cn->val, cn->vlen); else return 0;
             } else return 0;
         }
-            p[z].said = 0; }
+            p[z]=thing_operand(th,p[z]); }
         Ref X = th->n == 1 ? p[0] : said_tuple(compose(p, (uint32_t)th->n, ref_above(p, (size_t)th->n)));      /* named by several parts together: the path of them */
         *out = thing_scope(k,t,g,th,X,depth); return 1; }
 }
