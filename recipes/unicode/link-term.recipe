@@ -1,0 +1,12 @@
+name unicode-link-term
+# UTS #58 LinkTerm.txt: "Property: Link_Term"; values Include, Hard, Soft,
+# Close and Open. Preserve the range and its explicitly written value.
+# @missing defaults are comment lines and never become claims.
+match LinkTerm.txt
+format commented_table
+names codepoint value
+tier field by ;
+range codepoint
+content value
+thing row codepoint literal Link_Term value
+itself row
