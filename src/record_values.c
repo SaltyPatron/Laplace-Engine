@@ -367,7 +367,7 @@ static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const 
                 }
                 int32_t c = record_select_first(t, g, th->name[z]); if (c < 0) { if (th->required[z]) return 0; continue; }
                 const SemanticValue *cn = &t->n[c]; if (cn->kind == S_GROUP && record_field_first(cn) >= 0 && record_field_next(&t->n[record_field_first(cn)]) < 0 && t->n[record_field_first(cn)].kind == S_TEXT) cn = &t->n[record_field_first(cn)];
-                if (record_value_empty(k->s, cn) || (cn->kind != S_GROUP && !cn->vlen)) { if (th->required[z]) return 0; continue; }
+                if (cn->kind != S_GROUP && (record_value_empty(k->s, cn) || !cn->vlen)) { if (th->required[z]) return 0; continue; }
                 if (record_value(k, t, c, &p[np], depth)) { p[np]=thing_operand(th,p[np]); np++; continue; }
                 if (th->required[z]) return 0;
                 record_obligation_note(k, 'o', &record_diagnostic_labels[DIAG_UNRESOLVED_KEY], (const uint8_t *)th->name[z], record_selector_code(th->name[z])->source_length, NULL, 0); }     /* said, never dropped */
@@ -396,7 +396,10 @@ static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const 
                 Keys kf; kf.n = 0; if (th->form[z].has_re) { record_key_forms(&th->form[z], cn->val, cn->vlen, &kf, t, c); if (!kf.n) return 0; } else { if (cn->vlen >= sizeof kf.k[0]) return 0; memcpy(kf.k[0], cn->val, cn->vlen); kf.k[0][cn->vlen] = 0; }
                 char *w = kf.k[0]; if (th->space[z]) for (char *q = w; *q; q++) if (*q == th->space[z]) *q = ' ';
                 p[z] = record_text((const uint8_t *)w, strlen(w)); p[z].said = 0; continue; }
-            if (t->n[c].kind == S_GROUP && record_field_first(&t->n[c]) >= 0 && record_field_next(&t->n[record_field_first(&t->n[c])]) >= 0) {      /* a part that is several pieces: the path of what each is, in order */
+            if (th->preserve && t->n[c].kind == S_GROUP && record_value(k, t, c, &p[z], depth)) {
+                /* A declared child composition is one operand. In particular,
+                 * nested aligned layers must retain their own boundaries. */
+            } else if (t->n[c].kind == S_GROUP && record_field_first(&t->n[c]) >= 0 && record_field_next(&t->n[record_field_first(&t->n[c])]) >= 0) {      /* a part that is several pieces: the path of what each is, in order */
                 Ref pc[256]; uint32_t np = 0; for (int32_t q = record_field_first(&t->n[c]); q >= 0 && np < 256; q = record_field_next(&t->n[q])) if (record_value(k, t, q, &pc[np], depth)) { pc[np].said = 0; np++; }
                 if (!np) return 0; p[z] = np == 1 ? pc[0] : compose(pc, np, ref_above(pc, np)); }
             else if (!record_value(k, t, c, &p[z], depth)) {

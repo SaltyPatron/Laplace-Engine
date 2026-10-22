@@ -1,0 +1,13 @@
+grammar lp_bidi_character
+records record comment
+node record group as record
+node input text as input
+node direction text as direction
+node resolution group as resolution
+node paragraph_level text as paragraph_level
+node levels group as levels
+node level group as level
+node visual_order group as visual_order
+node index group as index
+node comment skip
+node trailing_comment skip
