@@ -65,6 +65,11 @@ jobs:
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
           mkdir -p "$RUNNER_TEMP/engine" && cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace" "$RUNNER_TEMP/engine/laplace"
           sha256sum "$RUNNER_TEMP/engine/laplace" | tee "$RUNNER_TEMP/engine/laplace.sha256"
+      - name: Provide the pinned Rust compiler for the Tree-sitter generator
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: 1.90.0
+
       - name: Compile the recipe grammars from this revision
         run: |
           . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
