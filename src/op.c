@@ -4,6 +4,11 @@
 #include "engine.h"
 #include <string.h>
 
+int cmd_highway_joins(int argc,char **argv);
+static int status_with_joins(int argc,char **argv){
+    for(int i=1;i<argc;i++)if(!strcmp(argv[i],"--joins"))return cmd_highway_joins(argc,argv);
+    return cmd_status(argc,argv);
+}
 /* ---- the parameters. Each says only what the program itself says of it (its comments and usage). */
 static const Param
     CONNINFO = { "conninfo", "-d", ARG_CONNINFO, "LAPLACE_CONNINFO", "the database, as a libpq connection string" },
@@ -29,9 +34,9 @@ static const Param
     DRY      = { "dry", "--dry", ARG_FLAG, NULL, "dry" },
     EXCEPT   = { "except", "--except", ARG_FLAG, NULL, "every witness but these" },
     TRUNK    = { "trunk", "--trunk", ARG_FLAG, NULL, "each witness named by its ID, its source's trunk, not by the source's name" },
-    VOICES   = { "voices", "--voices", ARG_FLAG, NULL, "the count under each voice as well (who in a record says it)" },
     FILES    = { "files", "--files", ARG_FLAG, NULL, "the count under each file as well" },
-    TSV      = { "tsv", "--tsv", ARG_PATH, NULL, "FILE: one line a claim and who said it (a trunk, file:PATH, voice:ID): games, tokens, the sum of the scores, the least position" },
+    TSV      = { "tsv", "--tsv", ARG_PATH, NULL, "FILE: claims and their corpus/file containment: games, tokens, score sum, least position" },
+    JOINS    = { "joins", "--joins", ARG_FLAG, NULL, "highway identifiers with evidence from at least 2, 3 and 4 independent source lineages" },
     WRITE    = { "write", "--write", ARG_FLAG, NULL, "put the replayed standings in place" },
     PART     = { "part", NULL, ARG_TEXT, NULL, "a part of the strand: a text, LIST:KEY for a type of the highway, ? for a part left open" },
     SOURCE   = { "source", "-s", ARG_TEXT, NULL, "the files named are this source's: a part of it at a time" },
@@ -77,8 +82,9 @@ static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O
 static const Arg A_MERGE[] = { O(CONNINFO), { &JOBS, 0, NULL, "every processor" }, END };
 static const Arg A_FORGET[] = { O(CONNINFO), O(JOBS), O(EXCEPT), O(TRUNK), { &WITNESS, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
 static const Arg A_SWEEP[] = { O(CONNINFO), O(JOBS), O(DRY), END };
-static const Arg A_HELD[] = { O(CONNINFO), O(FILES), O(VOICES), O(TSV), { &PART, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
-static const Arg A_REPLAY[] = { O(CONNINFO), O(WRITE), O(TSV), O(VOICES), O(FILES), END };
+static const Arg A_HELD[] = { O(CONNINFO), O(FILES), O(TSV), { &PART, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
+static const Arg A_REPLAY[] = { O(CONNINFO), O(WRITE), O(TSV), O(FILES), END };
+static const Arg A_JOINS[] = { O(CONNINFO), O(JOINS), END };
 static const Arg A_STRUCTURE[] = { { &NODES, 0, NULL, "60" }, { &LAYOUT, ARG_REQUIRED, NULL, NULL }, { &FILE_, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_TREE[] = { O(RECIPES), O(GRAMMAR), { &NODES, 0, NULL, "400" }, { &FILE_, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_TEXT[] = { { &TEXT, ARG_REQUIRED, NULL, NULL }, END };
@@ -120,8 +126,8 @@ const Op OPS[] = {
     { "translate", cmd_translate, "a word up to its concepts and down into other languages", A_TRANSLATE, R_DB | R_F, "text" },
     { "degrees",   cmd_degrees,   "how far one entity is from another, over rated claims", A_DEGREES, R_DB | R_F, "text" },
     { "fills",     cmd_fills,     "what follows a phrase", A_FILLS, R_DB | R_F, "text" },
-    { "status",    cmd_status,    "what a database holds", A_NONE, R_DB, "text" },
-    { "bench",     cmd_bench,     "every native operation, measured", A_NONE, R_F, "text" },
+    { "status",    status_with_joins, "what a database holds; --joins reports cross-source highway evidence", A_JOINS, R_DB | R_F, "text" },
+    { "bench",     cmd_bench,     "every native operation, measured; --joins reports corpus convergence", A_JOINS, R_DB | R_F, "text" },
     { "model",     cmd_model,     "a transformer checkpoint read as testimony", A_MODEL, R_F, "text" },
     { "pgn",       cmd_pgn,       "a PGN file's games written again from the database alone: the read edge of chess", A_PGN, R_DB | R_F, "PGN" },
 };
