@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <string.h>
 
-enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, D_RANGE, D_OWN };
+enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, D_RANGE };
 enum { DEFAULT_LITERAL = 1, DEFAULT_FIELD };
 /* A key as a resource writes it, matched by a pattern and written as a template (\1: the pattern's first part) where it
  * writes it otherwise than those it points at write it (vn:51.2 for 51.2): the highway's lines, and a type's key. */
@@ -23,8 +23,8 @@ typedef struct { char name[64]; int what; char arg[64]; KSpec k; uint32_t when;
                  TargetCode *targets; uint8_t ntargets; uint16_t name_length, arg_length, text_length;
                  DiagnosticLabel *road_label, *statement_label; uint32_t name_slot, part_slot, parent_slot; } Dis;   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse); text: what a relation line words it as */
 typedef struct { char tier[32], name[64], scope[32]; uint16_t tier_length, tier_id; lp_id domain, parent_domain; } Pair;
-typedef struct { char tier[32]; char name[64][64]; int n; uint32_t when; char by[64], of[64]; int file; } Att;      /* when: the conditions it is said under, by their places in where[]; by: the part that names who says it; of: the part it is said of; file: a witness stands within the file */
-typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char by[64], of[64]; int alone; } Rel;     /* alone: where what it is to names nothing, the relation alone */
+typedef struct { char tier[32]; char name[64][64]; int n; uint32_t when; char with[64], of[64]; int file; } Att; /* with: content qualifying a judgment; file: a field identifier is local to its source file */
+typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char with[64], of[64]; int alone; } Rel;     /* alone: where what it is to names nothing, the relation alone */
 typedef struct { char tier[32], name[8][160]; int n, within, infile, span, inclusive, of, resolved; char lit[8], space[8]; KSpec form[8]; } Thing;    /* of: the path of the things of its parts of these names, in order (a sentence of its words) */   /* within: its name stands only within the thing it is inside: the pair of that thing and it; infile: only within the file; span: the stretch of a text name[2] between the characters name[0] and name[1] */
 typedef struct { char tier[32], name[64]; double from, to; int mapped; } Score;
 typedef struct { char name[64]; int op; char val[128]; regex_t re; } Where;
@@ -41,9 +41,8 @@ typedef struct KeyProjection KeyProjection;
 typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thing thing[32]; int nthing; Pair key[32]; int nkey; Att att[32]; int natt; Att pair[8]; int npair; Att hold[16]; int nhold; Rel rel[16]; int nrel;
                  Att itself[8]; int nitself;                                 /* a TIER's thing is itself what is attested: a tuple is the claim it is */
                  Dependence dependence[8]; int ndependence;
-                 Att voices[8]; int nvoices;                                 /* parts each of which is a witness of its own, saying its field of the thing */
                  Att together[8]; int ntogether;                             /* a TIER whose claims are said together: one record, witnessed once, its claims within it */
-                 char stem, stemfrom;                                        /* what ends the part of the file's name {file} stands for (. unless said), and what it begins after */
+                 char stem, stemfrom; uint8_t file_qualifiers;                /* file-qualified column identifiers are resolved once per file */
                  char split[16][64]; int nsplit;                             /* a long file a grammar reads is parted before each line that begins one of these elements */
                  lp_strmap *perf;                                           /* immutable folded property-name index (UAX44-LM3) */
                  char selfmark;                                              /* what the source writes, in a value, for the code point the part is (UCD: #) */
@@ -52,7 +51,7 @@ typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thi
                  char *said; size_t nsaid; int laid_line;                                  /* every word the recipe's lines write, each between spaces: a part named nowhere in them is left open (unmentioned); laid_line: the line just said lays the file out, which names its parts and reads none */
                  Dis val[256]; int nval;                                     /* value LIST NAME...: what a part means in a claim; arg: its road class's list, "" for none the highway holds */
                  Dis defaults[256]; int ndefaults;                           /* indexed field defaults; literals or compiled sibling selectors */
-                 Score score[4]; int nscore; Where where[16]; int nwhere; uint32_t whole, now; Pair voice;   /* whole: the conditions on the outermost part (where); now: the ones the lines being read are said under (when) */
+                 Score score[4]; int nscore; Where where[16]; int nwhere; uint32_t whole, now;   /* whole: outermost conditions; now: conditions on the current declaration */
                  /* a record's layers down its rows and its tree by head, where the recipe gives them (layers, tree): parts of the
                   * record's path beside the claims it says (record_of) */
                  char lay_tier[32], lay_row[32], layer[16][64]; int nlayer; char tree_tier[32], tree_row[32], tree_head[64], tree_rel[64];
@@ -76,7 +75,7 @@ struct PathStep {
     uint32_t filter_length, position;
     uint8_t operation;
 };
-enum { SELECT_FIELD, SELECT_SELF, SELECT_FILE, SELECT_ELEMENTS, SELECT_UNNAMED };
+enum { SELECT_FIELD, SELECT_SELF, SELECT_FILE, SELECT_ELEMENTS, SELECT_UNNAMED, SELECT_LABEL };
 struct KeyProjection { const PathStep *field; lp_id domain; uint16_t tier; KeyProjection *next, *all_next; };
 typedef struct { const PathStep *reference; KeyProjection *targets; } ReferenceProjection;
 typedef struct { NameCode whole; PathStep *first; uint16_t source_length; uint8_t special; ReferenceProjection *projection; } PathCode;

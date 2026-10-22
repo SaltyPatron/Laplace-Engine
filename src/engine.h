@@ -218,7 +218,8 @@ int     recipes_broken(const Recipe *r, int n, const Source *of);             /*
  * record; witness: who in the record says it (a voice), where the source names one for this statement. */
 enum { EV_CLAIM = 0, EV_RECORD = 1, EV_MEMBER = 2 };      /* a claim that is its own record; a record; a claim within the record before it */
 typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviation; uint32_t position; uint8_t kind, own_witness; lp_id witness; uint32_t run; int32_t rec;
-                 lp_id dependence; double dependence_trust; uint8_t has_dependence; } Event;
+                 lp_id dependence; double dependence_trust; uint8_t has_dependence;
+                 lp_id qualifier; uint8_t has_qualifier; } Event;
 typedef struct { Event *e; uint64_t n, cap; } Events;
 typedef int (*record_batch_fn)(void *, const Ref *, size_t, const Ref *, size_t, const Events *);
 struct FileAssembly;

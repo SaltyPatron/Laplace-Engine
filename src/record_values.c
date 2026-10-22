@@ -171,7 +171,6 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
             for (uint32_t i = 0; i < x->vlen; i++) { if (x->val[i] == (uint8_t)s->selfmark) { memcpy(o + j, hex, hl); j += hl; } else o[j++] = x->val[i]; }
             *out = record_text(o, j); scratch_restore(mark); return 1; }
         *out = semantic_text_ref(k, typed_payload ? &t->n[c] : x); return 1; }
-    if (d->what == D_OWN) { Ref w[3] = { k->fw, string_ref(x->name, x->nlen), string_ref(x->val, x->vlen) }; w[0].said = 0; *out = said_tuple(compose(w, 3, ref_above(w, 3))); return 1; }
     if (d->what == D_TYPE) {                                                 /* by the source's key of it; or the type whose content this text is; a text that is neither is left open */
         const uint8_t *kp = x->val; size_t kn = x->vlen;
         for (int more = 1; more; ) { more = 0;                                /* white space around it, a no-break space (U+00A0) among it */
