@@ -1,0 +1,8 @@
+grammar pgn_moves
+node document group as moves capture source
+node san text as move
+node variation group as variation
+node comment text as commentary
+node line_comment text as commentary
+node nag text as annotation
+node annotation text as annotation

@@ -1,0 +1,18 @@
+# Complete declaration bytes accompany the extracted semantic fields.
+grammar postgresql
+records children
+node @record group as packaging capture source
+node create_table group as create_table capture source
+node create_function group as create_function capture source
+node create_procedure group as create_procedure capture source
+node create_view group as create_view capture source
+node create_type group as create_type capture source
+node object_reference text under create_table as name
+node object_reference text under create_function as name
+node object_reference text under create_procedure as name
+node object_reference text under create_view as name
+node object_reference text under create_type as name
+node function_arguments text as parameters
+node function_body text as implementation
+node column_definitions text as members_source
+
