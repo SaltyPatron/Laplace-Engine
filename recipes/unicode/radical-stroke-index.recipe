@@ -4,10 +4,7 @@ name unicode-radical-stroke-index
 # scalars. The index's property and value form one content path; every listed
 # ideograph is a separate member, rather than one concatenated string.
 match RSIndex.txt
-tier row by \n
-comment hash
-remark hash
-padded
+format commented_table
 names index ideographs
 tier field by \t
 thing row literal kRSUnicode index
