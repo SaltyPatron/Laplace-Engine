@@ -9,6 +9,7 @@ open-multilingual-wordnet
 princeton-wordnet
 propbank
 verbnet
+verbnet-gl
 framenet
 semlink
 predicate-matrix
@@ -29,6 +30,7 @@ tatoeba
 opensubtitles
 project-gutenberg
 tokenizers
+brown
 geonames
 hatecheck
 sghatecheck
@@ -43,4 +45,5 @@ civil-comments
 chess-com
 twic
 lumbras-gigabase
+openings
 workspace-code

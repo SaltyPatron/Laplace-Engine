@@ -1,0 +1,6 @@
+name brown
+# The Brown tagged distribution read by NLTK's TaggedCorpusReader.
+witness Brown Corpus
+class AcademicCurated
+root $LAPLACE_DATA/Brown/brown
+after unicode
