@@ -467,6 +467,7 @@ static const Layout *inner_layout(const char *name){
     if (!valid || !declared || !layout_compile_grammar(layout, name)) { inner_state[id] = 3; return NULL; }
     inner_layouts[id] = layout; inner_state[id] = 2; return layout;
 }
+const Layout *layout_format(const char *name){ return inner_layout(name); }
 int layout_compile_parts(Layout *layout){
     if (layout->parts_compiled) return !layout->part_errors;
     layout->parts_compiled = 1;
