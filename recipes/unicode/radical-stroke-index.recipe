@@ -1,0 +1,17 @@
+name unicode-radical-stroke-index
+# RSIndex.txt is the UAX #38 radical-stroke index. Each row lists a
+# radical/stroke pair and its individual Han ideographs, including supplementary
+# scalars. The index's property and value form one content path; every listed
+# ideograph is a separate member, rather than one concatenated string.
+match RSIndex.txt
+tier row by \n
+comment hash
+remark hash
+padded
+names index ideographs
+tier field by \t
+thing row literal kRSUnicode index
+content index
+part ideographs by space
+codepoints ideographs
+pair row ideographs
