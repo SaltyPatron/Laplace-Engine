@@ -413,7 +413,7 @@ static int input_fill(const SInput *input, lp_buf *buffer, size_t target, size_t
 int say_record_streamable(const Recipe *recipe){
     const Say *say = recipe ? recipe->say : NULL;
     return say && say->lay.g.compiled && !say->has_about && (say->lay.g.scope_count ||
-        (say->lay.g.record_count && !say->lay.g.record_name_count && !say->lay.g.has_context));
+        ((say->lay.g.record_count || say->lay.g.record_children) && !say->lay.g.record_name_count && !say->lay.g.has_context));
 }
 static void read_records(RecordPipeline *pipeline){
     const uint8_t *original_source = pipeline->source; size_t original_length = pipeline->length;

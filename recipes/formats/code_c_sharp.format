@@ -1,0 +1,26 @@
+# Complete declaration bytes accompany the extracted semantic fields.
+grammar c_sharp
+records children
+node @record group as packaging capture source
+node class_declaration group as class_declaration capture source
+node struct_declaration group as struct_declaration capture source
+node method_declaration group as method_declaration capture source
+node constructor_declaration group as constructor_declaration capture source
+node record_declaration group as record_declaration capture source
+node property_declaration group as property_declaration capture source
+node interface_declaration group as interface_declaration capture source
+node enum_declaration group as enum_declaration capture source
+node delegate_declaration group as delegate_declaration capture source
+node identifier text field name under class_declaration as name
+node identifier text field name under struct_declaration as name
+node identifier text field name under method_declaration as name
+node identifier text field name under constructor_declaration as name
+node identifier text field name under record_declaration as name
+node identifier text field name under property_declaration as name
+node identifier text field name under interface_declaration as name
+node identifier text field name under enum_declaration as name
+node identifier text field name under delegate_declaration as name
+node parameter_list text as parameters
+node block text as implementation
+node arrow_expression_clause text as implementation
+

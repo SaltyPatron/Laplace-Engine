@@ -1,0 +1,16 @@
+# Complete declaration bytes accompany the extracted semantic fields.
+grammar cpp
+records children
+node @record group as packaging capture source
+node function_definition group as function_definition capture source
+node struct_specifier group as struct_specifier capture source
+node class_specifier group as class_specifier capture source
+node function_declarator group as signature capture signature_source
+node identifier text field declarator as name
+node field_identifier text field declarator as name
+node qualified_identifier text field declarator as name
+node type_identifier text field name as name
+node parameter_list text as parameters
+node compound_statement text as implementation
+node field_declaration_list group as members capture members_source
+
