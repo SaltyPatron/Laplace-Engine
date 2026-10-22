@@ -155,7 +155,7 @@ void op_usage(FILE *out, const Op *op){
     fprintf(out, "\n");
 }
 
-static void json_str(FILE *out, const char *s){
+void json_str(FILE *out, const char *s){
     if (!s) { fputs("null", out); return; }
     fputc('"', out);
     for (; *s; s++) {

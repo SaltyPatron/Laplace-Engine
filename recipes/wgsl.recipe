@@ -1,0 +1,5 @@
+name wgsl
+# Packaging syntax; leaves retain the original bytes.
+match *.wgsl
+class UserCuratedResource
+grammar wgsl

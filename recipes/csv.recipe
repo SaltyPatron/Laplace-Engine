@@ -1,0 +1,5 @@
+name csv
+# Packaging syntax; leaves retain the original bytes.
+match *.csv
+class UserCuratedResource
+grammar csv

@@ -1,0 +1,5 @@
+name hlsl
+# Packaging syntax; leaves retain the original bytes.
+match *.hlsl *.fx
+class UserCuratedResource
+grammar hlsl

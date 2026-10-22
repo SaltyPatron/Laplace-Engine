@@ -135,7 +135,7 @@ fwf=$here/../firmware/program.firmware
 tl(){ "$L" translate -d "$conn" --firmware "$fwf" "$@" 2>&1 || true; }
 line(){ grep -E "^ +$1 " <<<"$2" || true; }      # a language's line of an answer
 # a concept's lines, found by its definition (the concept itself is shown as its text, the ILI, where CILI is read)
-block(){ awk -v d="$1" '/ ± / {on = index($0, d) > 0} on' <<<"$2"; }
+block(){ awk -v RS='' -v d="$1" 'index($0, d) > 0 {print}' <<<"$2"; }
 concepts(){ grep -c ' ± ' <<<"$1" || true; }
 dog='a member of the genus Canis'; man='informal term for a man'
 
@@ -173,13 +173,13 @@ echo "translate: chien fr en goes back to English; a sense of a synset CILI has 
 # then standing"): game's senses as cntlist counts them, 38, 26, 14, before the adjective senses the witness lists first
 # and no concordance tags
 out=$(tl game en en)
-order=$(grep ' ± ' <<<"$out")      # a concept is shown as its text, here its definition (the comment on block, above)
-[[ $(sed -n 1p <<<"$order") == *'a contest with rules to determine a winner'*'observed 38 times' ]] || fail "game en en: the first concept is not i37810 (a contest with rules), observed 38 times: $out"
-[[ $(sed -n 2p <<<"$order") == *'a single play of a sport'*'observed 26 times' && $(sed -n 3p <<<"$order") == *'an amusement or pastime'*'observed 14 times' ]] || fail "game en en: i37811 (26) and i37661 (14) do not follow: $out"
-[[ $(sed -n 4p <<<"$order") == *'disabled in the feet or legs' ]] || fail "game en en: the unobserved senses do not come after the observed ones, in the witness's order (i5573 first): $out"
+order=$(grep ' ± ' <<<"$out")      # headers contain canonical IDs; definitions follow on their own lines
+[[ $(sed -n 1p <<<"$order") == *i37810*'observed 38 times' ]] || fail "game en en: the first concept is not i37810 (a contest with rules), observed 38 times: $out"
+[[ $(sed -n 2p <<<"$order") == *i37811*'observed 26 times' && $(sed -n 3p <<<"$order") == *i37661*'observed 14 times' ]] || fail "game en en: i37811 (26) and i37661 (14) do not follow: $out"
+[[ $(sed -n 4p <<<"$order") == *i5573* ]] || fail "game en en: the unobserved senses do not come after the observed ones, in the witness's order (i5573 first): $out"
 # game's three noun synsets each list [game], so they are one synset (recipes/wn-lmf.recipe): its definitions are not
 # shown as any one concept's
-[[ $(sed -n 2p <<<"$(block 'a contest with rules' "$out")") != *'a single play'* ]] || fail "game en en: i37810 is shown with i37811's definition: $out"
+grep -q 'a contest with rules' <<<"$(block i37810 "$out")" && ! grep -q 'a single play' <<<"$(block i37810 "$out")" || fail "game en en: i37810 is shown with the wrong definition: $out"
 out=$(tl dog en en); [[ $(grep ' ± ' <<<"$out" | head -1) == *'observed 42 times' ]] && grep -q 'a member of the genus Canis' <<<"$(block 'observed 42' "$out")" || fail "dog en en: i46360 is not first, observed 42 times: $out"
 echo "translate: game en en orders game's senses by cntlist's counts (i37810 38, i37811 26, i37661 14), then the unobserved"
 

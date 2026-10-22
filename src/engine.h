@@ -164,7 +164,7 @@ typedef struct TSLanguage TSLanguage;
  * part of that tree is (say.c). Configuration only: there is one decomposer, and no code for a format or a source. */
 typedef struct {
     char name[64];
-    char match[16][128]; int nmatch;                 /* filename globs */
+    char match[64][256]; int nmatch;                 /* filename globs; fail explicitly if the declaration exceeds this capacity */
     char grammar[64];                                 /* "text" (UAX #29), "layout" (the recipe's tiers), or a tree-sitter grammar name */
     const TSLanguage *lang;
     double trust;                                    /* the witness's trust, -1 .. 1 */
@@ -189,6 +189,7 @@ void say_program_hash(const Recipe *recipe, uint8_t out[32]);
  * its files reads; the source says who the witness is, where the source is kept, and which sources it comes after. */
 typedef struct {
     char name[64];
+    char aliases[8][64]; int naliases;                 /* accepted names declared beside the source */
     char witness[128], lineage[128]; double trust;
     char called[128];                                 /* what the source is, where its witness is named file by file (called NAME) */
     char held[256];                                   /* held REASON: a source not here yet, by its keeper's choice; absent, it is said so with the reason and fails no plan */
@@ -206,6 +207,9 @@ typedef struct {
     char unset[64];                                   /* a variable its root or files name that the environment does not set: it is nowhere until it is */
 } Source;
 int     recipes_load(const char *dir, Recipe **out);
+int     recipes_catalog(const char *dir, FILE *out, int json);
+int     source_named(const Source *source, const char *name);
+void    json_str(FILE *out, const char *s);
 Source *sources_loaded(int *n);                                       /* in the order they go in */
 Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of);   /* of: among that source's recipes only */
 int     recipes_broken(const Recipe *r, int n, const Source *of);             /* how many of a source's recipes (NULL: of the formats) did not load; each is said */

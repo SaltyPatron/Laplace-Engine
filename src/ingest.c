@@ -411,7 +411,20 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
         printf("%-10s %'10.1f   %s\n", code ? "FAILED" : "in", now() - t, last);
         if (src[i].nfound > 1) printf("%-4s %-38s %-10s %10s   its root matches %d directories: it takes the last by name, %s\n", "", "", "", "", src[i].nfound, src[i].found);
         fflush(stdout);
-        if (code) { failed = 1; fprintf(stderr, "\n%s did not go in (exit %d); what it said is in %s\n", src[i].name, code, log); } else { went++; wentin[i] = 1; }
+        if (code) {
+            failed = 1; fprintf(stderr, "\n%s did not go in (exit %d); diagnostic: %s\n", src[i].name, code, log);
+            FILE *f = fopen(log, "r");
+            if (f) {
+                /* Keep the actual child error visible in CLI/Actions output. Bound
+                 * output even when a source produced a long progress log. */
+                char tail[16384]; size_t used, begin = 0;
+                if (!fseek(f, 0, SEEK_END)) { long size = ftell(f); if (size > (long)sizeof tail) { fseek(f, -(long)sizeof tail, SEEK_END); begin = 1; } else rewind(f); }
+                used = fread(tail, 1, sizeof tail, f); fclose(f);
+                if (begin) { while (begin < used && tail[begin] != '\n') begin++; if (begin < used) begin++; }
+                fwrite(tail + begin, 1, used - begin, stderr);
+                fputc('\n', stderr);
+            }
+        } else { went++; wentin[i] = 1; }
         if (!code && loads && before >= 0 && bytes_in > 0) { double after = db_bytes(conninfo); if (after > before) room_keep(roomf, src[i].name, (after - before) / bytes_in); }     /* what it took, for the next run's check */
     }
     printf("\n%d sources in, %d absent, %d held, %d without a recipe, %d not begun for want of room, %d not begun because what they come after is not in%s   %'.1f s\n", went, absent, held, empty, short_of_room, short_of_order, failed ? ", and one that failed: the run stops there" : "", now() - T);
@@ -432,7 +445,7 @@ static int ingest_ewkb_point(const uint8_t *e, size_t n, lp_coord *out){
     if (n < off + 32) return 0; for (int d = 0; d < 4; d++) { double v; memcpy(&v, e + off + 8 * d, 8); out->m[d] = (int64_t)(v * (double)LP_FIXED_ONE); } return 1;
 }
 static int files_recorded(const char *conninfo, File *files, int nfiles){
-    File *candidate=NULL;int *owner=NULL,ncandidate=0,ccandidate=0;
+    File *candidate=NULL;int *owner=NULL,ncandidate=0,ccandidate=0,failed=0;
     lp_id *want = malloc(sizeof(lp_id) * (size_t)(nfiles + 1)); int *of = malloc(sizeof(int) * (size_t)(nfiles + 1)), nw = 0, found = 0;
     for (int i = 0; i < nfiles; i++) { if (files[i].skipped || files[i].known) continue; Ref os; if (file_os(files[i].recipe, &files[i], &os)) { want[nw] = os.id; of[nw++] = i; } }
     PGconn *pg = nw ? db_connect(conninfo) : NULL;
@@ -445,7 +458,7 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
                 " FROM unnest($1::blake3[]) wanted(id) JOIN public.physicality c"
                 " ON c.path @> ARRAY[wanted.id]::blake3[] JOIN public.entity e ON e.id=c.entity",
                 1, NULL, v, l, f, 1);
-            if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "which files are recorded: %s", PQerrorMessage(pg)); PQclear(r); free(ab); break; }
+            if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "which files are recorded: %s", PQerrorMessage(pg)); PQclear(r); free(ab); failed=1; break; }
             for (int j = 0; j < PQntuples(r); j++) {
                 lp_vertex vx[2]; size_t nv = lp_path_vertices((const uint8_t *)PQgetvalue(r, j, 1), (size_t)PQgetlength(r, j, 1), vx, 2); if (!nv) continue;
                 int64_t k = lp_idmap_find(at, &vx[0].id); if (k < 0) continue;                    /* held, but not first: not its metadata */
@@ -461,9 +474,11 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
                 else { if (nn == ncap) { ncap *= 2; next = xrealloc(next, sizeof(lp_id) * (size_t)ncap); nof = xrealloc(nof, sizeof(int) * (size_t)ncap); } next[nn] = c; nof[nn++] = of[k]; } }                                         /* a metadata tree it begins: what holds that is next */
             PQclear(r); free(ab); }
         lp_idmap_free(at); free(want); free(of); want = next; of = nof; nw = 0;
+        if (failed) break;
         for (int k = 0; k < nn; k++) if (!files[of[k]].known) { want[nw] = want[k]; of[nw++] = of[k]; }
     }
     if (pg) PQfinish(pg); free(want); free(of);
+    if (failed) { free(candidate); free(owner); return -1; }
     validate_file_contexts(conninfo,candidate,ncandidate);
     uint8_t *stale=calloc((size_t)nfiles,1);if(nfiles && !stale){perror("cached reading contexts");exit(1);}
     for(int i=0;i<ncandidate;i++)if(candidate[i].known && !files[owner[i]].known){
@@ -515,16 +530,24 @@ static int ingest_highway(const char *conninfo, const char *t0p, int threads, in
 
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
-    int highway = 0, threads = 0, do_load = 1, show_claims = 0, entities = 0, asking = 1; const char *of = NULL; extern int load_whole;
+    int highway = 0, threads = 0, do_load = 1, show_claims = 0, entities = 0, asking = 1, catalog = 0, list = 0; const char *of = NULL; extern int load_whole;
     int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "-t", .kind = 's', .at = &t0p }, { .flag = "-r", .kind = 's', .at = &rdir }, { .flag = "-j", .kind = 'i', .at = &threads },
         { .flag = "-s", .kind = 's', .at = &of },                                                       /* the files named are this source's: a part of it at a time */
         { .flag = "--highway", .kind = 'b', .at = &highway },
+        { .flag = "--catalog", .kind = 'b', .at = &catalog },
+        { .flag = "--list-sources", .kind = 'b', .at = &list },
         { .flag = "--whole", .kind = 'b', .at = &load_whole },                                          /* after a run that was cut off: every node is looked for */
         { .flag = "--no-load", .kind = 'v', .at = &do_load, .val = 0 }, { .flag = "--plan", .kind = 'v', .at = &do_load, .val = -1 },
         { .flag = "--claims", .kind = 'b', .at = &show_claims },                                        /* what the recipes attest, as text; nothing is loaded */
         { .flag = "--claims-tsv", .kind = 'b', .at = &tsv_claims },                                     /* --claims for a machine: a claim a line, its parts between tabs */
         { .flag = "--entities", .kind = 'b', .at = &entities },                                         /* what the recipes would record, entities and claims; nothing is loaded */
         { 0 } });
+    if (catalog || list) {
+        if (a < argc || of || highway || show_claims || tsv_claims || entities || do_load != 1 || (catalog && list)) {
+            fputs("Use ingest --catalog or --list-sources with optional -r recipes.\n", stderr); return 2;
+        }
+        return recipes_catalog(rdir, stdout, catalog);
+    }
     if (highway) {
         if (a < argc || of || show_claims || tsv_claims || entities || do_load < 0) { fprintf(stderr, "--highway admits only the existing highway contents; use -d, -t, -j or --no-load\n"); return 2; }
         return ingest_highway(conninfo, t0p, threads, do_load);
@@ -539,14 +562,14 @@ int cmd_ingest(int argc, char **argv){
     Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec), nsrc; Source *src = sources_loaded(&nsrc);
     if (entities) for (int i = a; i < argc; i++) { struct stat st_; if (stat(argv[i], &st_)) { fprintf(stderr, "--entities shows what files would record: %s is no file (a sample of a source: -s SOURCE FILE)\n", argv[i]); return 2; } }
     for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, "file")) file_record_stock(&rec[k]);   /* what the OS keeps of every file: the stock recipe file */
-    if (of) { int k = 0; while (k < nsrc && strcmp(src[k].name, of)) k++; if (k == nsrc) { fprintf(stderr, "%s is not a source\n", of); return 2; } walking = &src[k]; }
-    { int named = 0; for (int i = a; i < argc; i++) { struct stat st_; int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++; named += k < nsrc && stat(argv[i], &st_); }
+    if (of) { int k = 0; while (k < nsrc && !source_named(&src[k], of)) k++; if (k == nsrc) { fprintf(stderr, "%s is not a source\n", of); return 2; } walking = &src[k]; }
+    { int named = 0; for (int i = a; i < argc; i++) { struct stat st_; int k = 0; while (k < nsrc && !source_named(&src[k], argv[i])) k++; named += k < nsrc && stat(argv[i], &st_); }
       if (named && named == argc - a && !of && !getenv("LAPLACE_INGEST_ONE")) {   /* sources by name: each its own run, in recipes/order, after everything it comes after */
-          int *want = calloc((size_t)nsrc, sizeof(int)); for (int i = a; i < argc; i++) for (int k = 0; k < nsrc; k++) if (!strcmp(src[k].name, argv[i])) want[k] = 1;
+          int *want = calloc((size_t)nsrc, sizeof(int)); for (int i = a; i < argc; i++) for (int k = 0; k < nsrc; k++) if (source_named(&src[k], argv[i])) want[k] = 1;
           for (int k = nsrc - 1; k >= 0; k--) if (want[k]) for (int x = 0; x < src[k].nafter; x++) for (int j = 0; j < k; j++) if (!strcmp(src[j].name, src[k].after[x])) want[j] = 1;   /* sources is in order: what one comes after is before it */
           int rc = ingest_every(a, argv, src, nsrc, rec, nrec, want); free(want); return rc; } }
     for (int i = a; i < argc; i++) {                                         /* a source by its name, or files and directories */
-        struct stat st; int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++;
+        struct stat st; int k = 0; while (k < nsrc && !source_named(&src[k], argv[i])) k++;
         if (k < nsrc && stat(argv[i], &st)) {
             if (src[k].unset[0]) { fprintf(stderr, "source %s: its root names $%s, which the environment does not set (Laplace-Operations laplace.env)\n", src[k].name, src[k].unset); return 2; }
             if (!src[k].found[0]) { fprintf(stderr, "source %s is not at any of its roots\n", src[k].name); return 1; }
@@ -628,7 +651,7 @@ int cmd_ingest(int argc, char **argv){
         blake3_hasher_finalize(&hash,files[i].reading_context,32);
     }
     free(identities);
-    if (do_load) { double tk = now(); nknown = files_recorded(conninfo, files, nfiles); if (nknown) fprintf(stderr, "  %d files recorded already, found by the OS's record of them, not read (%.2f s)\n", nknown, now() - tk); }
+    if (do_load) { double tk = now(); nknown = files_recorded(conninfo, files, nfiles); if (nknown < 0) return 1; if (nknown) fprintf(stderr, "  %d files recorded already, found by the OS's record of them, not read (%.2f s)\n", nknown, now() - tk); }
     int restore_keys = 0;
     for (int i = 0; i < nfiles; i++) if (!files[i].known && !files[i].skipped) { restore_keys = 1; break; }
 

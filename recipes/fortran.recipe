@@ -1,0 +1,5 @@
+name fortran
+# Packaging syntax; leaves retain the original bytes.
+match *.f *.f90 *.f95 *.for
+class UserCuratedResource
+grammar fortran
