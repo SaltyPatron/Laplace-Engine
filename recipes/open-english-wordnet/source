@@ -1,4 +1,5 @@
 name open-english-wordnet
+aliases oewn
 # Open English WordNet: one source trunk and one witness (Laplace-Engine#28).
 witness Open English WordNet
 lineage WordNet

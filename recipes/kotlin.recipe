@@ -1,0 +1,5 @@
+name kotlin
+# Packaging syntax; leaves retain the original bytes.
+match *.kt *.kts
+class UserCuratedResource
+grammar kotlin

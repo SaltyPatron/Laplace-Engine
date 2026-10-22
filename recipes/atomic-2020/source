@@ -1,4 +1,5 @@
 name atomic-2020
+aliases atomic2020 atomic
 # ATOMIC 2020: commonsense tuples, a head, a relation and a tail on every line, in three files.
 # The witness is named as the set's README.md titles itself: "# ATOMIC 2020 Knowledge Graph".
 witness ATOMIC 2020 Knowledge Graph

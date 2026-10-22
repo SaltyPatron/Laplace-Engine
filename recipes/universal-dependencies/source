@@ -1,4 +1,5 @@
 name universal-dependencies
+aliases ud
 # Universal Dependencies: treebanks of sentences, each with a row for every word and what the treebank says of it.
 # One source trunk and one witness; each treebank is a directory of files under it (Laplace-Engine#28).
 witness Universal Dependencies

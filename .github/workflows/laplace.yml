@@ -3,6 +3,11 @@
 name: Laplace-Engine
 on:
   workflow_dispatch:
+    inputs:
+      verify_estate:
+        description: "Audit every installed corpus and compare full ISO ingestion with the published monorepo"
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
@@ -93,6 +98,7 @@ jobs:
           export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
           export TMPDIR=${RUNNER_TEMP:?}
           export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes
+          python3 Laplace-Engine/tests/catalog.py "$L"
           failed=0
           for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code; do
             if ! bash "Laplace-Engine/tests/$suite.sh" "$L"; then
@@ -115,21 +121,24 @@ jobs:
         run: |
           . Laplace-Operations/laplace.env
           export LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native
-          python3 Laplace-Engine/tests/staging-role.py
+          python3 Laplace-Engine/tests/staging-role.py "$RUNNER_TEMP/engine/laplace"
       - name: a working tree's whole reading supersedes the readings before it
         run: |
           . Laplace-Operations/laplace.env
           export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
-          bash Laplace-Engine/tests/supersede.sh "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace"
+          bash Laplace-Engine/tests/supersede.sh "$RUNNER_TEMP/engine/laplace"
       - name: translate goes through the lexicalization, read from the recipe (dog en en, dog en fr)
         run: |
           . Laplace-Operations/laplace.env
           export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
-          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/translate.sh "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace"
+          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/translate.sh "$RUNNER_TEMP/engine/laplace"
   # Every source in recipes/order is where its recipe says, on the data host (Laplace-Engine#60): the plan walks each
   # source's root and matches its files to recipes, without the database, and fails on a source whose root is unset, at
   # none of its roots or holding no files. Its own job: what it finds is the data's, and does not hold the deploy.
   plan:
+    # Corpus availability is an estate audit, not a software build requirement.
+    # PRs qualify all recipes plus actual ingestion on scoped database fixtures.
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.verify_estate)
     needs: engine
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
@@ -160,7 +169,7 @@ jobs:
   # dispatch; after plan, so the short job does not wait out the long one on the one runner.
   parity:
     needs: [engine, plan]
-    if: ${{ !cancelled() && needs.engine.result == 'success' && needs.engine.outputs.parity == 'true' }}
+    if: ${{ !cancelled() && needs.engine.result == 'success' && needs.engine.outputs.parity == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.verify_estate)) }}
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
       - name: Select this run's canonical cache closure

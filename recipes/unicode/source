@@ -1,4 +1,5 @@
 name unicode
+aliases ucd uca
 # The Unicode Standard's data: the character database, the collation table, the emoji data. The floor of everything.
 witness Unicode Character Database
 # The standard that defines these properties.

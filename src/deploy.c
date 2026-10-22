@@ -126,6 +126,7 @@ int cmd_status(int argc, char **argv){
 
 /* laplace sources: the sources there are recipes for, in the order they go in, where each is, and whether it is in. */
 int cmd_sources(int argc, char **argv){
+    if (argc == 2 && !strcmp(argv[1], "--catalog")) return recipes_catalog(laplace_recipes(), stdout, 1);
     PGconn *pg = db_connect(conn_arg(argc, argv)); tier0_open(NULL); lp_text *tx = lp_text_new(T0);
     Recipe *rec = NULL; int nrec = recipes_load(laplace_recipes(), &rec), n; Source *s = sources_loaded(&n);
     printf("%-4s %-28s %-8s %-9s %s\n", "", "source", "recipes", "in", "kept at");
