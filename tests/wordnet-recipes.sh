@@ -1,5 +1,5 @@
 #!/bin/bash
-# The WordNet 3.0 database files as their recipes read them (Laplace-Engine#70): a synset is the concept CILI keys by
+# Canonical WordNet senses and embedded highway identifiers (Laplace-Engine#70): a synset is the concept CILI keys by
 # its offset and type, a key template naming the part beside it (\0-{ss_type}); a pointer is the relation WordNet
 # writes between two concepts; an index line's satellite offsets, written a, resolve by the template after it
 # (as \0-{pos} as \0-s). No offset and no sense key is content. Read with the highway the environment names.
