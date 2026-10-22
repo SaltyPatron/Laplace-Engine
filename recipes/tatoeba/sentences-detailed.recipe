@@ -1,8 +1,8 @@
 name tatoeba-sentences-detailed
 # "Contains additional fields for each sentence (owner name, date created/modified)."
 # Fields: Sentence id [tab] Lang [tab] Text [tab] Username [tab] Date added [tab] Date last modified
-# A sentence is its text; Username is the column the page calls "owner name". A member stands within Tatoeba:
-# [Tatoeba, Username, the name]. The dates are Tatoeba's bookkeeping.
+# A sentence is its text; Username is the "owner name", recorded as content
+# beside the sentence. The dates are Tatoeba's bookkeeping.
 match sentences_detailed.csv
 
 tier row by \n
@@ -13,10 +13,11 @@ empty \\N
 
 thing row Text
 key row "Sentence id"
-own Username
+content Username
 content Text Lang
 omit "Date added" "Date last modified"
 # "Each sentence is associated with a unique id and an ISO 639-3 language code." (sentences.csv; the other files
 # name the same field Lang): the sentence's language code
 relation "ISO 639-3 language code" Lang
-attest row Lang by Username
+attest row Lang
+pair row . of Username

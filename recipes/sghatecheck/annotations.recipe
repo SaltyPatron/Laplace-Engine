@@ -5,8 +5,8 @@ name sghatecheck-annotations
 # if it has harmful language directed at a protected group. Other annotation choices are non-hateful and nonsensical,
 # if the test case is incomprehensible to the annotator."
 # The columns' names are the files' own. Each annotator column is an annotator of that file's language, and its field
-# what that annotator says of the test case; nothing is written between the two. An annotator stands within the file:
-# [the set, the file, the column]. The rest is said of the test case by the set.
+# what that annotator says of the test case. The column is qualified by its
+# source-relative file path; the corpus witnesses [column identifier, judgment].
 match annotations/*_annotations.csv
 
 tier row by \n
@@ -35,4 +35,5 @@ relation "the target of each test case" p_target
 #   annotations came to, but the README words neither, nor how they differ; as bare values they would fold into the
 #   gold label t_gold ([case, hateful] once), losing that the annotators said it.
 attest row c_group p_label p_value p_target t_case_local t_function t_gold t_direction annotation_common annotation_selected
-voices row annotator_* within-file
+value - annotator_*
+attest row annotator_* with {field} within-file

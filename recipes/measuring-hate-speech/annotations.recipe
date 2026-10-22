@@ -15,7 +15,8 @@ name measuring-hate-speech-annotations
 # whom infitms, outfitms, std_err and hypothesis belong to; it lists them in the order hate_speech_score, text,
 # infitms, outfitms, annotator_severity, std_err, annotator_infitms, annotator_outfitms, hypothesis, and the recipe
 # records the four of the comment.
-# A comment is its text; comment_id is the set's key to it. An annotator stands within the set: [the set, annotator_id, the id].
+# A comment is its text; comment_id is its pointer. The annotator ID is content
+# beside each judgment, and the corpus trunk is the sole witness.
 match train-*.tsv
 
 tier row by \n
@@ -25,7 +26,7 @@ tier field by \t
 
 thing row text
 key row comment_id
-own annotator_id
+content annotator_id
 content text platform hate_speech_score infitms outfitms std_err hypothesis sentiment respect insult humiliate status dehumanize violence genocide attack_defend hatespeech target_* annotator_*
 
 # The card: "hate_speech_score - continuous hate speech measure"
@@ -74,6 +75,6 @@ relation "Does this comment contain hate speech" hatespeech
 #   annotator_* (gender, trans, educ, income, ideology, age, and their ticked subgroups): what the corpus reports of
 #   the annotator, worded nowhere; with the people the corpus names (Laplace-Engine#29).
 attest row platform hate_speech_score infitms outfitms std_err hypothesis
-attest row sentiment respect insult humiliate status dehumanize violence genocide attack_defend hatespeech target_* by annotator_id
+attest row sentiment respect insult humiliate status dehumanize violence genocide attack_defend hatespeech target_* with annotator_id
 # The annotator columns are named one by one: annotator_id, the annotator itself, is not said of itself.
 attest row annotator_severity annotator_infitms annotator_outfitms annotator_gender annotator_trans annotator_educ annotator_income annotator_ideology annotator_age annotator_gender_* annotator_transgender* annotator_cisgender annotator_education_* annotator_income_* annotator_ideology_* annotator_race_* annotator_religion_* annotator_sexuality_* of annotator_id
