@@ -1,5 +1,5 @@
 grammar wn_sense_key
-node sense_key group
+node sense_key group as sense capture reference
 node lemma text kind
 node ss_type text kind
 node lex_filenum text kind
