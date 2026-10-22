@@ -14,7 +14,18 @@ empty NULL id:NULL vn:NULL wn:NULL mcr:NULL fn:NULL pb:NULL eso:NULL mcr:ili-30-
 # Missing edition-specific pointers remain diagnosed; no newer class is guessed.
 type 5_VN_CLASS vnclass matching ^vn:(.*)$
 type 7_VN_SUBCLASS vnclass matching ^vn:(.*)$
-type 11_WN_SENSE ili matching ^wn:(.*)$
+# A sense key carries lexical facts as well as an ILI pointer. Its English
+# lexicalization is shared with WordNet's [lemma, language, concept] identity;
+# the packaging prefix and numeric sense key never become that identity.
+part 11_WN_SENSE grammar wn_sense_key
+thing 11_WN_SENSE of sense
+thing sense lemma space _ literal eng reference
+type sense.reference ili
+type sense.lex_filenum lexfile
+value lexfile sense.lex_filenum
+relation "WordNet synset type" sense.ss_type
+relation "WordNet lexical identifier" sense.lex_id
+attest sense ss_type lex_filenum lex_id
 type 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$
 type 23_MCR_BLC ili matching ^mcr:ili-30-([0-9]+-[a-z])$
 type 13_FN_FRAME fnframe matching ^fn:(.*)$ node
@@ -52,7 +63,12 @@ thing 3_ID_PRED 2
 thing 4_ID_ROLE 2
 thing 9_VN_LEMA 2
 thing 10_VN_ROLE 2
+# FrameNet qualifies LU/FE identifiers by their frame. A bare drop.v or Agent
+# is not the highway identity [Body_movement, drop.v] or [Body_movement, Agent].
+# Where the row supplies no frame, retain its unqualified source value.
+thing 14_FN_LE ^/13_FN_FRAME 2
 thing 14_FN_LE 2
+thing 15_FN_FRAME_ELEMENT ^/13_FN_FRAME 2
 thing 15_FN_FRAME_ELEMENT 2
 thing 17_PB_ARG 2
 thing 18_MCR_BC 2
