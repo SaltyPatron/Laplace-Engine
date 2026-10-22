@@ -28,20 +28,24 @@ static void said_as(RecordWorker *k, const Dis *m, Ref S, Ref v){ if (m->what !=
     if (m->what == 1) { Ref p[3] = { S, string_ref((const uint8_t *)m->text, m->text_length), v }; record_emit_claim(k, p, 3); return; }     /* relation "TEXT": [thing, TEXT, value] */
     record_note_road_value(k, m, &v); Ref p[2] = { S, v }; record_emit_claim(k, p, 2); }
 
-static int voice_of(RecordWorker *k, const SemanticRecord *t, int32_t c){
-    if (c < 0 || record_value_empty(k->s, &t->n[c])) return 0; const SemanticValue *y = &t->n[c]; const Dis *d = record_field_disposition(k->s, y);
-    if (d && d->what == D_OWN) { if (!record_value(k, t, c, &k->voice, 0)) return 0; }
-    else { Ref w[3] = { k->fw, string_ref(y->name, y->nlen), string_ref(y->val, y->vlen) }; w[0].said = 0; k->voice = said_tuple(compose(w, 3, ref_above(w, 3))); }
-    k->voiced = 1; return 1;
+/* Qualifiers are content in a judgment record. The corpus remains its witness. */
+static int qualifier_of(RecordWorker *k, const SemanticRecord *t, int32_t c){
+    if (c<0 || record_value_empty(k->s,&t->n[c]) || !record_value(k,t,c,&k->qualifier,0)) return 0;
+    k->qualified=1; return 1;
 }
-static int said_by(RecordWorker *k, const SemanticRecord *t, int32_t g, const char *by){ return voice_of(k, t, record_select_first(t, g, by)); }
-
-static int whos(const Say *s, const SemanticRecord *t, int32_t g, const char *by, int32_t *who){
-    if (!by[0]) return 0; int n = record_select_all(t, g, by, who, RECORD_REFERENCE_CAPACITY), m = 0;
-    for (int i = 0; i < n; i++) if (who[i] >= 0 && t->n[who[i]].vlen && !record_value_empty(s, &t->n[who[i]])) who[m++] = who[i];      /* a column it leaves empty names no one: the source says it */
-    return m;
+static int qualifiers(const Say *s, const SemanticRecord *t, int32_t g, const char *path, int32_t *out){
+    if (!path[0] || record_selector_code(path)->special==SELECT_LABEL) return 0;
+    int n=record_select_all(t,g,path,out,RECORD_REFERENCE_CAPACITY), count=0;
+    for (int i=0; i<n; i++) if (out[i]>=0 && t->n[out[i]].vlen && !record_value_empty(s,&t->n[out[i]])) out[count++]=out[i];
+    return count;
 }
-
+static void field_qualifier(RecordWorker *k, const SemanticValue *field, int file){
+    Ref parts[3]={k->fw,k->file_scope,string_ref(field->name,field->nlen)};
+    if (!file) parts[1]=parts[2];
+    size_t count=file?3:2;
+    for (size_t i=0; i<count; i++) parts[i].said=0;
+    k->qualifier=said_tuple(compose(parts,(uint32_t)count,ref_above(parts,count))); k->qualified=1;
+}
 static float score_of(const Say *s, const SemanticRecord *t, int32_t g){
     const SemanticValue *x = &t->n[g];
     for (int i = 0; i < s->nscore; i++) if (record_field_named(x, s->score[i].tier, strlen(s->score[i].tier))) { int32_t c = record_field_child(t, g, s->score[i].name, -1); if (c < 0 || !t->n[c].vlen || t->n[c].vlen > 31) return 1.0f;
@@ -85,22 +89,15 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
         if (x->nlen) { const Dis *dg = record_field_disposition(s, x); if (dg && dg->what == D_OMIT) { g = (uint32_t)record_scope_end(t, (int32_t)g); continue; } }     /* the file's bookkeeping: nothing inside it is read */
         k->selfcp = -1;
         if (s->selfmark) { Ref X; if (record_subject(k, t, (int32_t)g, &X) && X.tier == 0) k->selfcp = (long)lp_tier0_codepoint(T0, &X.id); }     /* the code point the part speaks of, for the source's mark */
-        Ref S; int has = -1; float sc = score_of(s, t, (int32_t)g); k->score = s->nitself ? 1.0f : sc; k->voiced = 0;      /* the score is the attested tuple's, where there is one; what is said of it is said outright */
-        if (s->voice.tier[0] && record_field_named(x, s->voice.tier, strlen(s->voice.tier))) said_by(k, t, (int32_t)g, s->voice.name);     /* who says everything the part says */
+        Ref S; int has = -1; float sc = score_of(s, t, (int32_t)g); k->score = s->nitself ? 1.0f : sc; k->qualified = 0;      /* the score is the attested tuple's, where there is one; what is said of it is said outright */
         uint64_t e0 = k->ev.n; k->grp.n = 0;
         record_emit_layers(k,t,(int32_t)g);
-        for (int a = 0; a < s->nvoices; a++) { if (!record_field_named(x, s->voices[a].tier, strlen(s->voices[a].tier)) || !record_conditions_match(s, t, (int32_t)g, s->voices[a].when)) continue;   /* each such part a witness of its own: [the source's witness, NAME] */
-            if (has < 0) has = record_subject(k, t, (int32_t)g, &S); if (!has) break; int was = k->voiced; Ref wv = k->voice;
-            for (int z = 0; z < s->voices[a].n; z++) for (int32_t c = record_field_first(x); c >= 0; c = record_field_next(&t->n[c])) { const SemanticValue *y = &t->n[c]; Ref v; if (!y->nlen || !record_field_matches(y, s->voices[a].name[z]) || !record_value(k, t, c, &v, 0)) continue;
-                Ref w[3] = { k->fw, k->fname, string_ref(y->name, y->nlen) }; int nw = 2; if (s->voices[a].file) nw = 3; else w[1] = w[2]; w[0].said = 0; w[1].said = 0;     /* [the source's witness, NAME], or within the file [witness, file, NAME] */
-                k->voice = said_tuple(compose(w, (uint32_t)nw, ref_above(w, (size_t)nw))); k->voiced = 1; Ref p[2] = { S, v }; record_emit_claim(k, p, 2); }
-            k->voiced = was; k->voice = wv; }
         for (int a = 0; a < s->nitself; a++) { if (!record_field_named(x, s->itself[a].tier, strlen(s->itself[a].tier)) || !record_conditions_match(s, t, (int32_t)g, s->itself[a].when)) continue;
             Ref X; if (!record_thing(k, t, (int32_t)g, &X, 0)) break;
-            int32_t who[RECORD_REFERENCE_CAPACITY]; int nw = whos(s, t, (int32_t)g, s->itself[a].by, who), was = k->voiced; Ref wv = k->voice;
-            for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !voice_of(k, t, who[wi])) continue;
+            int32_t who[RECORD_REFERENCE_CAPACITY]; int nw = qualifiers(s, t, (int32_t)g, s->itself[a].with, who), was = k->qualified; Ref wv = k->qualifier;
+            for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !qualifier_of(k, t, who[wi])) continue;
                 record_emit_event(k, &X.id, sc); }
-            k->voiced = was; k->voice = wv; }
+            k->qualified = was; k->qualifier = wv; }
         for (int a = 0; a < s->npair; a++) { if (!record_field_matches(x, s->pair[a].tier) || !record_conditions_match(s, t, (int32_t)g, s->pair[a].when)) continue;      /* nothing written between the two: the pair */
             Ref P;
             if (s->pair[a].of[0]) { int32_t oc = record_select_first(t, (int32_t)g, s->pair[a].of); if (oc < 0 || !record_value(k, t, oc, &P, 0)) continue; }      /* of another of its parts */
@@ -114,11 +111,11 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                     if (!record_value(k, t, c, &v, 0)) continue; }
                 if (!memcmp(&v.id, &P.id, 16)) continue; Ref p[2] = { P, v }; record_emit_claim(k, p, 2); } }
         for (int a = 0; a < s->natt; a++) { if (!record_field_matches(x, s->att[a].tier) || !record_conditions_match(s, t, (int32_t)g, s->att[a].when)) continue;
-            Ref S0 = S; int had = has, was = k->voiced; Ref wv = k->voice;
+            Ref S0 = S; int had = has, was = k->qualified; Ref wv = k->qualifier;
             if (s->att[a].of[0]) { int32_t oc = record_select_first(t, (int32_t)g, s->att[a].of); if (oc < 0 || !record_value(k, t, oc, &S, 0)) continue; has = 1; }      /* said of another of its parts */
             else { if (has < 0) has = record_subject(k, t, (int32_t)g, &S); if (!has) break; }
-            int32_t who[RECORD_REFERENCE_CAPACITY]; int nw = whos(s, t, (int32_t)g, s->att[a].by, who);
-            for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !voice_of(k, t, who[wi])) continue;
+            int32_t who[RECORD_REFERENCE_CAPACITY]; int nw = qualifiers(s, t, (int32_t)g, s->att[a].with, who);
+            for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !qualifier_of(k, t, who[wi])) continue;
             for (int z = 0; z < s->att[a].n; z++) for (int32_t c = record_field_first(x); c >= 0; c = record_field_next(&t->n[c])) { const SemanticValue *y = &t->n[c];
                 if (record_selector_code(s->att[a].name[z])->special == SELECT_ELEMENTS) {                      /* each element inside it that is a value: its own text, or its one attribute (rdf:resource), as the element's name means it */
                     if (y->kind != S_GROUP || !y->nlen || y->join == S_PIECES) continue; int32_t only = -1, nk = 0;
@@ -135,6 +132,7 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                 if (!y->nlen || y->kind == S_TEXT || !record_field_matches(y, s->att[a].name[z])) continue;
                 if (!s->att[a].of[0] && record_names_identity(k, t, (int32_t)g, y)) continue;                         /* a part that names the thing is said already: it is the thing */
                 if (record_field_defaulted(s,t,c)) continue;
+                if (s->att[a].with[0] && record_selector_code(s->att[a].with)->special==SELECT_LABEL) field_qualifier(k,y,s->att[a].file);
                 if (y->kind == S_GROUP && y->join != S_PIECES && strchr(s->att[a].name[z], '*')) continue;      /* a wildcard names the part's values, not the elements inside it, which speak for themselves */
                 if (y->kind == S_GROUP) {                                    /* parts: each KEY IS VALUE the pair [KEY, VALUE] (a feature's Name=Value), or each piece, read as the part is */
                     const Dis *my = record_value_meaning(s, y);
@@ -158,7 +156,7 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                     said_as(k, m, S, v); } }
             }
             if (s->att[a].of[0]) { S = S0; has = had; }
-            k->voiced = was; k->voice = wv; }
+            k->qualified = was; k->qualifier = wv; }
         for (int a = 0; a < s->nhold; a++) { if (!record_field_matches(x, s->hold[a].tier) || !record_conditions_match(s, t, (int32_t)g, s->hold[a].when)) continue;   /* the things inside it, under their own name */
             if (has < 0) has = record_subject(k, t, (int32_t)g, &S); if (!has) break;
             /* the nearest things of those names inside it, however deep: what holds them and is no thing is how the file groups them */
@@ -180,8 +178,8 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
             Ref subject;
             if (s->rel[a].of[0]) { int32_t at=record_select_first(t,(int32_t)g,s->rel[a].of); if (at<0 || !record_value(k,t,at,&subject,0)) continue; }
             else { if (has < 0) has = record_subject(k, t, (int32_t)g, &S); if (!has) break; subject=S; }
-            int was = k->voiced; Ref wv = k->voice; int32_t who[RECORD_REFERENCE_CAPACITY]; int nw = whos(s, t, (int32_t)g, s->rel[a].by, who);
-            for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !voice_of(k, t, who[wi])) continue;
+            int was = k->qualified; Ref wv = k->qualifier; int32_t who[RECORD_REFERENCE_CAPACITY]; int nw = qualifiers(s, t, (int32_t)g, s->rel[a].with, who);
+            for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !qualifier_of(k, t, who[wi])) continue;
             Ref rel, o;
             if (record_selector_code(s->rel[a].rel)->special == SELECT_FILE) { if (!wi) record_obligation_note(k, 'o', &record_diagnostic_labels[DIAG_RELATE], (const uint8_t *)"{file}", 6, NULL, 0); break; }     /* a file's name is never a relation */
             else { int32_t rc = record_select_first(t, (int32_t)g, s->rel[a].rel); if (rc < 0 || !record_value(k, t, rc, &rel, 0)) break;
@@ -202,7 +200,7 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                 else if (oc >= 0 && record_value(k, t, oc, &o, 0)) { Ref p[3] = { subject, rel, o }; record_emit_claim(k, p, 3); }
                 else if (s->rel[a].alone && oc >= 0) { Ref p[2] = { subject, rel }; record_emit_claim(k, p, 2); } }      /* to what names nothing (a treebank's root): the relation alone, where the recipe says so; otherwise no claim */
             }
-            k->voiced = was; k->voice = wv; }
+            k->qualified = was; k->qualifier = wv; }
         for (int a = 0; a < s->ntogether; a++) if (record_field_named(x, s->together[a].tier, strlen(s->together[a].tier)) && record_conditions_match(s, t, (int32_t)g, s->together[a].when)) {
             if (np_ < 64) { pend[np_].end = record_scope_end(t, (int32_t)g); pend[np_].e0 = e0; pend[np_].has = record_thing(k, t, (int32_t)g, &pend[np_].about, 0); np_++; } break; }      /* closed when the reading passes the last node inside it */
     }
