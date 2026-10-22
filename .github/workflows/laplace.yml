@@ -20,14 +20,15 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   engine:
-    env:
-      LAPLACE_TIER0: ${{ runner.temp }}/engine/inputs/tier0.bin
-      LAPLACE_FLAGS: ${{ runner.temp }}/engine/inputs/tier0.flags
-      LAPLACE_HIGHWAY: ${{ runner.temp }}/engine/inputs/highway.bin
     runs-on: [self-hosted, laplace, Laplace-Engine]
     outputs:
       parity: ${{ steps.changes.outputs.parity }}
     steps:
+      - name: Select this run's canonical cache closure
+        run: |
+          echo "LAPLACE_TIER0=$RUNNER_TEMP/engine/inputs/tier0.bin" >> "$GITHUB_ENV"
+          echo "LAPLACE_FLAGS=$RUNNER_TEMP/engine/inputs/tier0.flags" >> "$GITHUB_ENV"
+          echo "LAPLACE_HIGHWAY=$RUNNER_TEMP/engine/inputs/highway.bin" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with: { path: Laplace-Engine }
       # Whether this change can move what an ingest records (tools/ci/parity-needed.sh says which paths can); the parity
@@ -122,13 +123,14 @@ jobs:
   # source's root and matches its files to recipes, without the database, and fails on a source whose root is unset, at
   # none of its roots or holding no files. Its own job: what it finds is the data's, and does not hold the deploy.
   plan:
-    env:
-      LAPLACE_TIER0: ${{ runner.temp }}/engine/inputs/tier0.bin
-      LAPLACE_FLAGS: ${{ runner.temp }}/engine/inputs/tier0.flags
-      LAPLACE_HIGHWAY: ${{ runner.temp }}/engine/inputs/highway.bin
     needs: engine
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
+      - name: Select this run's canonical cache closure
+        run: |
+          echo "LAPLACE_TIER0=$RUNNER_TEMP/engine/inputs/tier0.bin" >> "$GITHUB_ENV"
+          echo "LAPLACE_FLAGS=$RUNNER_TEMP/engine/inputs/tier0.flags" >> "$GITHUB_ENV"
+          echo "LAPLACE_HIGHWAY=$RUNNER_TEMP/engine/inputs/highway.bin" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with: { path: Laplace-Engine }
       - uses: actions/checkout@v4
@@ -150,14 +152,15 @@ jobs:
   # It runs when the change can move what an ingest records (the engine job's changes step), every night, and on a
   # dispatch; after plan, so the short job does not wait out the long one on the one runner.
   parity:
-    env:
-      LAPLACE_TIER0: ${{ runner.temp }}/engine/inputs/tier0.bin
-      LAPLACE_FLAGS: ${{ runner.temp }}/engine/inputs/tier0.flags
-      LAPLACE_HIGHWAY: ${{ runner.temp }}/engine/inputs/highway.bin
     needs: [engine, plan]
     if: ${{ !cancelled() && needs.engine.result == 'success' && needs.engine.outputs.parity == 'true' }}
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
+      - name: Select this run's canonical cache closure
+        run: |
+          echo "LAPLACE_TIER0=$RUNNER_TEMP/engine/inputs/tier0.bin" >> "$GITHUB_ENV"
+          echo "LAPLACE_FLAGS=$RUNNER_TEMP/engine/inputs/tier0.flags" >> "$GITHUB_ENV"
+          echo "LAPLACE_HIGHWAY=$RUNNER_TEMP/engine/inputs/highway.bin" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with: { path: Laplace-Engine }
       - uses: actions/checkout@v4
