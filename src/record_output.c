@@ -10,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct CSeen { lp_id claim, voice, dependence; uint64_t epoch, ev; };
+struct CSeen { lp_id claim, qualifier, dependence; uint64_t epoch, ev; };
 typedef struct { Ref head; int parent, first, next, last; } TNode;
 static uint64_t claims_unplaced;                                              /* a claim no reference could be made of: in no record (said) */
 
@@ -64,25 +64,25 @@ void record_highway_entry(RecordWorker *k, int what, int line, const Ref *thing,
 }
 static int said_already(RecordWorker *k, const lp_id *c){
     if (!k->cs_epoch) k->cs_epoch = 1;                                      /* a slot never used is of epoch 0: no part's */
-    lp_id voice; memset(&voice, 0, sizeof voice); if (k->voiced) voice = k->voice.id;     /* the source's own voice: no ID */
+    lp_id qualifier; memset(&qualifier, 0, sizeof qualifier); if (k->qualified) qualifier = k->qualifier.id;     /* an unqualified source assertion: no qualifier ID */
     if ((k->cs_n + 1) * 2 > k->cs_cap) {                                     /* half full: twice the room, this part's keys moved */
         struct CSeen *o = k->cs; uint64_t oc = k->cs_cap; k->cs_cap = oc ? oc * 2 : 256;
         if (k->cs_cap < oc || k->cs_cap > SIZE_MAX / sizeof(struct CSeen)) { fputs("claim index exceeds the output arena\n", stderr); abort(); }
         k->cs = arena_alloc(&k->output, (size_t)k->cs_cap * sizeof *k->cs); memset(k->cs, 0, (size_t)k->cs_cap * sizeof *k->cs);
-        for (uint64_t i = 0; i < oc; i++) if (o[i].epoch == k->cs_epoch) { uint64_t h, w, d; memcpy(&h, o[i].claim.b, 8); memcpy(&w, o[i].voice.b + 8, 8); memcpy(&d,o[i].dependence.b,8); uint64_t s = (h ^ w ^ d) & (k->cs_cap - 1);
+        for (uint64_t i = 0; i < oc; i++) if (o[i].epoch == k->cs_epoch) { uint64_t h, w, d; memcpy(&h, o[i].claim.b, 8); memcpy(&w, o[i].qualifier.b + 8, 8); memcpy(&d,o[i].dependence.b,8); uint64_t s = (h ^ w ^ d) & (k->cs_cap - 1);
             while (k->cs[s].epoch == k->cs_epoch) s = (s + 1) & (k->cs_cap - 1); k->cs[s] = o[i]; }
     }
-    uint64_t h, w, d; memcpy(&h, c->b, 8); memcpy(&w, voice.b + 8, 8); memcpy(&d,k->dependence.id.b,8); uint64_t s = (h ^ w ^ d) & (k->cs_cap - 1);
-    while (k->cs[s].epoch == k->cs_epoch) { if (!memcmp(&k->cs[s].claim, c, 16) && !memcmp(&k->cs[s].voice, &voice, 16) && lp_id_eq(&k->cs[s].dependence,&k->dependence.id)) {
+    uint64_t h, w, d; memcpy(&h, c->b, 8); memcpy(&w, qualifier.b + 8, 8); memcpy(&d,k->dependence.id.b,8); uint64_t s = (h ^ w ^ d) & (k->cs_cap - 1);
+    while (k->cs[s].epoch == k->cs_epoch) { if (!memcmp(&k->cs[s].claim, c, 16) && !memcmp(&k->cs[s].qualifier, &qualifier, 16) && lp_id_eq(&k->cs[s].dependence,&k->dependence.id)) {
             uint64_t e = k->cs[s].ev; if (e < k->ev.n && k->ev.e[e].run < (1u << LP_M_RUN_BITS) - 1) k->ev.e[e].run++; return 1; }
         s = (s + 1) & (k->cs_cap - 1); }
-    k->cs[s].claim = *c; k->cs[s].voice = voice; k->cs[s].dependence=k->dependence.id; k->cs[s].epoch = k->cs_epoch; k->cs[s].ev = k->ev.n; k->cs_n++; return 0;
+    k->cs[s].claim = *c; k->cs[s].qualifier = qualifier; k->cs[s].dependence=k->dependence.id; k->cs[s].epoch = k->cs_epoch; k->cs[s].ev = k->ev.n; k->cs_n++; return 0;
 }
 
 void record_emit_event(RecordWorker *k, const lp_id *c, float score){
     Event x = {.claim=*c, .witnessed=*c, .score=score, .enter_rating=k->er, .enter_deviation=k->ed, .kind=EV_CLAIM, .run=1, .rec=k->rec};
     if (k->dependence_class) { x.has_dependence=1; x.dependence=k->dependence.id; x.dependence_trust=k->dependence_class->prior; }
-    if (k->voiced) { x.own_witness = 1; x.witness = k->voice.id; } record_event_push(k, &x);
+    if (k->qualified) { x.has_qualifier = 1; x.qualifier = k->qualifier.id; } record_event_push(k, &x);
 }
 
 void record_emit_claim(RecordWorker *k, Ref *part, int n){
@@ -205,7 +205,7 @@ void record_build_provenance(RecordWorker *k, const SemanticRecord *t, int32_t r
     for (size_t i = 0; i < nr; i++) at[i + 1] += at[i];
     { uint64_t *fill = scratch_alloc(sizeof(uint64_t) * (nr + 1)); memcpy(fill, at, sizeof(uint64_t) * (nr + 1)); for (uint64_t e = 0; e < n; e++) ord[fill[of[e]]++] = ev0 + e; }
     uint64_t most = 0; for (size_t i = 0; i < nr; i++) { uint64_t need = 24; for (uint64_t j = at[i]; j < at[i + 1]; j++) need += (k->ev.e[ord[j]].run ? k->ev.e[ord[j]].run : 1) + 2; if (need > most) most = need; }
-    Ref *part = scratch_alloc(sizeof(Ref) * (most ? most : 24));              /* each claim said run times, and a voice before it */
+    Ref *part = scratch_alloc(sizeof(Ref) * (most ? most : 24));              /* each claim said run times, with content/dependence qualifiers */
     for (size_t ri = 0; ri < nr; ri++) { int32_t r = recs[ri]; uint32_t np = 0; int mine = r == root;
         int t_claim = 0;                                                      /* the thing is itself a claim it says: that claim's vertex stands for it */
         if (mine && T) for (uint64_t j = at[ri]; j < at[ri + 1] && !t_claim; j++) t_claim = !memcmp(&k->ev.e[ord[j]].claim, &T->id, 16);
@@ -214,13 +214,23 @@ void record_build_provenance(RecordWorker *k, const SemanticRecord *t, int32_t r
         uint32_t nclaims = 0, ones = 0;
         for (uint64_t j = at[ri]; j < at[ri + 1]; j++) { const Event *x = &k->ev.e[ord[j]]; if (x->kind != EV_CLAIM) continue;
             Ref c; if (!claim_vertex(x, &c)) continue;
-            if (x->own_witness) { int ok; Ref v = ref_of_id(&x->witness, &ok); if (ok) { v.said = LP_SAID_VOICE; v.outcome = 0; v.position = 0; v.spare = 0; part[np++] = v; } }
+            uint32_t first=np;
+            if (x->has_qualifier) {
+                int ok; Ref v=ref_of_id(&x->qualifier,&ok);
+                if (!ok) { fputs("content qualifier is missing from its record\n",stderr); abort(); }
+                v.said=v.outcome=v.position=v.spare=0; part[np++]=v;
+            }
             if (x->has_dependence) { int ok; Ref v=ref_of_id(&x->dependence,&ok);
                 if (!ok) { fputs("dependence class is missing from its record\n",stderr); abort(); }
                 v.said=LP_SAID_DEPENDENCE; v.outcome=v.position=v.spare=0; part[np++]=v;
             }
             uint32_t run = x->run ? x->run : 1; for (uint32_t z = 0; z < run; z++) part[np++] = c;    /* said run times: one vertex, the run in M */
-            nclaims++; ones += run == 1 && !x->own_witness && !x->has_dependence; }
+            if (x->has_qualifier) {
+                Ref judgment=compose(part+first,np-first,ref_above(part+first,np-first));
+                judgment.said=LP_SAID_RECORD; judgment.outcome=judgment.position=judgment.spare=0;
+                np=first; part[np++]=judgment;
+            }
+            nclaims++; ones += run == 1 && !x->has_qualifier && !x->has_dependence; }
         if (!np) continue;
         Ref R;
         if (np == 1 && nclaims == 1 && ones == 1) { R = part[0]; R.said = LP_SAID_RECORD; }      /* one claim said once: the claim, its own record */
