@@ -1,0 +1,9 @@
+name unicode-link-formatting
+# UTS #58 LinkFormattingTest.txt writes an input link followed by its expected
+# normalized link. A URL fragment is content, not an inline comment.
+match LinkFormattingTest.txt
+format lp_line_pairs
+thing record source
+content source normalized
+relation "normalizes to" normalized
+attest record normalized
