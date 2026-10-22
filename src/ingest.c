@@ -432,7 +432,7 @@ static int ingest_ewkb_point(const uint8_t *e, size_t n, lp_coord *out){
     if (n < off + 32) return 0; for (int d = 0; d < 4; d++) { double v; memcpy(&v, e + off + 8 * d, 8); out->m[d] = (int64_t)(v * (double)LP_FIXED_ONE); } return 1;
 }
 static int files_recorded(const char *conninfo, File *files, int nfiles){
-    File *candidate=NULL;int *owner=NULL,ncandidate=0,ccandidate=0;
+    File *candidate=NULL;int *owner=NULL,ncandidate=0,ccandidate=0,failed=0;
     lp_id *want = malloc(sizeof(lp_id) * (size_t)(nfiles + 1)); int *of = malloc(sizeof(int) * (size_t)(nfiles + 1)), nw = 0, found = 0;
     for (int i = 0; i < nfiles; i++) { if (files[i].skipped || files[i].known) continue; Ref os; if (file_os(files[i].recipe, &files[i], &os)) { want[nw] = os.id; of[nw++] = i; } }
     PGconn *pg = nw ? db_connect(conninfo) : NULL;
@@ -445,7 +445,7 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
                 " FROM unnest($1::blake3[]) wanted(id) JOIN public.physicality c"
                 " ON c.path @> ARRAY[wanted.id]::blake3[] JOIN public.entity e ON e.id=c.entity",
                 1, NULL, v, l, f, 1);
-            if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "which files are recorded: %s", PQerrorMessage(pg)); PQclear(r); free(ab); break; }
+            if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "which files are recorded: %s", PQerrorMessage(pg)); PQclear(r); free(ab); failed=1; break; }
             for (int j = 0; j < PQntuples(r); j++) {
                 lp_vertex vx[2]; size_t nv = lp_path_vertices((const uint8_t *)PQgetvalue(r, j, 1), (size_t)PQgetlength(r, j, 1), vx, 2); if (!nv) continue;
                 int64_t k = lp_idmap_find(at, &vx[0].id); if (k < 0) continue;                    /* held, but not first: not its metadata */
@@ -461,9 +461,11 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
                 else { if (nn == ncap) { ncap *= 2; next = xrealloc(next, sizeof(lp_id) * (size_t)ncap); nof = xrealloc(nof, sizeof(int) * (size_t)ncap); } next[nn] = c; nof[nn++] = of[k]; } }                                         /* a metadata tree it begins: what holds that is next */
             PQclear(r); free(ab); }
         lp_idmap_free(at); free(want); free(of); want = next; of = nof; nw = 0;
+        if (failed) break;
         for (int k = 0; k < nn; k++) if (!files[of[k]].known) { want[nw] = want[k]; of[nw++] = of[k]; }
     }
     if (pg) PQfinish(pg); free(want); free(of);
+    if (failed) { free(candidate); free(owner); return -1; }
     validate_file_contexts(conninfo,candidate,ncandidate);
     uint8_t *stale=calloc((size_t)nfiles,1);if(nfiles && !stale){perror("cached reading contexts");exit(1);}
     for(int i=0;i<ncandidate;i++)if(candidate[i].known && !files[owner[i]].known){
@@ -628,7 +630,7 @@ int cmd_ingest(int argc, char **argv){
         blake3_hasher_finalize(&hash,files[i].reading_context,32);
     }
     free(identities);
-    if (do_load) { double tk = now(); nknown = files_recorded(conninfo, files, nfiles); if (nknown) fprintf(stderr, "  %d files recorded already, found by the OS's record of them, not read (%.2f s)\n", nknown, now() - tk); }
+    if (do_load) { double tk = now(); nknown = files_recorded(conninfo, files, nfiles); if (nknown < 0) return 1; if (nknown) fprintf(stderr, "  %d files recorded already, found by the OS's record of them, not read (%.2f s)\n", nknown, now() - tk); }
     int restore_keys = 0;
     for (int i = 0; i < nfiles; i++) if (!files[i].known && !files[i].skipped) { restore_keys = 1; break; }
 
@@ -803,7 +805,7 @@ int cmd_ingest(int argc, char **argv){
         }
         if (load_register(conninfo, threads, roots, nr) || merge(conninfo, threads)) { free(roots); return 1; }
         free(roots);
-        if (has_witness_trunk && witness_supersedes) forget_superseded(conninfo, threads, &witness_trunk);
+        if (has_witness_trunk && witness_supersedes && forget_superseded(conninfo, threads, &witness_trunk)) return 1;
     }
     printf("\n== total %.1f s\n", now() - T);
     return mism ? 1 : 0;
