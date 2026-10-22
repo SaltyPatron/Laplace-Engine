@@ -1,0 +1,16 @@
+name opensubtitles-en-hi-hi
+# The aligned partner of OpenSubtitles.en-Hi.en; README calls these
+# "translated movie subtitles" with sentence alignment. Both languages belong
+# to the translation strand. The line pointer is resolved, never recorded.
+match OpenSubtitles.en-Hi.Hi OpenSubtitles.en-Hi.hi OpenSubtitles.en-hi.hi
+
+tier sentence by \n
+numbered aligned
+names text
+tier field by \t
+
+thing sentence text literal hin
+content text
+refer aligned opensubtitles-en-hi-en
+relation "translated" aligned
+attest sentence aligned

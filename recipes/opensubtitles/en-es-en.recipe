@@ -1,0 +1,14 @@
+name opensubtitles-en-es-en
+# OPUS Moses: each line is one aligned subtitle. Its line number resolves only
+# inside this language pair; it is packaging, never an attested identifier.
+match OpenSubtitles.en-es.en
+
+tier sentence by \n
+numbered line
+names text
+tier field by \t
+
+# ISO 639-3 identity is content beside the sentence, not a relation name.
+thing sentence text literal eng
+content text
+key sentence line

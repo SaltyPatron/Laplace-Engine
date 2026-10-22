@@ -1,0 +1,16 @@
+name opensubtitles-de-en-en
+# The aligned partner of OpenSubtitles.de-en.de; README calls these
+# "translated movie subtitles" with sentence alignment. Both languages belong
+# to the translation strand. The line pointer is resolved, never recorded.
+match OpenSubtitles.de-en.en
+
+tier sentence by \n
+numbered aligned
+names text
+tier field by \t
+
+thing sentence text literal eng
+content text
+refer aligned opensubtitles-de-en-de
+relation "translated" aligned
+attest sentence aligned
