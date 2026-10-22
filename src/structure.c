@@ -279,10 +279,11 @@ int layout_says(Layout *l, const char *path, char *tok){
     if (!strcmp(tok, "records")) {
         char *name;
         while ((name = strtok(NULL, " \t\r\n"))) {
+            if(!strcmp(name,"children")){l->g.record_children=1;continue;}
             if (l->g.record_count == 16) { fprintf(stderr, "%s: too many record symbols\n", path); return -1; }
             str_set(l->g.record_types[l->g.record_count++], 48, name);
         }
-        if (!l->g.record_count) { fprintf(stderr, "%s: records requires a node type\n", path); return -1; }
+        if (!l->g.record_count && !l->g.record_children) { fprintf(stderr, "%s: records requires a node type\n", path); return -1; }
         return 1;
     }
     if (!strcmp(tok, "columns")) {
@@ -323,7 +324,8 @@ int layout_says(Layout *l, const char *path, char *tok){
         return 1; }
     if (!strcmp(tok, "node")) { char *ty = strtok(NULL, " \t\r\n"), *wh = strtok(NULL, " \t\r\n"), *w;
         if (!ty || !wh || l->g.n == 48) { fprintf(stderr, "%s: node TYPE group | value | text | member | note | skip ...\n", path); return -1; }
-        GRule *r = &l->g.rule[l->g.n++]; memset(r, 0, sizeof *r); str_set(r->type, sizeof r->type, ty);
+        GRule *r=!strcmp(ty,"@record")?&l->g.record_fallback:&l->g.rule[l->g.n++];
+        memset(r, 0, sizeof *r); str_set(r->type, sizeof r->type, ty);
         r->what = !strcmp(wh, "group") ? G_GROUP : !strcmp(wh, "value") ? G_VALUE : !strcmp(wh, "text") ? G_TEXT : !strcmp(wh, "member") ? G_MEMBER : !strcmp(wh, "skip") ? G_SKIP : !strcmp(wh, "note") ? G_NOTE : 0;
         if (!r->what) { fprintf(stderr, "%s: node %s %s: group | value | text | member | note | skip\n", path, ty, wh); return -1; }
         r->compiled.kind = (GNodeKind)r->what;
@@ -339,6 +341,7 @@ int layout_says(Layout *l, const char *path, char *tok){
                 r->alias_tier = (uint8_t)(index + 1); into = 0; continue;
             }
             if (into == 9) { str_set(r->numbered,sizeof r->numbered,w); r->number_length=(uint8_t)strlen(r->numbered); into=0; continue; }
+            if (into == 12) { str_set(r->capture,sizeof r->capture,w); r->capture_length=(uint16_t)strlen(r->capture); into=0; continue; }
             if (into == 10 || into == 11) {
                 char *end; unsigned long value=strtoul(w,&end,10);
                 if (!*w || *end || (into==10 ? value<2 || value>36 : value<1 || value>64)) {
@@ -361,12 +364,14 @@ int layout_says(Layout *l, const char *path, char *tok){
             else if (!strcmp(w,"numbered")) into=9;
             else if (!strcmp(w,"radix")) into=10;
             else if (!strcmp(w,"width")) into=11;
+            else if (!strcmp(w,"capture")) into=12;
             else if (!strcmp(w, "same-tier")) r->compiled.flags |= 1u;
             else if (!strcmp(w, "raw")) r->raw = 1; else if (!strcmp(w, "join")) r->join = 1; else if (!strcmp(w, "list")) r->list = 1; else if (!strcmp(w, "kind")) r->kind = 1; else if (!strcmp(w, "trim")) r->trim = 1;
             else if (into == 1 && r->nname < 4) str_set(r->name[r->nname++], 64, w); else if (into == 2) str_set(r->text, sizeof r->text, w);
             else { fprintf(stderr, "%s: node %s: %s is not something a node's line says\n", path, ty, w); return -1; } }
         if ((into >= 3 && into != 8) || (into == 8 && !r->ncontext) || (into == 1 && !r->nname) || (into == 2 && !r->text[0])) { fprintf(stderr, "%s: node %s: missing rule argument\n", path, ty); return -1; }
         if (r->ncontext && r->what != G_GROUP) { fprintf(stderr, "%s: context paths require a group\n", path); return -1; }
+        if (r->capture[0] && r->what!=G_GROUP) { fprintf(stderr,"%s: capture requires a group\n",path);return -1; }
         if ((r->what == G_VALUE || r->what == G_MEMBER || r->what == G_NOTE) && (!r->nname || !r->text[0])) { fprintf(stderr, "%s: node %s %s name PATH %s PATH\n", path, ty, wh, r->what == G_MEMBER ? "value" : "text"); return -1; }
         if ((r->alias[0] || r->alias_tier) && r->what != G_GROUP && r->what != G_TEXT) { fprintf(stderr, "%s: node %s: an alias applies to a group or text rule\n", path, ty); return -1; }
         if ((r->numbered[0] && r->what!=G_GROUP) || ((!r->numbered[0]) && (r->number_radix || r->number_width))) {
@@ -656,9 +661,10 @@ void layout_bind_names(Layout *layout, s_compile_name_fn compile, const void *pr
     layout->compile_name = compile; layout->name_program = program;
     if (!compile) return;
     if (layout->record_inner) layout_bind_names(layout->record_inner, compile, program);
-    for (int i=0;i<layout->g.n;i++) {
-        GRule *rule=&layout->g.rule[i];
+    for (int i=0;i<=layout->g.n;i++) {
+        GRule *rule=i==layout->g.n?&layout->g.record_fallback:&layout->g.rule[i];
         if (rule->numbered[0]) rule->number_bindings=compile(program,(const uint8_t *)rule->numbered,(uint32_t)strlen(rule->numbered),NULL);
+        if (rule->capture[0]) rule->capture_bindings=compile(program,(const uint8_t *)rule->capture,rule->capture_length,NULL);
     }
     for (uint32_t i = 0; i < layout->g.column_count; i++) {
         GColumn *column = &layout->g.columns[i]; column->bindings = compile(program, column->name, column->length, NULL);
@@ -731,6 +737,13 @@ int layout_compile_grammar(Layout *l, const char *grammar_name){
     if (g->compiled) return !g->unresolved;
     if (*g->language) grammar_name = g->language;
     g->compiled = 1; g->grammar_id = grammar_id_for(grammar_name);
+    if(g->record_fallback.what){
+        GRule *r=&g->record_fallback;
+        if(!g->record_children || r->what!=G_GROUP || !r->capture[0] || r->nname || r->text[0] || r->numbered[0] || r->ncontext){
+            fputs("@record requires records children and a simple captured group\n",stderr);g->unresolved++;return 0;
+        }
+        r->compiled.kind=G_GROUP;r->compiled.alias_length=(uint16_t)strlen(r->alias);
+    }
     if (l->ntier) {
         g->numbered_length = (uint16_t)strlen(l->tier[0].numbered);
         g->root_name_length = (uint16_t)strlen(l->tier[0].name);
@@ -1067,7 +1080,7 @@ static const uint8_t *decode_text(const GDecodePlan *plan, const uint8_t *src, u
     }
     *length = used; return out;
 }
-/* Curated admission never consumes a recovered syntax tree. Stop when every
+/* Strict curated admission never consumes a recovered syntax tree. Stop when every
  * parser stack has entered error recovery, rather than spending unbounded work
  * trying to repair a malformed record that this pipeline would reject anyway. */
 static bool reject_recovery(TSParseState *state){ return state->has_error; }
@@ -1525,7 +1538,7 @@ int s_record_next(SRecords *records, SRecord *record){
     for (;;) {
         TSNode node = ts_tree_cursor_current_node(records->cursor); TSSymbol symbol = ts_node_symbol(node);
         if (ts_node_start_byte(node) >= records->limit) { records->done = 1; return 0; }
-        int selected = ts_node_is_named(node) && (!grammar->record_symbols ||
+        int selected = ts_node_is_named(node) && (!grammar->record_children || ts_node_eq(ts_node_parent(node),ts_tree_root_node(records->tree))) && (!grammar->record_symbols ||
             (symbol < grammar->symbol_count && grammar->record_symbols[symbol])) && record_matches(records, node);
         int header = 0;
         if (!selected && grammar->record_name_count && ts_node_is_named(node)) {
@@ -1758,6 +1771,9 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
     while (count) {
         CursorFrame *frame = &frames[count - 1];
         const GRule *rule = frame->route || frame->node.id == omit ? NULL : rule_at(&worker, frame->node, frame->field, frame->parent);
+        if(!rule && count==1 && layout->g.record_fallback.what){
+            rule=&layout->g.record_fallback;
+        }
         int children = 1;
         SField field = {.source=frame->node, .range=source_range(input, node_range(frame->node)), .name=frame->name, .name_length=frame->name_length,
                         .bindings=frame->bindings,
@@ -1854,6 +1870,13 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
             if (!(action & S_VISIT_OK)) { valid = 0; break; }
             frame->closing = field; frame->close_scope = 1;
             if (action & S_VISIT_SKIP) { children = 0; goto after_rule; }
+            if(rule->capture[0]){
+                SField captured={.source=frame->node,.range=field.range,.name=(const uint8_t *)rule->capture,
+                    .name_length=rule->capture_length,.value=input->src+ts_node_start_byte(frame->node),
+                    .value_length=ts_node_end_byte(frame->node)-ts_node_start_byte(frame->node),
+                    .bindings=rule->capture_bindings,.grammar=layout->g.grammar_id,.kind=S_TEXT};
+                if(!visit(sink,S_FIELD,&captured)){valid=0;break;}
+            }
             if (rule->numbered[0]) {
                 if (count<2) { valid=0; break; }
                 CursorFrame *parent=&frames[count-2];
@@ -1871,7 +1894,7 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
                 if (!visit(sink,S_FIELD,&number)) { valid=0; break; }
             }
             frame->context_name = field.name; frame->context_length = field.name_length; frame->context_list = (uint8_t)rule->list;
-            if (!ts_node_named_child_count(frame->node)) {
+            if (!rule->capture[0] && !ts_node_named_child_count(frame->node)) {
                 g_text(&worker, frame->node, 0, &field.value, &field.value_length); field.kind = S_TEXT;
                 if (field.value_length && !visit(sink, S_FIELD, &field)) { valid = 0; break; }
             }

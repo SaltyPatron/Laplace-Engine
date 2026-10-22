@@ -1,0 +1,118 @@
+{
+  "origin": "https://github.com/derekstride/tree-sitter-sql",
+  "commit": "c2e1e08db1ea20dc23bdb8d228a81a8756e9c450",
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha": "b976c9b4c70b2aad4bb31de3d6504193dc0be83c"
+    },
+    {
+      "path": "grammar.js",
+      "sha": "eea8deca823c6e937b2204cc42405c350499aa48"
+    },
+    {
+      "path": "grammar/column-lists.js",
+      "sha": "55d257d70e83c364d875494961944439118fd8b5"
+    },
+    {
+      "path": "grammar/expressions.js",
+      "sha": "5d49ccb50c83ba182566a8100709936d05ec36ed"
+    },
+    {
+      "path": "grammar/helpers.js",
+      "sha": "6f29664f8b0d97fc12eb729c17b73aede64ad576"
+    },
+    {
+      "path": "grammar/keywords.js",
+      "sha": "6be9e8940972d69a3c5804cce56666e59be23fd2"
+    },
+    {
+      "path": "grammar/statements/alter.js",
+      "sha": "7646598a4b8db56ff8f0dd42812a4226120e8d5b"
+    },
+    {
+      "path": "grammar/statements/comment.js",
+      "sha": "ec4320f1c1844e3917638036332ae964332a35ad"
+    },
+    {
+      "path": "grammar/statements/copy.js",
+      "sha": "647fcd322d13f43c81e8eb079d9c7a7fbe1a067a"
+    },
+    {
+      "path": "grammar/statements/create-function.js",
+      "sha": "283881a5d43e08f360aba4099f684a1242beaf14"
+    },
+    {
+      "path": "grammar/statements/create-procedure.js",
+      "sha": "5e846c3c9dcc3e4727ab1b9bd878caf62e54c4d7"
+    },
+    {
+      "path": "grammar/statements/create.js",
+      "sha": "41f54a244e283c38b7fec7b1f1d6e5e8f595e8a8"
+    },
+    {
+      "path": "grammar/statements/delete.js",
+      "sha": "97bad160d9445e299978bb2a95b8b7116343d74f"
+    },
+    {
+      "path": "grammar/statements/drop.js",
+      "sha": "48e10baa69aaa8e4fa8cd1bff7e1b98b99c041c3"
+    },
+    {
+      "path": "grammar/statements/index.js",
+      "sha": "94f0ec628add92d8a258f3441dbc85e551290dec"
+    },
+    {
+      "path": "grammar/statements/insert.js",
+      "sha": "f241d126b4a5bfcccaad193ca956ccbefa2ae1a6"
+    },
+    {
+      "path": "grammar/statements/merge.js",
+      "sha": "38d827074c5abcc8361d856c7d0d746de8f377e8"
+    },
+    {
+      "path": "grammar/statements/optimize.js",
+      "sha": "2c5de9e414cb53ed19781cd7e797e5a5bc9e1e9b"
+    },
+    {
+      "path": "grammar/statements/refresh.js",
+      "sha": "1cc849435c38c6a8d2b89e0f4061cb56bbc40ec4"
+    },
+    {
+      "path": "grammar/statements/rename.js",
+      "sha": "8b2d05cc0da36da1d497d40219d7bd124cc0de8c"
+    },
+    {
+      "path": "grammar/statements/select.js",
+      "sha": "69629c82346551a41689f2c3f5f4301875a84e17"
+    },
+    {
+      "path": "grammar/statements/set.js",
+      "sha": "e916bc747456b20d8e24480e0f08c4a65fc2a471"
+    },
+    {
+      "path": "grammar/statements/truncate.js",
+      "sha": "9c1df6d2815a0354da1a63af130213fde3dcab12"
+    },
+    {
+      "path": "grammar/statements/update.js",
+      "sha": "4f30d86b06b9778f6ae051b7635b4a6879632f2a"
+    },
+    {
+      "path": "grammar/transactions.js",
+      "sha": "a8e66d080ff4e501252fda31fd99b1b2dcf3320e"
+    },
+    {
+      "path": "grammar/types.js",
+      "sha": "ea16931dcfcc0cb2401ea396b75ca0354c20ffbc"
+    },
+    {
+      "path": "package.json",
+      "sha": "6722c44c2df2ad738a4c7a3a588901749ec3448a"
+    },
+    {
+      "path": "src/scanner.c",
+      "sha": "d110c15cac288780bf5dbb98d557224a9088ae17"
+    }
+  ]
+}

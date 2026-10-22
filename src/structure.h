@@ -117,6 +117,7 @@ typedef struct {
     char type[48]; int what, raw, join, list, kind, trim;
     char name[4][64]; int nname; char text[64];
     char context[4][64]; uint8_t ncontext;
+    char capture[48]; uint16_t capture_length; const SNameBindings *capture_bindings;
     char child_grammar[64];
     char field[48], parent[48];
     char alias[64]; uint8_t alias_tier;
@@ -141,7 +142,8 @@ typedef struct {
     uint32_t field_count, *field_lengths;
     int compiled, unresolved;
     char record_types[16][48], column_types[8][48], column_parent[48], named_columns[S_NAMES][48];
-    uint8_t record_count, column_type_count, column_tier; uint16_t named_column_count;
+    uint8_t record_count, column_type_count, column_tier, record_children; uint16_t named_column_count;
+    GRule record_fallback;
     uint8_t *record_symbols, *column_symbols, *column_parents;
     TSSymbol column_parent_symbol;
     uint16_t *column_by_field;
