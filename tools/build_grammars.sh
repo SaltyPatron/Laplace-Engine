@@ -37,7 +37,7 @@ while IFS= read -r -d '' definition; do
   [[ ! -f "$package/src/parser.c" ]] || continue
   if [[ -z "$generator" ]]; then
     generator=${LAPLACE_TREESITTER_CLI:-$(command -v tree-sitter || true)}
-    if [[ -z "$generator" ]]; then
+    if [[ -z "$generator" ]] || ! "$generator" --version >/dev/null 2>&1; then
       runtime=${LAPLACE_TREESITTER:-${LAPLACE_DEPSRC:?Declare pinned dependency sources}/tree-sitter}
       target="${LAPLACE_BUILD:?Declare the build root}/deps/tree-sitter-cli"
       cargo build --locked --release --package tree-sitter-cli --manifest-path "$runtime/Cargo.toml" --target-dir "$target"
