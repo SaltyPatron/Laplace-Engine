@@ -3,16 +3,20 @@ name wordnet-frames
 # the synset"; "f_num is a two digit decimal integer frame number", and "See wninput(5WN) for the text of the generic
 # sentence frames". frames.vrb, and verb.Framestext beside it (the same lines), write each frame on a line: its number,
 # then its text ("1  Something ----s").
-# A frame is its text; the highway lists the frames as WordNet's generic verb sentence frames, by their numbers (the
-# keys data.verb's f_num writes them by) and by their texts.
+# The highway frame is its own identifier number. Its template text is an
+# attested definition of that identifier, not the identifier's identity.
 match frames.vrb verb.Framestext
+format wndb
 
 tier line by \n
-names frame
-tier field by \t
-part frame by space pieces 2 padded
+names number text
+tier field by space
 
-thing line frame/2
+type number wnframe node
+thing line number
+content text
+relation "generic verb sentence frame" text
+attest line text
 types wnframe "WordNet generic verb sentence frame" line
-keyed wnframe line frame/1
-keyed wnframe line frame/2
+keyed wnframe line number
+keyed wnframe line text

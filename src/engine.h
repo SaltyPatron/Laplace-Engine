@@ -147,7 +147,7 @@ Ref    atom(uint32_t cp);
 Ref    compose(const Ref *ch, uint32_t n, uint8_t tier);             /* one child is that child */
 uint8_t ref_above(const Ref *r, size_t n);                            /* the tier above the highest of them (255 stays 255) */
 Node  *table_find(const lp_id *id);                                   /* NULL for atoms and unknown IDs */
-Ref    ref_of_id(const lp_id *id, int *ok);                         /* its node's coordinate and tier, or the codepoint's; ok = 0 when neither */
+Ref    ref_of_id(const lp_id *id, int *ok);                         /* node, Tier-0 or Highway geometry; ok = 0 when absent */
 size_t table_parts(const lp_id *id, lp_id *out, size_t cap);         /* a composition's constituents in order, its runs written out; 0 when it is not in the table */
 void   table_size(uint64_t bytes);                                    /* while the table is empty: room for what a batch of this many bytes makes */
 uint64_t table_count(void);
@@ -253,7 +253,7 @@ const char *say_refers(const Recipe *, int i);                              /* t
  * in the run, the offset of the part of it read, and the unit's place in that part. */
 typedef struct { uint64_t file, at, unit, member; } KeyRank;
 typedef struct { Ref value; const uint8_t *text; uint32_t length; uint8_t has_value, has_text, blocked; } KeyField;
-void keys_domain(const char *recipe, const char *tier, int within, lp_id *out); /* recipe-load symbol namespace, never an entity */
+void keys_domain(const char *recipe, const char *tier, uint8_t key_namespace, lp_id *out); /* complete symbol namespace byte, never an entity */
 void keys_field_domain(const lp_id *domain, const char *path, lp_id *out);
 void keys_put(const lp_id *domain, const uint8_t *k, size_t n, Ref x, const KeyRank *rank);
 int  keys_get(const lp_id *domain, const uint8_t *k, size_t n, Ref *out);

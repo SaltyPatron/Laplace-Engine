@@ -120,6 +120,8 @@ typedef struct {
     char child_grammar[64];
     char field[48], parent[48];
     char alias[64]; uint8_t alias_tier;
+    char numbered[64]; uint8_t number_radix, number_width, number_length;
+    const SNameBindings *number_bindings;
     CompiledRule compiled;
 } GRule;     /* join: texts side by side are one text; list: a group of values, in order, each named by it; kind: named by its type */
 typedef struct { const uint8_t *name; uint32_t length; uint8_t flags; const SNameBindings *bindings; } GColumn;
