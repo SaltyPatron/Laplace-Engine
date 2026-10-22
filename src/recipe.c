@@ -608,7 +608,7 @@ int reads_in_stretches(const Recipe *r, char *boundary){
 }
 typedef struct { FILE *plain; gzFile compressed; File *file; int failed; } RecipeInput;
 int recipe_record_streamable(const Recipe *recipe){
-    return recipe && recipe->curated && !recipe->native && say_record_streamable(recipe);
+    return recipe && recipe->curated && (recipe->native ? recipe->native->input != NULL : say_record_streamable(recipe));
 }
 static size_t recipe_input_read(void *context, uint8_t *out, size_t capacity){
     RecipeInput *input = context; size_t n;
@@ -647,7 +647,8 @@ void decompose_file(Ctx *c, File *f){
         f->witness = text_ref(c, (const uint8_t *)witness, strlen(witness)); f->trunk = f->witness;
         if (lineage[0]) { f->lineage = text_ref(c, (const uint8_t *)lineage, strlen(lineage)); f->has_lineage = 1; }
         SInput input = {.context=&reader, .read=recipe_input_read, .error=recipe_input_error};
-        f->bytes = 0; attest_input(r, f, &input);
+        f->bytes = 0;
+        if (r->native) r->native->input(r, f, &input); else attest_input(r, f, &input);
         if (reader.compressed) { if (gzclose(reader.compressed) != Z_OK) reader.failed = 1; }
         else if (fclose(reader.plain)) reader.failed = 1;
         if (reader.failed) { fprintf(stderr, "%s: input did not close cleanly\n", f->path); exit(2); }
