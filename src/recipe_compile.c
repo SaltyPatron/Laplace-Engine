@@ -278,13 +278,13 @@ static void path_register(Say *say, const char *name){
     PathCode *code = calloc(1, sizeof *code); if (!code) { perror("selector program"); abort(); }
     size_t length = strlen(name); code->whole = compile_name(name, length); code->first = compile_steps(name, length, NULL); code->source_length = (uint16_t)length;
     code->special = length == 1 && name[0] == '.' ? SELECT_SELF : length == 6 && !memcmp(name, "{file}", 6) ? SELECT_FILE :
-                    length == 2 && !memcmp(name, "*/", 2) ? SELECT_ELEMENTS : length == 3 && !memcmp(name, "...", 3) ? SELECT_UNNAMED : SELECT_FIELD;
+                    length == 7 && !memcmp(name, "{field}", 7) ? SELECT_LABEL : length == 2 && !memcmp(name, "*/", 2) ? SELECT_ELEMENTS : length == 3 && !memcmp(name, "...", 3) ? SELECT_UNNAMED : SELECT_FIELD;
     path_insert(program, (PathEntry){offset, code});
     if (*name == '>') path_register(say, name + 1);
 }
 static void register_att_paths(Say *say, const Att *att, int count){
     for (int i = 0; i < count; i++) {
-        path_register(say, att[i].tier); path_register(say, att[i].by); path_register(say, att[i].of);
+        path_register(say, att[i].tier); path_register(say, att[i].with); path_register(say, att[i].of);
         for (int j = 0; j < att[i].n; j++) path_register(say, att[i].name[j]);
     }
 }
@@ -434,12 +434,13 @@ static void compile_semantic_paths(Say *say, const char *recipe){
         for (int j = 0; j < say->thing[i].n; j++) { path_register(say, say->thing[i].name[j]); path_register(say, say->thing[i].form[j].path); compile_key_forms(&say->thing[i].form[j]); }
     }
     register_att_paths(say, say->att, say->natt); register_att_paths(say, say->pair, say->npair);
+    for (int i=0; i<say->natt; i++) if (say->att[i].file && !strcmp(say->att[i].with,"{field}")) say->file_qualifiers=1;
     register_att_paths(say, say->hold, say->nhold); register_att_paths(say, say->itself, say->nitself);
-    register_att_paths(say, say->together, say->ntogether); register_att_paths(say, say->voices, say->nvoices);
+    register_att_paths(say, say->together, say->ntogether);
     for (int i=0; i<say->ndependence; i++) path_register(say,say->dependence[i].tier);
     for (int i=0; i<say->ndefaults; i++) if (say->defaults[i].what == DEFAULT_FIELD) path_register(say,say->defaults[i].arg);
     for (int i = 0; i < say->nrel; i++) {
-        path_register(say, say->rel[i].tier); path_register(say, say->rel[i].rel); path_register(say, say->rel[i].to); path_register(say, say->rel[i].by); path_register(say, say->rel[i].of);
+        path_register(say, say->rel[i].tier); path_register(say, say->rel[i].rel); path_register(say, say->rel[i].to); path_register(say, say->rel[i].with); path_register(say, say->rel[i].of);
     }
     for (int i = 0; i < say->nkey; i++) {
         Pair *key = &say->key[i]; path_register(say, key->tier); path_register(say, key->name); path_register(say,key->scope);
@@ -454,7 +455,7 @@ static void compile_semantic_paths(Say *say, const char *recipe){
     for (int i = 0; i < say->ndis; i++) compile_key_forms(&say->dis[i].k);
     for (int i = 0; i < say->nval; i++) compile_key_forms(&say->val[i].k);
     path_register(say, say->lay_tier); path_register(say, say->lay_row); path_register(say, say->tree_tier); path_register(say, say->tree_row);
-    path_register(say, say->tree_head); path_register(say, say->tree_rel); path_register(say, say->voice.tier); path_register(say, say->voice.name);
+    path_register(say, say->tree_head); path_register(say, say->tree_rel);
     for (int i = 0; i < say->nlayer; i++) path_register(say, say->layer[i]);
     path_register(say, say->surface.tier); path_register(say, say->surface.row);
     path_register(say, say->surface.key); path_register(say, say->surface.form);
@@ -542,15 +543,12 @@ int say_says(Recipe *r, const char *path, char *tok){
             if (!strcmp(nm, "span")) { p->span = 1; continue; } if (!strcmp(nm, "inclusive")) { p->inclusive = 1; continue; } if (!strcmp(nm, "of")) { p->of = 1; continue; } if (!strcmp(nm, "resolved")) { p->resolved = 1; continue; } if (p->n < 8) snprintf(p->name[p->n++], sizeof p->name[0], "%s", nm); }
         if (p->span && p->n != 3) { fprintf(stderr, "%s: thing TIER span START END TEXT [inclusive]\n", path); return -1; }
         if (!p->n) { fprintf(stderr, "%s: thing TIER NAME... [within]\n", path); return -1; } return 1; }
-    if ((!strcmp(tok, "voices") || !strcmp(tok, "together")) && LAID) { int v = tok[0] == 'v'; at = strtok(NULL, "\r\n");
-        Att *x = v ? &s->voices[s->nvoices] : &s->together[s->ntogether]; if (!name_next(&at, a2, sizeof a2) || (v ? s->nvoices : s->ntogether) == 8) { fprintf(stderr, "%s: %s TIER%s\n", path, tok, v ? " NAME... [within-file]" : ""); return -1; }
-        memset(x, 0, sizeof *x); snprintf(x->tier, sizeof x->tier, "%s", a2); x->when = s->now;
-        while (v && x->n < 64 && name_next(&at, nm, sizeof nm)) { if (!strcmp(nm, "within-file")) { x->file = 1; continue; } snprintf(x->name[x->n++], 64, "%s", nm); }
-        if (v && !x->n) { fprintf(stderr, "%s: voices TIER NAME...\n", path); return -1; }
-        if (v) s->nvoices++; else s->ntogether++; return 1; }
-    if (!strcmp(tok, "itself") && LAID) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->nitself == 8) { fprintf(stderr, "%s: itself TIER [by PATH]\n", path); return -1; }
+    if (!strcmp(tok, "together") && LAID) { at = strtok(NULL, "\r\n");
+        if (!name_next(&at,a2,sizeof a2) || s->ntogether==8) { fprintf(stderr,"%s: together TIER\n",path); return -1; }
+        Att *x=&s->together[s->ntogether++]; memset(x,0,sizeof *x); snprintf(x->tier,sizeof x->tier,"%s",a2); x->when=s->now; return 1; }
+    if (!strcmp(tok, "itself") && LAID) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->nitself == 8) { fprintf(stderr, "%s: itself TIER [with PATH]\n", path); return -1; }
         Att *x = &s->itself[s->nitself++]; memset(x, 0, sizeof *x); snprintf(x->tier, sizeof x->tier, "%s", a2); x->when = s->now;
-        if (name_next(&at, nm, sizeof nm)) { if (strcmp(nm, "by") || !name_next(&at, x->by, sizeof x->by)) { fprintf(stderr, "%s: itself TIER [by PATH]\n", path); return -1; } }
+        if (name_next(&at, nm, sizeof nm)) { if (strcmp(nm, "with") || !name_next(&at, x->with, sizeof x->with)) { fprintf(stderr, "%s: itself TIER [with PATH]\n", path); return -1; } }
         return 1; }
     if (!strcmp(tok, "holds") && LAID) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->nhold == 16) { fprintf(stderr, "%s: holds TIER NAME... [via]\n", path); return -1; }
         Att *x = &s->hold[s->nhold++]; memset(x, 0, sizeof *x); snprintf(x->tier, sizeof x->tier, "%s", a2); x->when = s->now;
@@ -640,9 +638,6 @@ int say_says(Recipe *r, const char *path, char *tok){
     if ((!strcmp(tok, "codepoints") || !strcmp(tok, "range")) && LAID) { int what = tok[0] == 'c' ? D_CODEPOINTS : D_RANGE; at = strtok(NULL, "\r\n"); int any = 0;
         while (name_next(&at, nm, sizeof nm)) { if (dis_add(s, path, nm, what, NULL) < 0) return -1; any = 1; }
         if (!any) { fprintf(stderr, "%s: %s NAME...\n", path, tok); return -1; } return 1; }
-    if (!strcmp(tok, "voice") && LAID) { at = strtok(NULL, "\r\n");
-        if (!name_next(&at, a2, sizeof a2) || !name_next(&at, nm, sizeof nm)) { fprintf(stderr, "%s: voice TIER NAME\n", path); return -1; }
-        snprintf(s->voice.tier, sizeof s->voice.tier, "%s", a2); snprintf(s->voice.name, sizeof s->voice.name, "%s", nm); return 1; }      /* the part stays what its own disposition says */
     if ((!strcmp(tok, "refer") || !strcmp(tok, "type")) && LAID) { at = strtok(NULL, "\r\n");
         if (!name_next(&at, nm, sizeof nm) || !name_next(&at, a2, sizeof a2)) { fprintf(stderr, "%s: %s NAME %s\n", path, tok, tok[0] == 'r' ? "TIER" : "LIST..."); return -1; }
         KSpec ks; memset(&ks, 0, sizeof ks);
@@ -668,11 +663,13 @@ int say_says(Recipe *r, const char *path, char *tok){
             length=perf_fold(l->field[i].say,strlen(l->field[i].say),folded); lp_strmap_put(s->perf,folded,length,NULL);
         }
         return 1; }
-    if (!strcmp(tok, "attest") && LAID) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->natt == 32) { fprintf(stderr, "%s: attest TIER NAME... [of NAME] [by NAME]\n", path); return -1; }
+    if (!strcmp(tok, "attest") && LAID) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->natt == 32) { fprintf(stderr, "%s: attest TIER NAME... [of NAME] [with NAME]\n", path); return -1; }
         Att *x = &s->att[s->natt++]; memset(x, 0, sizeof *x); snprintf(x->tier, sizeof x->tier, "%s", a2); x->when = s->now;
-        while (x->n < 64 && name_next(&at, nm, sizeof nm)) { if (!strcmp(nm, "by") || !strcmp(nm, "of")) { char w[64]; if (!name_next(&at, w, sizeof w)) { fprintf(stderr, "%s: attest ... %s NAME\n", path, nm); return -1; } snprintf(nm[0] == 'b' ? x->by : x->of, 64, "%s", w); continue; }
+        while (x->n < 64 && name_next(&at, nm, sizeof nm)) {
+            if (!strcmp(nm,"within-file")) { x->file=1; continue; }
+            if (!strcmp(nm, "with") || !strcmp(nm, "of")) { char w[64]; if (!name_next(&at, w, sizeof w)) { fprintf(stderr, "%s: attest ... %s NAME\n", path, nm); return -1; } snprintf(nm[0] == 'w' ? x->with : x->of, 64, "%s", w); continue; }
             snprintf(x->name[x->n++], 64, "%s", nm); }
-        if (!x->n) { fprintf(stderr, "%s: attest TIER NAME... [of NAME] [by NAME]\n", path); return -1; } return 1; }
+        if (!x->n || (x->file && strcmp(x->with,"{field}"))) { fprintf(stderr, "%s: attest TIER NAME... [of NAME] [with NAME]; within-file requires with {field}\n", path); return -1; } return 1; }
     if ((!strcmp(tok, "about") || !strcmp(tok, "line")) && LAID) {           /* PATTERN: the rest of the line; its parentheses are the parts it says */
         char *rest = strtok(NULL, "\r\n"); if (!rest) { fprintf(stderr, "%s: %s PATTERN\n", path, tok); return -1; } while (*rest == ' ' || *rest == '\t') rest++;
         char pat[1024]; snprintf(pat, sizeof pat, "%s", rest); int mode = 0; char pred[64] = "";
@@ -707,9 +704,6 @@ int say_says(Recipe *r, const char *path, char *tok){
             size_t length = strlen(tx) + 1; char *text = malloc(length); if (!text) { perror("recipe relation"); abort(); }
             memcpy(text, tx, length); d->text = text; d->what = 1; any = 1; }      /* kept for the recipe's life */
         if (!any) { fprintf(stderr, "%s: relation \"TEXT\" NAME...\n", path); return -1; } return 1; }
-    if (!strcmp(tok, "own") && LAID) { at = strtok(NULL, "\r\n"); int any = 0;      /* a name that stands only within the source: [the source's witness, NAME, the name] */
-        while (name_next(&at, nm, sizeof nm)) { if (dis_add(s, path, nm, D_OWN, NULL) < 0) return -1; any = 1; }
-        if (!any) { fprintf(stderr, "%s: own NAME...\n", path); return -1; } return 1; }
     if ((!strcmp(tok, "types") || !strcmp(tok, "keyed") || !strcmp(tok, "alias") || !strcmp(tok, "maps")) && LAID) { at = strtok(NULL, "\r\n");      /* the highway's (laplace highway) */
         static const char *how[] = { "", "types LIST SAY TIER", "keyed LIST TIER PATH [matching PATTERN] [as TEMPLATE]", "alias LIST TIER PATH [matching PATTERN] [as TEMPLATE] to PATH [...]", "maps TIER PATH LIST [matching PATTERN] [as TEMPLATE] to PATH LIST [...]" };
         int what = tok[0] == 't' ? 1 : tok[0] == 'k' ? 2 : tok[0] == 'a' ? 3 : 4; if (s->nhw == 32) { fprintf(stderr, "%s: more than 32 lines of the highway\n", path); return -1; }
@@ -732,7 +726,7 @@ int say_says(Recipe *r, const char *path, char *tok){
         if (!name_next(&at, a2, sizeof a2) || !name_next(&at, nm, sizeof nm) || !name_next(&at, to, sizeof to) || strcmp(to, "to") || !name_next(&at, b, sizeof b) || s->nrel == 16) { fprintf(stderr, "%s: relate TIER NAME to NAME\n", path); return -1; }
         Rel *x = &s->rel[s->nrel++]; memset(x, 0, sizeof *x); x->when = s->now; snprintf(x->tier, sizeof x->tier, "%s", a2); snprintf(x->rel, sizeof x->rel, "%s", nm); snprintf(x->to, sizeof x->to, "%s", b);
         char w1[8], w2[64]; while (name_next(&at, w1, sizeof w1)) { if (!strcmp(w1, "alone")) { x->alone = 1; continue; }
-            if ((strcmp(w1, "by") && strcmp(w1, "of")) || !name_next(&at, w2, sizeof w2)) { fprintf(stderr, "%s: relate TIER NAME to NAME [alone] [by NAME] [of PATH]\n", path); return -1; } snprintf(w1[0]=='b' ? x->by : x->of, sizeof x->by, "%s", w2); }
+            if ((strcmp(w1, "with") && strcmp(w1, "of")) || !name_next(&at, w2, sizeof w2)) { fprintf(stderr, "%s: relate TIER NAME to NAME [alone] [with NAME] [of PATH]\n", path); return -1; } snprintf(w1[0]=='w' ? x->with : x->of, sizeof x->with, "%s", w2); }
         return 1; }
     s->laid_line = 1; return layout_says(&s->lay, path, tok);
 }

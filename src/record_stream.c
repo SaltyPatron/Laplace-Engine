@@ -2,6 +2,7 @@
  * Semantic evaluation is delegated to the record worker API. */
 #define _GNU_SOURCE
 #include "record_worker.h"
+#include "record_select.h"
 #include <fcntl.h>
 #include <omp.h>
 #include <stdio.h>
@@ -48,7 +49,7 @@ typedef struct {
 typedef struct RecordPipeline {
     const Recipe *recipe; File *file; const Say *say; const uint8_t *source; size_t length; const SInput *input;
     RecordWorker *result, *workers, *evaluators; uint32_t worker_count;
-    Ref filename, stem, about; int has_about, failed; uint32_t key_gaps;
+    Ref filename, stem, file_scope, about; int has_about, failed; uint32_t key_gaps;
     DeferredRecords deferred;
     struct RecordPipeline *next;
 } RecordPipeline;
@@ -195,7 +196,7 @@ static void deferred_drain(RecordPipeline *pipeline){
 static void reset_record_worker(RecordPipeline *pipeline, RecordWorker *worker){
     SayScratch arena = worker->output; arena.used = arena.stack_used = 0;
     *worker = (RecordWorker){.r=pipeline->recipe, .s=pipeline->say, .er=1500.0f, .ed=0.0f,
-        .fw=pipeline->file->witness, .fname=pipeline->filename, .fstem=pipeline->stem,
+        .fw=pipeline->file->witness, .fname=pipeline->filename, .fstem=pipeline->stem, .file_scope=pipeline->file_scope,
         .fabout=pipeline->about, .has_fabout=pipeline->has_about, .hw=pipeline->result->hw, .output=arena};
     worker->reserve_declarations = pipeline->key_gaps != 0;
     record_worker_outputs(worker);
@@ -240,6 +241,7 @@ static void deferred_close(DeferredRecords *records){
 static void pending_outputs(RecordPipeline *pipeline){
     RecordWorker *result = pipeline->result; File *file = pipeline->file;
     table_pin(&pipeline->filename.id); table_pin(&pipeline->stem.id); table_pin(&file->witness.id);
+    if (pipeline->say->file_qualifiers) table_pin(&pipeline->file_scope.id);
     if (file->has_lineage) table_pin(&file->lineage.id);
     for (size_t i = 0; i < result->things.n; i++) table_pin(&result->things.c[i].id);
     for (size_t i = 0; i < result->meta.n; i++) table_pin(&result->meta.c[i].id);
@@ -565,8 +567,19 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     if (sy->stemfrom) { const char *from = NULL; for (const char *c = base; c < base + bl; c++) if (*c == sy->stemfrom) from = c; if (from) sb = from + 1; }
     const char *dot = memchr(sb, sy->stem ? sy->stem : '.', (size_t)(base + bl - sb));
     Ref fname = string_ref((const uint8_t *)base, bl), fstem = string_ref((const uint8_t *)sb, dot ? (size_t)(dot - sb) : (size_t)(base + bl - sb));
+    int needs_scope=sy->file_qualifiers;
+    Ref file_scope={0};
+    if (needs_scope) {
+        const char *relative=f->path;
+        if (f->source && f->source->found[0]) {
+            size_t root=strlen(f->source->found);
+            if (!strncmp(relative,f->source->found,root) && (relative[root]=='/' || relative[root]=='\\')) relative+=root+1;
+        }
+        file_scope=string_ref((const uint8_t *)relative,strlen(relative));
+    }
     if (f->emit) {
         table_pin(&fname.id); table_pin(&fstem.id); table_pin(&f->witness.id);
+        if (needs_scope) table_pin(&file_scope.id);
         if (f->has_lineage) table_pin(&f->lineage.id);
     }
     uint32_t workers = (uint32_t)omp_get_max_threads(); if (!workers) workers = 1;
@@ -576,7 +589,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     if (!part || !lanes || !pipeline) { perror("record workers"); exit(2); }
     *part = (RecordWorker){.r=r, .s=sy, .hw=hw}; record_worker_outputs(part);
     *pipeline = (RecordPipeline){.recipe=r, .file=f, .say=sy, .source=src, .length=n, .input=input,
-        .result=part, .workers=lanes, .worker_count=workers, .filename=fname, .stem=fstem};
+        .result=part, .workers=lanes, .worker_count=workers, .filename=fname, .stem=fstem, .file_scope=file_scope};
     if (f->emit || omp_in_parallel()) read_records(pipeline);
     else {
         #pragma omp parallel
