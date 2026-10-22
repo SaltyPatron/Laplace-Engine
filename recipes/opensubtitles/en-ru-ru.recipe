@@ -1,0 +1,16 @@
+name opensubtitles-en-ru-ru
+# The aligned partner of OpenSubtitles.en-ru.en; README calls these
+# "translated movie subtitles" with sentence alignment. Both languages belong
+# to the translation strand. The line pointer is resolved, never recorded.
+match OpenSubtitles.en-ru.ru
+
+tier sentence by \n
+numbered aligned
+names text
+tier field by \t
+
+thing sentence text literal rus
+content text
+refer aligned opensubtitles-en-ru-en
+relation "translated" aligned
+attest sentence aligned

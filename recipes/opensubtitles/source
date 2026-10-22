@@ -5,5 +5,7 @@ witness OpenSubtitles
 # The README: "This package is part of OPUS - the open collection of parallel corpora".
 lineage OPUS
 class StructuredCorpus
-root $LAPLACE_DATA/OpenSubtitles/extracted
+# Recurse across every locally extracted pair directory, including ar/de/el-en.
+# Pair recipes bind both ISO language identities and keep line keys pair-local.
+root $LAPLACE_DATA/OpenSubtitles
 after unicode iso-639
