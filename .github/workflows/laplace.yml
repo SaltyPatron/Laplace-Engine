@@ -92,18 +92,25 @@ jobs:
           L=$RUNNER_TEMP/engine/laplace
           export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
           export TMPDIR=${RUNNER_TEMP:?}
-          bash Laplace-Engine/tests/highway-admission.sh "$L"
-          bash Laplace-Engine/tests/layout-counted.sh "$L"
-          bash Laplace-Engine/tests/left-open.sh "$L"
-          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/wordnet-recipes.sh "$L"
-          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/claims-tsv.sh "$L"
-          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/thing-resolved.sh "$L"
-          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/data-root.sh "$L"
-          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/source-after.sh "$L"
-          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/workspace-code.sh "$L"
-          python3 Laplace-Engine/tools/parity/test_diff.py
-          bash Laplace-Engine/tests/parity-needed.sh
-          python3 Laplace-Engine/tools/parity/test_claims.py
+          export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes
+          failed=0
+          for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code; do
+            if ! bash "Laplace-Engine/tests/$suite.sh" "$L"; then
+              echo "::error::Engine check failed: $suite"
+              failed=1
+            fi
+          done
+          for suite in test_diff test_claims; do
+            if ! python3 "Laplace-Engine/tools/parity/$suite.py"; then
+              echo "::error::Engine check failed: $suite"
+              failed=1
+            fi
+          done
+          if ! bash Laplace-Engine/tests/parity-needed.sh; then
+            echo "::error::Engine check failed: parity-needed"
+            failed=1
+          fi
+          exit "$failed"
       - name: Verify ingestion staging under a scoped database identity
         run: |
           . Laplace-Operations/laplace.env
