@@ -25,7 +25,8 @@ t=$(run --claims cili "$scratch/cili/ili.ttl")
 [ "$(grep -c '^claim	' <<<"$c")" = "$(grep -c '^\[' <<<"$t")" ] || fail "--claims-tsv and --claims say a different number of claims: $c / $t"
 ! grep -q '^\[' <<<"$c" || fail "--claims-tsv also wrote a claim as text: $c"
 
-# VerbNet: a member's sense and its PropBank roleset are types of the highway, written LIST:KEY
+# Cross-resource aliases retain their canonical identifier; an identifier
+# already present as content is realized as its own text.
 mkdir -p "$scratch/vn"
 cat >"$scratch/vn/heed-0.0.xml" <<'EOF'
 <!DOCTYPE VNCLASS SYSTEM "vn_class-3.dtd">
@@ -41,6 +42,6 @@ cat >"$scratch/vn/heed-0.0.xml" <<'EOF'
 EOF
 v=$(run --claims-tsv verbnet "$scratch/vn/heed-0.0.xml") || fail "verbnet did not read: $v"
 grep -Pq '^claim\t[0-9]+\t[0-9.e+-]+\theed\tili:i[0-9]+$' <<<"$v" || fail "heed's sense is not ili:KEY: $v"
-grep -Pq '^claim\t[0-9]+\t[0-9.e+-]+\tkeep_to\tpbroleset:keep\.04$' <<<"$v" || fail "keep_to's roleset is not pbroleset:keep.04: $v"
+grep -Pq '^claim\t[0-9]+\t[0-9.e+-]+\tkeep_to\tkeep\.04$' <<<"$v" || fail "keep_to's roleset is not its canonical identifier keep.04: $v"
 ! grep -P '^(claim|held)\t' <<<"$v" | grep -q '<[a-z]*>' || fail "a type is written as its list alone: $v"
 echo "claims-tsv: ok"

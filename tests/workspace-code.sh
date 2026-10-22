@@ -16,6 +16,7 @@ printf 'build/\n*.log\n!keep.log\n/top.txt\n' > "$w/.gitignore"; printf 'secret*
 for f in a.c build/x.c sub/a.log keep.log top.txt sub/top.txt .hidden/x.c sub/secret.py sub/b.py docs/build/y.md docs/z.md; do
   printf 'int x;\n' > "$w/$f"
 done
+printf 'x = 1\n' > "$w/sub/b.py"
 printf '# readme\n' > "$LAPLACE_SRC/Laplace-MCP/README.md"
 
 out=$(LAPLACE_TRUNKS=1 LAPLACE_INGEST_ONE=1 "$L" ingest --no-load workspace-code 2>&1) || fail "the ingest failed: $out"
