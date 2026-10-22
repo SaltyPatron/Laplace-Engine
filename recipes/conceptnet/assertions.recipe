@@ -1,51 +1,49 @@
 name conceptnet-assertions
-# One edge on every line, five fields parted by tabs, no header row. ConceptNet's documentation (Downloads):
-#   "The five fields of each line are: The URI of the whole edge; The relation expressed by the edge; The node at the
-#    start of the edge; The node at the end of the edge; A JSON structure of additional information about the edge, such as its weight"
-#
-# (URI hierarchy) "Every object in ConceptNet has a URI that is structured like a path"; "Concept URIs contain the
-# text of the concept, with spaces replaced by underscores"; a concept has "the initial /c", "a part that indicates
-# its language", "a part with the concept text", and "an optional fourth component gives the part of speech"; what
-# follows it the page does not name. A URI is ConceptNet's address for a term: the term is the text itself, the word any
-# other witness speaks of, and what the address says of it (its language, its part of speech) is said of the term.
-# /c/en/ice_cream/n is the term "ice cream", of which ConceptNet says en and n. A relation's URI, /r/IsA, is the
-# relation IsA (/r/dbpedia/genre, the relation dbpedia/genre).
-#
-# (Edges) The edge is the claim [start, relation, end]: the line is that claim. "sources: the sources that, when
-# combined, say that this assertion should be true": contributors are content
-# beside their judgments; ConceptNet remains the witness. What else the JSON says of the edge (its weight,
-# the sentence it was read from and the surface forms of its two ends) ConceptNet says of the edge. The edge's own
-# URI is its start, relation and end again; the dataset, licence, process and activity are ConceptNet's bookkeeping.
-match assertions.csv
+# Downloads.md: URI, relation, start, end, then JSON metadata, without a header.
+# URI-hierarchy.md defines a concept's language, lemma and optional WordNet POS.
+# The qualifier is retained in its original source notation.
+match assertions.csv conceptnet-assertions-5.7.0.csv
 
 tier edge by \n
 names uri rel start end json
 tier field by \t
 part rel by / pieces 2
-part start by / space _
-part end by / space _
-part json by object
+part start grammar concept_uri
+part end grammar concept_uri
+part lemma by \t space _
+part pos grammar wordnet_category
+part json grammar json
 
-# ExternalURL is no relation between terms: its end is a URL of the term on another site, which split at its slashes
-# made wiki and en.wiktionary.org things of their own (about 49M attestations). Those edges are not read.
-where rel is-not /r/ExternalURL
-# surfaceStart and surfaceEnd are the two ends as surfaceText writes them: "The locations of the start and end concepts
-# will be marked by surrounding them with double brackets" ([[sucker]] is related to [[ball]]; in every edge sampled
-# both stand in surfaceText so). The page gives them no wording of their own, and they say nothing surfaceText does
-# not: they are not read.
-omit uri dataset license process activity surfaceStart surfaceEnd
-content rel start end weight surfaceText
-content contributor
+# Compare the parsed relation value, rather than its packaging group.
+where rel/2 is-not ExternalURL
+omit uri dataset license process activity surfaceStart surfaceEnd external
+content lemma pos qualifier weight surfaceText contributor
+type lexicalization.language language
 
-thing edge start/3 rel/2 end/3
+# Universal POS is attached beside the source's own category, so adjective
+# satellites keep their 's' identity while sharing the ADJ highway class.
+when . is n
+type pos.category upos as NOUN
+always
+when . is v
+type pos.category upos as VERB
+always
+when . is a
+type pos.category upos as ADJ
+always
+when . is s
+type pos.category upos as ADJ
+always
+when . is r
+type pos.category upos as ADV
+always
+
+thing concept resolved lexicalization/lemma required lexicalization/language required pos pos/category qualifier
+thing edge preserve start rel/2 end
 itself edge with json/sources/contributor
-# What the JSON says of the edge, in the words of ConceptNet's page "Edges" (Laplace-Engine#32): never the member's name.
-#   "weight: the strength with which this edge expresses this assertion. A typical weight is 1, but weights can be
-#   higher or lower. All weights are positive."
+
+# Edges.md: strength and the original natural-language statement are claims
+# about the edge, not JSON member names used as relation vertices.
 relation "the strength with which this edge expresses this assertion" json.weight
-#   "surfaceText: the original natural language text that expressed this statement. May be null, because not every
-#   statement was derived from natural language input."
 relation "the original natural language text" json.surfaceText
 attest edge json
-pair edge start/2 start/4 of start/3
-pair edge end/2 end/4 of end/3
