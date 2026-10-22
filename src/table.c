@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include "laplace/tier0.h"
+#include "laplace_reader_source.h"
 
 Node *NODE; Vtx *VTX;
 const lp_tier0_record *T0;
@@ -47,9 +48,11 @@ static __thread uint64_t key_reader = UINT64_MAX;
 void keys_reader_file(uint64_t file){ key_reader = file; }
 int keys_file_reads(uint64_t file){ return file<=UINT32_MAX && __atomic_load_n(&key_readers[file],__ATOMIC_ACQUIRE); }
 
-/* Exact executable/perf-cache provenance for a reading. This fingerprint is
+/* Reader-source/perf-cache provenance for a reading. This fingerprint is
  * file metadata, not content identity. Compute it once without opening any
- * corpus file; changing the reader must invalidate an OS-only pre-check. */
+ * corpus file; changing the reader must invalidate an OS-only pre-check.
+ * Executable bytes are not a reading contract: identical source built into the
+ * standalone and embedded runtimes must produce identical provenance trunks. */
 static pthread_mutex_t program_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint8_t program_environment[32]; static int program_ready;
 void program_environment_hash(uint8_t out[32]){
@@ -57,11 +60,9 @@ void program_environment_hash(uint8_t out[32]){
         pthread_mutex_lock(&program_mutex);
         if (!program_ready) {
             if (!T0) { fputs("reading contract requires the mapped Tier-0 cache\n", stderr); exit(1); }
-            char executable[4096]; ssize_t n = readlink("/proc/self/exe", executable, sizeof executable - 1);
-            if (n <= 0 || n >= (ssize_t)sizeof executable - 1) { perror("reading executable"); exit(1); }
-            executable[n] = 0; uint8_t artifact[32]; blake3_hasher hash; blake3_hasher_init(&hash);
-            if (!program_file_hash(executable, artifact)) { perror(executable); exit(1); }
-            blake3_hasher_update(&hash, artifact, sizeof artifact);
+            uint8_t artifact[32]; blake3_hasher hash; blake3_hasher_init(&hash);
+            static const char source[] = LAPLACE_READER_SOURCE_ID;
+            blake3_hasher_update(&hash, source, sizeof source - 1);
             blake3_hasher cache; blake3_hasher_init(&cache);
             blake3_hasher_update(&cache, T0, (size_t)LP_TIER0_COUNT * sizeof *T0);
             blake3_hasher_finalize(&cache, artifact, sizeof artifact); blake3_hasher_update(&hash, artifact, sizeof artifact);
