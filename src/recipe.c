@@ -432,13 +432,17 @@ static Recipe *sniff_generic_recipe(Recipe *r, int n, const char *path){
     }
     return by_recipe_name(r, n, "text");
 }
-Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of){
+Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, RecipeCoverage *coverage){
+    if (coverage) *coverage=RECIPE_UNCOVERED;
     const char *b0 = strrchr(path, '/'); b0 = b0 ? b0 + 1 : path;
     char base[1024]; snprintf(base, sizeof base, "%s", b0);
     size_t bl = strlen(base); if (bl > 3 && !strcmp(base + bl - 3, ".gz")) base[bl - 3] = 0;   /* matched by what it holds */
     if (!of) for (int s = 0; s < nsources; s++) if (under_source_root(&sources[s], path)) { of = &sources[s]; break; }
     Recipe *best = NULL; size_t best_lit = 0;                              /* the most specific pattern wins */
-    for (int i = 0; of && i < of->nexcept; i++) if (!os_fnmatch(of->except[i], path)) return NULL;
+    for (int i = 0; of && i < of->nexcept; i++) if (!os_fnmatch(of->except[i], path)) {
+        if (coverage) *coverage=RECIPE_OMITTED;
+        return NULL;
+    }
     for (int i = 0; i < n; i++) {
         if (r[i].broken) continue;
         if (of) { if (!(r[i].source >= 0 && &sources[r[i].source] == of) && !(r[i].source < 0 && reads(of, &r[i]))) continue; }
@@ -458,7 +462,11 @@ Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of){
         best->lang = grammar_load(best->grammar);
         if (!best->lang) { fprintf(stderr, "recipe %s: required grammar %s is unavailable for %s\n", best->name, best->grammar, path); exit(2); }
     }
+    if (coverage && best) *coverage=RECIPE_COVERED;
     return best;
+}
+Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of){
+    return recipe_select(r,n,path,of,NULL);
 }
 
 /* A recipe that did not load stops the source it belongs to, so its files are never read as something else; it stops
