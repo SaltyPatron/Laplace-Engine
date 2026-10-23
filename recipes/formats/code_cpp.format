@@ -10,7 +10,8 @@ node identifier text field declarator as name
 node field_identifier text field declarator as name
 node qualified_identifier text field declarator as name
 node type_identifier text field name as name
-node parameter_list text as parameters
+node parameter_list group as parameters capture parameters_source
+node parameter_declaration group as parameter_declaration capture source
 node compound_statement text as implementation
 node field_declaration_list group as members capture members_source
 

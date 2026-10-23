@@ -1,11 +1,12 @@
+# Tree-sitter declaration kinds and complete declaration bytes are content, not relation verbs.
 name workspace-typescript
 match *.ts *.mts *.cts
 format code_typescript
 content source name parameters implementation signature_source members_source
 thing packaging source
-thing function_declaration source
-thing class_declaration source
-thing method_definition source
+thing function_declaration literal function_declaration source
+thing class_declaration literal class_declaration source
+thing method_definition literal method_definition source
 relation "declared identifier" name
 relation "parameter signature" parameters
 relation "implemented by" implementation
