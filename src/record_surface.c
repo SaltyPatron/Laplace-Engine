@@ -55,17 +55,19 @@ static SurfaceRows rows_of(RecordWorker *worker, const SemanticRecord *record, i
     for (int32_t child=record_field_first(&record->n[root]); child>=0; child=record_field_next(&record->n[child])) {
         if (!record_field_matches(&record->n[child],program->row)) continue;
         SurfaceRow row={.scope=child};
-        if (!index_row(scalar(record,record_select_first(record,child,program->key)),&row)) invalid_surface(worker,"invalid index notation");
+        if (program->linear) {
+            row.first=row.last=++previous; row.kind=SURFACE_WORD;
+        } else if (!index_row(scalar(record,record_select_first(record,child,program->key)),&row)) invalid_surface(worker,"invalid index notation");
         row.form=scalar(record,record_select_first(record,child,program->form));
         if (row.kind!=SURFACE_EMPTY && (!row.form || !row.form->vlen)) invalid_surface(worker,"surface row has no form");
-        if (row.kind==SURFACE_WORD) {
+        if (!program->linear && row.kind==SURFACE_WORD) {
             if (row.first!=previous+1) invalid_surface(worker,"word indices are not consecutive");
             previous=row.first;
         } else if (row.kind==SURFACE_RANGE) {
             if (row.first!=previous+1 || row.first<=covered) invalid_surface(worker,"overlapping or misplaced range");
             covered=row.last;
         } else if (row.first!=previous) invalid_surface(worker,"empty position is not after its anchor");
-        const SemanticValue *adjacency=scalar(record,record_select_first(record,child,program->adjoining));
+        const SemanticValue *adjacency=program->linear ? NULL : scalar(record,record_select_first(record,child,program->adjoining));
         row.adjoining=(uint8_t)(adjacency && adjacency->vlen==program->adjoining_length &&
                                !memcmp(adjacency->val,program->adjoining_value,adjacency->vlen));
         if (out.count>=capacity) invalid_surface(worker,"row count exceeds its prepared scope");
@@ -83,24 +85,54 @@ int record_surface_text(RecordWorker *worker, const SemanticRecord *record, int3
     const SurfaceProgram *program=&worker->s->surface;
     if (!program->thing || !record_field_matches(&record->n[root],program->tier)) return 0;
     size_t mark=scratch_mark(), length=0; SurfaceRows rows=rows_of(worker,record,root);
-    uint32_t covered=0; const SurfaceRow *previous=NULL;
+    uint32_t covered=0, characters=0; const SurfaceRow *previous=NULL;
     for (uint32_t i=0; i<rows.count; i++) if (surface_row(&rows.rows[i],&covered)) {
         size_t separator=previous && !previous->adjoining ? program->separator_length : 0;
         if (separator>SIZE_MAX-length || rows.rows[i].form->vlen>SIZE_MAX-length-separator) invalid_surface(worker,"surface exceeds address space");
         length+=separator+rows.rows[i].form->vlen; previous=&rows.rows[i];
+        if (program->linear) {
+            const SemanticValue *form=rows.rows[i].form; uint32_t count=0;
+            for (uint32_t byte=0; byte<form->vlen; byte++) count+=(form->val[byte]&0xc0)!=0x80;
+            if (count>UINT32_MAX-characters) invalid_surface(worker,"surface character position overflow");
+            SurfacePosition position={characters,characters+count};
+            worker->surface_positions[rows.rows[i].scope]=position;
+            worker->surface_positions[form-record->n]=position;
+            characters+=count;
+        }
     }
+    if (program->linear) worker->surface_positions[root]=(SurfacePosition){0,characters};
     uint8_t *bytes=scratch_alloc(length); size_t used=0; covered=0; previous=NULL;
     for (uint32_t i=0; i<rows.count; i++) if (surface_row(&rows.rows[i],&covered)) {
         if (previous && !previous->adjoining) { memcpy(bytes+used,program->separator,program->separator_length); used+=program->separator_length; }
         memcpy(bytes+used,rows.rows[i].form->val,rows.rows[i].form->vlen); used+=rows.rows[i].form->vlen; previous=&rows.rows[i];
     }
-    const SemanticValue *declared=scalar(record,record_select_first(record,root,program->verify));
+    const SemanticValue *declared=program->linear ? NULL : scalar(record,record_select_first(record,root,program->verify));
     if (declared && (declared->vlen!=length || memcmp(declared->val,bytes,length))) invalid_surface(worker,"declared text differs from the composed tokens");
     *out=record_text(bytes,length); out->said=0; scratch_restore(mark); return 1;
 }
+int record_surface_position(RecordWorker *worker, const SemanticRecord *record, int32_t scope,
+    int last, Ref *out, int depth){
+    const SurfaceProgram *program=&worker->s->surface;
+    if (!program->linear || !worker->surface_positions || scope<0 || (uint32_t)scope>=record->count) return 0;
+    if (worker->surface_positions[scope].first==UINT32_MAX) {
+        int32_t root=scope;
+        while (root>=0 && !record_field_matches(&record->n[root],program->tier)) root=record->n[root].parent;
+        Ref surface;
+        if (root<0 || !record_thing(worker,record,root,&surface,depth+1)) return 0;
+    }
+    SurfacePosition position=worker->surface_positions[scope];
+    if (position.first==UINT32_MAX || position.end<=position.first) return 0;
+    uint32_t value=last ? position.end-1 : position.first;
+    uint8_t digits[10]; size_t count=0;
+    do { digits[count++]=(uint8_t)('0'+value%10); value/=10; } while (value);
+    for (size_t a=0,b=count-1; a<b; a++,b--) {
+        uint8_t byte=digits[a]; digits[a]=digits[b]; digits[b]=byte;
+    }
+    *out=record_text(digits,count); out->said=0; return 1;
+}
 uint32_t record_surface_parts(RecordWorker *worker, const SemanticRecord *record, int32_t root, Ref *parts, uint32_t capacity){
     const SurfaceProgram *program=&worker->s->surface;
-    if (!program->thing || !record_field_matches(&record->n[root],program->tier)) return 0;
+    if (!program->thing || program->linear || !record_field_matches(&record->n[root],program->tier)) return 0;
     size_t mark=scratch_mark(); SurfaceRows rows=rows_of(worker,record,root);
     Ref *tokens=scratch_alloc((size_t)rows.count*sizeof(Ref)), *bindings=scratch_alloc((size_t)rows.count*sizeof(Ref));
     Ref *components=scratch_alloc((size_t)rows.count*sizeof(Ref));

@@ -146,8 +146,7 @@ static int obl_cmp(const void *x, const void *y){ const char *a = (const char *)
 
 void say_obligations(FILE *o){
     uint64_t n = OBL_MORE, m = 0, sd = 0; for (size_t i = 0; i < NOBL; i++) { if (OBL[i].what == 'o') n += OBL[i].n; else if (OBL[i].what == 'm') m += OBL[i].n; else sd += OBL[i].n; }
-    if (!NOBL && !OBL_MORE) return;
-    qsort(OBL, NOBL, sizeof *OBL, obl_cmp);
+    if (NOBL) qsort(OBL, NOBL, sizeof *OBL, obl_cmp);
     if (sd) { fprintf(o, "\n== statements, by the meaning the recipe gives each part (value LIST NAME, relation \"TEXT\" NAME): %'llu\n", (unsigned long long)sd);
         for (size_t i = 0; i < NOBL; i++) if (OBL[i].what == 's') fprintf(o, "   %-22s %-80s %'14llu\n", OBL[i].recipe, OBL[i].name, (unsigned long long)OBL[i].n); }
     fprintf(o, "\n== unresolved obligations: %'llu parts a claim would name have no meaning the recipe gives, so no claim is made of them (Laplace-Engine#32)\n", (unsigned long long)n);

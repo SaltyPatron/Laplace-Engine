@@ -199,7 +199,8 @@ static void tuple_text(const lp_id *id, Buf *o){
 static void show_tuple(const lp_id *id){ Buf o = { 0 }; tuple_text(id, &o); fwrite(o.b, 1, o.n, stdout); free(o.b); }
 /* --claims-tsv: one line a claim (claim) or a tuple a record holds besides (held): kind, position, score, then each part as
  * text (a tuple part bracketed as above); a tab, a line end or a backslash in a part is written \t, \n, \r, \\. Every
- * line of this kind begins with its kind and a tab; whatever else is said (what was read, what is left open) does not. */
+ * line of this kind begins with its kind and a tab. A record line includes its
+ * native ID and display text, including records which state no claims. */
 static void tsv_escaped(const uint8_t *b, size_t n){
     for (size_t i = 0; i < n; i++) switch (b[i]) { case '\t': fputs("\\t", stdout); break; case '\n': fputs("\\n", stdout); break;
         case '\r': fputs("\\r", stdout); break; case '\\': fputs("\\\\", stdout); break; default: putchar(b[i]); }
@@ -220,6 +221,11 @@ static void tsv_held(const lp_id *id, int depth){
         if (said == LP_SAID_TUPLE) tsv_tuple("held", &VTX[c->voff + v].id, 0, 1.0);
         else if (said == LP_SAID_RECORD) tsv_held(&VTX[c->voff + v].id, depth + 1); }
 }
+static void tsv_record(const lp_id *id, unsigned position){
+    char hex[33]; Buf display={0}; id_text(id,hex); part_text(id,&display);
+    printf("record\t%u\t1\t%s\t",position,hex);
+    tsv_escaped(display.b,display.n); putchar('\n'); free(display.b);
+}
 /* What a record holds besides its claims: the things and specifics said with them, and the records inside it. */
 static void show_held(const lp_id *id, int depth){
     Node *c = table_find(id); if (!c || depth > 6) return;
@@ -230,7 +236,13 @@ static void show_held(const lp_id *id, int depth){
 static void show_record_events(const File *file){
     for (uint64_t i = 0; i < file->ev.n; i++) {
         const Event *event = &file->ev.e[i];
-        if (tsv_claims) { if (event->kind == EV_RECORD) tsv_held(&event->witnessed, 0); else tsv_tuple("claim", &event->claim, event->position, (double)event->score); continue; }
+        if (tsv_claims) {
+            if (event->kind == EV_RECORD) {
+                tsv_record(&event->witnessed,event->position);
+                tsv_held(&event->witnessed,0);
+            } else tsv_tuple("claim",&event->claim,event->position,(double)event->score);
+            continue;
+        }
         if (event->kind == EV_RECORD) { printf("-- record %u\n", event->position); show_held(&event->witnessed, 0); continue; }
         if (!table_find(&event->claim)) continue;
         show_tuple(&event->claim);
@@ -252,6 +264,9 @@ static int stream_record_batch(void *context, const Ref *things, size_t n, const
     }
     Events previous = file->ev; Ref *said = file->said; uint64_t nsaid = file->nsaid, csaid = file->csaid;
     file->ev = *events; file->said = (Ref *)root; file->nsaid = roots; file->csaid = roots;
+    /* Claim events cannot describe records which state no claims. Inspect the
+     * actual product roots before this streaming window releases its DAG. */
+    if (stream->show && tsv_claims) for (size_t i=0; i<n; i++) tsv_record(&things[i].id,0);
     if (stream->show) show_record_events(file);
     *stream->events += events->n;
     double begin = now(); int result = 0;

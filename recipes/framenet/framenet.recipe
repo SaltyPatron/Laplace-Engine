@@ -113,9 +113,11 @@ relation "abbreviated" FE.abbrev
 # instantiations CNI/DNI/INI and resolved feID pointers, stay inside the whole sentence layer above. The book (1):
 # "get a new set of annotation layers (frame element, grammatical function, phrase type)". The documented layer
 # meanings below state those bundles of their sentence, relative to the annotation set's target LU and offsets.
-# A lexeme's breakBefore and headword say how it stands in its lexical unit (whether a break comes before it, whether
-# it is the head of a multiword unit); neither the book nor the release notes nor the schema gives them any wording:
-# an unresolved obligation (Laplace-Engine#32), until the lexemes of a lexical unit are its path.
+# A lexical unit retains one aligned lexeme path: names, POS, breakBefore
+# and headword in source order. These flags describe positions inside this LU,
+# so they remain in that bundle rather than becoming properties of the word
+# independently of its lexical unit.
+layers lexUnit lexeme name POS breakBefore headword
 # A frame file's frameRelation is no thing (only frRelation.xml's, by its subID, are), so neither "holds frame
 # frameRelation" nor "holds frameRelationType frameRelation" (a frameRelationType is no thing) ever made a claim: both
 # are gone; frRelation.xml says each frame relation, under its type, below.
@@ -127,7 +129,7 @@ attest frame definition
 attest FE coreType abbrev definition
 attest lexUnit POS definition incorporatedFE
 attest lu POS
-attest lexeme name POS breakBefore headword
+attest lexeme name POS
 attest semType superType
 relate frameRelation ^/name to supID
 relate FERelation ^/^/name to supID

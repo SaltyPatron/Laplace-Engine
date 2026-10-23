@@ -7,5 +7,6 @@
 
 int record_surface_text(RecordWorker *, const SemanticRecord *, int32_t, Ref *);
 uint32_t record_surface_parts(RecordWorker *, const SemanticRecord *, int32_t, Ref *, uint32_t);
+int record_surface_position(RecordWorker *, const SemanticRecord *, int32_t, int, Ref *, int);
 
 #endif

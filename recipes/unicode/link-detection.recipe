@@ -1,0 +1,13 @@
+name unicode-link-detection
+# UTS #58 LinkDetectionTest.txt: remove the annotation markers to recover
+# the input, and retain every expected link with its Unicode scalar bounds.
+# Repeated links are separate spans. A line with no marked links remains
+# a test record with its complete input and an empty expected-link set.
+match LinkDetectionTest.txt
+format lp_marked_spans
+surface record * .
+thing span preserve ^record {first} {last}
+content text
+relation "expected link text" span.text
+attest span text
+together record

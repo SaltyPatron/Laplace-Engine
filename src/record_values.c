@@ -376,6 +376,11 @@ static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const 
             *out = thing_scope(k,t,g,th,X,depth); return 1; }
         for (int z = 0; z < th->n; z++) {
             if (th->lit[z]) { p[z] = record_text((const uint8_t *)th->name[z], strlen(th->name[z])); p[z].said = 0; continue; }      /* a text the recipe writes */
+            unsigned special=record_selector_code(th->name[z])->special;
+            if (special==SELECT_SURFACE_FIRST || special==SELECT_SURFACE_LAST) {
+                if (!record_surface_position(k,t,g,special==SELECT_SURFACE_LAST,&p[z],depth)) return 0;
+                continue;
+            }
             if (th->name[z][0] == '>') {
                 KeyField field;
                 if (!referred_field(k, t, g, th->name[z] + 1, &field, depth)) return 0;
