@@ -207,6 +207,8 @@ typedef struct {
 } Source;
 int     recipes_load(const char *dir, Recipe **out);
 Source *sources_loaded(int *n);                                       /* in the order they go in */
+typedef enum { RECIPE_UNCOVERED, RECIPE_OMITTED, RECIPE_COVERED } RecipeCoverage;
+Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, RecipeCoverage *coverage);
 Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of);   /* of: among that source's recipes only */
 int     recipes_broken(const Recipe *r, int n, const Source *of);             /* how many of a source's recipes (NULL: of the formats) did not load; each is said */
 
@@ -225,7 +227,7 @@ typedef int (*record_batch_fn)(void *, const Ref *, size_t, const Ref *, size_t,
 struct FileAssembly;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */
-typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; int has_lineage; uint64_t bytes, incomplete; int exact, skipped, known; Events ev;
+typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; int has_lineage; uint64_t bytes, incomplete; int exact, skipped, known; RecipeCoverage coverage; Events ev;
                  const Source *source;                 /* the source it is a file of, or NULL for a file given by itself */
                  double trust;                         /* how far its witness is trusted */
                  Ref file; int has_file;               /* the file in the DAG: its trunk, over its metadata and its content */

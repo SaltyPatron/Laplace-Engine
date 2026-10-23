@@ -597,9 +597,15 @@ int cmd_ingest(int argc, char **argv){
 
     File *files = calloc(nfiles, sizeof(File));
     int uncovered = 0;
-    for (int i = 0; i < nfiles; i++) { files[i].path = paths[i]; files[i].recipe = recipe_for(rec, nrec, files[i].path, path_of[i]); files[i].source = path_of[i];
+    for (int i = 0; i < nfiles; i++) { files[i].path = paths[i]; files[i].recipe = recipe_select(rec, nrec, files[i].path, path_of[i], &files[i].coverage); files[i].source = path_of[i];
                                        if (files[i].recipe) files[i].trust = path_of[i] && files[i].recipe->source < 0 ? path_of[i]->trust : files[i].recipe->trust;
-                                       if (!files[i].recipe) { files[i].skipped = 1; uncovered += path_of[i] == NULL; } }     /* a source takes the files its recipes name */
+                                       if (!files[i].recipe) {
+                                           files[i].skipped = 1; uncovered += files[i].coverage == RECIPE_UNCOVERED;
+                                           if (do_load < 0) {
+                                               printf("%s\t",files[i].coverage == RECIPE_OMITTED ? "omitted" : "uncovered");
+                                               tsv_escaped((const uint8_t *)files[i].path,strlen(files[i].path)); putchar('\n');
+                                           }
+                                       } }     /* a source takes the files its recipes name */
     /* a source's files, most trusted witness first; among equals, as they were found */
     for (int i = 1; i < nfiles; i++) { File x = files[i]; int j = i;
         while (j > 0 && path_of[i] && x.recipe && files[j - 1].recipe && x.recipe->trust > files[j - 1].recipe->trust) { files[j] = files[j - 1]; j--; }
@@ -613,7 +619,7 @@ int cmd_ingest(int argc, char **argv){
     for (int i = 0; i < nfiles; i++) files[i].order = (uint32_t)i;              /* the order a key defined in two files is kept by */
     if (uncovered) {                                                                  /* what no recipe covers yet, by extension */
         typedef struct { char ext[16]; int n; } Ext; Ext ex[512]; int ne = 0;
-        for (int i = 0; i < nfiles; i++) if (!files[i].recipe) {
+        for (int i = 0; i < nfiles; i++) if (files[i].coverage == RECIPE_UNCOVERED) {
             const char *d = strrchr(files[i].path, '.'), *sl = strrchr(files[i].path, '/'); char e[16] = "(none)";
             if (d && (!sl || d > sl) && strlen(d) < sizeof e) snprintf(e, sizeof e, "%s", d);
             int k = 0; while (k < ne && strcmp(ex[k].ext, e)) k++; if (k == ne && ne < 512) { snprintf(ex[ne].ext, 16, "%s", e); ex[ne++].n = 0; } if (k < ne) ex[k].n++;
@@ -621,6 +627,7 @@ int cmd_ingest(int argc, char **argv){
         for (int x = 0; x < ne; x++) for (int y = x + 1; y < ne; y++) if (ex[y].n > ex[x].n) { Ext tmp = ex[x]; ex[x] = ex[y]; ex[y] = tmp; }
         printf("files no recipe covers yet: %d of %d:", uncovered, nfiles);
         for (int k = 0; k < ne && k < 40; k++) printf(" %s %d", ex[k].ext, ex[k].n); printf("\n");
+        printf("recipe coverage is partial: %d unsupported files were not admitted\n",uncovered);
     }
     if (do_load < 0) {                                                                /* the plan: which recipe takes what */
         for (int k = 0; k < nrec; k++) { int n = 0; for (int i = 0; i < nfiles; i++) n += files[i].recipe == &rec[k]; if (n) printf("  %-24s %d files\n", rec[k].name, n); }
