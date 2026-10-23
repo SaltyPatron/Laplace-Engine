@@ -1,0 +1,14 @@
+name mapnet-frame-synsets
+# README: mapping_frame_synsets.txt maps FrameNet 1.3 frames to WordNet 1.6
+# synsets. Each complete row records those two identifiers together. The offset
+# remains WordNet 1.6's identifier; no equivalence to another edition is guessed.
+match mapping_frame_synsets.txt
+
+tier row by \n
+names frames synsets
+tier field by \t
+
+thing row frames
+type frames fnframe node
+content synsets
+pair row synsets
