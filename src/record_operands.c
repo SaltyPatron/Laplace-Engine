@@ -24,7 +24,8 @@ static uint32_t semantic_variable(SemanticRecord *record, const PathProgram *pro
         .kind=field->kind, .tier=(uint8_t)(tier < 255 ? tier : 255),
         .join=(uint8_t)((field->flags & S_FIELD_LIST) ? S_PIECES : (field->flags & S_FIELD_JOIN) != 0),
         .trim=(uint8_t)((field->flags & S_FIELD_TRIM) != 0), .context=(uint8_t)((field->flags & S_FIELD_CONTEXT) != 0),
-        .scalar=(uint8_t)((field->flags & S_FIELD_PAYLOAD) != 0)};
+        .scalar=(uint8_t)((field->flags & S_FIELD_PAYLOAD) != 0),
+        .capture=(uint8_t)((field->flags & S_FIELD_CAPTURE) != 0)};
     if (parent >= 0) {
         record->n[id].operand = record_binding_add(record->bindings, (uint32_t)parent, BIND_INPUTS, id);
         record->n[parent].arity++;
@@ -161,6 +162,10 @@ int record_collect_fields(void *sink, int event, const SField *field){
     }
     if (event == S_FINISH) {
         if (collector->depth || collector->context_depth) return 0;
+        if (field->flags & S_FIELD_CAPTURE) {
+            record->n[0].val = field->value; record->n[0].vlen = field->value_length;
+            record->n[0].capture = 1;
+        }
         record->n[0].extent = record->count - 1;
         RecordSelectionFrame previous = record_selection_enter(record, NULL, output->s, record->bindings);
         for (int32_t value = record_field_first(&record->n[0]); value >= 0; value = record_field_next(&record->n[value])) finish_text(output, &record->n[value]);

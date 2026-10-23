@@ -29,7 +29,7 @@ typedef struct {
     const uint8_t *name, *val;
     uint32_t nlen, vlen, arity, extent, operand;
     int32_t parent;
-    uint8_t kind, tier, join, trim, context, scalar;
+    uint8_t kind, tier, join, trim, context, scalar, capture;
     uint32_t dropped_first;
     TextRun *text;
 } SemanticValue;
