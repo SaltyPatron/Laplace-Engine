@@ -1,0 +1,11 @@
+grammar	source
+c_sharp	tree-sitter-c-sharp
+csv	tree-sitter-csv
+tsv	tree-sitter-csv
+psv	tree-sitter-csv
+tsx	tree-sitter-typescript
+typescript	tree-sitter-typescript
+xml	tree-sitter-xml
+dtd	tree-sitter-xml
+markdown	tree-sitter-markdown
+markdown_inline	tree-sitter-markdown
