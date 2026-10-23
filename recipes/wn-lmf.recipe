@@ -116,13 +116,16 @@ relation "count of usages" Count
 relation "definition of the synset" Definition
 relation "standard definition of the synset in the ILI" ILIDefinition
 relation "example usage" Example
+# Wn's Sense.lexicalized() and Synset.lexicalized() documentation:
+# "Return True if the sense is lexicalized" / "Return True if the synset is lexicalized".
+# https://wn.readthedocs.io/en/latest/api/wn.html
+# Keep the explicit boolean as content, including false. A sense can name a
+# descriptive phrase for a lexical gap; neither discard that phrase nor turn
+# this flag into a confidence score. An absent attribute creates no new claim.
+relation "is lexicalized" lexicalized
 # What stays an unresolved obligation, each with its reason:
 #   ref (of a Requires): "the required wordnet should be loaded as well": a dependence between two sources' trunks, the
 #     corpus as the witness (Laplace-Engine#28).
-#   lexicalized: the DTD's (true|false) "true", which the format's documentation words nowhere (the GWA's schemas#43
-#     lists it as "apparently unused"); the Open Multilingual Wordnet writes "false" for a lexical gap (omw-he's README:
-#     "GAP for synsets that are not lexicalized in Hebrew"): the absence of a lexicalization [lemma, language, ILI],
-#     Laplace-Engine#20.
 #   variety (of a Pronunciation): wn-lemon-1.3.ttl, "Indicates the variety of language the pronunciation represents":
 #     said of the pronunciation, which is no thing a claim can be made of here (said of the entry it would say
 #     [virtuoso, US]); a qualifier of the pronunciation claim (Laplace-Engine#32).
