@@ -9,5 +9,8 @@ node identifier text field name as name
 node property_identifier text field name as name
 node type_identifier text field name as name
 node formal_parameters text as parameters
-node statement_block text as implementation
+node statement_block group as implementation capture implementation_source
 
+
+# Declaration-name rules are more specific; remaining names are references.
+node identifier group as reference capture referenced_identifier

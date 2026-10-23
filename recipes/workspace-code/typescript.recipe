@@ -2,7 +2,7 @@
 name workspace-typescript
 match *.ts *.mts *.cts
 format code_typescript
-content source name parameters implementation signature_source members_source
+content source name referenced_identifier implementation_source parameters implementation signature_source members_source
 thing packaging source
 thing function_declaration literal function_declaration source
 thing class_declaration literal class_declaration source
@@ -20,3 +20,5 @@ attest function_declaration name parameters implementation signature members mem
 attest class_declaration name parameters implementation signature members members_source
 attest method_definition name parameters implementation signature members members_source
 
+relation "referenced identifier" reference
+attest reference .

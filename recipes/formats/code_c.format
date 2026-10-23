@@ -9,6 +9,9 @@ node identifier text field declarator as name
 node type_identifier text field name as name
 node parameter_list group as parameters capture parameters_source
 node parameter_declaration group as parameter_declaration capture source
-node compound_statement text as implementation
+node compound_statement group as implementation capture implementation_source
 node field_declaration_list group as members capture members_source
 
+
+# Declaration-name rules are more specific; remaining names are references.
+node identifier group as reference capture referenced_identifier

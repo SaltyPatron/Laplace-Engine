@@ -13,6 +13,9 @@ node object_reference text under create_procedure as name
 node object_reference text under create_view as name
 node object_reference text under create_type as name
 node function_arguments text as parameters
-node function_body text as implementation
+node function_body group as implementation capture implementation_source
 node column_definitions text as members_source
 
+
+# Declaration-name rules are more specific; remaining names are references.
+node object_reference group as reference capture referenced_identifier
