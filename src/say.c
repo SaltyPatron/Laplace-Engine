@@ -224,6 +224,11 @@ void record_execute(RecordWorker *sink, const SemanticRecord *t, int32_t root, u
      * this cache in the record frame, never behind pointers into child frames. */
     k->text_products = scratch_alloc(sizeof(Ref) * t->count);
     k->text_ready = scratch_alloc(t->count); memset(k->text_ready, 0, t->count);
+    k->surface_positions = NULL;
+    if (s->surface.linear) {
+        k->surface_positions = scratch_alloc(sizeof(SurfacePosition) * t->count);
+        memset(k->surface_positions, 0xff, sizeof(SurfacePosition) * t->count);
+    }
     Tls previous = tls_save(t, k->dm, s, &k->bindings);
     record_index_keys(k, t);
     if (bind_keys) { record_publish_keys(k, t, root, bind_keys == 3); k->binding_phase = binding_phase; tls_back(&previous); scratch_restore(record_mark); return; }

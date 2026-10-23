@@ -35,7 +35,7 @@ typedef struct { char name[64]; int op; char val[128]; regex_t re; } Where;
 typedef struct {
     char tier[32], row[32], key[64], form[64], separator[16], adjoining[64], adjoining_value[64], verify[64];
     uint16_t separator_length, adjoining_length;
-    uint8_t thing;
+    uint8_t thing, linear;
 } SurfaceProgram;
 typedef struct { char tier[32]; uint32_t when; const lp_trust_class *class; uint16_t length; } Dependence;
 typedef struct { int what; char tier[32], say[64]; KSpec a, b; uint32_t when; } HwLine;       /* what: 1 types, 2 keyed, 3 alias, 4 maps */
@@ -79,7 +79,8 @@ struct PathStep {
     uint32_t filter_length, position;
     uint8_t operation;
 };
-enum { SELECT_FIELD, SELECT_SELF, SELECT_FILE, SELECT_ELEMENTS, SELECT_UNNAMED, SELECT_LABEL };
+enum { SELECT_FIELD, SELECT_SELF, SELECT_FILE, SELECT_ELEMENTS, SELECT_UNNAMED, SELECT_LABEL,
+       SELECT_SURFACE_FIRST, SELECT_SURFACE_LAST };
 struct KeyProjection { const PathStep *field; lp_id domain; uint16_t tier; KeyProjection *next, *all_next; };
 typedef struct { const PathStep *reference; KeyProjection *targets; } ReferenceProjection;
 typedef struct { NameCode whole; PathStep *first; uint16_t source_length; uint8_t special; ReferenceProjection *projection; } PathCode;

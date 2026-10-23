@@ -161,10 +161,13 @@ void record_emit_layers(RecordWorker *worker, const SemanticRecord *record, int3
     Ref subject;
     if (!record_thing(worker,record,root,&subject,0)) return;
     Ref layers[20]; uint32_t count=record_rows(worker,record,root,layers,20);
-    for (uint32_t i=0; i<count; i++) {
-        if (lp_id_eq(&subject.id,&layers[i].id)) continue;
-        Ref pair[2]={subject,layers[i]}; record_emit_claim(worker,pair,2);
-    }
+    if (!count) return;
+    if (count==1 && lp_id_eq(&subject.id,&layers[0].id)) return;
+    Ref bundle[21]; bundle[0]=subject;
+    for (uint32_t i=0; i<count; i++) bundle[i+1]=layers[i];
+    /* The aligned axes describe one source record together. Separate pairs
+     * erase which axis an equal-valued sequence occupies. */
+    record_emit_claim(worker,bundle,(int)count+1);
 }
 
 int record_claim_vertex(const Event *e, Ref *out){

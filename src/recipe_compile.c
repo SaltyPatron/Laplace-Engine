@@ -278,7 +278,10 @@ static void path_register(Say *say, const char *name){
     PathCode *code = calloc(1, sizeof *code); if (!code) { perror("selector program"); abort(); }
     size_t length = strlen(name); code->whole = compile_name(name, length); code->first = compile_steps(name, length, NULL); code->source_length = (uint16_t)length;
     code->special = length == 1 && name[0] == '.' ? SELECT_SELF : length == 6 && !memcmp(name, "{file}", 6) ? SELECT_FILE :
-                    length == 7 && !memcmp(name, "{field}", 7) ? SELECT_LABEL : length == 2 && !memcmp(name, "*/", 2) ? SELECT_ELEMENTS : length == 3 && !memcmp(name, "...", 3) ? SELECT_UNNAMED : SELECT_FIELD;
+                    length == 7 && !memcmp(name, "{field}", 7) ? SELECT_LABEL :
+                    length == 7 && !memcmp(name, "{first}", 7) ? SELECT_SURFACE_FIRST :
+                    length == 6 && !memcmp(name, "{last}", 6) ? SELECT_SURFACE_LAST :
+                    length == 2 && !memcmp(name, "*/", 2) ? SELECT_ELEMENTS : length == 3 && !memcmp(name, "...", 3) ? SELECT_UNNAMED : SELECT_FIELD;
     path_insert(program, (PathEntry){offset, code});
     if (*name == '>') path_register(say, name + 1);
 }
@@ -603,23 +606,27 @@ int say_says(Recipe *r, const char *path, char *tok){
      *                                    dependents' subtrees and [REL, the row's thing] in the rows' order */
     if (!strcmp(tok, "surface") && LAID) {
         SurfaceProgram *program=&s->surface; char keyword[32], extra[32]; at=strtok(NULL,"\r\n");
-        if (program->thing || s->nthing==32 ||
-            !name_next(&at,program->tier,sizeof program->tier) || !name_next(&at,program->row,sizeof program->row) ||
-            !name_next(&at,program->key,sizeof program->key) || !name_next(&at,program->form,sizeof program->form) ||
-            !name_next(&at,keyword,sizeof keyword) || strcmp(keyword,"separator") ||
-            !name_next(&at,program->separator,sizeof program->separator) ||
-            !name_next(&at,keyword,sizeof keyword) || strcmp(keyword,"unless") ||
-            !name_next(&at,program->adjoining,sizeof program->adjoining) ||
-            !name_next(&at,program->adjoining_value,sizeof program->adjoining_value) ||
-            !name_next(&at,keyword,sizeof keyword) || strcmp(keyword,"verify") ||
-            !name_next(&at,program->verify,sizeof program->verify) || name_next(&at,extra,sizeof extra)) {
-            fprintf(stderr,"%s: surface TIER ROW ID FORM separator TEXT unless FIELD VALUE verify FIELD (one per recipe)\n",path); return -1;
+        int valid = !program->thing && s->nthing<32 &&
+            name_next(&at,program->tier,sizeof program->tier) && name_next(&at,program->row,sizeof program->row) &&
+            name_next(&at,program->key,sizeof program->key);
+        if (valid && !name_next(&at,program->form,sizeof program->form)) {
+            program->linear=1; memcpy(program->form,program->key,sizeof program->form); program->key[0]=0;
+        } else if (valid) valid =
+            name_next(&at,keyword,sizeof keyword) && !strcmp(keyword,"separator") &&
+            name_next(&at,program->separator,sizeof program->separator) &&
+            name_next(&at,keyword,sizeof keyword) && !strcmp(keyword,"unless") &&
+            name_next(&at,program->adjoining,sizeof program->adjoining) &&
+            name_next(&at,program->adjoining_value,sizeof program->adjoining_value) &&
+            name_next(&at,keyword,sizeof keyword) && !strcmp(keyword,"verify") &&
+            name_next(&at,program->verify,sizeof program->verify) && !name_next(&at,extra,sizeof extra);
+        if (!valid) {
+            fprintf(stderr,"%s: surface TIER ROW FORM, or surface TIER ROW ID FORM separator TEXT unless FIELD VALUE verify FIELD (one per recipe)\n",path); return -1;
         }
         program->separator_length=(uint16_t)strlen(program->separator);
         program->adjoining_length=(uint16_t)strlen(program->adjoining_value);
         Thing *thing=&s->thing[s->nthing++]; memset(thing,0,sizeof *thing);
         snprintf(thing->tier,sizeof thing->tier,"%s",program->tier);
-        snprintf(thing->name[0],sizeof thing->name[0],"%s",program->verify); thing->n=1;
+        snprintf(thing->name[0],sizeof thing->name[0],"%s",program->linear ? "." : program->verify); thing->n=1;
         program->thing=(uint8_t)s->nthing; return 1;
     }
     if (!strcmp(tok, "layers") && LAID) { at = strtok(NULL, "\r\n");
