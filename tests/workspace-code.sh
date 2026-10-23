@@ -31,7 +31,7 @@ echo "workspace-code: directories walked through their ignore files; ${want// /,
 
 # The shared code grammar records typed declaration subjects and ternary
 # semantic claims. Neither a declaration's kind nor its parameters may be lost.
-printf 'int doubled(int value){ return external(value) * 2; }\n' > "$w/a.c"
+printf 'int doubled(int value){ int local = external(value); return local * 2; }\n' > "$w/a.c"
 printf 'int tripled(int value){ return value * 3; }\n' > "$w/a.cpp"
 printf 'class Sample { public int Twice(int value){ return value * 2; } }\n' > "$w/a.cs"
 printf 'def squared(value):\n    return value * value\n' > "$w/a.py"
@@ -50,6 +50,8 @@ for spec in 'c:function_definition:doubled' 'cpp:function_definition:tripled' 'c
     grep -Fq '[parameter_declaration, int value]' <<< "$out" || fail "C parameter declaration: $out"
     grep -Fq $'\tparameter signature\t(int value)' <<< "$out" || fail "C parameter signature: $out"
     grep -Fq $'\treferenced identifier\texternal' <<< "$out" || fail "C call target: $out"
+    ! grep -Fq $'\tdeclared identifier\tlocal' <<< "$out" || fail "C local variable renamed the containing function: $out"
+    [ "$(grep -c $'\timplemented by\t' <<< "$out")" = 1 ] || fail "C body was attested more than once: $out"
   fi
 done
 echo 'workspace-code: typed declarations and semantic identifiers retained across C, C++, C#, Python, TypeScript and SQL'

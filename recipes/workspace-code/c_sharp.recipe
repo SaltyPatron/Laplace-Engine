@@ -22,15 +22,17 @@ relation "parameter signature" signature.parameters
 relation "declared members" members.members_source
 relation "declared identifier" members.name
 relation "declared members" members_source
-attest class_declaration name parameters implementation signature members members_source
-attest struct_declaration name parameters implementation signature members members_source
-attest method_declaration name parameters implementation signature members members_source
-attest constructor_declaration name parameters implementation signature members members_source
-attest record_declaration name parameters implementation
-attest property_declaration name parameters implementation
-attest interface_declaration name parameters implementation
-attest enum_declaration name parameters implementation
-attest delegate_declaration name parameters implementation
+attest class_declaration name parameters signature members members_source
+attest struct_declaration name parameters signature members members_source
+attest method_declaration name parameters signature members members_source
+attest constructor_declaration name parameters signature members members_source
+attest record_declaration name parameters
+attest property_declaration name parameters
+attest interface_declaration name parameters
+attest enum_declaration name parameters
+attest delegate_declaration name parameters
 
 relation "referenced identifier" reference
 attest reference .
+# A body is attested as its captured surface; nested reference groups speak separately.
+attest implementation .
