@@ -21,6 +21,9 @@ node identifier text field name under interface_declaration as name
 node identifier text field name under enum_declaration as name
 node identifier text field name under delegate_declaration as name
 node parameter_list text as parameters
-node block text as implementation
-node arrow_expression_clause text as implementation
+node block group as implementation capture implementation_source
+node arrow_expression_clause group as implementation capture implementation_source
 
+
+# Declaration-name rules are more specific; remaining names are references.
+node identifier group as reference capture referenced_identifier

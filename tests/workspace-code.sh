@@ -31,23 +31,25 @@ echo "workspace-code: directories walked through their ignore files; ${want// /,
 
 # The shared code grammar records typed declaration subjects and ternary
 # semantic claims. Neither a declaration's kind nor its parameters may be lost.
-printf 'int doubled(int value){ return value * 2; }\n' > "$w/a.c"
+printf 'int doubled(int value){ return external(value) * 2; }\n' > "$w/a.c"
 printf 'int tripled(int value){ return value * 3; }\n' > "$w/a.cpp"
 printf 'class Sample { public int Twice(int value){ return value * 2; } }\n' > "$w/a.cs"
 printf 'def squared(value):\n    return value * value\n' > "$w/a.py"
 printf 'function increment(value: number): number { return value + 1; }\n' > "$w/a.ts"
-printf 'CREATE TABLE widgets (id integer);\n' > "$w/a.sql"
+printf 'CREATE TABLE widgets (id integer);\nSELECT widgets FROM widgets;\n' > "$w/a.sql"
 for spec in 'c:function_definition:doubled' 'cpp:function_definition:tripled' 'cs:method_declaration:Twice' \
             'py:function_definition:squared' 'ts:function_declaration:increment' 'sql:create_table:widgets'; do
   IFS=: read -r ext kind name <<< "$spec"
   out=$("$L" ingest --claims-tsv -j 1 -s workspace-code "$w/a.$ext" 2>&1 | tr -d '\r') || fail "$ext claims: $out"
   grep -Fq "[$kind, " <<< "$out" || fail "$ext lost its typed declaration: $out"
   grep -Fq $'\tdeclared identifier\t'"$name" <<< "$out" || fail "$ext lost its declared identifier: $out"
+  grep -Fq $'\treferenced identifier\t' <<< "$out" || fail "$ext did not descend into references: $out"
   grep -q 'mismatched 0' <<< "$out" || fail "$ext did not recompose: $out"
   grep -q 'unresolved obligations: 0 ' <<< "$out" || fail "$ext left unresolved fields: $out"
   if [ "$ext" = c ]; then
     grep -Fq '[parameter_declaration, int value]' <<< "$out" || fail "C parameter declaration: $out"
     grep -Fq $'\tparameter signature\t(int value)' <<< "$out" || fail "C parameter signature: $out"
+    grep -Fq $'\treferenced identifier\texternal' <<< "$out" || fail "C call target: $out"
   fi
 done
 echo 'workspace-code: typed declarations and semantic identifiers retained across C, C++, C#, Python, TypeScript and SQL'

@@ -2,7 +2,7 @@
 name workspace-cpp
 match *.cpp *.cc *.cxx *.c++ *.hpp *.hh *.hxx *.inl *.ipp
 format code_cpp
-content source name parameters parameters_source implementation signature_source members_source
+content source name referenced_identifier implementation_source parameters parameters_source implementation signature_source members_source
 thing packaging source
 thing function_definition literal function_definition source
 thing struct_specifier literal struct_specifier source
@@ -25,3 +25,5 @@ attest class_specifier name parameters implementation signature members members_
 thing parameter_declaration literal parameter_declaration source
 attest parameter_declaration name
 attest signature parameters
+relation "referenced identifier" reference
+attest reference .
