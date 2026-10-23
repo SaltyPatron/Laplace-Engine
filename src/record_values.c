@@ -328,8 +328,14 @@ static Ref thing_scope(RecordWorker *k,const SemanticRecord *t,int32_t g,const T
     return value;
 }
 
-static Ref thing_operand(const Thing *thing,Ref value){
-    if (!thing->preserve || value.said!=LP_SAID_TUPLE) value.said=0;
+static Ref thing_operand(const Thing *thing,Ref value,const Say *program,const SemanticValue *field){
+    if (value.said==LP_SAID_TUPLE) {
+        const Dis *dis=field ? record_field_disposition(program,field) : NULL;
+        /* A typed range is its two bounds, even inside a compound identity.
+         * Keep that boundary without requiring a corpus-specific modifier. */
+        if (thing->preserve || (dis && dis->what==D_RANGE)) return value;
+    }
+    value.said=0;
     return value;
 }
 static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const Thing *th, Ref *out, int depth){
@@ -361,14 +367,14 @@ static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const 
             for (int z = 0; z < th->n; z++) { int ref = th->name[z][0] == '>';
                 if (ref) {
                     KeyField field;
-                    if (referred_field(k, t, g, th->name[z] + 1, &field, depth) && field.has_value) p[np++]=thing_operand(th,field.value);
+                    if (referred_field(k, t, g, th->name[z] + 1, &field, depth) && field.has_value) p[np++]=thing_operand(th,field.value,k->s,NULL);
                     else if (th->required[z]) return 0;
                     continue;
                 }
                 int32_t c = record_select_first(t, g, th->name[z]); if (c < 0) { if (th->required[z]) return 0; continue; }
                 const SemanticValue *cn = &t->n[c]; if (cn->kind == S_GROUP && record_field_first(cn) >= 0 && record_field_next(&t->n[record_field_first(cn)]) < 0 && t->n[record_field_first(cn)].kind == S_TEXT) cn = &t->n[record_field_first(cn)];
                 if (cn->kind != S_GROUP && (record_value_empty(k->s, cn) || !cn->vlen)) { if (th->required[z]) return 0; continue; }
-                if (record_value(k, t, c, &p[np], depth)) { p[np]=thing_operand(th,p[np]); np++; continue; }
+                if (record_value(k, t, c, &p[np], depth)) { p[np]=thing_operand(th,p[np],k->s,&t->n[c]); np++; continue; }
                 if (th->required[z]) return 0;
                 record_obligation_note(k, 'o', &record_diagnostic_labels[DIAG_UNRESOLVED_KEY], (const uint8_t *)th->name[z], record_selector_code(th->name[z])->source_length, NULL, 0); }     /* said, never dropped */
             if (!np) return 0;
@@ -392,7 +398,7 @@ static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const 
                     char *text = form.k[0]; if (th->space[z]) for (char *q = text; *q; q++) if (*q == th->space[z]) *q = ' ';
                     p[z] = record_text((const uint8_t *)text, strlen(text));
                 } else { if (!field.has_value) return 0; p[z] = field.value; }
-                p[z]=thing_operand(th,p[z]); continue;
+                p[z]=thing_operand(th,p[z],k->s,NULL); continue;
             }
             int32_t c = record_select_first(t, g, th->name[z]); if (c < 0) return 0;
             if (th->form[z].has_re || th->space[z]) {                        /* the part's text as the source's notation parts it: what it writes, never what it is disposed as */
@@ -415,7 +421,7 @@ static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const 
                 if (cn->kind == S_TEXT && cn->vlen) p[z] = record_text(cn->val, cn->vlen); else return 0;
             } else return 0;
         }
-            p[z]=thing_operand(th,p[z]); }
+            p[z]=thing_operand(th,p[z],k->s,&t->n[c]); }
         Ref X = th->n == 1 ? p[0] : said_tuple(compose(p, (uint32_t)th->n, ref_above(p, (size_t)th->n)));      /* named by several parts together: the path of them */
         *out = thing_scope(k,t,g,th,X,depth); return 1; }
 }
