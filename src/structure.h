@@ -190,7 +190,7 @@ void layout_bind_names(Layout *layout, s_compile_name_fn compile, const void *pr
 enum { S_OPEN = 1, S_FIELD, S_CLOSE, S_FINISH };
 enum { S_FIELD_JOIN = 1, S_FIELD_LIST = 2, S_FIELD_TRIM = 4, S_FIELD_ALIAS = 8, S_FIELD_DERIVED = 16,
        S_FIELD_SAME_TIER = 32, S_FIELD_PARTS = 64, S_FIELD_TIER = 128, S_FIELD_CONTEXT = 256, S_FIELD_RECORD = 512,
-       S_FIELD_PAYLOAD = 1024 };
+       S_FIELD_PAYLOAD = 1024, S_FIELD_CAPTURE = 2048 };
 enum { S_VISIT_OK = 1, S_VISIT_RELEASE = 2, S_VISIT_SKIP = 4, S_VISIT_RETAIN = 8 };
 typedef struct {
     TSNode source;
@@ -240,6 +240,8 @@ typedef struct {
     SScopeStream *stream;
     size_t header_mark;
     uint64_t ordinal;
+    uint32_t surface_end;
+    TSPoint surface_point;
     uint8_t started, done, failed, header_pending, descend;
 } SRecords;
 enum { S_RECORD_VALUE, S_RECORD_RESERVE, S_RECORD_COMPLETE };

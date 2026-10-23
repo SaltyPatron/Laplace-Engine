@@ -1553,7 +1553,9 @@ int s_record_next(SRecords *records, SRecord *record){
     for (;;) {
         TSNode node = ts_tree_cursor_current_node(records->cursor); TSSymbol symbol = ts_node_symbol(node);
         if (ts_node_start_byte(node) >= records->limit) { records->done = 1; return 0; }
-        int selected = ts_node_is_named(node) && (!grammar->record_children || ts_node_eq(ts_node_parent(node),ts_tree_root_node(records->tree))) && (!grammar->record_symbols ||
+        int empty_surface = grammar->record_children && grammar->record_fallback.capture[0] &&
+            ts_node_eq(node,ts_tree_root_node(records->tree)) && !ts_node_named_child_count(node);
+        int selected = ts_node_is_named(node) && (empty_surface || !grammar->record_children || ts_node_eq(ts_node_parent(node),ts_tree_root_node(records->tree))) && (!grammar->record_symbols ||
             (symbol < grammar->symbol_count && grammar->record_symbols[symbol])) && record_matches(records, node);
         int header = 0;
         if (!selected && grammar->record_name_count && ts_node_is_named(node)) {
@@ -1574,7 +1576,20 @@ int s_record_next(SRecords *records, SRecord *record){
             records->descend = (uint8_t)header;
             const SContext *context = records->layout->g.has_context ? record_context_snapshot(records, node) : NULL;
             if (records->failed) return 0;
-            *record = (SRecord){.node=node, .range=node_range(node), .ordinal=records->ordinal++, .header=(uint8_t)header, .context=context}; return 1;
+            TSRange range = node_range(node);
+            if (grammar->record_children && grammar->record_fallback.capture[0]) {
+                range.start_byte = records->surface_end; range.start_point = records->surface_point;
+                TSNode next = ts_node_next_named_sibling(node);
+                if (ts_node_is_null(next) || ts_node_start_byte(next) >= records->limit) {
+                    for (uint32_t i = range.end_byte; i < records->limit; i++) {
+                        if (records->source[i] == '\n') { range.end_point.row++; range.end_point.column=0; }
+                        else range.end_point.column++;
+                    }
+                    range.end_byte = records->limit;
+                }
+                records->surface_end = range.end_byte; records->surface_point = range.end_point;
+            }
+            *record = (SRecord){.node=node, .range=range, .ordinal=records->ordinal++, .header=(uint8_t)header, .context=context}; return 1;
         }
         if (!record_advance(records, 1)) return 0;
     }
@@ -1605,6 +1620,7 @@ int s_records_window(SRecords *records, const Layout *layout, const uint8_t *sou
     *consumed = prefix; records->limit = prefix;
     ts_tree_cursor_reset(records->cursor, root);
     records->started = records->done = records->failed = records->descend = 0; records->ordinal = 0;
+    records->surface_end = 0; records->surface_point = (TSPoint){0,0};
     return 1;
 }
 
@@ -1889,7 +1905,7 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
                 SField captured={.source=frame->node,.range=field.range,.name=(const uint8_t *)rule->capture,
                     .name_length=rule->capture_length,.value=input->src+ts_node_start_byte(frame->node),
                     .value_length=ts_node_end_byte(frame->node)-ts_node_start_byte(frame->node),
-                    .bindings=rule->capture_bindings,.grammar=layout->g.grammar_id,.kind=S_TEXT};
+                    .bindings=rule->capture_bindings,.grammar=layout->g.grammar_id,.kind=S_TEXT,.flags=S_FIELD_CAPTURE};
                 if(!visit(sink,S_FIELD,&captured)){valid=0;break;}
             }
             if (rule->numbered[0]) {
@@ -2453,6 +2469,10 @@ static int cursor_record(const Layout *layout, TSNode root, TSRange range, int h
     int retained = 0;
     if (valid) {
         SField end = {.source=root, .range=range, .arena_begin=mark, .grammar=layout->g.grammar_id};
+        if (layout->g.record_children && layout->g.record_fallback.capture[0]) {
+            end.value = source + range.start_byte; end.value_length = range.end_byte-range.start_byte;
+            end.flags |= S_FIELD_CAPTURE;
+        }
         int result = visit(sink, S_FINISH, &end);
         valid = (result & S_VISIT_OK) != 0; retained = valid && (result & S_VISIT_RETAIN);
     }

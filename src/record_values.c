@@ -442,6 +442,7 @@ int record_names_identity(RecordWorker *k, const SemanticRecord *t, int32_t g, c
 
 int record_entity(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out){
     const SemanticValue *x = &t->n[c]; const Say *s = k->s; const SemanticValue *up = x->parent >= 0 ? &t->n[x->parent] : NULL;
+    if (x->kind == S_GROUP && x->capture) { *out = record_text(x->val, x->vlen); return 1; }
     if (x->kind != S_GROUP) {
         if (record_value_empty(s, x)) return 0;
         if (up && up->kind == S_GROUP && up->tier == x->tier && up->nlen) {       /* a part of a part */
@@ -459,6 +460,12 @@ int record_entity(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out)
         return record_value(k, t, c, out, 0);                                    /* a reference: the thing it names, or nothing */
     }
     const Dis *d = x->nlen ? record_field_disposition(s, x) : NULL; if (d && (d->what == D_OMIT || d->what == D_METADATA)) return 0;
+    /* A capture is the complete byte surface of this grammar-bounded group.
+     * Its extracted semantic fields still produce their own claims, but are
+     * not appended to the surface a second time when realizing the record. */
+    for (int32_t q = record_field_first(x); q >= 0; q = record_field_next(&t->n[q])) {
+        if (t->n[q].capture) { *out = semantic_text_ref(k, &t->n[q]); return 1; }
+    }
     record_note_dropped(k, t, (uint32_t)c, 0);
     size_t mark = scratch_mark();
     Ref stack[64], *kid = x->arity <= 64 ? stack : scratch_alloc(sizeof(Ref) * x->arity); uint32_t n = 0;
