@@ -1,14 +1,13 @@
 name wordframenet-xwfn
-# XWFN/eXtendedWFN: Extended WordFrameNet frame alignments to WordNet words, parts of speech, and synset offsets.
+# XWFN/eXtendedWFN uses the same frame/lexical-row packaging as WFN.
+# Its rows usually have no definition; absence adds no synthetic operand.
 match eXtendedWFN
-witness eXtendedWFN
-lineage WordFrameNet
-class AcademicCurated
-tier block by \n\n
-names frame row...
-tier line by \n
-part frame by space pieces 2
-content frame row
-thing block frame/2
-attest block row
-value - row
+format frame_lexicon
+
+thing frame header/name
+type header.name fnframe node
+content *
+thing reference literal WordNet literal 1.6 offset category
+thing lexicalization preserve spelling space _ literal eng ^entry/reference
+thing entry resolved preserve ^frame/header/name required lexicalization required pos required annotation definition
+itself entry

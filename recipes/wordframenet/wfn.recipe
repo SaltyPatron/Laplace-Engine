@@ -1,13 +1,21 @@
 name wordframenet-wfn
-# WFN/WordFrameNet: FrameNet frames aligned to WordNet words, parts of speech, synset offsets, and glosses.
+# WFN/WordFrameNet: each frame header scopes its lexical rows, including
+# rows separated by blank lines. Source: adimen.ehu.eus/web/WordFrameNet;
+# Laparra/Rigau RANLP2009, table 1 (WordNet 1.6 offsets, not PWN3.0 keys).
 match WordFrameNet
-witness WordFrameNet
-class AcademicCurated
-tier block by \n\n
-names frame row...
-tier line by \n
-part frame by space pieces 2
-content frame row
-thing block frame/2
-attest block row
-value - row
+format frame_lexicon
+
+thing frame header/name
+type header.name fnframe node
+content *
+# A reference retains both its numeric offset and syntactic category, qualified
+# by the edition the source used. It is not a guessed ILI/highway crosswalk.
+thing reference literal WordNet literal 1.6 offset category
+# Reuse the lexical-sense composition used by the WordNet recipes: surface,
+# language and concept. The English language is declared by the source paper.
+# WordNet's lexical spelling writes underscores for spaces.
+thing lexicalization preserve spelling space _ literal eng ^entry/reference
+# Each row is one alignment, with any source annotation and definition kept
+# in that context. The pipe-form row's numeric annotation is never a score.
+thing entry resolved preserve ^frame/header/name required lexicalization required pos required annotation definition
+itself entry
