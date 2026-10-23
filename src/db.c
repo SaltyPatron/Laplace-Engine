@@ -402,6 +402,50 @@ static void carrier_bytes(lp_mask value,uint8_t out[12]){
 static int hilbert_order(const void *a,const void *b){
     const Row *x=a,*y=b;return x->hilbert<y->hilbert?-1:x->hilbert>y->hilbert?1:memcmp(x->node->id.b,y->node->id.b,16);
 }
+/* Rejected COPY input is retained. Identify the actual violated invariant
+ * without weakening validation or dumping the batch/content into the log.
+ * This set query runs only after a failed merge, outside its rolled-back
+ * statement; it never changes either the caller's staging or public rows. */
+static void merge_failure(PGconn *pg, const char *entities, const char *paths){
+    fprintf(stderr,"stage merge: %s",PQerrorMessage(pg));
+    char sql[8192];
+    int length=snprintf(sql,sizeof sql,
+        "WITH rejected(reason,id,detail) AS ("
+        " SELECT 'duplicate entity',id,'rows='||count(*) FROM %s GROUP BY id HAVING count(*)<>1"
+        " UNION ALL SELECT 'duplicate path',entity,'rows='||count(*) FROM %s GROUP BY entity HAVING count(*)<>1"
+        " UNION ALL SELECT 'invalid entity carrier/tier',id,'tier='||tier||' mask='||mask FROM %s"
+        " WHERE tier NOT BETWEEN 1 AND 255 OR NOT laplace_mask_valid(mask)"
+        " UNION ALL SELECT 'invalid path carrier/tier',entity,'tier='||tier||' mask='||mask FROM %s"
+        " WHERE tier NOT BETWEEN 1 AND 255 OR NOT laplace_mask_valid(mask)"
+        " UNION ALL SELECT 'entity identity conflict',s.id,"
+        " 'coord_equal='||(ST_AsEWKB(s.coord)=ST_AsEWKB(d.coord))||' hilbert_equal='||(s.hilbert=d.hilbert)"
+        " ||' staged='||ST_AsEWKT(s.coord)||' recorded='||ST_AsEWKT(d.coord)"
+        " FROM %s s JOIN public.entity d USING(id)"
+        " WHERE ST_AsEWKB(s.coord)<>ST_AsEWKB(d.coord) OR s.hilbert<>d.hilbert"
+        " UNION ALL SELECT 'path identity conflict',s.entity,"
+        " 'ids_equal='||(laplace_vertex_ids(s.path)=laplace_vertex_ids(d.path))"
+        " ||' hilbert_equal='||(s.hilbert=d.hilbert)"
+        " ||' staged_vertices='||laplace_path_length(s.path)||' recorded_vertices='||laplace_path_length(d.path)"
+        " ||' staged_prefix='||encode(substring(ST_AsEWKB(s.path) from 1 for 160),'hex')"
+        " ||' recorded_prefix='||encode(substring(ST_AsEWKB(d.path) from 1 for 160),'hex')"
+        " FROM %s s JOIN public.physicality d ON d.entity=s.entity"
+        " WHERE ST_AsEWKB(s.path)<>ST_AsEWKB(d.path) OR s.hilbert<>d.hilbert"
+        " UNION ALL SELECT 'entity without path',s.id,'' FROM %s s"
+        " LEFT JOIN %s batch ON batch.entity=s.id LEFT JOIN public.physicality d ON d.entity=s.id"
+        " WHERE batch.entity IS NULL AND d.entity IS NULL"
+        " UNION ALL SELECT 'path without entity',s.entity,'' FROM %s s"
+        " LEFT JOIN %s batch ON batch.id=s.entity LEFT JOIN public.entity d ON d.id=s.entity"
+        " WHERE batch.id IS NULL AND d.id IS NULL)"
+        " SELECT reason,id::text,detail FROM rejected ORDER BY reason,id LIMIT 8",
+        entities,paths,entities,paths,entities,paths,entities,paths,paths,entities);
+    if(length<0 || (size_t)length>=sizeof sql){fputs("stage rejection diagnostic exceeded its bound\n",stderr);return;}
+    PGresult *detail=PQexec(pg,sql);
+    if(PQresultStatus(detail)==PGRES_TUPLES_OK){
+        for(int row=0;row<PQntuples(detail);row++)
+            fprintf(stderr,"  stage rejection: %s id=%s %s\n",PQgetvalue(detail,row,0),PQgetvalue(detail,row,1),PQgetvalue(detail,row,2));
+    }else fprintf(stderr,"stage rejection diagnostic: %s",PQerrorMessage(pg));
+    PQclear(detail);
+}
 static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
     lp_copy copy={0}; char sql[256]; uint8_t geometry[128],mask[12];
     statement(pg,"BEGIN");
@@ -458,7 +502,7 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         for(int lane=0;lane<lanes;lane++)copy_rows(writer.copy[lane],rows,count*(size_t)lane/(size_t)lanes,count*(size_t)(lane+1)/(size_t)lanes);
         char sql[320];snprintf(sql,sizeof sql,"SELECT * FROM laplace_merge_stage('%s'::regclass,'%s'::regclass)",writer.entity,writer.path);
         PGresult *q=PQexec(writer.copy[0],sql);
-        if(PQresultStatus(q)!=PGRES_TUPLES_OK){fprintf(stderr,"stage merge: %s",PQerrorMessage(writer.copy[0]));exit(1);}
+        if(PQresultStatus(q)!=PGRES_TUPLES_OK){merge_failure(writer.copy[0],writer.entity,writer.path);PQclear(q);exit(1);}
         st->ent_rows+=strtoull(PQgetvalue(q,0,0),NULL,10);st->phy_rows+=strtoull(PQgetvalue(q,0,1),NULL,10);PQclear(q);
     }
     free(rows);TABLE_EACH(x)if(x->keep==1 || x->keep==2){bool fresh;lp_idmap_put(writer.known,&x->id,&fresh);}
@@ -523,7 +567,7 @@ int cmd_merge(int argc,char **argv){
     if(at<argc){fputs("usage: laplace merge [-d conninfo]\n",stderr);return 2;}
     PGconn *pg=db_connect(conninfo);statement(pg,"SELECT laplace_ensure_stage()");
     PGresult *q=PQexec(pg,"SELECT * FROM laplace_merge_stage('stage.entity','stage.physicality')");
-    if(PQresultStatus(q)!=PGRES_TUPLES_OK){fprintf(stderr,"stage merge: %s",PQerrorMessage(pg));PQclear(q);PQfinish(pg);return 1;}
+    if(PQresultStatus(q)!=PGRES_TUPLES_OK){merge_failure(pg,"stage.entity","stage.physicality");PQclear(q);PQfinish(pg);return 1;}
     printf("merged %s entities, %s paths, %s existing rows updated\n",PQgetvalue(q,0,0),PQgetvalue(q,0,1),PQgetvalue(q,0,2));
     PQclear(q);PQfinish(pg);return 0;
 }
