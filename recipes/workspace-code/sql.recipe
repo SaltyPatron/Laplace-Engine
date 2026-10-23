@@ -18,11 +18,13 @@ relation "parameter signature" signature.parameters
 relation "declared members" members.members_source
 relation "declared identifier" members.name
 relation "declared members" members_source
-attest create_table name parameters implementation signature members members_source
-attest create_function name parameters implementation signature members members_source
-attest create_procedure name parameters implementation signature members members_source
-attest create_view name parameters implementation signature members members_source
-attest create_type name parameters implementation signature members members_source
+attest create_table name parameters signature members members_source
+attest create_function name parameters signature members members_source
+attest create_procedure name parameters signature members members_source
+attest create_view name parameters signature members members_source
+attest create_type name parameters signature members members_source
 
 relation "referenced identifier" reference
 attest reference .
+# A body is attested as its captured surface; nested reference groups speak separately.
+attest implementation .

@@ -16,9 +16,11 @@ relation "parameter signature" signature.parameters
 relation "declared members" members.members_source
 relation "declared identifier" members.name
 relation "declared members" members_source
-attest function_declaration name parameters implementation signature members members_source
-attest class_declaration name parameters implementation signature members members_source
-attest method_definition name parameters implementation signature members members_source
+attest function_declaration name parameters signature members members_source
+attest class_declaration name parameters signature members members_source
+attest method_definition name parameters signature members members_source
 
 relation "referenced identifier" reference
 attest reference .
+# A body is attested as its captured surface; nested reference groups speak separately.
+attest implementation .
