@@ -1,13 +1,14 @@
+# Tree-sitter declaration kinds and complete declaration bytes are content, not relation verbs.
 name workspace-sql
 match *.sql
 format code_sql
 content source name parameters implementation signature_source members_source
 thing packaging source
-thing create_table source
-thing create_function source
-thing create_procedure source
-thing create_view source
-thing create_type source
+thing create_table literal create_table source
+thing create_function literal create_function source
+thing create_procedure literal create_procedure source
+thing create_view literal create_view source
+thing create_type literal create_type source
 relation "declared identifier" name
 relation "parameter signature" parameters
 relation "implemented by" implementation

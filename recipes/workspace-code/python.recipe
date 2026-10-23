@@ -1,10 +1,11 @@
+# Tree-sitter declaration kinds and complete declaration bytes are content, not relation verbs.
 name workspace-python
 match *.py *.pyi
 format code_python
 content source name parameters implementation signature_source members_source
 thing packaging source
-thing function_definition source
-thing class_definition source
+thing function_definition literal function_definition source
+thing class_definition literal class_definition source
 relation "declared identifier" name
 relation "parameter signature" parameters
 relation "implemented by" implementation
