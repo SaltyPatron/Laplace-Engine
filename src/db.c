@@ -30,8 +30,10 @@ static void start_loader(const char *conninfo, int requested){
     PGconn *control = db_connect(conninfo);
     PGresult *q = PQexec(control, "SELECT greatest(1, current_setting('max_connections')::int"
         " - current_setting('superuser_reserved_connections')::int"
-        " - current_setting('reserved_connections')::int - (SELECT count(*) FROM pg_stat_activity) - 4)");
+        " - current_setting('reserved_connections')::int - (SELECT count(*) FROM pg_stat_activity) - 4),"
+        " to_regprocedure('public.laplace_path_enrich(geometry,geometry)') IS NOT NULL");
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "ingest connections: %s", PQerrorMessage(control)); exit(1); }
+    if(strcmp(PQgetvalue(q,0,1),"t")){fputs("ingest requires the installed laplace 1.25 annotation merge upgrade\n",stderr);PQclear(q);PQfinish(control);exit(1);}
     int available = atoi(PQgetvalue(q, 0, 0)); PQclear(q);
     int cores = omp_get_max_threads();
     if (requested <= 0 || requested > cores) requested = cores;
@@ -57,7 +59,7 @@ static void start_loader(const char *conninfo, int requested){
     snprintf(sql, sizeof sql,
         "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.physicality INCLUDING DEFAULTS);"
-        "CREATE UNLOGGED TABLE %s (id blake3 NOT NULL,tier smallint NOT NULL,entity_mask bit(64) NOT NULL,path_mask bit(64) NOT NULL);"
+        "CREATE UNLOGGED TABLE %s (id blake3 NOT NULL,tier smallint NOT NULL,entity_mask bit(64) NOT NULL,path_mask bit(64) NOT NULL,annotations geometry);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (LIKE public.witness INCLUDING DEFAULTS);"
@@ -410,7 +412,12 @@ static int hilbert_order(const void *a,const void *b){
  * statement; it never changes either the caller's staging or public rows. */
 static void merge_failure(PGconn *pg, const char *entities, const char *paths, const char *error){
     fprintf(stderr,"stage merge: %s",error);
-    char sql[8192];
+    char sql[8192],annotations[1024]={0};
+    if(writer.carriers[0])snprintf(annotations,sizeof annotations,
+        " UNION ALL SELECT 'recorded path annotation conflict',c.id,"
+        " 'incoming_prefix='||encode(substring(ST_AsEWKB(c.annotations) from 1 for 160),'hex')"
+        " FROM %s c JOIN public.physicality p ON p.entity=c.id"
+        " WHERE c.annotations IS NOT NULL AND laplace_path_enrich(p.path,c.annotations) IS NULL",writer.carriers);
     int length=snprintf(sql,sizeof sql,
         "WITH rejected(reason,id,detail) AS ("
         " SELECT 'duplicate entity',id,'rows='||count(*) FROM %s GROUP BY id HAVING count(*)<>1"
@@ -431,17 +438,17 @@ static void merge_failure(PGconn *pg, const char *entities, const char *paths, c
         " ||' staged_prefix='||encode(substring(ST_AsEWKB(s.path) from 1 for 160),'hex')"
         " ||' recorded_prefix='||encode(substring(ST_AsEWKB(d.path) from 1 for 160),'hex')"
         " FROM %s s JOIN public.physicality d ON d.entity=s.entity"
-        " WHERE ST_AsEWKB(s.path)<>ST_AsEWKB(d.path) OR s.hilbert<>d.hilbert"
+        " WHERE (ST_AsEWKB(s.path)<>ST_AsEWKB(d.path) AND laplace_path_enrich(d.path,s.path) IS NULL) OR s.hilbert<>d.hilbert"
         " UNION ALL SELECT 'entity without path',s.id,'' FROM %s s"
         " LEFT JOIN %s batch ON batch.entity=s.id LEFT JOIN public.physicality d ON d.entity=s.id"
         " WHERE batch.entity IS NULL AND d.entity IS NULL"
         " UNION ALL SELECT 'path without entity',s.entity,'' FROM %s s"
         " LEFT JOIN %s batch ON batch.id=s.entity LEFT JOIN public.entity d ON d.id=s.entity"
-        " WHERE batch.id IS NULL AND d.id IS NULL)"
+        " WHERE batch.id IS NULL AND d.id IS NULL%s)"
         ",sample AS MATERIALIZED (SELECT reason,id,detail FROM rejected ORDER BY reason,id LIMIT 8)"
         " SELECT s.reason,s.id::text,s.detail,ST_AsEWKB(p.path) FROM sample s"
         " LEFT JOIN public.physicality p ON p.entity=s.id ORDER BY s.reason,s.id",
-        entities,paths,entities,paths,entities,paths,entities,paths,paths,entities);
+        entities,paths,entities,paths,entities,paths,entities,paths,paths,entities,annotations);
     if(length<0 || (size_t)length>=sizeof sql){fputs("stage rejection diagnostic exceeded its bound\n",stderr);return;}
     PGresult *detail=PQexec(pg,sql);
     if(PQresultStatus(detail)==PGRES_TUPLES_OK){
@@ -460,6 +467,22 @@ static void merge_failure(PGconn *pg, const char *entities, const char *paths, c
     }else fprintf(stderr,"stage rejection diagnostic: %s",PQerrorMessage(pg));
     PQclear(detail);
 }
+typedef struct { lp_id *ids;uint64_t *runs;uint32_t *spare;uint8_t *bytes;size_t capacity,byte_capacity; } PathEncoding;
+static size_t encode_node_path(const Node *x,PathEncoding *path){
+    if(x->nv>path->capacity){path->capacity=x->nv;path->ids=xrealloc(path->ids,path->capacity*sizeof *path->ids);
+        path->runs=xrealloc(path->runs,path->capacity*sizeof *path->runs);path->spare=xrealloc(path->spare,path->capacity*sizeof *path->spare);}
+    for(uint32_t j=0;j<x->nv;j++){const Vtx *v=&VTX[x->voff+j];path->ids[j]=v->id;path->runs[j]=v->m;path->spare[j]=v->spare;}
+    size_t size=lp_ewkb_runs_spare(path->ids,path->runs,path->spare,x->nv,NULL,0);
+    if(!size){
+        char id[33];id_text(&x->id,id);fprintf(stderr,"invalid native path before COPY: entity=%s vertices=%u\n",id,x->nv);
+        for(uint32_t j=0;j<x->nv;j++)if(path->runs[j]>(UINT64_C(1)<<53)-1 || (path->spare[j]>>LP_SPARE_BITS))
+            fprintf(stderr,"  vertex=%u M=%llu spare=%u\n",j,(unsigned long long)path->runs[j],path->spare[j]);
+        exit(1);
+    }
+    if(size>path->byte_capacity){path->byte_capacity=size;path->bytes=xrealloc(path->bytes,size);}
+    if(lp_ewkb_runs_spare(path->ids,path->runs,path->spare,x->nv,path->bytes,size)!=size){fputs("native path size changed during COPY\n",stderr);exit(1);}
+    return size;
+}
 static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
     lp_copy copy={0}; char sql[256]; uint8_t geometry[128],mask[12];
     statement(pg,"BEGIN");
@@ -477,41 +500,34 @@ static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
     copy_close(&copy);lp_buf_free(&copy.buf);copy=(lp_copy){0};
     snprintf(sql,sizeof sql,"COPY %s (entity,tier,hilbert,path,mask) FROM STDIN (FORMAT binary)",writer.path);
     copy_open(&copy,pg,sql);
-    lp_id *ids=NULL;uint64_t *runs=NULL;uint32_t *spare=NULL;uint8_t *path=NULL;size_t capacity=0,path_capacity=0;
+    PathEncoding path={0};
     for(size_t i=lo;i<hi;i++){
         const Node *x=rows[i].node;
         if(x->keep!=1)continue;
-        if(x->nv>capacity){capacity=x->nv;ids=xrealloc(ids,capacity*sizeof *ids);runs=xrealloc(runs,capacity*sizeof *runs);spare=xrealloc(spare,capacity*sizeof *spare);}
-        for(uint32_t j=0;j<x->nv;j++){const Vtx *v=&VTX[x->voff+j];ids[j]=v->id;runs[j]=v->m;spare[j]=v->spare;}
-        size_t size=lp_ewkb_runs_spare(ids,runs,spare,x->nv,NULL,0);
-        if (!size) {
-            char id[33]; id_text(&x->id,id); fprintf(stderr,"invalid native path before COPY: entity=%s vertices=%u\n",id,x->nv);
-            for (uint32_t j=0; j<x->nv; j++) if (runs[j]>(UINT64_C(1)<<53)-1 || (spare[j]>>LP_SPARE_BITS))
-                fprintf(stderr,"  vertex=%u M=%llu spare=%u\n",j,(unsigned long long)runs[j],spare[j]);
-            exit(1);
-        }
-        if(size>path_capacity){path_capacity=size;path=xrealloc(path,path_capacity);}
-        if (lp_ewkb_runs_spare(ids,runs,spare,x->nv,path,size)!=size) { fputs("native path size changed during COPY\n",stderr); exit(1); }
+        size_t size=encode_node_path(x,&path);
         carrier_bytes(x->kind,mask);
         lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
         lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));
-        lp_copy_field(&copy,path,(uint32_t)size);lp_copy_field(&copy,mask,sizeof mask);
+        lp_copy_field(&copy,path.bytes,(uint32_t)size);lp_copy_field(&copy,mask,sizeof mask);
     }
     copy_close(&copy);lp_buf_free(&copy.buf);
-    /* A recorded trunk amputates its complete path. A later use can add a
-     * carrier, but must not resend that use's contextual M/spare annotations
-     * or recomputed coordinates as another copy of the recorded identity. */
+    /* Recorded content stays pruned. Carrier-only uses send no path. A use
+     * with annotations supplies only that metadata candidate; the Native
+     * extension enriches absent annotations over the identical ordered IDs
+     * and runs, rejecting conflicting outcomes, positions or scores. */
     copy=(lp_copy){0};
-    snprintf(sql,sizeof sql,"COPY %s (id,tier,entity_mask,path_mask) FROM STDIN (FORMAT binary)",writer.carriers);
+    snprintf(sql,sizeof sql,"COPY %s (id,tier,entity_mask,path_mask,annotations) FROM STDIN (FORMAT binary)",writer.carriers);
     copy_open(&copy,pg,sql);
     for(size_t i=lo;i<hi;i++){
         const Node *x=rows[i].node;if(x->keep!=2)continue;
         uint8_t path_mask[12];carrier_bytes(rows[i].lexical,mask);carrier_bytes(x->kind,path_mask);
-        lp_copy_row(&copy,4);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
+        lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
         lp_copy_field(&copy,mask,sizeof mask);lp_copy_field(&copy,path_mask,sizeof path_mask);
+        int annotated=0;for(uint32_t j=0;j<x->nv && !annotated;j++)annotated=(VTX[x->voff+j].m>>LP_M_RUN_BITS)!=0 || VTX[x->voff+j].spare!=0;
+        if(annotated){size_t size=encode_node_path(x,&path);lp_copy_field(&copy,path.bytes,(uint32_t)size);}else lp_copy_null(&copy);
     }
     copy_close(&copy);lp_buf_free(&copy.buf);
-    free(ids);free(runs);free(spare);free(path);statement(pg,"COMMIT");
+    free(path.ids);free(path.runs);free(path.spare);free(path.bytes);statement(pg,"COMMIT");
 }
 int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     start_loader(conninfo,npg);table_kinds();
@@ -539,7 +555,7 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
             " SELECT c.id,c.tier,e.coord,e.hilbert,c.entity_mask FROM %s c"
             " LEFT JOIN public.entity e ON e.id=c.id;"
             "INSERT INTO %s(entity,tier,hilbert,path,mask)"
-            " SELECT c.id,c.tier,p.hilbert,p.path,c.path_mask FROM %s c"
+            " SELECT c.id,c.tier,p.hilbert,coalesce(c.annotations,p.path),c.path_mask FROM %s c"
             " LEFT JOIN public.physicality p ON p.entity=c.id;"
             "SELECT * FROM laplace_merge_stage('%s'::regclass,'%s'::regclass)",
             writer.entity,writer.carriers,writer.path,writer.carriers,writer.entity,writer.path);
