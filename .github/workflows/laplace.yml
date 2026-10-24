@@ -78,6 +78,7 @@ jobs:
 
       - name: Compile the recipe grammars from this revision
         run: |
+          . Laplace-Operations/laplace.env
           . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
           bash Laplace-Engine/tools/build_grammars.sh Laplace-Engine/recipes/formats/grammars "$LAPLACE_GRAMMARS"
       - name: Prepare canonical caches for this run from local Unicode and frozen manifests
