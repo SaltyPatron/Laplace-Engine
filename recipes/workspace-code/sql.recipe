@@ -2,7 +2,7 @@
 name workspace-sql
 match *.sql
 format code_sql
-content source name referenced_identifier implementation_source parameters implementation signature_source members_source
+content source name referenced_identifier implementation_source parameters implementation signature_source members_source code_fragment
 thing packaging source
 thing create_table literal create_table source
 thing create_function literal create_function source
@@ -19,8 +19,8 @@ relation "declared members" members.members_source
 relation "declared identifier" members.name
 relation "declared members" members_source
 attest create_table name parameters signature members members_source
-attest create_function name parameters signature members members_source
-attest create_procedure name parameters signature members members_source
+attest create_function name parameters implementation signature members members_source
+attest create_procedure name parameters implementation signature members members_source
 attest create_view name parameters signature members members_source
 attest create_type name parameters signature members members_source
 

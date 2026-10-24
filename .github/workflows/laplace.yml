@@ -80,6 +80,7 @@ jobs:
         run: |
           . Laplace-Operations/laplace.env
           . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
+          export LAPLACE_OPERATIONS="$GITHUB_WORKSPACE/Laplace-Operations"
           bash Laplace-Engine/tools/build_grammars.sh Laplace-Engine/recipes/formats/grammars "$LAPLACE_GRAMMARS"
       - name: Prepare canonical caches for this run from local Unicode and frozen manifests
         run: |
