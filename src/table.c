@@ -21,6 +21,14 @@
 Node *NODE; Vtx *VTX;
 const lp_tier0_record *T0;
 
+static __thread const File *reading_file;
+const File *table_reading_file(const File *file){
+    const File *previous = reading_file; reading_file = file; return previous;
+}
+static void input_error_prefix(void){
+    if (reading_file) fprintf(stderr, "%s: ", reading_file->path);
+}
+
 double now(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
 void *xrealloc(void *p, size_t n){ p = realloc(p, n ? n : 1); if (!p) { perror("realloc"); exit(1); } return p; }
 
@@ -371,6 +379,7 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
     if (!n) return lp_ref_compose(ch, 0, tier);
     static const lp_id absent = {{0}};
     for (uint32_t i=0; i<n; i++) if (lp_id_eq(&ch[i].id,&absent)) {
+        input_error_prefix();
         fprintf(stderr,"invalid scalar content or unresolved child at composition operand %u\n",i); exit(1);
     }
     if (n == 1) return ch[0];
@@ -457,7 +466,7 @@ Ref text_ref(Ctx *c, const uint8_t *s, size_t n){
      * must never introduce a second text decomposition or change its ID. */
     Ref r = lp_text_decompose(c, s, n, compose_sink, NULL); r.said = 0;
     static const lp_id absent = {{0}};
-    if (n && lp_id_eq(&r.id,&absent)) { fputs("invalid scalar content has no canonical text entity\n",stderr); exit(1); }
+    if (n && lp_id_eq(&r.id,&absent)) { input_error_prefix(); fputs("invalid scalar content has no canonical text entity\n",stderr); exit(1); }
     return r;
 }
 

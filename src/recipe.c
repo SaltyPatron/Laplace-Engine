@@ -681,7 +681,7 @@ static int recipe_input_error(void *context){
     } else if (ferror(input->plain)) { perror(input->file->path); input->failed = 1; }
     return input->failed;
 }
-void decompose_file(Ctx *c, File *f){
+static void decompose_input(Ctx *c, File *f){
     const Recipe *r = f->recipe;
     if (recipe_record_streamable(r)) {
         RecipeInput reader = {.file=f}; size_t length = strlen(f->path);
@@ -712,6 +712,11 @@ void decompose_file(Ctx *c, File *f){
         f->exact = file_matches_bytes(&f->trunk.id, src0, n);
     }
     free(src0);
+}
+void decompose_file(Ctx *c, File *f){
+    const File *previous = table_reading_file(f);
+    decompose_input(c, f);
+    table_reading_file(previous);
 }
 void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
     const Recipe *r = f->recipe;

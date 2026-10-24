@@ -306,6 +306,7 @@ void hw_edge(Hw *, const char *la, const char *ka, const char *lb, const char *k
 void highway_file(Ctx *, File *, Hw *);                                             /* a file read for the highway (recipe.c) */
 int  source_files(const Source *, Recipe *rec, int nrec, char ***paths, Recipe ***of);   /* a source's files its recipes read, in the order they are read (ingest.c) */
 void decompose_file(Ctx *, File *);
+const File *table_reading_file(const File *);                          /* thread-local input context for composition diagnostics; returns previous */
 void decompose_bytes(Ctx *, File *, uint8_t *src, size_t n, int first);     /* a stretch of a file that is read a stretch at a time */
 /* ---- a grammar that is no tree-sitter grammar: a reading the engine holds of its own, found by the name a recipe's
  * grammar line gives (grammars.c lists them). The recipe names it as it names any grammar; recipe.c names none. */
