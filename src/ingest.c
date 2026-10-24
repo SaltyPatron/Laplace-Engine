@@ -251,6 +251,7 @@ static void show_record_events(const File *file){
         putchar('\n');
     }
 }
+#include "ingest_progress.h"
 typedef struct {
     const char *conninfo; int threads, show, loading; File *file; Fold *fold; LoadStats *stats;
     uint64_t *events, windows; double database_seconds, *source_seconds;
@@ -279,6 +280,7 @@ static int stream_record_batch(void *context, const Ref *things, size_t n, const
     file->ev = previous; file->said = said; file->nsaid = nsaid; file->csaid = csaid;
     if (!result) {
         stream->windows++; table_reset();
+        progress_file("progress", file);
         if (stream->loading) fprintf(stderr, "\r  %'llu record windows, %'llu entities and %'llu paths persisted   ",
                 (unsigned long long)stream->windows, (unsigned long long)stream->stats->ent_rows, (unsigned long long)stream->stats->phy_rows);
         else fprintf(stderr, "\r  %'llu record windows inspected, %'llu claim events reported   ",
@@ -307,6 +309,7 @@ static int source_file_ready(void *context, File *file){
         }
     }
     if (source->loading && !streamed) source->database_seconds += now() - start;
+    progress_file("file-composed", file);
     if (!file->partial && getenv("LAPLACE_TRUNKS")) { char id[33]; id_text(&file->trunk.id, id); fprintf(stderr, "  trunk %s  %s\n", id, file->path); }
     return 0;
 }
@@ -698,6 +701,7 @@ int cmd_ingest(int argc, char **argv){
     uint64_t *size = calloc((size_t)nfiles, 8);
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
         size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
+    if (do_load && progress_open(files, nfiles, &st)) return 1;
     #define SHOW(F) do { if (show_claims) show_record_events(F); } while (0)
     /* What was read of a file is kept for its content; a file read to its end gets its trunk. */
     #define WHOLE(F) do { File *f_ = (F); if (!f_->partial) file_close(f_); } while (0)
@@ -716,6 +720,7 @@ int cmd_ingest(int argc, char **argv){
             .fold=fold, .stats=&st, .events=&nev, .source_seconds=&completion.database_seconds};
         if (streaming) {
             File *file = &files[a0]; file->emit = stream_record_batch; file->emit_context = stream;
+            progress_file("file-start", file);
             file_stream_begin(file); decompose_file(CTX[0], file);
             if (!file->partial) { file->emit = NULL; file->emit_context = NULL; }
             bytes += file->bytes; done++;
@@ -731,6 +736,7 @@ int cmd_ingest(int argc, char **argv){
                     if (load_file_keys(conninfo, &files[i])) return 1;
                 }
                 if (files[i].known || files[i].skipped) continue;
+                progress_file("file-start", &files[i]);
                 decompose_file(CTX[0], &files[i]); bytes += files[i].bytes; done++;
             }
             t_dec += now() - td;
@@ -745,6 +751,7 @@ int cmd_ingest(int argc, char **argv){
             if (files[i].known || files[i].skipped) continue;
             #pragma omp task firstprivate(i)
             {
+                progress_file("file-start", &files[i]);
                 decompose_file(CTX[omp_get_thread_num()], &files[i]);
                 #pragma omp critical
                 {
@@ -775,6 +782,8 @@ int cmd_ingest(int argc, char **argv){
             fold_events(fold, files + a0, b0 - a0);
             if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1;
         }
+        for (int i = a0; i < b0; i++) progress_file("file-composed", &files[i]);
+        progress_file("progress", &files[a0]);
         for (int i = a0; i < b0; i++) if (files[i].partial) { free(files[i].ev.e); files[i].ev = (Events){0}; }
         td = now(); double database_before = completion.database_seconds;
         if (say_source_poll(source_file_ready, &completion)) return 1;
@@ -826,6 +835,7 @@ int cmd_ingest(int argc, char **argv){
           if (source_trunk(one, files, nfiles, &trunk)) { File sf; memset(&sf, 0, sizeof sf); sf.path = one->name; sf.source = one; sf.trunk = trunk; sf.file = trunk; sf.has_file = 1;
               LoadStats ss = { 0 }; double ts = now(); if (load(conninfo, threads, &sf, 1, &ss)) return 1;
               printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded");
+              st.ent_rows += ss.ent_rows; st.phy_rows += ss.phy_rows;
               { char hx[33]; id_text(&trunk.id, hx); printf("  %-44s %s\n", "its ID, the witness", hx); }
               witness_trunk = trunk.id; witness_trust = trust; has_witness_trunk = 1; witness_supersedes = one->supersede;
               for (int i = 0; i < nfiles && !has_witness_lineage; i++) if (!files[i].skipped && files[i].has_lineage) { witness_lineage = files[i].lineage.id; has_witness_lineage = 1; } }
@@ -851,5 +861,6 @@ int cmd_ingest(int argc, char **argv){
         if (has_witness_trunk && witness_supersedes && forget_superseded(conninfo, threads, &witness_trunk)) return 1;
     }
     printf("\n== total %.1f s\n", now() - T);
+    progress_close(has_witness_trunk ? &witness_trunk : NULL);
     return mism ? 1 : 0;
 }
