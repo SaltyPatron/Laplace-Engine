@@ -71,5 +71,5 @@ printf 'BAD SURROGATE; D800\n' > "$scratch/invalid/NamedSequences.txt"
 if "$L" ingest --no-load -s unicode "$scratch/invalid/NamedSequences.txt" > "$scratch/invalid.log" 2>&1; then
     echo 'a surrogate was accepted as scalar sequence content' >&2; exit 1
 fi
-rg -q 'invalid scalar content' "$scratch/invalid.log"
+grep -q 'invalid scalar content' "$scratch/invalid.log"
 echo 'unicode-range-addresses: exact range endpoints, scalar floor and published witness passed'
