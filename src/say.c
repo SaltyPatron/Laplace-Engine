@@ -30,13 +30,14 @@ static void said_as(RecordWorker *k, const Dis *m, Ref S, Ref v){ if (m->what !=
 
 /* Qualifiers are content in a judgment record. The corpus remains its witness. */
 static int qualifier_of(RecordWorker *k, const SemanticRecord *t, int32_t c){
-    if (c<0 || record_value_empty(k->s,&t->n[c]) || !record_value(k,t,c,&k->qualifier,0)) return 0;
+    if (c<0 || (t->n[c].kind!=S_GROUP && record_value_empty(k->s,&t->n[c])) || !record_value(k,t,c,&k->qualifier,0)) return 0;
     k->qualified=1; return 1;
 }
 static int qualifiers(const Say *s, const SemanticRecord *t, int32_t g, const char *path, int32_t *out){
     if (!path[0] || record_selector_code(path)->special==SELECT_LABEL) return 0;
     int n=record_select_all(t,g,path,out,RECORD_REFERENCE_CAPACITY), count=0;
-    for (int i=0; i<n; i++) if (out[i]>=0 && t->n[out[i]].vlen && !record_value_empty(s,&t->n[out[i]])) out[count++]=out[i];
+    for (int i=0; i<n; i++) if (out[i]>=0 && (t->n[out[i]].kind==S_GROUP ||
+        (t->n[out[i]].vlen && !record_value_empty(s,&t->n[out[i]])))) out[count++]=out[i];
     return count;
 }
 static void field_qualifier(RecordWorker *k, const SemanticValue *field, int file){

@@ -21,6 +21,21 @@ empty hash NaN
 #   StandardizedVariants.txt: "Field 2: ... If more than one is present, there are spaces between them."
 part scx by space
 part when by space
+# UAX #38 revision 39: each U+ reference has its own optional dictionary and
+# T/B/Z/F/J usage annotations. Keep targets as canonical scalars and bind each
+# structured qualifier to its judgment, while the corpus remains the witness.
+# https://www.unicode.org/reports/tr38/tr38-39.html#kSemanticVariant
+part kCompatibilityVariant grammar scalar_references
+part kSemanticVariant grammar scalar_references
+part kSpecializedSemanticVariant grammar scalar_references
+part kSimplifiedVariant grammar scalar_references
+part kTraditionalVariant grammar scalar_references
+part kSpoofingVariant grammar scalar_references
+part kZVariant grammar scalar_references
+codepoints target
+content source flags
+thing reference target
+thing qualifier source flags resolved
 
 # Source defaults remain declarative, including properties also held in tier0.flags.
 # Source-specific defaults and sibling equality do not belong in the generic evaluator.
@@ -225,7 +240,9 @@ relation "CNS 11643-1986 mapping" kCNS1986
 #   kCNS1992: "The CNS 11643-1992 mapping for this ideograph in hexadecimal."
 relation "CNS 11643-1992 mapping" kCNS1992
 #   kCompatibilityVariant: "The canonical Decomposition_Mapping value for the ideograph, derived from UnicodeData.txt"
-relation "canonical Decomposition_Mapping value for the ideograph" kCompatibilityVariant
+when ^kCompatibilityVariant/reference/target matches .
+relation "canonical Decomposition_Mapping value for the ideograph" target
+always
 #   kCowles: "The index or indices of this ideograph in Roy T. Cowles, A Pocket Dictionary of Cantonese, ..."
 relation "index or indices ... A Pocket Dictionary of Cantonese" kCowles
 #   kDaeJaweon: "The position of this ideograph in the Dae Jaweon (Korean) dictionary used in the four-dictionary sorting
@@ -370,9 +387,13 @@ relation "standard radical-stroke count" kRSUnicode
 #   kSBGY: "The position of this ideograph in the Song Ben Guang Yun (SBGY) Medieval Chinese character dictionary"
 relation "position ... Song Ben Guang Yun (SBGY)" kSBGY
 #   kSemanticVariant: "The Unicode value for a semantic variant for this ideograph."
-relation "semantic variant" kSemanticVariant
+when ^kSemanticVariant/reference/target matches .
+relation "semantic variant" target
+always
 #   kSimplifiedVariant: "The Unicode value(s) for the simplified Chinese variant(s) for this ideograph."
-relation "simplified Chinese variant(s)" kSimplifiedVariant
+when ^kSimplifiedVariant/reference/target matches .
+relation "simplified Chinese variant(s)" target
+always
 #   kSMSZD2003Index: "This represents the position(s) of the ideograph in the Soengmou San Zidin (商務新字典, New
 #   Commercial Press Character Dictionary)."
 relation "position(s) of the ideograph in the Soengmou San Zidin" kSMSZD2003Index
@@ -380,9 +401,13 @@ relation "position(s) of the ideograph in the Soengmou San Zidin" kSMSZD2003Inde
 #   Zidin (商務新字典, New Commercial Press Character Dictionary)."
 relation "Mandarin and Cantonese readings(s) ... Soengmou San Zidin" kSMSZD2003Readings
 #   kSpecializedSemanticVariant: "The Unicode value for a specialized semantic variant for this ideograph."
-relation "specialized semantic variant" kSpecializedSemanticVariant
+when ^kSpecializedSemanticVariant/reference/target matches .
+relation "specialized semantic variant" target
+always
 #   kSpoofingVariant: "The spoofing variants for the ideograph, if any."
-relation "spoofing variants" kSpoofingVariant
+when ^kSpoofingVariant/reference/target matches .
+relation "spoofing variants" target
+always
 #   kStrange: "This property identifies CJK Unified Ideographs that are considered “strange” in one or more ways per the
 #   following 12 categories"
 relation "considered “strange” in one or more ways" kStrange
@@ -401,7 +426,9 @@ relation "Pīnyīn readings ... Tōngyòng Guīfàn Hànzì Zìdiǎn" kTGHZ2013
 #   conventions of the IRG."
 relation "total number of strokes in the ideograph" kTotalStrokes
 #   kTraditionalVariant: "The Unicode value(s) for the traditional Chinese variant(s) for this ideograph."
-relation "traditional Chinese variant(s)" kTraditionalVariant
+when ^kTraditionalVariant/reference/target matches .
+relation "traditional Chinese variant(s)" target
+always
 #   kUnihanCore2020: "Used for ideographs which are in the Unihan Core 2020 set, the minimal set of required ideographs
 #   for East Asia."
 relation "in the Unihan Core 2020 set" kUnihanCore2020
@@ -418,7 +445,9 @@ relation "most customary Zhuang reading" kZhuang
 #   kZhuangNumeric: "The value of the ideograph when used as a numeral in Zhuang languages with the Han script (Sawndip)."
 relation "value ... as a numeral in Zhuang languages" kZhuangNumeric
 #   kZVariant: "The z-variants for the ideograph, if any."
-relation "z-variants" kZVariant
+when ^kZVariant/reference/target matches .
+relation "z-variants" target
+always
 
 # --- Egyptian hieroglyphs: Unikemet.txt ("This file contains the following information:") and UAX #57. kEH_NoMirror
 # and kEH_NoRotate are binary: the flags hold them ---
@@ -489,6 +518,7 @@ relation "Corrected decomposition" normalization-correction.new
 value - because
 
 attest char *
+attest reference target of ^char with qualifier
 attest reserved *
 attest noncharacter *
 attest surrogate *
