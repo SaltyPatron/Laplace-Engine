@@ -581,14 +581,16 @@ int cmd_ingest(int argc, char **argv){
     if (entities) for (int i = a; i < argc; i++) { struct stat st_; if (stat(argv[i], &st_)) { fprintf(stderr, "--entities shows what files would record: %s is no file (a sample of a source: -s SOURCE FILE)\n", argv[i]); return 2; } }
     for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, "file")) file_record_stock(&rec[k]);   /* what the OS keeps of every file: the stock recipe file */
     if (of) { int k = 0; while (k < nsrc && !source_named(&src[k], of)) k++; if (k == nsrc) { fprintf(stderr, "%s is not a source\n", of); return 2; } walking = &src[k]; }
-    { int named = 0; for (int i = a; i < argc; i++) { struct stat st_; int k = 0; while (k < nsrc && !source_named(&src[k], argv[i])) k++; named += k < nsrc && stat(argv[i], &st_); }
+    /* A bare declared source keeps its meaning when the current directory has
+     * the same name. Explicit ./ or absolute paths still select file input. */
+    { int named = 0; for (int i = a; i < argc; i++) { int k = 0; while (k < nsrc && !source_named(&src[k], argv[i])) k++; named += k < nsrc; }
       if (named && named == argc - a && !of && !getenv("LAPLACE_INGEST_ONE")) {   /* sources by name: each its own run, in recipes/order, after everything it comes after */
           int *want = calloc((size_t)nsrc, sizeof(int)); for (int i = a; i < argc; i++) for (int k = 0; k < nsrc; k++) if (source_named(&src[k], argv[i])) want[k] = 1;
           for (int k = nsrc - 1; k >= 0; k--) if (want[k]) for (int x = 0; x < src[k].nafter; x++) for (int j = 0; j < k; j++) if (!strcmp(src[j].name, src[k].after[x])) want[j] = 1;   /* sources is in order: what one comes after is before it */
           int rc = ingest_every(a, argv, src, nsrc, rec, nrec, want); free(want); return rc; } }
     for (int i = a; i < argc; i++) {                                         /* a source by its name, or files and directories */
         struct stat st; int k = 0; while (k < nsrc && !source_named(&src[k], argv[i])) k++;
-        if (k < nsrc && stat(argv[i], &st)) {
+        if (k < nsrc) {
             if (src[k].unset[0]) { fprintf(stderr, "source %s: its root names $%s, which the environment does not set (Laplace-Operations laplace.env)\n", src[k].name, src[k].unset); return 2; }
             if (!src[k].found[0]) { fprintf(stderr, "source %s is not at any of its roots\n", src[k].name); return 1; }
             const Source *was = walking; walking = &src[k];
