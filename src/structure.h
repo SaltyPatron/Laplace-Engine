@@ -88,6 +88,7 @@ typedef struct { char path[64], sep[8], is[8]; int seplen, islen, pieces, padded
  *   node TYPE group [name PATH...] [list] [grammar NAME]
  *     context PATH...            ancestor header paths inherited by split records; their fields remain lexical
  *                               bindings, while the container's own header is reduced once in source order
+ *     context-level N           before context: ordered header level 1..255 for bounded carry between windows
  *   node TYPE value name PATH text PATH [grammar NAME]
  *   node TYPE text [raw] [join] [grammar NAME]
  *   node TYPE member name FIELD value FIELD [grammar NAME]
@@ -116,7 +117,7 @@ typedef struct {
 typedef struct {
     char type[48]; int what, raw, join, list, kind, trim;
     char name[4][64]; int nname; char text[64];
-    char context[4][64]; uint8_t ncontext;
+    char context[4][64]; uint8_t ncontext, context_level;
     char capture[48]; uint16_t capture_length; const SNameBindings *capture_bindings;
     char child_grammar[64];
     char field[48], parent[48];
@@ -154,7 +155,7 @@ typedef struct {
     GCountShape count_shapes[8]; uint8_t count_shape_count;
     char remark_group[48], remark_text[48];
     uint16_t numbered_length, root_name_length;
-    uint8_t has_context;
+    uint8_t has_context, context_stream;
     GScope scopes[8]; uint8_t scope_count, scope_space_count, scope_misc_count;
     char scope_space[8][48], scope_misc[16][48];
     char scope_prefix[8][48], scope_first[4][48]; uint8_t scope_prefix_count, scope_first_count;
@@ -200,7 +201,7 @@ typedef struct {
     size_t arena_begin;
     uint32_t name_length, value_length;
     uint16_t grammar, flags;
-    uint8_t kind, tier;
+    uint8_t kind, tier, context_level;
 } SField;
 /* Return S_VISIT_OK, optionally OR S_VISIT_RELEASE on S_CLOSE after reducing
  * an independent record. Release discards that record's decoded fields and
@@ -224,6 +225,7 @@ int layout_says(Layout *l, const char *path, char *tok);
  * finishes all work using a record before closing the window. */
 typedef struct SContext SContext;
 typedef struct SContextStore SContextStore;
+typedef struct SContextStream SContextStream;
 typedef struct SScopeState SScopeState;
 typedef struct SScopeStream SScopeStream;
 typedef struct {
@@ -236,6 +238,8 @@ typedef struct {
     SayScratch *header_arena;
     SayScratch context_arena;
     SContextStore *contexts;
+    SContextStream *context_stream;
+    const SContext *last_context;
     SScopeState *scopes;
     SScopeStream *stream;
     size_t header_mark;
@@ -253,6 +257,8 @@ int s_records_open(SRecords *records, const Layout *layout, const uint8_t *sourc
  * Nonfinal input retains the last complete record as boundary lookahead. */
 int s_records_window(SRecords *records, const Layout *layout, const uint8_t *source, size_t length,
                      int final, size_t *consumed, SayScratch *headers);
+int s_records_context_window(SRecords *records, const Layout *layout, const uint8_t *source, size_t length,
+                     int final, size_t *consumed, SayScratch *headers, SContextStream *context_stream);
 /* Persistent active headers for event grammars. The input window and its AST
  * remain disposable; only decoded active headers survive between windows. */
 SScopeStream *s_scope_stream_open(const Layout *layout);

@@ -65,6 +65,7 @@ set(ENGINE_SOURCES
     src/file_metadata.c
     src/recipe_compile.c
     src/record_stream.c
+    src/context_stream.c
     src/record_select.c
     src/record_operands.c
     src/record_diagnostics.c
