@@ -40,7 +40,7 @@ printf 'CREATE TABLE widgets (id integer);\nSELECT widgets FROM widgets;\n' > "$
 for spec in 'c:function_definition:doubled' 'cpp:function_definition:tripled' 'cs:method_declaration:Twice' \
             'py:function_definition:squared' 'ts:function_declaration:increment' 'sql:create_table:widgets'; do
   IFS=: read -r ext kind name <<< "$spec"
-  out=$("$L" ingest --claims-tsv -j 1 -s workspace-code "$w/a.$ext" 2>&1 | tr -d '\r') || fail "$ext claims: $out"
+  out=$("$L" ingest --claims-tsv -j 1 -s workspace-code "$w/a.$ext" 2> "$scratch/$ext.log" | tr -d '\r') || fail "$ext claims: $out $(cat "$scratch/$ext.log")"
   grep -Fq "[$kind, " <<< "$out" || fail "$ext lost its typed declaration: $out"
   grep -Fq $'\tdeclared identifier\t'"$name" <<< "$out" || fail "$ext lost its declared identifier: $out"
   grep -Fq $'\treferenced identifier\t' <<< "$out" || fail "$ext did not descend into references: $out"
@@ -55,3 +55,36 @@ for spec in 'c:function_definition:doubled' 'cpp:function_definition:tripled' 'c
   fi
 done
 echo 'workspace-code: typed declarations and semantic identifiers retained across C, C++, C#, Python, TypeScript and SQL'
+
+# Valid unsafe code in the installed workspace uses a cast or pointer arithmetic
+# as the operand of indirection. Neither form may fall back to unparsed text.
+cat > "$w/unsafe.cs" <<'CS'
+class PointerProducts {
+    public static unsafe int Read(byte[] bytes) {
+        fixed (byte* p = bytes) return *(int*)p;
+    }
+    public static unsafe void Write(int* p, int value) {
+        *(p + 1) = value;
+        *p = value;
+        ++*p;
+    }
+    public static unsafe int Next(int* p) { return *p + 1; }
+}
+CS
+for workers in 1 4; do
+  out=$("$L" ingest --claims-tsv -j "$workers" -s workspace-code "$w/unsafe.cs" 2> "$scratch/unsafe-$workers.log" | tr -d '\r') || fail "C# unsafe products: $out $(cat "$scratch/unsafe-$workers.log")"
+  for name in Read Write Next; do
+    grep -Fq $'\tdeclared identifier\t'"$name" <<< "$out" || fail "C# lost $name: $out"
+  done
+  grep -Fq 'return *(int*)p' <<< "$out" || fail "C# cast indirection was lost: $out"
+  grep -Fq '*(p + 1) = value' <<< "$out" || fail "C# arithmetic indirection was lost: $out"
+  grep -q 'unresolved obligations: 0 ' <<< "$out" || fail "C# unsafe fields unresolved: $out"
+  grep '^claim' <<< "$out" | LC_ALL=C sort > "$scratch/unsafe-$workers.claims"
+done
+cmp "$scratch/unsafe-1.claims" "$scratch/unsafe-4.claims" || fail 'C# unsafe claims changed with worker count'
+printf 'class Broken { public unsafe int Read( { return *; } }\n' > "$w/broken.cs"
+if "$L" ingest --no-load -s workspace-code "$w/broken.cs" > "$scratch/broken.log" 2>&1; then
+  fail 'malformed C# was accepted'
+fi
+grep -q 'does not parse completely' "$scratch/broken.log" || fail 'malformed C# failed for an unrelated reason'
+echo 'workspace-code: unsafe cast/arithmetic indirection retained, worker parity held, malformed input rejected'

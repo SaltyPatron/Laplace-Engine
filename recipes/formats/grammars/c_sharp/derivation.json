@@ -1,0 +1,14 @@
+{
+  "source": "tree-sitter-c-sharp",
+  "origin": "https://github.com/tree-sitter/tree-sitter-c-sharp",
+  "commit": "cac6d5fb595f5811a076336682d5d595ac1c9e85",
+  "patch": "unary-indirection.patch",
+  "files": [
+    {"path": "LICENSE", "sha": "c8921f694d834542874bd0403afe97adb8f5dab3"},
+    {"path": "grammar.js", "sha": "f08d8406ff103369b6008e9e3dd84bdfac524e18"},
+    {"path": "src/scanner.c", "sha": "c8d04f14c0c2f9f27ec7d05c86d772a3399bf6fe"},
+    {"path": "src/tree_sitter/alloc.h", "sha": "1abdd1201578605b8d05a3001f01ebc0d58826d9"},
+    {"path": "src/tree_sitter/array.h", "sha": "56fc8cd470996ded64a5452be25e26dbd2aa682a"},
+    {"path": "src/tree_sitter/parser.h", "sha": "858107deb9e4a1ffcd2ed5e6ffe98a5fcab3e1f6"}
+  ]
+}
