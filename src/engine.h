@@ -344,6 +344,7 @@ int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers
 int merge(const char *conninfo, int npg);            /* what the runs staged, into the real tables at once (db.c) */
 uint8_t *db_recorded(const char *conninfo, const lp_id *ids, uint64_t n);   /* which are recorded, real tables or stage: nothing written */
 int cmd_merge(int argc, char **argv);
+int cmd_projection(int argc, char **argv);
 
 /* ---- the database, as the engine speaks to it (pg.c): a statement's parameters, its columns read back, COPY */
 extern uint32_t id_oid;                                               /* the database's own number for the type of an ID, blake3 */

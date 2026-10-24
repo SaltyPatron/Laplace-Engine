@@ -583,3 +583,19 @@ int cmd_merge(int argc,char **argv){
     printf("merged %s entities, %s paths, %s existing rows updated\n",PQgetvalue(q,0,0),PQgetvalue(q,0,1),PQgetvalue(q,0,2));
     PQclear(q);PQfinish(pg);return 0;
 }
+int cmd_projection(int argc,char **argv){
+    const char *conninfo=laplace_db(); int apply=0;
+    int at=opts(argc,argv,(const Opt[]){
+        {.flag="-d",.kind='s',.at=&conninfo}, {.flag="--apply",.kind='b',.at=&apply}, {0}});
+    if(at<argc){fputs("usage: laplace projection [-d conninfo] [--apply]\n",stderr);return 2;}
+    PGconn *pg=db_connect(conninfo);
+    const char *arguments[]={apply?"true":"false"};
+    PGresult *result=PQexecParams(pg,"SELECT * FROM laplace_recoordinate($1::boolean)",1,NULL,arguments,NULL,NULL,0);
+    if(PQresultStatus(result)!=PGRES_TUPLES_OK || PQntuples(result)!=1 || PQnfields(result)!=2){
+        fprintf(stderr,"projection %s: %s",apply?"repair":"audit",PQerrorMessage(pg));
+        PQclear(result);PQfinish(pg);return 1;
+    }
+    printf("projection %s: %s entity coordinates, %s path Hilbert keys %s\n",
+        apply?"applied":"audit",PQgetvalue(result,0,0),PQgetvalue(result,0,1),apply?"corrected":"need correction");
+    PQclear(result);PQfinish(pg);return 0;
+}
