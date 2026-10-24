@@ -17,7 +17,7 @@ struct Fold { lp_strmap *series; };
 static Fold *active_fold;
 typedef struct {
     PGconn **copy, *series; int ncopy, from_ingest, witness_changed;
-    char entity[96], path[96], delta[96], pending[96], witnesses[96], affected[96];
+    char entity[96], path[96], carriers[96], delta[96], pending[96], witnesses[96], affected[96];
     lp_idmap *known, *changed;
 } Loader;
 static Loader writer;
@@ -48,6 +48,7 @@ static void start_loader(const char *conninfo, int requested){
     char suffix[40]; snprintf(suffix, sizeof suffix, "%s", PQgetvalue(q, 0, 0)); PQclear(q);
     snprintf(writer.entity, sizeof writer.entity, "stage.lp_entity_%s", suffix);
     snprintf(writer.path, sizeof writer.path, "stage.lp_path_%s", suffix);
+    snprintf(writer.carriers, sizeof writer.carriers, "stage.lp_carriers_%s", suffix);
     snprintf(writer.delta, sizeof writer.delta, "stage.lp_delta_%s", suffix);
     snprintf(writer.pending, sizeof writer.pending, "stage.lp_pending_%s", suffix);
     snprintf(writer.witnesses, sizeof writer.witnesses, "stage.lp_witness_%s", suffix);
@@ -56,11 +57,12 @@ static void start_loader(const char *conninfo, int requested){
     snprintf(sql, sizeof sql,
         "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.physicality INCLUDING DEFAULTS);"
+        "CREATE UNLOGGED TABLE %s (id blake3 NOT NULL,tier smallint NOT NULL,entity_mask bit(64) NOT NULL,path_mask bit(64) NOT NULL);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (LIKE public.witness INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (claim blake3 NOT NULL)",
-        writer.entity, writer.path, writer.delta, writer.pending, writer.witnesses, writer.affected);
+        writer.entity, writer.path, writer.carriers, writer.delta, writer.pending, writer.witnesses, writer.affected);
     statement(control, sql);
     writer.known = lp_idmap_new(); writer.changed = lp_idmap_new();
     writer.series = db_connect(conninfo);
@@ -406,8 +408,8 @@ static int hilbert_order(const void *a,const void *b){
  * without weakening validation or dumping the batch/content into the log.
  * This set query runs only after a failed merge, outside its rolled-back
  * statement; it never changes either the caller's staging or public rows. */
-static void merge_failure(PGconn *pg, const char *entities, const char *paths){
-    fprintf(stderr,"stage merge: %s",PQerrorMessage(pg));
+static void merge_failure(PGconn *pg, const char *entities, const char *paths, const char *error){
+    fprintf(stderr,"stage merge: %s",error);
     char sql[8192];
     int length=snprintf(sql,sizeof sql,
         "WITH rejected(reason,id,detail) AS ("
@@ -465,6 +467,7 @@ static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
     copy_open(&copy,pg,sql);
     for(size_t i=lo;i<hi;i++){
         const Node *x=rows[i].node; double point[4];
+        if(x->keep!=1)continue;
         for(int axis=0;axis<4;axis++)point[axis]=(double)x->m[axis]/LP_FIXED_ONE;
         size_t size=lp_ewkb_point4(point,geometry,sizeof geometry);
         lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
@@ -477,6 +480,7 @@ static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
     lp_id *ids=NULL;uint64_t *runs=NULL;uint32_t *spare=NULL;uint8_t *path=NULL;size_t capacity=0,path_capacity=0;
     for(size_t i=lo;i<hi;i++){
         const Node *x=rows[i].node;
+        if(x->keep!=1)continue;
         if(x->nv>capacity){capacity=x->nv;ids=xrealloc(ids,capacity*sizeof *ids);runs=xrealloc(runs,capacity*sizeof *runs);spare=xrealloc(spare,capacity*sizeof *spare);}
         for(uint32_t j=0;j<x->nv;j++){const Vtx *v=&VTX[x->voff+j];ids[j]=v->id;runs[j]=v->m;spare[j]=v->spare;}
         size_t size=lp_ewkb_runs_spare(ids,runs,spare,x->nv,NULL,0);
@@ -492,6 +496,19 @@ static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
         lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
         lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));
         lp_copy_field(&copy,path,(uint32_t)size);lp_copy_field(&copy,mask,sizeof mask);
+    }
+    copy_close(&copy);lp_buf_free(&copy.buf);
+    /* A recorded trunk amputates its complete path. A later use can add a
+     * carrier, but must not resend that use's contextual M/spare annotations
+     * or recomputed coordinates as another copy of the recorded identity. */
+    copy=(lp_copy){0};
+    snprintf(sql,sizeof sql,"COPY %s (id,tier,entity_mask,path_mask) FROM STDIN (FORMAT binary)",writer.carriers);
+    copy_open(&copy,pg,sql);
+    for(size_t i=lo;i<hi;i++){
+        const Node *x=rows[i].node;if(x->keep!=2)continue;
+        uint8_t path_mask[12];carrier_bytes(rows[i].lexical,mask);carrier_bytes(x->kind,path_mask);
+        lp_copy_row(&copy,4);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
+        lp_copy_field(&copy,mask,sizeof mask);lp_copy_field(&copy,path_mask,sizeof path_mask);
     }
     copy_close(&copy);lp_buf_free(&copy.buf);
     free(ids);free(runs);free(spare);free(path);statement(pg,"COMMIT");
@@ -512,10 +529,27 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         int lanes=writer.ncopy;if((size_t)lanes>count)lanes=(int)count;
         #pragma omp parallel for num_threads(lanes) schedule(static,1)
         for(int lane=0;lane<lanes;lane++)copy_rows(writer.copy[lane],rows,count*(size_t)lane/(size_t)lanes,count*(size_t)(lane+1)/(size_t)lanes);
-        char sql[320];snprintf(sql,sizeof sql,"SELECT * FROM laplace_merge_stage('%s'::regclass,'%s'::regclass)",writer.entity,writer.path);
+        /* Keep the already-recorded identity in PostgreSQL while passing all
+         * carrier changes through the same checked, atomic set merge. LEFT
+         * joins retain missing pairs as NOT NULL failures, never lost input.
+         * The merge's advisory lock also protects this preparation snapshot. */
+        char sql[1800];snprintf(sql,sizeof sql,
+            "BEGIN;SELECT pg_advisory_xact_lock(1279348803,-2);"
+            "INSERT INTO %s(id,tier,coord,hilbert,mask)"
+            " SELECT c.id,c.tier,e.coord,e.hilbert,c.entity_mask FROM %s c"
+            " LEFT JOIN public.entity e ON e.id=c.id;"
+            "INSERT INTO %s(entity,tier,hilbert,path,mask)"
+            " SELECT c.id,c.tier,p.hilbert,p.path,c.path_mask FROM %s c"
+            " LEFT JOIN public.physicality p ON p.entity=c.id;"
+            "SELECT * FROM laplace_merge_stage('%s'::regclass,'%s'::regclass)",
+            writer.entity,writer.carriers,writer.path,writer.carriers,writer.entity,writer.path);
         PGresult *q=PQexec(writer.copy[0],sql);
-        if(PQresultStatus(q)!=PGRES_TUPLES_OK){merge_failure(writer.copy[0],writer.entity,writer.path);PQclear(q);exit(1);}
+        if(PQresultStatus(q)!=PGRES_TUPLES_OK){
+            PGresult *rollback=PQexec(writer.copy[0],"ROLLBACK");PQclear(rollback);
+            merge_failure(writer.copy[0],writer.entity,writer.path,PQresultErrorMessage(q));PQclear(q);exit(1);
+        }
         st->ent_rows+=strtoull(PQgetvalue(q,0,0),NULL,10);st->phy_rows+=strtoull(PQgetvalue(q,0,1),NULL,10);PQclear(q);
+        snprintf(sql,sizeof sql,"TRUNCATE %s;COMMIT",writer.carriers);statement(writer.copy[0],sql);
     }
     free(rows);TABLE_EACH(x)if(x->keep==1 || x->keep==2){bool fresh;lp_idmap_put(writer.known,&x->id,&fresh);}
     st->t_copy+=now()-begin;begin=now();flush_series(active_fold,st);st->t_sem+=now()-begin;
@@ -568,7 +602,7 @@ int merge(const char *conninfo,int npg){
     /* An unchanged registered source contributes no new evidence on replay.
      * Recompute only for new series or changed witness trust/containment. */
     if(lp_idmap_count(writer.changed) || writer.witness_changed) statement(writer.series,sql);
-    snprintf(sql,sizeof sql,"DROP TABLE %s,%s,%s,%s,%s,%s",writer.entity,writer.path,writer.delta,writer.pending,writer.witnesses,writer.affected);
+    snprintf(sql,sizeof sql,"DROP TABLE %s,%s,%s,%s,%s,%s,%s",writer.entity,writer.path,writer.carriers,writer.delta,writer.pending,writer.witnesses,writer.affected);
     statement(writer.series,sql);statement(writer.series,"COMMIT");
     PQfinish(writer.series);for(int i=0;i<writer.ncopy;i++)PQfinish(writer.copy[i]);
     free(writer.copy);lp_idmap_free(writer.known);lp_idmap_free(writer.changed);writer=(Loader){0};return 0;
@@ -579,7 +613,7 @@ int cmd_merge(int argc,char **argv){
     if(at<argc){fputs("usage: laplace merge [-d conninfo]\n",stderr);return 2;}
     PGconn *pg=db_connect(conninfo);statement(pg,"SELECT laplace_ensure_stage()");
     PGresult *q=PQexec(pg,"SELECT * FROM laplace_merge_stage('stage.entity','stage.physicality')");
-    if(PQresultStatus(q)!=PGRES_TUPLES_OK){merge_failure(pg,"stage.entity","stage.physicality");PQclear(q);PQfinish(pg);return 1;}
+    if(PQresultStatus(q)!=PGRES_TUPLES_OK){merge_failure(pg,"stage.entity","stage.physicality",PQresultErrorMessage(q));PQclear(q);PQfinish(pg);return 1;}
     printf("merged %s entities, %s paths, %s existing rows updated\n",PQgetvalue(q,0,0),PQgetvalue(q,0,1),PQgetvalue(q,0,2));
     PQclear(q);PQfinish(pg);return 0;
 }
