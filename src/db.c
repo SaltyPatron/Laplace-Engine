@@ -436,13 +436,25 @@ static void merge_failure(PGconn *pg, const char *entities, const char *paths){
         " UNION ALL SELECT 'path without entity',s.entity,'' FROM %s s"
         " LEFT JOIN %s batch ON batch.id=s.entity LEFT JOIN public.entity d ON d.id=s.entity"
         " WHERE batch.id IS NULL AND d.id IS NULL)"
-        " SELECT reason,id::text,detail FROM rejected ORDER BY reason,id LIMIT 8",
+        ",sample AS MATERIALIZED (SELECT reason,id,detail FROM rejected ORDER BY reason,id LIMIT 8)"
+        " SELECT s.reason,s.id::text,s.detail,ST_AsEWKB(p.path) FROM sample s"
+        " LEFT JOIN public.physicality p ON p.entity=s.id ORDER BY s.reason,s.id",
         entities,paths,entities,paths,entities,paths,entities,paths,paths,entities);
     if(length<0 || (size_t)length>=sizeof sql){fputs("stage rejection diagnostic exceeded its bound\n",stderr);return;}
     PGresult *detail=PQexec(pg,sql);
     if(PQresultStatus(detail)==PGRES_TUPLES_OK){
-        for(int row=0;row<PQntuples(detail);row++)
+        for(int row=0;row<PQntuples(detail);row++){
             fprintf(stderr,"  stage rejection: %s id=%s %s\n",PQgetvalue(detail,row,0),PQgetvalue(detail,row,1),PQgetvalue(detail,row,2));
+            lp_id id; if(!id_parse(PQgetvalue(detail,row,1),&id)) continue;
+            const Node *node=table_find(&id); if(!node) continue;
+            fprintf(stderr,"    staged decomposition: tier=%u parts=%u vertices=%u\n",node->tier,node->len,node->nv);
+            for(uint32_t i=0;i<node->nv && i<8;i++){
+                const Vtx *v=&VTX[node->voff+i]; char child[33]; id_text(&v->id,child);
+                fprintf(stderr,"    child=%s run=%u\n",child,VRUN(v->m));
+            }
+            if(!PQgetisnull(detail,row,3))
+                fprintf(stderr,"    recorded path prefix=%.322s\n",PQgetvalue(detail,row,3));
+        }
     }else fprintf(stderr,"stage rejection diagnostic: %s",PQerrorMessage(pg));
     PQclear(detail);
 }
