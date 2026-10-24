@@ -3,6 +3,7 @@
 #define _GNU_SOURCE
 #include "record_worker.h"
 #include "record_select.h"
+#include "context_stream.h"
 #include <fcntl.h>
 #include <omp.h>
 #include <stdio.h>
@@ -413,7 +414,8 @@ static int input_fill(const SInput *input, lp_buf *buffer, size_t target, size_t
 int say_record_streamable(const Recipe *recipe){
     const Say *say = recipe ? recipe->say : NULL;
     return say && say->lay.g.compiled && !say->has_about && (say->lay.g.scope_count ||
-        ((say->lay.g.record_count || say->lay.g.record_children) && !say->lay.g.record_name_count && !say->lay.g.has_context));
+        ((say->lay.g.record_count || say->lay.g.record_children) && !say->lay.g.record_name_count &&
+         (!say->lay.g.has_context || say->lay.g.context_stream)));
 }
 static void read_records(RecordPipeline *pipeline){
     const uint8_t *original_source = pipeline->source; size_t original_length = pipeline->length;
@@ -427,7 +429,9 @@ static void read_records(RecordPipeline *pipeline){
     *layout = pipeline->say->lay;
     int independent = say_record_streamable(pipeline->recipe), ended = 0;
     SScopeStream *scopes = independent && layout->g.scope_count ? s_scope_stream_open(layout) : NULL;
+    SContextStream *context = independent && !scopes && layout->g.has_context ? s_context_stream_open() : NULL;
     if (independent && layout->g.scope_count && !scopes) { fputs("cannot create packaging scope stream\n", stderr); pipeline->failed = 1; }
+    if (independent && !scopes && layout->g.has_context && !context) { fputs("cannot create packaging header stream\n", stderr); pipeline->failed = 1; }
     size_t quantum = (size_t)8 << 20;
     const char *configured = getenv("LAPLACE_RECORD_WINDOW_BYTES");
     if (configured && *configured) {
@@ -453,7 +457,7 @@ static void read_records(RecordPipeline *pipeline){
         layout->source_row = source_row;
         for (;;) {
             status = scopes ? s_scope_stream_window(&records, scopes, layout, buffer.b, buffer.n, byte_at, ended) :
-                independent ? s_records_window(&records, layout, buffer.b, buffer.n, ended, &consumed, &headers) :
+                independent ? s_records_context_window(&records, layout, buffer.b, buffer.n, ended, &consumed, &headers, context) :
                 s_records_open(&records, layout, buffer.b, buffer.n);
             if (status || ended) break;
             if (buffer.n > UINT32_MAX - quantum) { status = -1; break; }
@@ -483,6 +487,9 @@ static void read_records(RecordPipeline *pipeline){
             free(layout); layout = next;
         }
         if (layout->ntier) { layout->tier[0].header = 0; layout->tier[0].skip = 0; }
+        if (!pipeline->failed && !s_context_stream_commit(context, records.last_context)) {
+            fputs("cannot retain active packaging headers\n", stderr); pipeline->failed = 1;
+        }
         s_records_close(&records);
         if (!pipeline->failed && ended && consumed == buffer.n) deferred_finish(pipeline, !source_active || pipeline->result->hw != NULL);
         if (pipeline->file->emit && !pipeline->failed) {
@@ -502,7 +509,7 @@ static void read_records(RecordPipeline *pipeline){
     }
     if (pipeline->failed || !pipeline->deferred.first) deferred_close(&pipeline->deferred);
     record_workers_free(pipeline->evaluators, pipeline->worker_count); pipeline->evaluators = NULL;
-    s_scope_stream_close(scopes); arena_release(&headers); lp_buf_free(&buffer); free(layout);
+    s_scope_stream_close(scopes); s_context_stream_close(context); arena_release(&headers); lp_buf_free(&buffer); free(layout);
     pipeline->source = original_source; pipeline->length = original_length;
 }
 

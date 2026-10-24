@@ -5,6 +5,7 @@
 #define _GNU_SOURCE
 #include "engine.h"
 #include "structure.h"
+#include "context_stream.h"
 #include "os.h"
 #include "laplace_config.h"
 #include <stdio.h>
@@ -342,6 +343,11 @@ int layout_says(Layout *l, const char *path, char *tok){
             }
             if (into == 9) { str_set(r->numbered,sizeof r->numbered,w); r->number_length=(uint8_t)strlen(r->numbered); into=0; continue; }
             if (into == 12) { str_set(r->capture,sizeof r->capture,w); r->capture_length=(uint16_t)strlen(r->capture); into=0; continue; }
+            if (into == 13) {
+                char *end; unsigned long level = strtoul(w, &end, 10);
+                if (!*w || *end || !level || level > UINT8_MAX) { fprintf(stderr, "%s: context-level requires 1..255\n", path); return -1; }
+                r->context_level = (uint8_t)level; into = 0; continue;
+            }
             if (into == 10 || into == 11) {
                 char *end; unsigned long value=strtoul(w,&end,10);
                 if (!*w || *end || (into==10 ? value<2 || value>36 : value<1 || value>64)) {
@@ -351,6 +357,7 @@ int layout_says(Layout *l, const char *path, char *tok){
                 into=0; continue;
             }
             if (!strcmp(w, "context")) { into = 8; continue; }
+            if (!strcmp(w, "context-level")) { into = 13; continue; }
             if (into == 8) {
                 if (r->ncontext == 4) { fprintf(stderr, "%s: at most four context paths per group\n", path); return -1; }
                 str_set(r->context[r->ncontext++], 64, w); continue;
@@ -371,6 +378,7 @@ int layout_says(Layout *l, const char *path, char *tok){
             else { fprintf(stderr, "%s: node %s: %s is not something a node's line says\n", path, ty, w); return -1; } }
         if ((into >= 3 && into != 8) || (into == 8 && !r->ncontext) || (into == 1 && !r->nname) || (into == 2 && !r->text[0])) { fprintf(stderr, "%s: node %s: missing rule argument\n", path, ty); return -1; }
         if (r->ncontext && r->what != G_GROUP) { fprintf(stderr, "%s: context paths require a group\n", path); return -1; }
+        if (r->context_level && !r->ncontext) { fprintf(stderr, "%s: context-level requires context paths\n", path); return -1; }
         if (r->capture[0] && r->what!=G_GROUP) { fprintf(stderr,"%s: capture requires a group\n",path);return -1; }
         if ((r->what == G_VALUE || r->what == G_MEMBER || r->what == G_NOTE) && (!r->nname || !r->text[0])) { fprintf(stderr, "%s: node %s %s name PATH %s PATH\n", path, ty, wh, r->what == G_MEMBER ? "value" : "text"); return -1; }
         if ((r->alias[0] || r->alias_tier) && r->what != G_GROUP && r->what != G_TEXT) { fprintf(stderr, "%s: node %s: an alias applies to a group or text rule\n", path, ty); return -1; }
@@ -848,6 +856,7 @@ int layout_compile_grammar(Layout *l, const char *grammar_name){
         const char *name = ts_language_symbol_name(lang, (TSSymbol)sym); uint32_t at = g->sym_rule_offset[sym];
         if (name) for (int i = 0; i < g->n; i++) if (!strcmp(g->rule[i].type, name)) g->sym_rules[at++] = (uint16_t)i;
     }
+    g->context_stream = 1;
     for (int i = 0; i < g->n; i++) {
         GRule *r = &g->rule[i]; CompiledRule *c = &r->compiled;
         if (r->alias_tier && r->alias_tier <= l->ntier) str_set(r->alias, sizeof r->alias, l->tier[r->alias_tier - 1].name);
@@ -870,6 +879,7 @@ int layout_compile_grammar(Layout *l, const char *grammar_name){
             fprintf(stderr, "grammar %s: unresolved context path %s on %s\n", grammar_name, r->context[j], r->type); g->unresolved++;
         }
         g->has_context |= r->ncontext != 0;
+        if (r->ncontext && !r->context_level) g->context_stream = 0;
         if (r->text[0] && !grammar_path_compile(lang, r->text, &c->text)) {
             fprintf(stderr, "grammar %s: unresolved text path %s on %s\n", grammar_name, r->text, r->type); g->unresolved++;
         }
@@ -878,6 +888,10 @@ int layout_compile_grammar(Layout *l, const char *grammar_name){
             if (!c->inner) { fprintf(stderr, "grammar %s: unresolved injection %s\n", grammar_name, r->child_grammar); g->unresolved++; }
             else c->child_grammar_id = c->inner->g.grammar_id;
         }
+    }
+    if (!g->context_stream) for (int i = 0; i < g->n; i++) if (g->rule[i].context_level) {
+        fprintf(stderr, "grammar %s: every inherited header requires a context-level for streaming\n", grammar_name);
+        g->unresolved++; break;
     }
     if (!layout_compile_parts(l)) g->unresolved++;
     return !g->unresolved;
@@ -1576,6 +1590,7 @@ int s_record_next(SRecords *records, SRecord *record){
             records->descend = (uint8_t)header;
             const SContext *context = records->layout->g.has_context ? record_context_snapshot(records, node) : NULL;
             if (records->failed) return 0;
+            records->last_context = context;
             TSRange range = node_range(node);
             if (grammar->record_children && grammar->record_fallback.capture[0]) {
                 range.start_byte = records->surface_end; range.start_point = records->surface_point;
@@ -1605,11 +1620,12 @@ void s_records_close(SRecords *records){
     arena_release(&records->context_arena);
     *records = (SRecords){0};
 }
-int s_records_window(SRecords *records, const Layout *layout, const uint8_t *source, size_t length,
-                     int final, size_t *consumed, SayScratch *headers){
+int s_records_context_window(SRecords *records, const Layout *layout, const uint8_t *source, size_t length,
+                     int final, size_t *consumed, SayScratch *headers, SContextStream *context_stream){
     *consumed = 0;
     if (!records_open(records, layout, source, length, !final, 1)) return final ? -1 : 0;
     records->header_arena = headers;
+    records->context_stream = context_stream;
     TSNode root = ts_tree_root_node(records->tree);
     SRecord record; uint32_t last = 0, previous = 0;
     while (s_record_next(records, &record)) { previous = last; last = record.range.end_byte; }
@@ -1621,7 +1637,12 @@ int s_records_window(SRecords *records, const Layout *layout, const uint8_t *sou
     ts_tree_cursor_reset(records->cursor, root);
     records->started = records->done = records->failed = records->descend = 0; records->ordinal = 0;
     records->surface_end = 0; records->surface_point = (TSPoint){0,0};
+    records->last_context = NULL;
     return 1;
+}
+int s_records_window(SRecords *records, const Layout *layout, const uint8_t *source, size_t length,
+                     int final, size_t *consumed, SayScratch *headers){
+    return s_records_context_window(records, layout, source, length, final, consumed, headers, NULL);
 }
 
 /* Part names are compiled at load time. Probe exact/prefix hash buckets and
@@ -2110,7 +2131,7 @@ static int record_context(const Layout *layout, TSNode root, const GInput *input
         const GRule *rule = rule_at(&worker, node, node_field(node, parent), ts_node_is_null(parent) ? 0 : ts_node_symbol(parent));
         if (!rule || rule->what != G_GROUP || !rule->ncontext) continue;
         SField field = {.source=node, .range=source_range(input, node_range(node)), .grammar=layout->g.grammar_id,
-                        .kind=S_GROUP, .flags=S_FIELD_CONTEXT};
+                        .kind=S_GROUP, .flags=S_FIELD_CONTEXT, .context_level=rule->context_level};
         if (rule->compiled.alias_length) { field.name = (const uint8_t *)rule->alias; field.name_length = rule->compiled.alias_length; }
         else if (rule->kind) { field.name = (const uint8_t *)rule->type; field.name_length = rule->compiled.type_length; }
         else for (int k = 0; k < rule->nname; k++) {
@@ -2130,31 +2151,15 @@ static int record_context(const Layout *layout, TSNode root, const GInput *input
 /* Immutable lexical context, independent of the packaging AST and input byte
  * buffer. A window projects each ancestor header once; record workers replay
  * compiled fields rather than parsing the same headers for every record. */
-typedef struct ContextEvent { SField field; int event; struct ContextEvent *next; } ContextEvent;
-struct SContext { ContextEvent *first, *last; SField *opened; uint32_t count; const SContext *parent; };
 typedef struct ContextEntry {
     const void *owner; uint32_t start; SContext value; struct ContextEntry *next;
 } ContextEntry;
 struct SContextStore { ContextEntry **buckets; size_t capacity, count; };
 typedef struct { SContext *context; SayScratch *arena; } ContextCapture;
-static SField context_field_copy(SayScratch *arena, const SField *field){
-    SField copy = *field; copy.source = (TSNode){0}; copy.flags |= S_FIELD_CONTEXT;
-    if (field->name_length) {
-        uint8_t *name = arena_alloc(arena, field->name_length); memcpy(name, field->name, field->name_length); copy.name = name;
-    }
-    if (field->value_length) {
-        uint8_t *value = arena_alloc(arena, field->value_length); memcpy(value, field->value, field->value_length); copy.value = value;
-    }
-    if (field->bindings) {
-        size_t size = sizeof(SNameBindings) + (size_t)field->bindings->count * sizeof(uint32_t);
-        SNameBindings *bindings = arena_alloc(arena, size); memcpy(bindings, field->bindings, size); copy.bindings = bindings;
-    }
-    return copy;
-}
 static int capture_context(void *sink, int event, const SField *field){
     ContextCapture *capture = sink;
     ContextEvent *entry = arena_alloc(capture->arena, sizeof *entry);
-    *entry = (ContextEvent){.field=context_field_copy(capture->arena, field), .event=event};
+    *entry = (ContextEvent){.field=s_context_field_copy(capture->arena, field), .event=event};
     if (capture->context->last) capture->context->last->next = entry;
     else capture->context->first = entry;
     capture->context->last = entry; return S_VISIT_OK;
@@ -2236,9 +2241,12 @@ static const SContext *record_context_snapshot(SRecords *records, TSNode node){
     }
     if (count) {
         entry->value.opened = arena_alloc(arena, (size_t)count * sizeof(SField)); entry->value.count = count;
-        for (uint32_t i = 0; i < count; i++) entry->value.opened[i] = context_field_copy(arena, &opened[i]);
+        for (uint32_t i = 0; i < count; i++) entry->value.opened[i] = s_context_field_copy(arena, &opened[i]);
     }
     scratch_restore(mark);
+    if (!s_context_stream_inherit(records->context_stream, &entry->value)) {
+        fputs("context levels must increase through ancestor groups\n", stderr); records->failed = 1; return NULL;
+    }
     size_t bucket = context_bucket(owner, start, store->capacity);
     entry->next = store->buckets[bucket]; store->buckets[bucket] = entry; store->count++;
     return &entry->value;
@@ -2364,7 +2372,7 @@ static int scope_stream_next(SRecords *records, SRecord *record){
                     if (!cursor_project(layout, node, &input, scope_opening_visit, &opening, NULL, 0, 0, 0) || !(opening.action & S_VISIT_OK)) {
                         scratch_restore(mark); return scope_stream_error(records, node);
                     }
-                    frame->opening = context_field_copy(frame->arena, &opening.field); scratch_restore(mark);
+                    frame->opening = s_context_field_copy(frame->arena, &opening.field); scratch_restore(mark);
                     ContextCapture attributes = {&frame->attributes, frame->arena}; SField inherited;
                     mark = scratch_mark();
                     if (!scope_context_header(layout, rule, node, &input, &attributes, &inherited)) {

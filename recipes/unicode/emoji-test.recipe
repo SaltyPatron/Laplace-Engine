@@ -1,20 +1,23 @@
 name unicode-emoji-test
-# UTS #51 emoji keyboard/display test data: every row says of its code points their status. The header:
-#   "# Format: code points; status # emoji name"
-# The emoji name is written after the #, where the file writes its comments, and is not read; nor are the
-# "# group:" and "# subgroup:" lines, which are comment lines that speak of the rows after them.
+# UTS #51 keyboard/display data: codepoint sequence, qualification, emoji name,
+# emoji-version label and illustrative palette groups. Structured annotations
+# after # are product. Ordinary comments and the repeated display glyph are
+# packaging. Version labels: UTS51 revision29 section1.5.2.
+# https://www.unicode.org/reports/tr51/tr51-29.html
 match emoji-test.txt
+format emoji_palette
 
-tier row by \n
-comment hash
-remark hash
-padded
-names "code points" status
-tier field by ;
+thing palette header/group_name
+thing subgroup header/subgroup_name
+thing entry sequence
+codepoints sequence
+content status name version group_name subgroup_name
+omit display
 
-thing row "code points"
-codepoints "code points"
-content status
-# The header: "Status component ... fully-qualified ... minimally-qualified ... unqualified": a value of that list
+# Each qualification is a value of the source's list. Palette memberships use
+# its own group vocabulary; they do not change an emoji's content identity.
 value - status
-attest row status
+relation "emoji name" name
+relation "emoji version" version
+attest entry status name version
+pair entry ^palette ^subgroup
