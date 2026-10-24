@@ -38,6 +38,7 @@ static const Param
     TSV      = { "tsv", "--tsv", ARG_PATH, NULL, "FILE: claims and their corpus/file containment: games, tokens, score sum, least position" },
     JOINS    = { "joins", "--joins", ARG_FLAG, NULL, "highway identifiers with evidence from at least 2, 3 and 4 independent source lineages" },
     WRITE    = { "write", "--write", ARG_FLAG, NULL, "put the replayed standings in place" },
+    APPLY    = { "apply", "--apply", ARG_FLAG, NULL, "repair the canonical coordinate projection after complete validation; otherwise audit" },
     PART     = { "part", NULL, ARG_TEXT, NULL, "a part of the strand: a text, LIST:KEY for a type of the highway, ? for a part left open" },
     SOURCE   = { "source", "-s", ARG_TEXT, NULL, "the files named are this source's: a part of it at a time" },
     HIGHWAY  = { "highway", "--highway", ARG_FLAG, NULL, "admit the existing highway contents only; --no-load validates without database access" },
@@ -83,6 +84,7 @@ static const Arg A_HIGHWAY[] = { O(OUT_HW), O(FINGERPRINT), END };
 static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(HIGHWAY), O(WHOLE), O(NO_LOAD), O(PLAN), O(CATALOG), O(LIST_SOURCES), O(CLAIMS), O(CLAIMS_TSV), O(ENTITIES),
                                 { &WHAT, ARG_MANY, NULL, NULL }, END };
 static const Arg A_MERGE[] = { O(CONNINFO), { &JOBS, 0, NULL, "every processor" }, END };
+static const Arg A_PROJECTION[] = { O(CONNINFO), O(APPLY), END };
 static const Arg A_FORGET[] = { O(CONNINFO), O(JOBS), O(EXCEPT), O(TRUNK), { &WITNESS, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
 static const Arg A_SWEEP[] = { O(CONNINFO), O(JOBS), O(DRY), END };
 static const Arg A_HELD[] = { O(CONNINFO), O(FILES), O(TSV), { &PART, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
@@ -115,6 +117,7 @@ const Op OPS[] = {
     { "sources",   cmd_sources,   "the sources there are recipes for, in the order they go in", A_SOURCES, R_DB | R_F, "text" },
     { "ingest",    cmd_ingest,    "a source by its name, or files, through their recipes", A_INGEST, W_DB | R_F, "text" },
     { "merge",     cmd_merge,     "what the ingest staged, into the real tables at once", A_MERGE, W_DB, "text" },
+    { "projection",cmd_projection,"audit or repair derived coordinates while preserving content IDs and paths", A_PROJECTION, W_DB, "text" },
     { "forget",    cmd_forget,    "what one witness said, taken back out: its trunk, what it alone holds, and the standings it touched played again", A_FORGET, W_DB | EFFECT_DESTROYS, "text" },
     { "sweep",     cmd_sweep,     "whatever nothing holds, removed", A_SWEEP, W_DB | EFFECT_DESTROYS, "text" },
     { "held",      cmd_held,      "who said a claim, how many times and how: a walk up the container index from it to the records, files and trunks that hold it", A_HELD, R_DB | R_F, "text" },

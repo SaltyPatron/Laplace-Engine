@@ -71,6 +71,10 @@ GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO "{identifier}";''')
         run('ingest', '-d', scoped, '-j', '2', 'scoped-loader')
         counts = sql(identifier, counts_sql)
         assert all(int(count) > 0 for count in counts.split('|')), counts
+        owner = 'dbname=' + identifier
+        assert 'projection audit: 0 entity coordinates, 0 path Hilbert keys' in run('projection', '-d', owner)
+        assert 'projection applied: 0 entity coordinates, 0 path Hilbert keys' in run('projection', '-d', owner, '--apply')
+        assert sql(identifier, counts_sql) == counts, 'Projection maintenance changed structural/witness counts'
         run('ingest', '-d', scoped, '-j', '2', 'scoped-loader')
         assert sql(identifier, counts_sql) == counts, 'Replay changed the recorded structural/witness closure'
         assert sql(identifier, "SELECT oid::text || '|' || relowner FROM pg_class WHERE oid='stage.staging_test_guard'::regclass;") == guard
