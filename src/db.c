@@ -71,20 +71,25 @@ static void start_loader(const char *conninfo, int requested){
     statement(writer.series, "BEGIN");
 }
 
-/* One parent-table set query per bounded ID window, across every tier. */
+/* One parent-table set query per allocated connection, across every tier. */
 static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, uint64_t n){
     uint8_t *hit = calloc(n ? (size_t)n : 1, 1);
-    const uint64_t window = 65536;
-    #pragma omp parallel for num_threads(npg) schedule(dynamic)
-    for (uint64_t begin = 0; begin < n; begin += window) {
-        uint64_t count = n - begin < window ? n - begin : window;
+    if (!n) return hit;
+    int lanes = (uint64_t)npg < n ? npg : (int)n;
+    /* Partition the complete frontier over the actual connection allocation.
+     * No fixed ID quota splits it into additional database round trips. */
+    #pragma omp parallel for num_threads(lanes) schedule(static,1)
+    for (int lane = 0; lane < lanes; lane++) {
+        uint64_t begin = n * (uint64_t)lane / (uint64_t)lanes;
+        uint64_t end = n * (uint64_t)(lane + 1) / (uint64_t)lanes;
+        uint64_t count = end - begin;
         lp_idmap *places = lp_idmap_sized(sizeof(uint8_t));
         for (uint64_t i = 0; i < count; i++) { bool fresh; lp_idmap_put(places, &ids[begin + i], &fresh); }
         Args a = {0}; arg_ids(&a, ids + begin, (size_t)count);
         /* Each requested ID supplies a partition-pruning parameter. With an
          * array predicate, a generic plan repeats array processing in every
          * entity partition even when none of the IDs is stored. */
-        PGresult *q = ask_once(pg[omp_get_thread_num()],
+        PGresult *q = ask_once(pg[lane],
             "SELECT e.id FROM unnest($1::blake3[]) wanted(id) JOIN public.entity e ON e.id=wanted.id", &a);
         for (int row = 0; row < PQntuples(q); row++) {
             lp_id id; memcpy(id.b, PQgetvalue(q, row, 0), 16);
@@ -612,19 +617,15 @@ int merge(const char *conninfo,int npg){
     const lp_id *changed=lp_idmap_keys(writer.changed);
     for(size_t i=0;i<lp_idmap_count(writer.changed);i++){lp_copy_row(&copy,1);lp_copy_id(&copy,&changed[i]);}
     copy_close(&copy);lp_buf_free(&copy.buf);
-    /* The final registered trunk includes unchanged files too. Replace pending
-     * provisional evidence with the complete containment estate inside the same
-     * transaction as witness registration. No standings are read by the client. */
+    /* The final registered trunk includes unchanged files too. Native owns
+     * traversal and testimony reconstruction; SQL only combines affected IDs
+     * and invokes the standing fold in the witness registration transaction. */
     snprintf(sql,sizeof sql,
         "DELETE FROM %s;"
-        "WITH RECURSIVE below(id) AS (SELECT id FROM %s UNION"
-        " SELECT child FROM below b JOIN public.physicality p ON p.entity=b.id"
-        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) child),"
-        " claims AS (SELECT claim FROM %s UNION SELECT b.id FROM below b"
-        " JOIN public.physicality p ON p.entity=b.id WHERE laplace_mask_has_value(p.mask,'kind','claim')"
-        " AND laplace_path_length(p.path)>=2)"
+        "WITH claims AS (SELECT claim FROM %s UNION"
+        " SELECT claim FROM laplace_contained_series(ARRAY(SELECT id FROM %s)))"
         " SELECT laplace_attest_series('%s'::regclass,array_agg(claim)) FROM claims",
-        writer.pending,writer.witnesses,writer.affected,writer.pending);
+        writer.pending,writer.affected,writer.witnesses,writer.pending);
     /* An unchanged registered source contributes no new evidence on replay.
      * Recompute only for new series or changed witness trust/containment. */
     if(lp_idmap_count(writer.changed) || writer.witness_changed) statement(writer.series,sql);
