@@ -160,6 +160,9 @@ thing block name
 thing emoji-source unicode
 thing normalization-correction cp
 codepoints cp first-cp last-cp cps bmg bpb cf dm FC_NFKC lc NFKC_CF NFKC_SCF scf slc stc suc tc uc EqUIdeo ideograph radical radical-ideograph of use code unicode old new
+# Block boundaries are addresses, including the surrogate blocks. The range
+# value rule preserves scalar endpoints and records non-scalar addresses as content.
+range block.first-cp block.last-cp
 omit xmlns
 omit description normalization-correction.version
 content *
