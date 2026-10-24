@@ -81,7 +81,11 @@ static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, uint64_t n){
         lp_idmap *places = lp_idmap_sized(sizeof(uint8_t));
         for (uint64_t i = 0; i < count; i++) { bool fresh; lp_idmap_put(places, &ids[begin + i], &fresh); }
         Args a = {0}; arg_ids(&a, ids + begin, (size_t)count);
-        PGresult *q = ask_once(pg[omp_get_thread_num()], "SELECT id FROM public.entity WHERE id = ANY($1::blake3[])", &a);
+        /* Each requested ID supplies a partition-pruning parameter. With an
+         * array predicate, a generic plan repeats array processing in every
+         * entity partition even when none of the IDs is stored. */
+        PGresult *q = ask_once(pg[omp_get_thread_num()],
+            "SELECT e.id FROM unnest($1::blake3[]) wanted(id) JOIN public.entity e ON e.id=wanted.id", &a);
         for (int row = 0; row < PQntuples(q); row++) {
             lp_id id; memcpy(id.b, PQgetvalue(q, row, 0), 16);
             int64_t at = lp_idmap_find(places, &id);
