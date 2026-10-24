@@ -368,6 +368,11 @@ static void said_same(const Ref *ch, uint32_t n, const lp_id *id){
 }
 /* A composition, recorded: Laplace-Native gives its ID and coordinate; the table keeps it, once, with its path. */
 Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
+    if (!n) return lp_ref_compose(ch, 0, tier);
+    static const lp_id absent = {{0}};
+    for (uint32_t i=0; i<n; i++) if (lp_id_eq(&ch[i].id,&absent)) {
+        fprintf(stderr,"invalid scalar content or unresolved child at composition operand %u\n",i); exit(1);
+    }
     if (n == 1) return ch[0];
     Ref r = lp_ref_compose(ch, n, tier); r.said = 0; r.outcome = 0; r.position = 0; r.spare = 0;
     Seen *c = seen_of(); uint64_t h = hkey(&r.id); uint32_t at = (uint32_t)(h >> 17) & (SEEN - 1);
@@ -450,7 +455,10 @@ void ctx_open(int threads){
 Ref text_ref(Ctx *c, const uint8_t *s, size_t n){
     /* Native owns the canonical UAX #29 tree. A worker or byte-window boundary
      * must never introduce a second text decomposition or change its ID. */
-    Ref r = lp_text_decompose(c, s, n, compose_sink, NULL); r.said = 0; return r;
+    Ref r = lp_text_decompose(c, s, n, compose_sink, NULL); r.said = 0;
+    static const lp_id absent = {{0}};
+    if (n && lp_id_eq(&r.id,&absent)) { fputs("invalid scalar content has no canonical text entity\n",stderr); exit(1); }
+    return r;
 }
 
 static uint64_t nodes_before, hits_before;
