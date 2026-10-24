@@ -5,6 +5,10 @@ set -euo pipefail
 SRC=${1:-${LAPLACE_GRAMMAR_SRC:?Declare grammar sources}}
 OUT=${2:-${LAPLACE_GRAMMARS:?Declare grammar output}}
 SRC=$(cd "$SRC" && pwd)
+EXTERNAL_SOURCES=${LAPLACE_GRAMMAR_SRC:-}
+if [[ -z "$EXTERNAL_SOURCES" && -n "${LAPLACE_EXTERNAL:-}" ]]; then
+  EXTERNAL_SOURCES="$LAPLACE_EXTERNAL/tree-sitter-grammars"
+fi
 mkdir -p "$OUT"
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) win=1; ext=dll; CC=${CC:-icx-cc} ;;
@@ -56,7 +60,7 @@ done < <(find "$SRC" -name grammar.js -not -path '*/node_modules/*' -print0)
 
 while IFS= read -r -d '' manifest; do
   package=$(python3 "$(dirname "$0")/prepare_grammar.py" "$manifest" \
-    "${LAPLACE_GRAMMAR_SRC:?Declare pinned external grammar sources}" \
+    "${EXTERNAL_SOURCES:?Declare pinned external grammar sources}" \
     "${LAPLACE_BUILD:?Declare the build root}/deps/grammars/derived")
   generate "$package/grammar.js"
 done < <(find "$SRC" -name derivation.json -not -path '*/node_modules/*' -print0)
