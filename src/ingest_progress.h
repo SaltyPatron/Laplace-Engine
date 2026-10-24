@@ -46,6 +46,8 @@ static int progress_open(File *files, int nfiles, LoadStats *stats) {
         if (files[i].known) { ingest_progress.state[i] = 2; ingest_progress.done++; }
     }
     progress_write("inventory", NULL, NULL);
+    for (int i = 0; i < nfiles; i++) if (!files[i].skipped && files[i].known)
+        progress_write("file-known", &files[i], NULL);
     return 0;
 }
 
