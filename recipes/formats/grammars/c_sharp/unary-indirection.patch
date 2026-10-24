@@ -1,0 +1,11 @@
+--- a/grammar.js
++++ b/grammar.js
+@@ -46,2 +46,3 @@
+   conflicts: $ => [
++    [$.expression, $.assignment_expression],
+     [$._simple_name, $.generic_name],
+@@ -1467,3 +1468,3 @@
+       '*',
+-      $.lvalue_expression,
++      $.expression,
+     )),

@@ -32,9 +32,10 @@ compile() {
 }
 
 generator=
-while IFS= read -r -d '' definition; do
+generate() {
+  local definition=$1 package generated
   package=$(dirname "$definition")
-  [[ ! -f "$package/src/parser.c" ]] || continue
+  [[ ! -f "$package/src/parser.c" ]] || return 0
   if [[ -z "$generator" ]]; then
     generator=${LAPLACE_TREESITTER_CLI:-$(command -v tree-sitter || true)}
     if [[ -z "$generator" ]] || ! "$generator" --version >/dev/null 2>&1; then
@@ -48,7 +49,17 @@ while IFS= read -r -d '' definition; do
   mkdir -p "$generated"
   "$generator" generate "$definition" --output "$generated" --abi 15 --js-runtime native
   compile "$generated/parser.c" "$package/src" "$(dirname "$package")/common"
+}
+while IFS= read -r -d '' definition; do
+  generate "$definition"
 done < <(find "$SRC" -name grammar.js -not -path '*/node_modules/*' -print0)
+
+while IFS= read -r -d '' manifest; do
+  package=$(python3 "$(dirname "$0")/prepare_grammar.py" "$manifest" \
+    "${LAPLACE_GRAMMAR_SRC:?Declare pinned external grammar sources}" \
+    "${LAPLACE_BUILD:?Declare the build root}/deps/grammars/derived")
+  generate "$package/grammar.js"
+done < <(find "$SRC" -name derivation.json -not -path '*/node_modules/*' -print0)
 
 while IFS= read -r -d '' parser; do
   package=$(dirname "$(dirname "$parser")")
