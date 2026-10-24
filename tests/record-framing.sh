@@ -15,7 +15,8 @@ file=$scratch/ucd.all.flat.xml
   for ((i=0; i<80; i++)); do
     printf '<block first-cp="%04X" last-cp="%04X" name="Block %s &amp; Ω"/>\n' "$((i*16))" "$((i*16+15))" "$i"
   done
-  printf '%s\n' '</blocks>' '</ucd>'
+  printf '%s\n' '</blocks>' '<repertoire>' \
+    '<char cp="3400" kSemanticVariant="U+4E18"/>' '</repertoire>' '</ucd>'
 } > "$file"
 read_claims(){
   LAPLACE_RECORD_WINDOW_BYTES=$1 "$L" ingest --claims -j 2 -s unicode "$file" > "$scratch/$1.log" 2> "$scratch/$1.err"
@@ -24,6 +25,7 @@ read_claims(){
 }
 read_claims 65536
 [[ -s $scratch/65536.claims ]]
+grep -q 'semantic variant' "$scratch/65536.claims"
 for window in 97 257 4096; do
   read_claims "$window"
   cmp "$scratch/65536.claims" "$scratch/$window.claims"

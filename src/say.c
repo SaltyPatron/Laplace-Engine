@@ -135,7 +135,9 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                 if (record_field_defaulted(s,t,c)) continue;
                 if (s->att[a].with[0] && record_selector_code(s->att[a].with)->special==SELECT_LABEL) field_qualifier(k,y,s->att[a].file);
                 if (y->kind == S_GROUP && y->join != S_PIECES && strchr(s->att[a].name[z], '*')) continue;      /* a wildcard names the part's values, not the elements inside it, which speak for themselves */
-                if (y->kind == S_GROUP && !y->scalar) {                      /* Structured scalar payloads retain their whole value; other groups attest their parts. */
+                /* A declared meaning attests a structured scalar as one value.
+                 * Otherwise its named parts retain their own scoped meanings. */
+                if (y->kind == S_GROUP && (!y->scalar || !record_value_meaning(s, y))) {
                     const Dis *my = record_value_meaning(s, y);
                     for (int32_t q = record_field_first(y); q >= 0; q = record_field_next(&t->n[q])) { const SemanticValue *w = &t->n[q]; if (!w->vlen) continue; Ref v;
                         if (w->kind == S_VALUE && w->nlen && !record_field_named(w, (const char *)y->name, y->nlen)) { const Dis *dw = record_field_disposition(s, w); if (dw && (dw->what == D_OMIT || dw->what == D_METADATA)) continue;      /* the file's bookkeeping says nothing */
