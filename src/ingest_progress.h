@@ -59,7 +59,9 @@ static void progress_file(const char *event, File *file) {
         if (!strcmp(event, "file-start")) {
             if (!*state) { *state = 1; progress_write(event, file, NULL); }
         } else if (!strcmp(event, "file-composed")) {
-            if (*state != 2 && !file->partial && file->has_file) {
+            /* A curated file can be fully read without producing content,
+             * as with Unicode's comments-only NamedSequencesProv.txt. */
+            if (*state != 2 && !file->partial) {
                 *state = 2; ingest_progress.done++; ingest_progress.bytes += file->bytes;
                 progress_write(event, file, NULL);
             }
