@@ -15,12 +15,14 @@ export LAPLACE_RECIPES=$scratch/recipes LAPLACE_INGEST_PROGRESS_PATH=$scratch/pr
 cp -r "$here/../recipes" "$LAPLACE_RECIPES"
 sed -i '/^tier0$/d' "$LAPLACE_RECIPES/unicode/source"
 mkdir -p "$LAPLACE_DATA/UCD/Public/UCD/latest"
-printf '0041 ; Yes\n0042 ; No\n' > "$LAPLACE_DATA/UCD/Public/UCD/latest/LinkEmail.txt"
+printf '0041\n0042\n0041\n' > "$LAPLACE_DATA/UCD/Public/UCD/latest/LinkEmail.txt"
 # Like the real NamedSequencesProv.txt: fully read, with no provisional rows.
 printf '# Provisional named sequences\n# No provisional entries are currently defined.\n' \
     > "$LAPLACE_DATA/UCD/Public/UCD/latest/NamedSequencesProv.txt"
 "$L" deploy -d "$conn" > "$scratch/deploy.log" 2>&1 || { cat "$scratch/deploy.log"; exit 1; }
-"$L" ingest -d "$conn" -j 2 unicode > "$scratch/ingest.log" 2>&1 || { cat "$scratch/ingest.log"; cat "$LAPLACE_WORK/logs/ingest/unicode.log"; exit 1; }
+# Cross grammar-framed windows so the last row updates an earlier cumulative
+# series with a NULL lineage rather than duplicating or adding its total again.
+LAPLACE_RECORD_WINDOW_BYTES=1 "$L" ingest -d "$conn" -j 2 unicode > "$scratch/ingest.log" 2>&1 || { cat "$scratch/ingest.log"; cat "$LAPLACE_WORK/logs/ingest/unicode.log"; exit 1; }
 "$psql" -Xw -v ON_ERROR_STOP=1 -d "$conn" <<SQL
 CREATE TEMP TABLE progress_lines(line text);
 \copy progress_lines FROM '$scratch/progress.jsonl' WITH (FORMAT csv, DELIMITER E'\x1f', QUOTE E'\x1e');
@@ -38,6 +40,11 @@ BEGIN
          AND j->>'file' LIKE '%/NamedSequencesProv.txt' AND NOT j ? 'file_id')
      OR NOT EXISTS (SELECT FROM progress WHERE j->>'event'='file-composed' AND j ? 'file_id') THEN
     RAISE EXCEPTION 'producer progress disagrees with persisted source: %', last_frame;
+  END IF;
+  IF NOT EXISTS (SELECT FROM laplace_contained_series(ARRAY[(last_frame->>'source_id')::blake3])
+       WHERE claim=laplace_compose(ARRAY[laplace_cp_id(65),laplace_id('Link_Email')]) AND games=2 AND score=2)
+     OR (SELECT count(*) FROM progress WHERE j->>'event'='progress' AND j->>'file' LIKE '%/LinkEmail.txt')<3 THEN
+    RAISE EXCEPTION 'streaming windows lost or duplicated cumulative testimony';
   END IF;
 END \$\$;
 SQL

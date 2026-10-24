@@ -62,9 +62,10 @@ static void start_loader(const char *conninfo, int requested){
         "CREATE UNLOGGED TABLE %s (id blake3 NOT NULL,tier smallint NOT NULL,entity_mask bit(64) NOT NULL,path_mask bit(64) NOT NULL,annotations geometry);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
+        "CREATE UNIQUE INDEX ON %s (claim,witness,lineage) NULLS NOT DISTINCT;"
         "CREATE UNLOGGED TABLE %s (LIKE public.witness INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (claim blake3 NOT NULL)",
-        writer.entity, writer.path, writer.carriers, writer.delta, writer.pending, writer.witnesses, writer.affected);
+        writer.entity, writer.path, writer.carriers, writer.delta, writer.pending, writer.pending, writer.witnesses, writer.affected);
     statement(control, sql);
     writer.known = lp_idmap_new(); writer.changed = lp_idmap_new();
     writer.series = db_connect(conninfo);
@@ -313,11 +314,11 @@ static void flush_series(Fold *f, LoadStats *st){
     size_t n=lp_idmap_count(changed);
     if(n){
         snprintf(sql,sizeof sql,
-            "UPDATE %s p SET games=d.games,score=d.score,trust=d.trust,lineage=d.lineage FROM %s d"
-            " WHERE p.claim=d.claim AND p.witness=d.witness AND p.lineage IS NOT DISTINCT FROM d.lineage;"
-            "INSERT INTO %s SELECT d.* FROM %s d WHERE NOT EXISTS"
-            " (SELECT FROM %s p WHERE p.claim=d.claim AND p.witness=d.witness AND p.lineage IS NOT DISTINCT FROM d.lineage);TRUNCATE %s",
-            writer.pending,writer.delta,writer.pending,writer.delta,writer.pending,writer.delta);
+            "INSERT INTO %s (claim,witness,lineage,games,score,trust)"
+            " SELECT claim,witness,lineage,games,score,trust FROM %s"
+            " ON CONFLICT(claim,witness,lineage) DO UPDATE"
+            " SET games=EXCLUDED.games,score=EXCLUDED.score,trust=EXCLUDED.trust;TRUNCATE %s",
+            writer.pending,writer.delta,writer.delta);
         statement(writer.series,sql);
         Args a={0}; arg_text(&a,writer.pending); arg_ids(&a,lp_idmap_keys(changed),n);
         PGresult *q=ask_once(writer.series,"SELECT laplace_attest_series($1::regclass,$2::blake3[])",&a);
