@@ -15,7 +15,7 @@ def contained(root, relative):
     return path
 
 
-def prepare(manifest, sources, build):
+def prepare(manifest, sources, build, definition_path=False):
     manifest = manifest.resolve()
     spec = json.loads(manifest.read_text(encoding='utf-8'))
     if not re.fullmatch(r'[A-Za-z0-9_-]+', spec['source']):
@@ -23,7 +23,11 @@ def prepare(manifest, sources, build):
     if not re.fullmatch(r'[a-f0-9]{40}', spec['commit']):
         raise ValueError('Invalid grammar source revision')
     source = contained(sources.resolve(), spec['source'])
-    key = hashlib.sha256(manifest.read_bytes()).hexdigest()[:16]
+    patch = contained(manifest.parent, spec['patch']) if spec.get('patch') else None
+    fingerprint = hashlib.sha256(manifest.read_bytes())
+    if patch:
+        fingerprint.update(patch.read_bytes())
+    key = fingerprint.hexdigest()[:16]
     destination = (build / (manifest.parent.name + '-' + key)).resolve()
     for protected in (sources.resolve(), manifest.parent):
         if destination == protected or destination.is_relative_to(protected):
@@ -41,25 +45,29 @@ def prepare(manifest, sources, build):
         if any(target == previous for previous, _ in inputs):
             raise ValueError('Duplicate grammar input')
         inputs.append((target, data))
-    patch = contained(manifest.parent, spec['patch'])
     destination.mkdir(parents=True, exist_ok=True)
     for target, data in inputs:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
     # git apply is the same patch implementation on Windows and Linux. A
     # changed upstream preimage or an ambiguous patch is a build error.
-    for options in (['--check'], []):
-        subprocess.run(['git', 'apply', '--whitespace=error-all', *options, str(patch)],
-                       cwd=destination, check=True, stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE)
-    return destination
+    if patch:
+        for options in (['--check'], []):
+            subprocess.run(['git', 'apply', '--unidiff-zero', '--whitespace=error-all', *options, str(patch)],
+                           cwd=destination, check=True, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)
+    definition = contained(destination, spec.get('grammar', 'grammar.js'))
+    if not definition.is_file():
+        raise ValueError('Prepared grammar definition is missing')
+    return definition if definition_path else destination
 
 
 if __name__ == '__main__':
     try:
-        if len(sys.argv) != 4:
-            raise ValueError('usage: prepare_grammar.py manifest external_sources build_directory')
-        print(prepare(*(Path(value) for value in sys.argv[1:])))
+        definition_path = len(sys.argv) == 5 and sys.argv[4] == '--definition'
+        if len(sys.argv) != 4 and not definition_path:
+            raise ValueError('usage: prepare_grammar.py manifest external_sources build_directory [--definition]')
+        print(prepare(*(Path(value) for value in sys.argv[1:4]), definition_path=definition_path))
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         print(f'Grammar derivation failed: {error}', file=sys.stderr)
         if isinstance(error, subprocess.CalledProcessError):

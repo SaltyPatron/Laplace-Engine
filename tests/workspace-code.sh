@@ -88,3 +88,53 @@ if "$L" ingest --no-load -s workspace-code "$w/broken.cs" > "$scratch/broken.log
 fi
 grep -q 'does not parse completely' "$scratch/broken.log" || fail 'malformed C# failed for an unrelated reason'
 echo 'workspace-code: unsafe cast/arithmetic indirection retained, worker parity held, malformed input rejected'
+
+# SQL bodies are code selected by the declaration's LANGUAGE, wherever that
+# clause appears. The outer parser retains psql packaging; child grammars must
+# inspect PL/pgSQL statements and SQL expressions, including escaped literals.
+cat > "$w/functions.sql" <<'SQL'
+\echo workspace code
+CREATE FUNCTION before_body(value integer) RETURNS integer
+LANGUAGE sql STABLE SET search_path = public AS $sql$
+SELECT dependency(value);
+$sql$;
+CREATE FUNCTION after_body(value integer) RETURNS integer
+AS 'SELECT dependency(value) + 1' LANGUAGE SQL;
+CREATE FUNCTION escaped_body(value integer) RETURNS integer
+AS E'SELECT \x64ependency(value) + \u0032' LANGUAGE sql;
+CREATE FUNCTION procedural_body(value integer) RETURNS integer
+LANGUAGE plpgsql SET search_path = public AS $body$
+DECLARE result integer;
+BEGIN
+  SELECT dependency(value) INTO result;
+  IF result IS NULL THEN RETURN 0; END IF;
+  RETURN result + dependency(value);
+END
+$body$;
+DO $body$ BEGIN PERFORM dependency(1); END $body$;
+CREATE FUNCTION external_body(value integer) RETURNS integer
+AS 'native_library', 'entry_point' LANGUAGE c;
+SQL
+for workers in 1 4; do
+  out=$("$L" ingest --claims-tsv -j "$workers" -s workspace-code "$w/functions.sql" 2> "$scratch/sql-$workers.log" | tr -d '\r') || fail "SQL bodies: $out $(cat "$scratch/sql-$workers.log")"
+  for name in before_body after_body escaped_body procedural_body external_body; do
+    grep -Fq $'\tdeclared identifier\t'"$name" <<< "$out" || fail "SQL lost $name"
+  done
+  grep -Fq $'\treferenced identifier\tdependency' <<< "$out" || fail 'SQL body call target was not inspected'
+  grep -Fq $'\treferenced identifier\tresult' <<< "$out" || fail 'PL/pgSQL body expressions were not inspected'
+  grep -Fq $'\timplemented by\tSELECT dependency(value) + 2' <<< "$out" || fail 'SQL escaped body was not decoded'
+  grep -Fq $'\timplemented by\tentry_point' <<< "$out" || fail 'Native entry point was not retained as content'
+  grep -q 'mismatched 0' <<< "$out" || fail 'SQL packaging did not recompose exactly'
+  grep -q 'unresolved obligations: 0 ' <<< "$out" || fail 'SQL left unresolved fields'
+  grep '^claim' <<< "$out" | LC_ALL=C sort > "$scratch/sql-$workers.claims"
+done
+cmp "$scratch/sql-1.claims" "$scratch/sql-4.claims" || fail 'SQL claims changed with worker count'
+for body in 'SELECT FROM' 'BEGIN RETURN +; END' ''; do
+  if [[ "$body" = SELECT* ]]; then language=sql; else language=plpgsql; fi
+  printf 'CREATE FUNCTION broken() RETURNS integer LANGUAGE %s AS $$%s$$;\n' "$language" "$body" > "$w/broken.sql"
+  if "$L" ingest --no-load -s workspace-code "$w/broken.sql" > "$scratch/broken-sql.log" 2>&1; then
+    fail "malformed $language body was accepted"
+  fi
+  grep -q 'does not parse completely' "$scratch/broken-sql.log" || fail 'malformed SQL failed for an unrelated reason'
+done
+echo 'workspace-code: SQL/PLpgSQL bodies inspected, literals decoded, worker parity held, malformed and empty bodies rejected'

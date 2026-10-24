@@ -91,13 +91,18 @@ typedef struct { char path[64], sep[8], is[8]; int seplen, islen, pieces, padded
  *     context-level N           before context: ordered header level 1..255 for bounded carry between windows
  *   node TYPE value name PATH text PATH [grammar NAME]
  *   node TYPE text [raw] [join] [grammar NAME]
+ *     when PATH is VALUE [casefold] | when PATH missing
+ *                               PATH is compiled once; ^TYPE selects an enclosing
+ *                               node and //FIELD selects its descendant field.
+ *                               Child NAME names a .format profile, whose grammar
+ *                               declaration selects the actual native parser.
  *   node TYPE member name FIELD value FIELD [grammar NAME]
  *   node TYPE skip
  *   resolve xml | json | turtle
  *   trim
  * A kind the recipe says nothing of is passed through: what is inside it stands where it stands. */
 typedef enum { G_GROUP = 1, G_VALUE, G_TEXT, G_MEMBER, G_SKIP, G_NOTE } GNodeKind;
-enum { G_XML = 1, G_JSON, G_TURTLE, G_CSV, G_DELIMITED, G_LINES };
+enum { G_XML = 1, G_JSON, G_TURTLE, G_CSV, G_DELIMITED, G_LINES, G_SQL, G_SQL_ESCAPE };
 
 #define G_PATH_STEPS 8
 typedef struct { TSSymbol symbol; TSFieldId field; uint8_t flags; } GPathStep;
@@ -111,7 +116,7 @@ typedef struct {
     uint8_t tier_slot;
     uint16_t target_slot, type_length, alias_length;
     uint32_t flags;
-    GPath name[4], text, context[4];
+    GPath name[4], text, context[4], condition;
     const Layout *inner;
 } CompiledRule;
 typedef struct {
@@ -120,6 +125,7 @@ typedef struct {
     char context[4][64]; uint8_t ncontext, context_level;
     char capture[48]; uint16_t capture_length; const SNameBindings *capture_bindings;
     char child_grammar[64];
+    char condition[128], equals[64]; uint8_t condition_mode, equals_length, casefold;
     char field[48], parent[48];
     char alias[64]; uint8_t alias_tier;
     char numbered[64]; uint8_t number_radix, number_width, number_length;

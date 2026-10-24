@@ -8,6 +8,7 @@
 #include "context_stream.h"
 #include "os.h"
 #include "laplace_config.h"
+#include "literal_sql.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -215,13 +216,13 @@ int layout_says(Layout *l, const char *path, char *tok){
     if (!strcmp(tok, "part")) { char *pa = strtok(NULL, " \t\r\n"), *by = strtok(NULL, " \t\r\n"), *sp = strtok(NULL, " \t\r\n"), *w;
         if (!pa || !by || (strcmp(by, "by") && strcmp(by, "grammar")) || !sp || l->npart == 32) { fprintf(stderr, "%s: part NAME by SEPARATOR [is IS] [pieces N] [space CHAR] [padded] [grammar NAME]\n", path); return -1; }
         SPart *p = &l->part[l->npart++]; memset(p, 0, sizeof *p); str_set(p->path, sizeof p->path, pa);
-        if (!strcmp(by, "grammar")) { str_set(p->grammar, sizeof p->grammar, sp); p->child_grammar_id = grammar_id_for(sp); }
+        if (!strcmp(by, "grammar")) { str_set(p->grammar, sizeof p->grammar, sp); }
         else p->seplen = sep_read(sp, p->sep, sizeof p->sep);
         while ((w = strtok(NULL, " \t\r\n"))) { if (!strcmp(w, "padded")) { p->padded = 1; continue; } char *v = strtok(NULL, " \t\r\n"), b[8];
             if (v && !strcmp(w, "is")) p->islen = sep_read(v, p->is, sizeof p->is);
             else if (v && !strcmp(w, "pieces") && atoi(v) > 0) p->pieces = atoi(v);
             else if (v && !strcmp(w, "space") && sep_read(v, b, sizeof b)) p->space = b[0];
-            else if (v && !strcmp(w, "grammar")) { str_set(p->grammar, sizeof p->grammar, v); p->child_grammar_id = grammar_id_for(v); }
+            else if (v && !strcmp(w, "grammar")) { str_set(p->grammar, sizeof p->grammar, v); }
             else { fprintf(stderr, "%s: part NAME by SEPARATOR [is IS] [pieces N] [space CHAR] [padded] [grammar NAME]\n", path); return -1; } }
         return 1; }
     if (!strcmp(tok, "trim")) { l->g.trim = 1; return 1; }
@@ -310,7 +311,7 @@ int layout_says(Layout *l, const char *path, char *tok){
     if (!strcmp(tok, "levels")) { char *v; while ((v = strtok(NULL, " \t\r\n")) && l->nlevels < 8) {
             str_set(l->levels[l->nlevels], 32, v); l->level_lengths[l->nlevels] = (uint8_t)strlen(l->levels[l->nlevels]); l->nlevels++; }
         if (!l->nlevels) { fprintf(stderr, "%s: levels NAME...\n", path); return -1; } return 1; }
-    if (!strcmp(tok, "resolve")) { char *v = strtok(NULL, " \t\r\n"); l->g.resolve = v && !strcmp(v, "xml") ? G_XML : v && !strcmp(v, "json") ? G_JSON : v && !strcmp(v, "turtle") ? G_TURTLE : v && !strcmp(v, "csv") ? G_CSV : v && !strcmp(v, "delimited") ? G_DELIMITED : v && !strcmp(v, "lines") ? G_LINES : 0;
+    if (!strcmp(tok, "resolve")) { char *v = strtok(NULL, " \t\r\n"); l->g.resolve = v && !strcmp(v, "xml") ? G_XML : v && !strcmp(v, "json") ? G_JSON : v && !strcmp(v, "turtle") ? G_TURTLE : v && !strcmp(v, "csv") ? G_CSV : v && !strcmp(v, "delimited") ? G_DELIMITED : v && !strcmp(v, "lines") ? G_LINES : v && !strcmp(v, "sql") ? G_SQL : 0;
         if (!l->g.resolve) { fprintf(stderr, "%s: resolve xml | json | turtle | csv | lines | delimited [quoted] [escaped CHAR]\n", path); return -1; }
         char *option;
         while ((option = strtok(NULL, " \t\r\n"))) {
@@ -332,7 +333,7 @@ int layout_says(Layout *l, const char *path, char *tok){
         r->compiled.kind = (GNodeKind)r->what;
         int into = 0;                                                       /* names, text path, injection, field, parent */
         while ((w = strtok(NULL, " \t\r\n"))) {
-            if (into == 3) { str_set(r->child_grammar, sizeof r->child_grammar, w); r->compiled.child_grammar_id = grammar_id_for(w); into = 0; continue; }
+            if (into == 3) { str_set(r->child_grammar, sizeof r->child_grammar, w); into = 0; continue; }
             if (into == 4) { str_set(r->field, sizeof r->field, w); into = 0; continue; }
             if (into == 5) { str_set(r->parent, sizeof r->parent, w); into = 0; continue; }
             if (into == 6) { str_set(r->alias, sizeof r->alias, w); into = 0; continue; }
@@ -348,6 +349,15 @@ int layout_says(Layout *l, const char *path, char *tok){
                 if (!*w || *end || !level || level > UINT8_MAX) { fprintf(stderr, "%s: context-level requires 1..255\n", path); return -1; }
                 r->context_level = (uint8_t)level; into = 0; continue;
             }
+            if (into == 14) { str_set(r->condition, sizeof r->condition, w); into = 15; continue; }
+            if (into == 15) {
+                if (!strcmp(w, "missing")) { r->condition_mode = 2; into = 0; continue; }
+                if (!strcmp(w, "is")) { r->condition_mode = 1; into = 16; continue; }
+                fprintf(stderr, "%s: node condition requires is VALUE or missing\n", path); return -1;
+            }
+            if (into == 16) { str_set(r->equals, sizeof r->equals, w); r->equals_length = (uint8_t)strlen(r->equals); into = 0; continue; }
+            if (!strcmp(w, "when")) { into = 14; continue; }
+            if (!strcmp(w, "casefold")) { r->casefold = 1; continue; }
             if (into == 10 || into == 11) {
                 char *end; unsigned long value=strtoul(w,&end,10);
                 if (!*w || *end || (into==10 ? value<2 || value>36 : value<1 || value>64)) {
@@ -373,6 +383,7 @@ int layout_says(Layout *l, const char *path, char *tok){
             else if (!strcmp(w,"width")) into=11;
             else if (!strcmp(w,"capture")) into=12;
             else if (!strcmp(w, "same-tier")) r->compiled.flags |= 1u;
+            else if (!strcmp(w, "required")) r->compiled.flags |= 4u;
             else if (!strcmp(w, "raw")) r->raw = 1; else if (!strcmp(w, "join")) r->join = 1; else if (!strcmp(w, "list")) r->list = 1; else if (!strcmp(w, "kind")) r->kind = 1; else if (!strcmp(w, "trim")) r->trim = 1;
             else if (into == 1 && r->nname < 4) str_set(r->name[r->nname++], 64, w); else if (into == 2) str_set(r->text, sizeof r->text, w);
             else { fprintf(stderr, "%s: node %s: %s is not something a node's line says\n", path, ty, w); return -1; } }
@@ -422,25 +433,43 @@ int layout_says(Layout *l, const char *path, char *tok){
 static int grammar_path_compile(const TSLanguage *lang, const char *path, GPath *out){
     memset(out, 0, sizeof *out);
     if (path[0] == '.' && !path[1]) return 1;
+    uint8_t descendant = 0;
     for (const char *at = path; *at;) {
+        if (at[0] == '/' && at[1] == '/') { descendant = 8; at += 2; continue; }
         const char *end = strchr(at, '/'); uint32_t len = (uint32_t)(end ? (size_t)(end - at) : strlen(at));
         if (len) {
             if (out->n == G_PATH_STEPS) return 0;
             GPathStep *step = &out->step[out->n++];
+            step->flags = descendant; descendant = 0;
+            if (*at == '^') { step->flags |= 4; at++; len--; }
             step->field = ts_language_field_id_for_name(lang, at, len);
             step->symbol = ts_language_symbol_for_name(lang, at, len, true);
             if (!step->symbol) step->symbol = ts_language_symbol_for_name(lang, at, len, false);
             if (step->field) step->flags |= 1;
             if (step->symbol || (len == 5 && !memcmp(at, "ERROR", 5))) step->flags |= 2;
-            if (!step->flags) return 0;
+            if (!(step->flags & 3) || ((step->flags & 4) && !(step->flags & 2))) return 0;
         }
-        at = end ? end + 1 : at + len;
+        if (end && end[1] == '/') { at = end + 2; descendant = 8; }
+        else at = end ? end + 1 : at + len;
     }
-    return 1;
+    return !descendant;
 }
 
-static Layout *inner_layouts[512];
-static uint8_t inner_state[512];
+static struct { char name[64]; Layout *layout; uint8_t state; } inner_formats[512];
+static unsigned inner_count;
+static int layout_resolved(const Layout *layout, const Layout **seen, unsigned count){
+    if (!layout || !layout->g.compiled || layout->g.unresolved || layout->part_errors) return 0;
+    for (unsigned i = 0; i < count; i++) if (seen[i] == layout) return 1;
+    if (count == 512) return 0;
+    seen[count++] = layout;
+    for (int i = 0; i < layout->g.n; i++) if (layout->g.rule[i].compiled.inner &&
+        !layout_resolved(layout->g.rule[i].compiled.inner, seen, count)) return 0;
+    for (int i = 0; i < layout->npart; i++) {
+        if (layout->part[i].inner && !layout_resolved(layout->part[i].inner, seen, count)) return 0;
+        if (layout->part[i].syntax && !layout_resolved(layout->part[i].syntax, seen, count)) return 0;
+    }
+    return !layout->record_inner || layout_resolved(layout->record_inner, seen, count);
+}
 static uint64_t part_hash(const uint8_t *bytes, size_t length){
     uint64_t hash = UINT64_C(14695981039346656037);
     for (size_t i = 0; i < length; i++) hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
@@ -456,29 +485,53 @@ static FILE *format_open(const char *name, char *path, size_t capacity){
     if (!file) perror(path);
     return file;
 }
-static const Layout *inner_layout(const char *name){
-    uint16_t id = grammar_id_for(name);
-    if (!id || id >= 512) return NULL;
-    if (inner_state[id] == 2) return inner_layouts[id];
-    if (inner_state[id]) { fprintf(stderr, "grammar %s: cyclic or failed injected format\n", name); return NULL; }
-    inner_state[id] = 1;
-    char path[4400]; FILE *file = format_open(name, path, sizeof path);
-    if (!file) { inner_state[id] = 3; return NULL; }
-    Layout *layout = calloc(1, sizeof *layout); if (!layout) { perror("injected format"); abort(); }
-    char line[2048]; int valid = 1, declared = 0;
-    blake3_hasher program; blake3_hasher_init(&program); Recipe source = {.program_state=&program};
+static int format_lines(Layout *layout, Recipe *source, FILE *file, const char *path, int *declared, unsigned depth){
+    if (depth == 32) { fprintf(stderr, "%s: format includes exceed 32 levels\n", path); return 0; }
+    char line[2048];
     while (fgets(line, sizeof line, file)) {
-        comment_off(line); recipe_program_line(&source, path, line); char *token = strtok(line, " \t\r\n"); if (!token) continue;
+        comment_off(line); recipe_program_line(source, path, line);
+        char *token = strtok(line, " \t\r\n"); if (!token) continue;
         if (!strcmp(token, "grammar")) {
-            char *language = strtok(NULL, " \t\r\n"); declared = language && *language && strlen(language) < sizeof layout->g.language;
-            if (!declared) { valid = 0; break; } str_set(layout->g.language, sizeof layout->g.language, language);
-        }
-        else if (layout_says(layout, path, token) != 1) { valid = 0; break; }
+            char *language = strtok(NULL, " \t\r\n");
+            if (*declared || !language || !*language || strlen(language) >= sizeof layout->g.language) return 0;
+            str_set(layout->g.language, sizeof layout->g.language, language); *declared = 1;
+        } else if (!strcmp(token, "include")) {
+            char name[64], included_path[4400], *argument = strtok(NULL, " \t\r\n");
+            if (!argument || strlen(argument) >= sizeof name || strtok(NULL, " \t\r\n")) return 0;
+            str_set(name, sizeof name, argument);
+            FILE *included = format_open(name, included_path, sizeof included_path); if (!included) return 0;
+            int valid = format_lines(layout, source, included, included_path, declared, depth + 1);
+            fclose(included); if (!valid) return 0;
+        } else if (layout_says(layout, path, token) != 1) return 0;
     }
+    return !ferror(file);
+}
+static const Layout *inner_layout(const char *name){
+    unsigned id = 0;
+    for (; id < inner_count; id++) if (!strcmp(inner_formats[id].name, name)) break;
+    if (id < inner_count) {
+        if (inner_formats[id].state == 1) return inner_formats[id].layout;
+        if (inner_formats[id].state == 2) {
+            const Layout *seen[512];
+            if (layout_resolved(inner_formats[id].layout, seen, 0)) return inner_formats[id].layout;
+            inner_formats[id].state = 3;
+        }
+        fprintf(stderr, "format %s: failed injected format\n", name); return NULL;
+    }
+    if (inner_count == 512 || strlen(name) >= sizeof inner_formats[id].name) return NULL;
+    inner_count++; str_set(inner_formats[id].name, sizeof inner_formats[id].name, name);
+    inner_formats[id].state = 1;
+    char path[4400]; FILE *file = format_open(name, path, sizeof path);
+    if (!file) { inner_formats[id].state = 3; return NULL; }
+    Layout *layout = calloc(1, sizeof *layout); if (!layout) { perror("injected format"); abort(); }
+    inner_formats[id].layout = layout;
+    int declared = 0;
+    blake3_hasher program; blake3_hasher_init(&program); Recipe source = {.program_state=&program};
+    int valid = format_lines(layout, &source, file, path, &declared, 0);
     fclose(file);
     blake3_hasher_finalize(&program, layout->g.format_hash, sizeof layout->g.format_hash);
-    if (!valid || !declared || !layout_compile_grammar(layout, name)) { inner_state[id] = 3; return NULL; }
-    inner_layouts[id] = layout; inner_state[id] = 2; return layout;
+    if (!valid || !declared || !layout_compile_grammar(layout, layout->g.language)) { inner_formats[id].state = 3; return NULL; }
+    inner_formats[id].state = 2; return layout;
 }
 const Layout *layout_format(const char *name){ return inner_layout(name); }
 int layout_compile_parts(Layout *layout){
@@ -521,34 +574,38 @@ static int compile_symbol_mask(const TSLanguage *language, uint32_t count, const
 }
 static int use_format(Layout *layout, const char *name){
     char path[4400]; FILE *file = format_open(name, path, sizeof path); if (!file) return 0;
-    char line[2048]; int valid = 1, declared = 0;
+    int declared = 0;
     blake3_hasher program; blake3_hasher_init(&program); Recipe source = {.program_state=&program};
-    while (fgets(line, sizeof line, file)) {
-        comment_off(line); recipe_program_line(&source, path, line); char *token = strtok(line, " \t\r\n"); if (!token) continue;
-        if (!strcmp(token, "grammar")) {
-            char *grammar = strtok(NULL, " \t\r\n"); declared = grammar && *grammar && strlen(grammar) < sizeof layout->g.language;
-            if (!declared) { valid = 0; break; }
-            str_set(layout->g.language, sizeof layout->g.language, grammar);
-        } else if (layout_says(layout, path, token) != 1) { valid = 0; break; }
-    }
+    int valid = format_lines(layout, &source, file, path, &declared, 0);
     fclose(file); blake3_hasher_finalize(&program, layout->g.format_hash, sizeof layout->g.format_hash); return valid && declared;
 }
-void layout_program_hash(const Layout *layout, uint8_t out[32]){
+static void layout_hash(const Layout *layout, const Layout **ancestors, unsigned depth, uint8_t out[32]){
     blake3_hasher hash; blake3_hasher_init(&hash);
     if (layout) {
         uint8_t dependency[32]; grammar_program_hash(layout->g.grammar_id, dependency);
         blake3_hasher_update(&hash, dependency, sizeof dependency);
         blake3_hasher_update(&hash, layout->g.format_hash, sizeof layout->g.format_hash);
+        for (unsigned i = 0; i < depth; i++) if (ancestors[i] == layout) {
+            uint32_t distance = depth - i;
+            uint8_t back[4] = {(uint8_t)distance, (uint8_t)(distance >> 8), (uint8_t)(distance >> 16), (uint8_t)(distance >> 24)};
+            blake3_hasher_update(&hash, back, sizeof back);
+            blake3_hasher_finalize(&hash, out, 32); return;
+        }
+        if (depth == 512) { fputs("format dependency graph exceeds 512 profiles\n", stderr); abort(); }
+        ancestors[depth++] = layout;
         for (int i = 0; i < layout->g.n; i++) if (layout->g.rule[i].compiled.inner) {
-            layout_program_hash(layout->g.rule[i].compiled.inner, dependency); blake3_hasher_update(&hash, dependency, sizeof dependency);
+            layout_hash(layout->g.rule[i].compiled.inner, ancestors, depth, dependency); blake3_hasher_update(&hash, dependency, sizeof dependency);
         }
         for (int i = 0; i < layout->npart; i++) {
-            if (layout->part[i].inner) { layout_program_hash(layout->part[i].inner, dependency); blake3_hasher_update(&hash, dependency, sizeof dependency); }
-            if (layout->part[i].syntax) { layout_program_hash(layout->part[i].syntax, dependency); blake3_hasher_update(&hash, dependency, sizeof dependency); }
+            if (layout->part[i].inner) { layout_hash(layout->part[i].inner, ancestors, depth, dependency); blake3_hasher_update(&hash, dependency, sizeof dependency); }
+            if (layout->part[i].syntax) { layout_hash(layout->part[i].syntax, ancestors, depth, dependency); blake3_hasher_update(&hash, dependency, sizeof dependency); }
         }
-        if (layout->record_inner) { layout_program_hash(layout->record_inner, dependency); blake3_hasher_update(&hash, dependency, sizeof dependency); }
+        if (layout->record_inner) { layout_hash(layout->record_inner, ancestors, depth, dependency); blake3_hasher_update(&hash, dependency, sizeof dependency); }
     }
     blake3_hasher_finalize(&hash, out, 32);
+}
+void layout_program_hash(const Layout *layout, uint8_t out[32]){
+    const Layout *ancestors[512]; layout_hash(layout, ancestors, 0, out);
 }
 static int separated_by(const STier *tier, const char *separator){
     size_t length = strlen(separator);
@@ -883,6 +940,9 @@ int layout_compile_grammar(Layout *l, const char *grammar_name){
         if (r->text[0] && !grammar_path_compile(lang, r->text, &c->text)) {
             fprintf(stderr, "grammar %s: unresolved text path %s on %s\n", grammar_name, r->text, r->type); g->unresolved++;
         }
+        if (r->condition_mode && !grammar_path_compile(lang, r->condition, &c->condition)) {
+            fprintf(stderr, "grammar %s: unresolved condition path %s on %s\n", grammar_name, r->condition, r->type); g->unresolved++;
+        }
         if (r->child_grammar[0]) {
             c->inner = inner_layout(r->child_grammar);
             if (!c->inner) { fprintf(stderr, "grammar %s: unresolved injection %s\n", grammar_name, r->child_grammar); g->unresolved++; }
@@ -973,6 +1033,21 @@ static GUnit decode_more(const GDecodePlan *plan, unsigned depth, const uint8_t 
 }
 static int hex_digit(int32_t c){ return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
 static int scalar(uint32_t cp){ return cp < LP_NCP && (cp < 0xd800 || cp > 0xdfff); }
+static int sql_byte_escape(const GDecodePlan *plan, unsigned depth, const uint8_t *src, uint32_t length, uint32_t *used, uint8_t *value){
+    uint32_t at = *used;
+    if (decode_more(plan, depth, src, length, &at).cp != '\\') return 0;
+    int32_t tag = decode_more(plan, depth, src, length, &at).cp;
+    unsigned result = 0, digits = 0, base = tag == 'x' ? 16u : 8u, limit = tag == 'x' ? 2u : 3u;
+    if (tag >= '0' && tag <= '7') { result = (unsigned)(tag - '0'); digits = 1; }
+    else if (tag != 'x') return 0;
+    while (digits < limit && at < length) {
+        uint32_t next_at = at; int d = hex_digit(decode_more(plan, depth, src, length, &next_at).cp);
+        if (d < 0 || (unsigned)d >= base) break;
+        result = result * base + (unsigned)d; at = next_at; digits++;
+    }
+    if (!digits) return 0;
+    *used = at; *value = (uint8_t)result; return 1;
+}
 static GUnit decode_unit(const GDecodePlan *plan, unsigned depth, const uint8_t *src, uint32_t length){
     if (!length) return g_unit(0, -1);
     if (!depth) {
@@ -984,6 +1059,24 @@ static GUnit decode_unit(const GDecodePlan *plan, unsigned depth, const uint8_t 
     GUnit first = decode_unit(plan, depth - 1, src, length);
     if (first.cp < 0) return first;
     unsigned mode = plan->mode[depth - 1]; uint32_t at = first.bytes;
+    if ((mode == G_SQL || mode == G_SQL_ESCAPE) && plan->quoted[depth - 1] && first.cp == plan->quoted[depth - 1]) {
+        GUnit next = decode_more(plan, depth - 1, src, length, &at);
+        return next.cp == first.cp ? g_unit(at, first.cp) : first;
+    }
+    if (mode == G_SQL_ESCAPE && first.cp == '\\') {
+        uint8_t bytes[4]; uint32_t used = 0;
+        if (sql_byte_escape(plan, depth - 1, src, length, &used, &bytes[0])) {
+            unsigned count = bytes[0] < 0x80 ? 1u : bytes[0] >= 0xc2 && bytes[0] <= 0xdf ? 2u :
+                bytes[0] >= 0xe0 && bytes[0] <= 0xef ? 3u : bytes[0] >= 0xf0 && bytes[0] <= 0xf4 ? 4u : 0u;
+            if (!count) return g_unit(used, -1);
+            for (unsigned i = 1; i < count; i++)
+                if (!sql_byte_escape(plan, depth - 1, src, length, &used, &bytes[i]) || (bytes[i] & 0xc0) != 0x80) return g_unit(used, -1);
+            size_t offset = 0; uint32_t cp;
+            if (!lp_utf8_next(bytes, count, &offset, &cp) || offset != count || !scalar(cp) ||
+                (count == 3 && cp < 0x800) || (count == 4 && cp < 0x10000)) return g_unit(used, -1);
+            return g_unit(used, (int32_t)cp);
+        }
+    }
     if (mode == G_LINES && (first.cp == '\r' || first.cp == '\n')) {
         if (first.cp == '\r') {
             uint32_t next_at = at; GUnit next = decode_more(plan, depth - 1, src, length, &next_at);
@@ -1036,15 +1129,15 @@ static GUnit decode_unit(const GDecodePlan *plan, unsigned depth, const uint8_t 
         if (cp == UINT32_MAX) return first; /* Unexpanded named DTD reference. */
         return g_unit(at, scalar(cp) ? (int32_t)cp : -1);
     }
-    if ((mode == G_JSON || mode == G_TURTLE) && first.cp == '\\') {
+    if ((mode == G_JSON || mode == G_TURTLE || mode == G_SQL_ESCAPE) && first.cp == '\\') {
         GUnit next = decode_more(plan, depth - 1, src, length, &at);
         int32_t cp = next.cp;
         switch (cp) {
             case '"': case '\\': case '/': return g_unit(at, cp);
-            case '\'': return g_unit(at, mode == G_TURTLE ? cp : -1);
+            case '\'': return g_unit(at, mode == G_TURTLE || mode == G_SQL_ESCAPE ? cp : -1);
             case '~': case '.': case '-': case '!': case '$': case '&': case '(':
             case ')': case '*': case '+': case ',': case ';': case '=': case '?':
-            case '#': case '@': case '%': case '_': return g_unit(at, mode == G_TURTLE ? cp : -1);
+            case '#': case '@': case '%': case '_': return g_unit(at, mode == G_TURTLE || mode == G_SQL_ESCAPE ? cp : -1);
             case 'b': return g_unit(at, '\b');
             case 'f': return g_unit(at, '\f');
             case 'n': return g_unit(at, '\n');
@@ -1052,7 +1145,7 @@ static GUnit decode_unit(const GDecodePlan *plan, unsigned depth, const uint8_t 
             case 't': return g_unit(at, '\t');
             case 'u': case 'U': {
                 unsigned digits = cp == 'u' ? 4 : 8;
-                if (cp == 'U' && mode != G_TURTLE) return g_unit(at, -1);
+                if (cp == 'U' && mode != G_TURTLE && mode != G_SQL_ESCAPE) return g_unit(at, -1);
                 uint32_t value = 0;
                 for (unsigned i = 0; i < digits; i++) {
                     GUnit unit = decode_more(plan, depth - 1, src, length, &at); int d = hex_digit(unit.cp);
@@ -1068,7 +1161,7 @@ static GUnit decode_unit(const GDecodePlan *plan, unsigned depth, const uint8_t 
                 }
                 return g_unit(at, scalar(value) ? (int32_t)value : -1);
             }
-            default: return g_unit(at, -1);
+            default: return g_unit(at, mode == G_SQL_ESCAPE ? cp : -1);
         }
     }
     return first;
@@ -1119,8 +1212,24 @@ static int at_path(TSNode nd, const GPath *path, TSNode *out){
     TSNode cur = nd;
     for (uint8_t i = 0; i < path->n; i++) {
         const GPathStep *step = &path->step[i]; TSNode selected = {0};
-        if (step->flags & 1) selected = ts_node_child_by_field_id(cur, step->field);
-        if (ts_node_is_null(selected) && (step->flags & 2)) {
+        if (step->flags & 4) {
+            for (TSNode ancestor = cur; !ts_node_is_null(ancestor); ancestor = ts_node_parent(ancestor))
+                if (ts_node_symbol(ancestor) == step->symbol) { selected = ancestor; break; }
+        } else if (step->flags & 8) {
+            TSTreeCursor *cursor = lp_tls_cursor(cur); if (!cursor) return 0;
+            if (ts_tree_cursor_goto_first_child(cursor)) for (;;) {
+                TSNode child = ts_tree_cursor_current_node(cursor);
+                if (((step->flags & 1) && ts_tree_cursor_current_field_id(cursor) == step->field) ||
+                    (!(step->flags & 1) && ts_node_symbol(child) == step->symbol)) { selected = child; break; }
+                if (ts_tree_cursor_goto_first_child(cursor)) continue;
+                while (!ts_tree_cursor_goto_next_sibling(cursor)) {
+                    if (!ts_tree_cursor_goto_parent(cursor) || ts_node_eq(ts_tree_cursor_current_node(cursor), cur)) goto descendant_done;
+                }
+            }
+descendant_done:
+            lp_tls_cursor_release(cursor);
+        } else if (step->flags & 1) selected = ts_node_child_by_field_id(cur, step->field);
+        if (!(step->flags & 12) && ts_node_is_null(selected) && (step->flags & 2)) {
             TSTreeCursor *cursor = lp_tls_cursor(cur); if (!cursor) return 0;
             if (ts_tree_cursor_goto_first_child(cursor)) do {
                 TSNode child = ts_tree_cursor_current_node(cursor);
@@ -1133,6 +1242,7 @@ static int at_path(TSNode nd, const GPath *path, TSNode *out){
     }
     *out = cur; return 1;
 }
+static void g_text(GW *, TSNode, int, const uint8_t **, uint32_t *);
 /* The rule of a node, by its symbol: O(1) lookup via precompiled sym_rule_offset jump table. */
 static const GRule *rule_at(GW *w, TSNode nd, TSFieldId field, TSSymbol parent){
     TSSymbol sy = ts_node_symbol(nd);
@@ -1143,7 +1253,25 @@ static const GRule *rule_at(GW *w, TSNode nd, TSFieldId field, TSSymbol parent){
         const GRule *rule = &g->rule[g->sym_rules[at]];
         const CompiledRule *c = &rule->compiled;
         if ((c->field_id && c->field_id != field) || (c->parent_sym && c->parent_sym != parent)) continue;
+        if (rule->condition_mode) {
+            TSNode value; int found = at_path(nd, &c->condition, &value);
+            if (rule->condition_mode == 2) { if (found) continue; }
+            else {
+                const uint8_t *text; uint32_t length;
+                if (!found) continue;
+                g_text(w, value, 0, &text, &length);
+                if (length != rule->equals_length) continue;
+                uint32_t i = 0;
+                for (; i < length; i++) {
+                    unsigned a = text[i], b = (uint8_t)rule->equals[i];
+                    if (rule->casefold) { if (a >= 'A' && a <= 'Z') a += 'a' - 'A'; if (b >= 'A' && b <= 'Z') b += 'a' - 'A'; }
+                    if (a != b) break;
+                }
+                if (i != length) continue;
+            }
+        }
         unsigned score = (c->field_id ? 2u : 0u) + (c->parent_sym ? 1u : 0u);
+        if (rule->condition_mode) score += 4u;
         if (!best || score > specificity) { best = rule; specificity = score; }
     }
     return best;
@@ -1175,6 +1303,16 @@ static void g_text(GW *w, TSNode nd, int raw, const uint8_t **p, uint32_t *n){
     uint32_t len = ts_node_end_byte(nd) - ts_node_start_byte(nd);
     const uint8_t *s = decode_text(&w->input->decode, w->src + ts_node_start_byte(nd), &len);
     if (padded) s = padding_off(s, &len, w->l->g.escaped);
+    if (!raw && w->l->g.resolve == G_SQL && quoted_node(&w->l->g, nd)) {
+        SqlLiteral literal;
+        if (!sql_literal_bounds(s, len, &literal)) { fputs("invalid SQL literal boundaries\n", stderr); exit(2); }
+        s += literal.begin; len = literal.end - literal.begin;
+        if (literal.quote) {
+            GDecodePlan plan = {.mode={literal.escaped ? G_SQL_ESCAPE : G_SQL}, .n=1, .quoted={literal.quote}};
+            s = decode_text(&plan, s, &len);
+        }
+        *p = s; *n = len; return;
+    }
     int wrapped = 0, quoted = 0;
     if (!raw && w->l->g.resolve == G_LINES) { size_t n = len; s = trimmed(s, &n); len = (uint32_t)n; }
     if (!raw && w->l->g.resolve == G_TURTLE) {                                 /* Turtle: an IRI without its angle brackets, a language tag without its @, a text without its quotes (one or three) */
@@ -1217,6 +1355,29 @@ static int injected_input(GW *w, TSNode payload, int raw, GInput *result){
     input.range = (TSRange){ts_node_start_point(payload), ts_node_end_point(payload), ts_node_start_byte(payload), ts_node_end_byte(payload)};
     if ((input.decode.n || (!raw && w->l->g.resolve)) && !index_input(&input)) return 0;
     if (padded && !input_padding_off(&input, w->l->g.escaped)) return 0;
+    if (!raw && w->l->g.resolve == G_SQL && quoted_node(&w->l->g, payload)) {
+        uint32_t length = input.range.end_byte - input.range.start_byte;
+        const uint8_t *text = decode_text(&input.decode, input.src + input.range.start_byte, &length);
+        SqlLiteral literal; if (!sql_literal_bounds(text, length, &literal)) return 0;
+        TSRange range = input.range; TSPoint point = range.start_point; uint32_t logical = 0;
+        for (uint32_t at = range.start_byte;;) {
+            if (logical == literal.begin) { input.range.start_byte = at; input.range.start_point = point; }
+            if (logical == literal.end) { input.range.end_byte = at; input.range.end_point = point; break; }
+            if (at == range.end_byte) return 0;
+            GUnit unit = decode_unit(&input.decode, input.decode.n, input.src + at, range.end_byte - at);
+            if (unit.cp < 0 || !unit.bytes) return 0;
+            uint8_t encoded[4]; logical += (uint32_t)lp_utf8_put((uint32_t)unit.cp, encoded);
+            at += unit.bytes; point = advance_point(point, unit);
+        }
+        if (literal.quote) {
+            if (input.decode.n == G_DECODE_DEPTH) return 0;
+            unsigned layer = input.decode.n++;
+            input.decode.mode[layer] = literal.escaped ? G_SQL_ESCAPE : G_SQL;
+            input.decode.quoted[layer] = literal.quote;
+        }
+        if (trim && !input_padding_off(&input, 0)) return 0;
+        *result = input; return 1;
+    }
     uint32_t begin = input.range.start_byte, end = input.range.end_byte;
     GUnit first[3] = {{0}}, last[3] = {{0}}; TSPoint last_point[3]; uint32_t last_byte[3], count = 0;
     TSPoint point = input.range.start_point;
@@ -1688,7 +1849,7 @@ static int cursor_injection(GW *worker, TSNode payload, const Layout *inner, int
     int action = visit(sink, S_OPEN, &field);
     if (!(action & S_VISIT_OK)) return 0;
     if (action & S_VISIT_SKIP) return close_field(visit, sink, &field);
-    if (input.range.start_byte != input.range.end_byte) {
+    if (input.range.start_byte != input.range.end_byte || (raw & 8)) {
         TSTree *tree = parse_input_tree(inner, &input);
         if (!tree) { fputs("injected field does not parse completely\n", stderr); return 0; }
         int valid = cursor_project(inner, ts_tree_root_node(tree), &input, visit, sink,
@@ -1863,7 +2024,7 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
             }
         } else if (rule && (rule->what == G_VALUE || rule->what == G_TEXT || rule->what == G_NOTE)) {
             TSNode payload = frame->node;
-            int text_mode = rule->raw | (rule->what == G_TEXT && layout->g.padded ? 2 : 0) |
+            int text_mode = rule->raw | ((rule->compiled.flags & 4u) ? 8 : 0) | (rule->what == G_TEXT && layout->g.padded ? 2 : 0) |
                             (!rule->join && (rule->trim || (rule->what == G_TEXT && layout->g.trim)) ? 4 : 0);
             field.kind = S_TEXT;
             if (rule->what == G_NOTE) {
@@ -1924,9 +2085,9 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
             if (action & S_VISIT_SKIP) { children = 0; goto after_rule; }
             if(rule->capture[0]){
                 SField captured={.source=frame->node,.range=field.range,.name=(const uint8_t *)rule->capture,
-                    .name_length=rule->capture_length,.value=input->src+ts_node_start_byte(frame->node),
-                    .value_length=ts_node_end_byte(frame->node)-ts_node_start_byte(frame->node),
+                    .name_length=rule->capture_length,
                     .bindings=rule->capture_bindings,.grammar=layout->g.grammar_id,.kind=S_TEXT,.flags=S_FIELD_CAPTURE};
+                g_text(&worker, frame->node, 1, &captured.value, &captured.value_length);
                 if(!visit(sink,S_FIELD,&captured)){valid=0;break;}
             }
             if (rule->numbered[0]) {

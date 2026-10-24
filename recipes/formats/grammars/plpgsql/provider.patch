@@ -1,0 +1,17 @@
+--- a/plpgsql/grammar.js
++++ b/plpgsql/grammar.js
+@@ -124 +124 @@
+-        $._sql_semicolon_expr,
++        alias($._sql_until_semicolon, $.sql_statement),
+@@ -296 +296 @@
+-      $._sql_loop_expr,
++      alias($._sql_until_loop, $.sql_statement),
+@@ -345 +345 @@
+-      seq($.kw_return, $.kw_query, $._sql_semicolon_guarded_expr, ';'),
++      seq($.kw_return, $.kw_query, alias($._sql_until_semicolon_guarded, $.sql_statement), ';'),
+@@ -464 +464 @@
+-            $._sql_semicolon_guarded_expr
++            alias($._sql_until_semicolon_guarded, $.sql_statement)
+@@ -579 +579 @@
+-    _sql_statement_expr: $ => alias($._sql_statement, $.sql_expression),
++    _sql_statement_expr: $ => alias($._sql_statement, $.sql_statement),

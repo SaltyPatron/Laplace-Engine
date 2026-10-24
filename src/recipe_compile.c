@@ -514,6 +514,32 @@ void say_mentions(Recipe *r, const char *line){
         s->said = xrealloc(s->said, s->nsaid + l + 3); if (!s->nsaid) s->said[s->nsaid++] = ' ';
         memcpy(s->said + s->nsaid, b, l); s->nsaid += l; s->said[s->nsaid++] = ' '; s->said[s->nsaid] = 0; }
 }
+static int format_says(Recipe *r, const char *name, unsigned depth){
+    char path[4400], line[2048];
+    if (depth == 32) { fprintf(stderr, "format %s: includes exceed 32 levels\n", name); return -1; }
+    snprintf(path, sizeof path, "%s/formats/%s.format", laplace_recipes(), name);
+    FILE *file = fopen(path, "r"); if (!file) { perror(path); return -1; }
+    int valid = 1;
+    while (valid && fgets(line, sizeof line, file)) {
+        comment_off(line); recipe_program_line(r, path, line);
+        char whole[2048]; snprintf(whole, sizeof whole, "%s", line);
+        char *token = strtok(line, " \t\r\n"); if (!token) continue;
+        if (!strcmp(token, "grammar")) {
+            char *language = strtok(NULL, " \t\r\n");
+            if (!language || strlen(language) >= sizeof r->grammar || strtok(NULL, " \t\r\n")) valid = 0;
+            else snprintf(r->grammar, sizeof r->grammar, "%s", language);
+        } else if (!strcmp(token, "include")) {
+            char included[64], *argument = strtok(NULL, " \t\r\n");
+            if (!argument || strlen(argument) >= sizeof included || strtok(NULL, " \t\r\n")) valid = 0;
+            else { snprintf(included, sizeof included, "%s", argument); valid = format_says(r, included, depth + 1) > 0; }
+        } else {
+            int result = say_says(r, path, token);
+            if (result > 0) say_mentions(r, whole);
+            else { if (!result) fprintf(stderr, "%s: \"%s\" is not something a format says\n", path, token); valid = 0; }
+        }
+    }
+    valid = valid && !ferror(file); fclose(file); return valid ? 1 : -1;
+}
 int say_says(Recipe *r, const char *path, char *tok){
     Say *s = r->say; if (!s) s = r->say = calloc(1, sizeof(Say)); s->laid_line = 0;
     char nm[160], a2[64], *at;
@@ -528,13 +554,11 @@ int say_says(Recipe *r, const char *path, char *tok){
         Dependence *d=&s->dependence[s->ndependence++]; snprintf(d->tier,sizeof d->tier,"%s",a2); d->class=c; d->when=s->now; d->length=(uint16_t)strlen(c->label);
         return 1;
     }
-    if (!strcmp(tok, "format")) {                                            /* the format's own lines, kept once for every recipe of that format: recipes/formats/NAME.format */
-        char *fn = strtok(NULL, " \t\r\n"), fp[4400], line[2048]; if (!fn) { fprintf(stderr, "%s: format NAME\n", path); return -1; }
-        snprintf(fp, sizeof fp, "%s/formats/%s.format", laplace_recipes(), fn); FILE *f = fopen(fp, "r"); if (!f) { perror(fp); return -1; }
-        while (fgets(line, sizeof line, f)) { comment_off(line); recipe_program_line(r, fp, line); char whole[2048]; snprintf(whole, sizeof whole, "%s", line); char *t2 = strtok(line, " \t\r\n"); if (!t2) continue;
-            if (!strcmp(t2, "grammar")) { char *g = strtok(NULL, " \t\r\n"); if (g) snprintf(r->grammar, sizeof r->grammar, "%s", g); continue; }
-            int sv = say_says(r, fp, t2); if (sv > 0) say_mentions(r, whole); if (sv <= 0) { if (!sv) fprintf(stderr, "%s: \"%s\" is not something a format says\n", fp, t2); fclose(f); return -1; } }
-        fclose(f); return 1; }
+    if (!strcmp(tok, "format")) {
+        char name[64], *argument = strtok(NULL, " \t\r\n");
+        if (!argument || strlen(argument) >= sizeof name || strtok(NULL, " \t\r\n")) { fprintf(stderr, "%s: format NAME\n", path); return -1; }
+        snprintf(name, sizeof name, "%s", argument); return format_says(r, name, 0);
+    }
     if (!strcmp(tok, "thing")) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->nthing == 32) { fprintf(stderr, "%s: thing TIER NAME... [within] [resolved]\n", path); return -1; }
         Thing *p = &s->thing[s->nthing++]; snprintf(p->tier, sizeof p->tier, "%s", a2); while (name_next(&at, nm, sizeof nm)) { if (!strcmp(nm, "within")) { p->within = 1; continue; } if (!strcmp(nm, "within-file")) { p->infile = 1; continue; }
             /* literal TEXT: a part the recipe writes, as the source's own documentation words it (a source that writes

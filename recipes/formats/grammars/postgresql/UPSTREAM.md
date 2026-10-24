@@ -1,13 +1,17 @@
-The base SQL grammar and dollar-quote scanner are the MIT-licensed sources from
-`derekstride/tree-sitter-sql` at `c2e1e08db1ea20dc23bdb8d228a81a8756e9c450`,
-the revision pinned by Laplace-Operations/grammars.lock.tsv. The upstream files
-are unchanged; `grammar.js` is stored as `upstream/sql.js` to distinguish the
-base module from the PostgreSQL dialect entry point. `source-lock.json` records
-the upstream Git blob IDs. No generated parser is kept in the repository.
+# PostgreSQL and PL/pgSQL providers
 
-The dialect adds psql backslash commands, PostgreSQL's C function linkage
-(`AS 'library', 'entrypoint'`), and anonymous `DO` blocks. Procedural block bodies
-are retained as language-specific string literals, as PostgreSQL specifies;
-they are not misparsed as standalone SQL statements. Other SQL productions
-remain the upstream rules, with PostgreSQL `ALTER COLUMN TYPE ... USING`,
-function-valued CHECK constraints and the FROM/FOR substring argument form.
+Source: https://github.com/gmr/tree-sitter-postgres/tree/d6ba3d1f1db62922aa5f2b94c04d33afbcdbc6ed
+
+The four derivation manifests pin the same external dependency and every input
+Git blob. The normal builder generates parsers outside the repository:
+
+- postgres: PostgreSQL statements and declaration-language fields;
+- postgresql: the same SQL with psql command packaging;
+- postgresql_expr: PostgreSQL's PL/pgSQL expression start rule;
+- plpgsql: procedural syntax with distinct statement and expression injections.
+
+The patches add field bindings/start rules and distinguish statements from
+expressions. Native compiled format profiles select the body grammar from
+LANGUAGE, retain decoded scalar products and recurse into actual body syntax.
+The original source license is retained in provider.LICENSE. Generated parser
+sources and the replaced derekstride SQL provider are not vendored or retained.

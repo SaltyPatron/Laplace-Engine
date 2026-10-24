@@ -9,6 +9,15 @@ EXTERNAL_SOURCES=${LAPLACE_GRAMMAR_SRC:-}
 if [[ -z "$EXTERNAL_SOURCES" && -n "${LAPLACE_EXTERNAL:-}" ]]; then
   EXTERNAL_SOURCES="$LAPLACE_EXTERNAL/tree-sitter-grammars"
 fi
+# Derived providers declare their source dependency once. Use the normal
+# Operations lock/provisioner in every build plane, including clean CI hosts.
+required=$(python3 -c 'import json,pathlib,sys; print("\n".join(sorted({json.loads(p.read_text())["source"] for p in pathlib.Path(sys.argv[1]).rglob("derivation.json")})))' "$SRC")
+if [[ -n "$required" ]]; then
+  operations=${LAPLACE_OPERATIONS:-$(dirname "$(dirname "$0")")/../Laplace-Operations}
+  [[ -f "$operations/grammars.sh" ]] || { echo 'Pinned derivations require the Operations grammar provisioner' >&2; exit 1; }
+  mapfile -t required_sources <<< "$required"
+  bash "$operations/grammars.sh" fetch "${EXTERNAL_SOURCES:?Declare pinned external grammar sources}" "${required_sources[@]}"
+fi
 mkdir -p "$OUT"
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) win=1; ext=dll; CC=${CC:-icx-cc} ;;
@@ -37,7 +46,7 @@ compile() {
 
 generator=
 generate() {
-  local definition=$1 package generated
+  local definition=$1 package generated key=${2:-}
   package=$(dirname "$definition")
   [[ ! -f "$package/src/parser.c" ]] || return 0
   if [[ -z "$generator" ]]; then
@@ -49,7 +58,7 @@ generate() {
       generator="$target/release/tree-sitter"
     fi
   fi
-  generated="${LAPLACE_BUILD:?Declare the build root}/deps/grammars/$(basename "$package")/src"
+  generated="${LAPLACE_BUILD:?Declare the build root}/deps/grammars/${key:-$(basename "$package")}/src"
   mkdir -p "$generated"
   "$generator" generate "$definition" --output "$generated" --abi 15 --js-runtime native
   compile "$generated/parser.c" "$package/src" "$(dirname "$package")/common"
@@ -59,10 +68,10 @@ while IFS= read -r -d '' definition; do
 done < <(find "$SRC" -name grammar.js -not -path '*/node_modules/*' -print0)
 
 while IFS= read -r -d '' manifest; do
-  package=$(python3 "$(dirname "$0")/prepare_grammar.py" "$manifest" \
+  definition=$(python3 "$(dirname "$0")/prepare_grammar.py" "$manifest" \
     "${EXTERNAL_SOURCES:?Declare pinned external grammar sources}" \
-    "${LAPLACE_BUILD:?Declare the build root}/deps/grammars/derived")
-  generate "$package/grammar.js"
+    "${LAPLACE_BUILD:?Declare the build root}/deps/grammars/derived" --definition)
+  generate "$definition" "$(basename "$(dirname "$manifest")")"
 done < <(find "$SRC" -name derivation.json -not -path '*/node_modules/*' -print0)
 
 while IFS= read -r -d '' parser; do
