@@ -20,5 +20,6 @@ ignore .gitignore
 # a working tree: each whole reading is what the workspace says now, and supersedes the readings before it, so a file
 # changed or removed since leaves nothing of its former content that only those readings held
 supersede
-after unicode
+# Text leaves and code identities come from the installed perf-caches; no
+# Unicode corpus ingestion is needed to read the workspace's declarations.
 reads text json xml cuda javascript tsx bash powershell css html cmake make dockerfile rust go java ruby
