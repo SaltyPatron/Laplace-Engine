@@ -12,5 +12,7 @@ tier field by \t
 
 thing row 0
 content 0
-codepoints 1
+# The index also names surrogate areas (for example High Surrogates -> D800).
+# A codepoint field is an address; scalar addresses still resolve to their atom.
+range 1
 pair row 1
