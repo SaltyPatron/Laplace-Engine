@@ -139,10 +139,13 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                     const Dis *my = record_value_meaning(s, y);
                     for (int32_t q = record_field_first(y); q >= 0; q = record_field_next(&t->n[q])) { const SemanticValue *w = &t->n[q]; if (!w->vlen) continue; Ref v;
                         if (w->kind == S_VALUE && w->nlen && !record_field_named(w, (const char *)y->name, y->nlen)) { const Dis *dw = record_field_disposition(s, w); if (dw && (dw->what == D_OMIT || dw->what == D_METADATA)) continue;      /* the file's bookkeeping says nothing */
-                            if (recipe_property_cached(s, (const char *)w->name, w->nlen)) continue;
+                            const Dis *mw = record_value_meaning(s, w);
+                            /* An explicit scoped meaning overrides the generic
+                             * property cache: this context may not be covered. */
+                            if ((!mw || !mw->parent_slot) && recipe_property_cached(s, (const char *)w->name, w->nlen)) continue;
                             if (record_names_identity(k,t,(int32_t)g,w)) continue;
                             Ref vw; if (!dw || !record_value(k, t, q, &vw, 0)) vw = record_text(w->val, w->vlen);
-                            const Dis *mw = record_value_meaning(s, w);                   /* the KEY valued itself (MISC.Translit): [thing, VALUE] */
+                            /* the KEY valued itself (MISC.Translit): [thing, VALUE] */
                             if (mw) { said_as(k, mw, S, vw); continue; }
                             if (!my) { if (!wi) record_obligation_note(k, 'o', &record_diagnostic_labels[DIAG_ATTEST], y->name, y->nlen, w->name, w->nlen); continue; }
                             Ref kv[2] = { string_ref(w->name, w->nlen), vw }; kv[0].said = 0; if (kv[1].said != LP_SAID_TUPLE) kv[1].said = 0;   /* the pair the record holds: the same entity */
@@ -151,9 +154,10 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                         const Dis *meaning=record_value_meaning(s,w); if (!meaning) meaning=my;
                         if (!meaning) { if (!wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_ATTEST], w); continue; }
                         said_as(k, meaning, S, v); } }
-                else { if (recipe_property_cached(s, (const char *)y->name, y->nlen)) continue;
+                else { const Dis *m = record_value_meaning(s, y);
+                    if ((!m || !m->parent_slot) && recipe_property_cached(s, (const char *)y->name, y->nlen)) continue;
                     Ref v; if (!record_value(k, t, c, &v, 0)) continue;
-                    const Dis *m = record_value_meaning(s, y); if (!m) { if (!wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_ATTEST], y); continue; }
+                    if (!m) { if (!wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_ATTEST], y); continue; }
                     said_as(k, m, S, v); } }
             }
             if (s->att[a].of[0]) { S = S0; has = had; }

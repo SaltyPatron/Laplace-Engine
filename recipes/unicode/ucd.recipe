@@ -149,6 +149,9 @@ thing noncharacter cp
 thing noncharacter first-cp last-cp
 thing surrogate cp
 thing surrogate first-cp last-cp
+# Surrogate codepoint addresses are identifiers, not scalar characters. They
+# cannot be looked up in the scalar-only floor or encoded as UTF-8 text.
+content surrogate.cp surrogate.first-cp surrogate.last-cp
 thing named-sequence cps
 thing provisional-named-sequence cps
 thing standardized-variant cps
@@ -169,6 +172,13 @@ content *
 # hieroglyph, Nushu and Tangut properties by their data files' headers or UAX #57 (revision 5, Unicode 17.0.0).
 
 # --- PropertyAliases.txt's properties that the flags do not hold: numeric, string and miscellaneous ---
+# These scoped meanings also retain properties of the non-scalar address
+# ranges, which have no entry in tier0.flags. Names are PropertyAliases.txt's
+# canonical property names; the XML attribute names are only selectors.
+relation "Age" surrogate.age
+relation "Block" surrogate.blk
+relation "General_Category" surrogate.gc
+relation "Line_Break" surrogate.lb
 # PropertyAliases.txt, "Numeric Properties": "nv ; Numeric_Value"
 relation "Numeric_Value" nv
 # PropertyAliases.txt, "String Properties": "bmg ; Bidi_Mirroring_Glyph"
