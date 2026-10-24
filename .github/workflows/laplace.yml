@@ -127,6 +127,11 @@ jobs:
           . Laplace-Operations/laplace.env
           export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
           bash Laplace-Engine/tests/supersede.sh "$RUNNER_TEMP/engine/laplace"
+      - name: Native progress agrees with committed source contents
+        run: |
+          . Laplace-Operations/laplace.env
+          export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
+          bash Laplace-Engine/tests/ingest-progress.sh "$RUNNER_TEMP/engine/laplace"
       - name: translate goes through the lexicalization, read from the recipe (dog en en, dog en fr)
         run: |
           . Laplace-Operations/laplace.env
