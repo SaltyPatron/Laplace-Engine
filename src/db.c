@@ -343,10 +343,16 @@ static void known_tree(Node *node){
     }
     free(todo.item);
 }
-static void queue_root(const lp_id *id){
-    Node *node=table_find(id); if(node && !node->keep) node->keep=3;
+static void queue_node(Nodes *frontier,Node *node){
+    if(node && !node->keep){node->keep=3;add_node(&frontier[node->tier],node);}
+}
+static void queue_root(Nodes *frontier,const lp_id *id){
+    queue_node(frontier,table_find(id));
 }
 static void prune(File *files,int nfiles,LoadStats *st){
+    /* Tiers are uint8_t. Queue a selected node once, in its actual tier,
+     * instead of scanning the complete working table at every altitude. */
+    Nodes frontier[UINT8_MAX+1]={0};
     TABLE_EACH(x) {
         /* Tier-0 is the database realizer's storage-free leaf floor. Highway
          * membership supplies an identity/coordinate, not proof that its path
@@ -355,45 +361,51 @@ static void prune(File *files,int nfiles,LoadStats *st){
         x->keep=lp_idmap_find(writer.known,&x->id)>=0 || lp_tier0_contains(T0,&x->id) ? 2 : 0;
     }
     TABLE_EACH(x) if(x->keep==2) known_tree(x);
-    TABLE_EACH(x) if(x->pin && !x->keep) x->keep=3;
+    TABLE_EACH(x) if(x->pin) queue_node(frontier,x);
     for(int i=0;i<nfiles;i++){
         File *f=&files[i]; if(f->known || f->skipped) continue;
-        if(f->has_file) queue_root(&f->file.id); else {
-            queue_root(&f->trunk.id);
-            for(uint64_t j=0;j<f->nsaid;j++) queue_root(&f->said[j].id);
+        if(f->has_file) queue_root(frontier,&f->file.id); else {
+            queue_root(frontier,&f->trunk.id);
+            for(uint64_t j=0;j<f->nsaid;j++) queue_root(frontier,&f->said[j].id);
         }
-        if(f->has_lineage) queue_root(&f->lineage.id);
+        if(f->has_lineage) queue_root(frontier,&f->lineage.id);
     }
-    if(load_whole) TABLE_EACH(x) if(!x->keep) x->keep=3;
-    int highest = 0; TABLE_EACH(x) if(x->tier > highest) highest = x->tier;
-    for(int tier=highest;tier>0;tier--){
-        Nodes candidates={0};
+    if(load_whole) TABLE_EACH(x) queue_node(frontier,x);
+    for(int tier=UINT8_MAX;tier>0;tier--){
+        Nodes *candidates=&frontier[tier];
+        while(candidates->n){
         /* Logical paths already bypass Native's binary hash spines. Explicit
-         * record-block spines are traversed immediately, never queried. */
-        int more;
-        do {
-            more=0;
-            TABLE_EACH(x) if(x->keep==3 && x->tier==(uint8_t)tier && x->spine && !x->kind){
+         * record-block spines are traversed immediately, never queried. New
+         * same-tier children append to this queue and join the same pass. */
+        size_t count=0;
+        for(size_t i=0;i<candidates->n;i++){
+            Node *x=candidates->item[i];if(x->keep!=3)continue;
+            if(x->spine && !x->kind){
                 x->keep=1;st->new_nodes++;
-                for(uint32_t i=0;i<x->nv;i++) queue_root(&VTX[x->voff+i].id);
-                more=1;
-            }
-        }while(more);
-        TABLE_EACH(x) if(x->keep==3 && x->tier==(uint8_t)tier) add_node(&candidates,x);
-        if(candidates.n){
-            lp_id *ids=malloc(candidates.n*sizeof *ids);
-            for(size_t i=0;i<candidates.n;i++) ids[i]=candidates.item[i]->id;
-            uint8_t *hit=recorded(writer.copy,writer.ncopy,ids,(uint64_t)candidates.n);
-            st->rounds++;st->checked+=(uint64_t)candidates.n;
-            for(size_t i=0;i<candidates.n;i++){
-                Node *x=candidates.item[i]; if(x->keep==2) continue;
+                for(uint32_t j=0;j<x->nv;j++) queue_root(frontier,&VTX[x->voff+j].id);
+            }else candidates->item[count++]=x;
+        }
+        candidates->n=count;
+        if(count){
+            lp_id *ids=malloc(count*sizeof *ids);
+            for(size_t i=0;i<count;i++) ids[i]=candidates->item[i]->id;
+            uint8_t *hit=recorded(writer.copy,writer.ncopy,ids,(uint64_t)count);
+            st->rounds++;st->checked+=(uint64_t)count;
+            for(size_t i=0;i<count;i++){
+                Node *x=candidates->item[i]; if(x->keep==2) continue;
                 if(hit[i]){known_tree(x);st->found++;}
-                else{x->keep=1;st->new_nodes++;for(uint32_t j=0;j<x->nv;j++)queue_root(&VTX[x->voff+j].id);}
+                else{x->keep=1;st->new_nodes++;for(uint32_t j=0;j<x->nv;j++)queue_root(frontier,&VTX[x->voff+j].id);}
             }
             free(hit);free(ids);
         }
-        free(candidates.item);
+        /* Saturated tiers may have same-tier logical children as well. Keep
+         * their frontier rather than losing it after the parent's probe. */
+        size_t next=candidates->n-count;
+        if(next)memmove(candidates->item,candidates->item+count,next*sizeof *candidates->item);
+        candidates->n=next;
+        }
     }
+    for(unsigned tier=0;tier<=UINT8_MAX;tier++)free(frontier[tier].item);
 }
 
 typedef struct { Node *node; uint64_t hilbert; lp_mask lexical; } Row;
