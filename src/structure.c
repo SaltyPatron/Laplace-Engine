@@ -1552,12 +1552,34 @@ static int records_open(SRecords *records, const Layout *layout, const uint8_t *
     TSParser *parser = lp_tls_parser(layout->g.grammar_id);
     if (!parser || !ts_parser_set_included_ranges(parser, NULL, 0)) return 0;
     size_t prefix = length; TSTree *tree;
+    int framing = tail && layout->g.scope_count;
     for (;;) {
         ts_parser_reset(parser);
         GInput input = {.src=source, .length=(uint32_t)prefix}; input.range.end_byte = (uint32_t)prefix;
         TSInput stream = {&input, read_input, TSInputEncodingUTF8, NULL};
-        tree = ts_parser_parse_with_options(parser, NULL, stream, (TSParseOptions){.progress_callback=reject_recovery});
+        tree = ts_parser_parse_with_options(parser, NULL, stream,
+            (TSParseOptions){.progress_callback=framing ? NULL : reject_recovery});
         if (tree && !ts_node_has_error(ts_tree_root_node(tree))) break;
+        if (framing) {
+            /* A partial packaging event can end anywhere in a byte window.
+             * Use recovery only to locate the leading complete grammar nodes,
+             * then strictly reparse that prefix before admitting any record.
+             * Halving arbitrary byte offsets can miss every legal boundary. */
+            uint32_t complete = 0;
+            if (tree) {
+                TSNode root = ts_tree_root_node(tree);
+                uint32_t count = ts_node_named_child_count(root);
+                for (uint32_t i = 0; i < count; i++) {
+                    TSNode child = ts_node_named_child(root, i);
+                    if (ts_node_has_error(child) || ts_node_is_missing(child)) break;
+                    complete = ts_node_end_byte(child);
+                }
+                ts_tree_delete(tree);
+            }
+            if (!complete || complete >= prefix) return 0;
+            prefix = complete; framing = 0;
+            continue;
+        }
         if (tree) ts_tree_delete(tree);
         if (!tail || prefix < 2) return 0;
         /* A byte window may end inside a legal quoted field. Probe a smaller
