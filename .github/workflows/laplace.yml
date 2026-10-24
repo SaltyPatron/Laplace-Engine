@@ -132,6 +132,11 @@ jobs:
           . Laplace-Operations/laplace.env
           export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
           bash Laplace-Engine/tests/ingest-progress.sh "$RUNNER_TEMP/engine/laplace"
+      - name: Unicode ranges retain non-scalar addresses without admitting atoms
+        run: |
+          . Laplace-Operations/laplace.env
+          export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
+          bash Laplace-Engine/tests/unicode-range-addresses.sh "$RUNNER_TEMP/engine/laplace"
       - name: translate goes through the lexicalization, read from the recipe (dog en en, dog en fr)
         run: |
           . Laplace-Operations/laplace.env

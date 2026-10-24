@@ -4,6 +4,7 @@
 #include "record_values.h"
 #include "record_surface.h"
 #include "record_diagnostics.h"
+#include "laplace/tier0.h"
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,6 +28,27 @@ static int codepoints_text(const uint8_t *p, size_t n, uint8_t *out, size_t cap,
         if (o == 1 && self_mark && *t0 == (uint8_t)self_mark && self_cp >= 0) { if (k + 4 > cap) return 0; k += lp_utf8_put((uint32_t)self_cp, out + k); continue; } if (o > 2 && t0[0] == 'U' && t0[1] == '+') { t0 += 2; o -= 2; } char h[16]; if (!o || o > 8) return 0; memcpy(h, t0, o); h[o] = 0;
         char *end; unsigned long cp = strtoul(h, &end, 16); if (*end || cp >= LP_NCP || k + 4 > cap) return 0; k += lp_utf8_put((uint32_t)cp, out + k); }
     *len = k; return k > 0;
+}
+
+/* A Unicode range can begin or end at a non-scalar address. As with UCD XML's
+ * surrogate fields, that address is its written content, never a Tier-0 atom. */
+static int non_scalar_address(const uint8_t *p, size_t n, Ref *out){
+    const uint8_t *digits=p; size_t length=n;
+    if (length>2 && digits[0]=='U' && digits[1]=='+') { digits+=2; length-=2; }
+    if (!length || length>8) return 0;
+    char hex[9]; memcpy(hex,digits,length); hex[length]=0;
+    char *end; unsigned long cp=strtoul(hex,&end,16);
+    if (*end || cp>=LP_NCP || lp_unicode_scalar((uint32_t)cp)) return 0;
+    *out=record_text(p,n); return 1;
+}
+
+static int range_endpoint(const uint8_t *p, size_t n, Ref *out){
+    while (n && *p==' ') { p++; n--; }
+    while (n && p[n-1]==' ') n--;
+    if (non_scalar_address(p,n,out)) return 1;
+    uint8_t bytes[8]; size_t length;
+    if (!codepoints_text(p,n,bytes,sizeof bytes,&length)) return 0;
+    *out=string_ref(bytes,length); return 1;
 }
 
 static Ref semantic_text_ref(RecordWorker *sink, const SemanticValue *value){
@@ -227,8 +249,9 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
         const uint8_t *p = x->val; size_t n = x->vlen; while (n && *p == ' ') { p++; n--; } while (n && p[n - 1] == ' ') n--;
         const uint8_t *dd = d->what == D_RANGE ? memmem(p, n, "..", 2) : NULL;
         if (dd) {                                                            /* a range, written as its first and its last: the path of the two */
-            uint8_t a[8], b[8]; size_t al, bl; if (!codepoints_text(p, (size_t)(dd - p), a, sizeof a, &al) || !codepoints_text(dd + 2, n - (size_t)(dd - p) - 2, b, sizeof b, &bl)) { *out = record_text(p, n); return 1; }   /* not code points: the text it is written as */
-            Ref two[2] = { string_ref(a, al), string_ref(b, bl) }; *out = said_tuple(compose(two, 2, ref_above(two, 2))); return 1; }
+            Ref two[2]; if (!range_endpoint(p, (size_t)(dd-p), &two[0]) || !range_endpoint(dd+2, n-(size_t)(dd-p)-2, &two[1])) { *out=record_text(p,n); return 1; }
+            *out = said_tuple(compose(two, 2, ref_above(two, 2))); return 1; }
+        if (d->what==D_RANGE && non_scalar_address(p,n,out)) return 1;
         uint8_t buf[512]; size_t l; if (!codepoints_text(p, n, buf, sizeof buf, &l)) { if (!n) return 0; *out = record_text(p, n); return 1; }
         *out = string_ref(buf, l); return 1; }
     if (d->what == D_REFER && depth < 16) {                                  /* the first of its targets that holds the key */
