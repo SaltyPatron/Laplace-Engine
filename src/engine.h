@@ -164,7 +164,7 @@ typedef struct TSLanguage TSLanguage;
  * part of that tree is (say.c). Configuration only: there is one decomposer, and no code for a format or a source. */
 typedef struct {
     char name[64];
-    char match[16][128]; int nmatch;                 /* filename globs */
+    char match[64][256]; int nmatch;                 /* filename globs; fail explicitly if the declaration exceeds this capacity */
     char grammar[64];                                 /* "text" (UAX #29), "layout" (the recipe's tiers), or a tree-sitter grammar name */
     const TSLanguage *lang;
     double trust;                                    /* the witness's trust, -1 .. 1 */
@@ -189,6 +189,7 @@ void say_program_hash(const Recipe *recipe, uint8_t out[32]);
  * its files reads; the source says who the witness is, where the source is kept, and which sources it comes after. */
 typedef struct {
     char name[64];
+    char aliases[8][64]; int naliases;                 /* accepted names declared beside the source */
     char witness[128], lineage[128]; double trust;
     char called[128];                                 /* what the source is, where its witness is named file by file (called NAME) */
     char held[256];                                   /* held REASON: a source not here yet, by its keeper's choice; absent, it is said so with the reason and fails no plan */
@@ -206,6 +207,9 @@ typedef struct {
     char unset[64];                                   /* a variable its root or files name that the environment does not set: it is nowhere until it is */
 } Source;
 int     recipes_load(const char *dir, Recipe **out);
+int     recipes_catalog(const char *dir, FILE *out, int json);
+int     source_named(const Source *source, const char *name);
+void    json_str(FILE *out, const char *s);
 Source *sources_loaded(int *n);                                       /* in the order they go in */
 typedef enum { RECIPE_UNCOVERED, RECIPE_OMITTED, RECIPE_COVERED } RecipeCoverage;
 Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, RecipeCoverage *coverage);
@@ -302,6 +306,7 @@ void hw_edge(Hw *, const char *la, const char *ka, const char *lb, const char *k
 void highway_file(Ctx *, File *, Hw *);                                             /* a file read for the highway (recipe.c) */
 int  source_files(const Source *, Recipe *rec, int nrec, char ***paths, Recipe ***of);   /* a source's files its recipes read, in the order they are read (ingest.c) */
 void decompose_file(Ctx *, File *);
+const File *table_reading_file(const File *);                          /* thread-local input context for composition diagnostics; returns previous */
 void decompose_bytes(Ctx *, File *, uint8_t *src, size_t n, int first);     /* a stretch of a file that is read a stretch at a time */
 /* ---- a grammar that is no tree-sitter grammar: a reading the engine holds of its own, found by the name a recipe's
  * grammar line gives (grammars.c lists them). The recipe names it as it names any grammar; recipe.c names none. */

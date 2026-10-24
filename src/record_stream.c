@@ -286,6 +286,7 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
         const Layout *layout = records->layout;
         #pragma omp taskloop grainsize(1) shared(batch, prepared)
         for (uint32_t lane = 0; lane < lanes; lane++) {
+            const File *previous_file = table_reading_file(pipeline->file);
             RecordWorker *worker = &pipeline->workers[lane]; reset_record_worker(pipeline, worker);
             uint32_t begin = (uint32_t)((uint64_t)count * lane / lanes), end = (uint32_t)((uint64_t)count * (lane + 1) / lanes);
             SayScratch previous = {0};
@@ -307,6 +308,7 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
                 if (!valid) __atomic_store_n(&pipeline->failed, 1, __ATOMIC_RELEASE);
             }
             if (bind_keys) scratch_leave(&prepared[lane].arena, previous);
+            table_reading_file(previous_file);
         }
         if (pipeline->failed) break;
         if (bind_keys) {
@@ -319,11 +321,13 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
                 before = keys_revision();
                 #pragma omp taskloop grainsize(1) shared(prepared)
                 for (uint32_t lane = 0; lane < lanes; lane++) {
+                    const File *previous_file = table_reading_file(pipeline->file);
                     RecordWorker *worker = &pipeline->workers[lane]; reset_record_worker(pipeline, worker);
                     SayScratch previous = scratch_enter(&prepared[lane].arena);
                     for (uint32_t i = 0; i < prepared[lane].count; i++)
                         if (prepared[lane].record[i].record.count) record_bind_declarations(worker, &prepared[lane].record[i]);
                     scratch_leave(&prepared[lane].arena, previous);
+                    table_reading_file(previous_file);
                 }
                 deferred_bind(pipeline, 0);
             } while (keys_revision() != before);
@@ -332,6 +336,7 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
              * the source bytes and each native AST were visited only once. */
             #pragma omp taskloop grainsize(1) shared(prepared)
             for (uint32_t lane = 0; lane < lanes; lane++) {
+                const File *previous_file = table_reading_file(pipeline->file);
                 RecordWorker *worker = &pipeline->workers[lane]; reset_record_worker(pipeline, worker);
                 RecordWorker *evaluation = &pipeline->evaluators[lane];
                 SayScratch previous = scratch_enter(&prepared[lane].arena);
@@ -349,6 +354,7 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
                     record_prepared_clear(record);
                 }
                 scratch_leave(&prepared[lane].arena, previous);
+                table_reading_file(previous_file);
             }
         }
         /* The taskgroup has joined: append complete lane results in source

@@ -56,6 +56,7 @@
 #include <omp.h>
 #include <zlib.h>
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 #include <blake3.h>
@@ -160,7 +161,8 @@ void comment_off(char *line){
     int q = 0; for (char *c = line; *c; c++) { if (*c == '"') q = !q; else if (*c == '#' && !q && (c == line || c[-1] == ' ' || c[-1] == '\t')) { *c = 0; return; } }
 }
 static void rest_of(char *into, size_t cap){ char *rest = strtok(NULL, "\r\n"); if (!rest) return; while (*rest == ' ' || *rest == '\t') rest++; snprintf(into, cap, "%s", rest); }
-static int recipe_parse(const char *path, Recipe *r){
+static const char *metadata_root;
+static int recipe_parse(const char *path, Recipe *r, int metadata){
     FILE *f = fopen(path, "r"); if (!f) return 0;
     memset(r, 0, sizeof *r); char line[4096];
     blake3_hasher program; blake3_hasher_init(&program); r->program_state = &program;
@@ -168,13 +170,29 @@ static int recipe_parse(const char *path, Recipe *r){
         comment_off(line); recipe_program_line(r, path, line); char whole[4096]; snprintf(whole, sizeof whole, "%s", line);
         char *tok = strtok(line, " \t\r\n"); if (!tok) continue;
         if (!strcmp(tok, "name")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->name, sizeof r->name, "%s", tok); }
-        else if (!strcmp(tok, "match")) while ((tok = strtok(NULL, " \t\r\n")) && r->nmatch < 16) snprintf(r->match[r->nmatch++], 128, "%s", tok);
+        else if (!strcmp(tok, "match")) while ((tok = strtok(NULL, " \t\r\n"))) {
+            if (r->nmatch == (int)(sizeof r->match / sizeof r->match[0]) || strlen(tok) >= sizeof r->match[0]) {
+                fprintf(stderr, "%s: too many or overlong match patterns\n", path); fclose(f); r->program_state = NULL; return 0;
+            }
+            snprintf(r->match[r->nmatch++], sizeof r->match[0], "%s", tok);
+        }
         else if (!strcmp(tok, "grammar")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->grammar, sizeof r->grammar, "%s", tok); r->native = native_grammar(r->grammar); }
         else if (!strcmp(tok, "class")) r->trust = class_trust(path, strtok(NULL, " \t\r\n"));
         else if (!strcmp(tok, "trust") || !strcmp(tok, "deviation")) trust_by_number(path, tok);
         else if (!strcmp(tok, "like")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->like, sizeof r->like, "%s", tok); }
         else if (!strcmp(tok, "witness")) rest_of(r->witness, sizeof r->witness);
         else if (!strcmp(tok, "lineage")) rest_of(r->lineage, sizeof r->lineage);
+        else if (metadata && !strcmp(tok, "format")) {
+            tok = strtok(NULL, " \t\r\n"); char fp[4096];
+            if (!tok || strchr(tok, '/') || strchr(tok, '\\') || strstr(tok, "..")) { fclose(f); return 0; }
+            snprintf(fp, sizeof fp, "%s/formats/%s.format", metadata_root, tok);
+            FILE *format = fopen(fp, "r"); if (!format) { fprintf(stderr, "missing format: %s\n", fp); fclose(f); return 0; }
+            char declaration[4096]; while (fgets(declaration, sizeof declaration, format)) {
+                char key[64], value[128]; if (sscanf(declaration, "%63s %127s", key, value) == 2 && !strcmp(key, "grammar")) snprintf(r->grammar, sizeof r->grammar, "%s", value);
+            }
+            fclose(format);
+        }
+        else if (metadata) continue;                                    /* inventory needs no grammar, cache or database */
         else { int sv = r->native ? r->native->says(r, path, tok)           /* a line of the native grammar the recipe names */
                               : say_says(r, path, tok);                     /* the file's layout and the disposition of its parts */
             if (sv > 0 && !r->native) say_mentions(r, whole);              /* its words: a part named in none is left open */
@@ -183,7 +201,7 @@ static int recipe_parse(const char *path, Recipe *r){
     }
     fclose(f);
     blake3_hasher_finalize(&program, r->program_hash, sizeof r->program_hash); r->program_state = NULL;
-    if (r->like[0]) return 1;
+    if (metadata || r->like[0]) return 1;
     /* A grammar-only recipe records packaging bytes. Native semantic execution
      * requires its explicit directives, rather than silently turning a raw PGN
      * file into curated chess claims. */
@@ -201,19 +219,27 @@ static int recipe_parse(const char *path, Recipe *r){
     return 1;
 }
 static Source *sources; static int nsources;
-static int source_parse(const char *path, Source *s){
+static int source_parse(const char *path, Source *s, int metadata){
     FILE *f = fopen(path, "r"); if (!f) return 0;
     memset(s, 0, sizeof *s); char line[4096];
     while (fgets(line, sizeof line, f)) {
         char *h = strchr(line, '#'); if (h && (h == line || h[-1] == ' ' || h[-1] == '\t')) *h = 0;
         char *tok = strtok(line, " \t\r\n"); if (!tok) continue;
         if (!strcmp(tok, "name")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(s->name, sizeof s->name, "%s", tok); }
+        else if (!strcmp(tok, "aliases")) while ((tok = strtok(NULL, " \t\r\n"))) {
+            if (s->naliases == 8 || strlen(tok) >= 64) { fprintf(stderr, "%s: too many or overlong aliases\n", path); fclose(f); return 0; }
+            snprintf(s->aliases[s->naliases++], 64, "%s", tok);
+        }
         else if (!strcmp(tok, "witness")) rest_of(s->witness, sizeof s->witness);
         else if (!strcmp(tok, "lineage")) rest_of(s->lineage, sizeof s->lineage);
         else if (!strcmp(tok, "class")) s->trust = class_trust(path, strtok(NULL, " \t\r\n"));
         else if (!strcmp(tok, "trust") || !strcmp(tok, "deviation")) trust_by_number(path, tok);
-        else if (!strcmp(tok, "root")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nroot < 8 && !path_expand(tok, s->root[s->nroot++], 512, s->unset, sizeof s->unset)) s->nroot--; }
-        else if (!strcmp(tok, "files")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nfiles < 16 && !path_expand(tok, s->files[s->nfiles++], 512, s->unset, sizeof s->unset)) s->nfiles--; }
+        else if (!strcmp(tok, "root")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nroot < 8) {
+            if (metadata) snprintf(s->root[s->nroot++], 512, "%s", tok);
+            else if (!path_expand(tok, s->root[s->nroot++], 512, s->unset, sizeof s->unset)) s->nroot--; } }
+        else if (!strcmp(tok, "files")) { tok = strtok(NULL, " \t\r\n"); if (tok && s->nfiles < 16) {
+            if (metadata) snprintf(s->files[s->nfiles++], 512, "%s", tok);
+            else if (!path_expand(tok, s->files[s->nfiles++], 512, s->unset, sizeof s->unset)) s->nfiles--; } }
         else if (!strcmp(tok, "room")) { tok = strtok(NULL, " \t\r\n"); if (tok) s->room = atof(tok); }
         else if (!strcmp(tok, "supersede")) s->supersede = 1;               /* its newest whole reading is what it says: the earlier ones go */
         else if (!strcmp(tok, "tier0")) s->tier0 = 1;                       /* it records every codepoint, tier 0, as its ingest's first act */
@@ -226,6 +252,7 @@ static int source_parse(const char *path, Source *s){
         else { fprintf(stderr, "%s: \"%s\" is not something a source says\n", path, tok); fclose(f); return 0; }
     }
     fclose(f);
+    if (metadata) return s->name[0] != 0;
     if (s->unset[0]) { s->nroot = s->nfiles = 0; return s->name[0] != 0; }   /* a root it names is not set: it is at none, and says why (source_unset) */
     if (s->nfiles) { os_list g; os_glob(s->files[0], &g); if (g.n) snprintf(s->found, sizeof s->found, "%s", s->files[0]); os_list_free(&g); }
     /* the first root that is there; of a pattern, the newest directory: an archive or a checksum kept beside the
@@ -238,7 +265,7 @@ static int source_parse(const char *path, Source *s){
     return s->name[0] != 0;
 }
 static int by_name(const void *a, const void *b){ return strcmp(*(char *const *)a, *(char *const *)b); }
-static int recipes_in(const char *dir, int source, Recipe **out, int n){
+static int recipes_in(const char *dir, int source, Recipe **out, int n, int metadata){
     os_list ls; if (os_list_dir(dir, &ls)) { perror(dir); return n; }
     char **names = ls.item; int nn = (int)ls.n;
     qsort(names, (size_t)nn, sizeof(char *), by_name);
@@ -246,7 +273,7 @@ static int recipes_in(const char *dir, int source, Recipe **out, int n){
         size_t l = strlen(names[i]); char p[2048]; snprintf(p, sizeof p, "%s/%s", dir, names[i]);
         if (l >= 8 && !strcmp(names[i] + l - 7, ".recipe")) {
             *out = xrealloc(*out, sizeof(Recipe) * (size_t)(n + 1)); Recipe *r = &(*out)[n];
-            if (!recipe_parse(p, r)) { r->broken = 1; r->curated = 0; r->lang = NULL; if (!r->name[0]) snprintf(r->name, sizeof r->name, "%.*s", (int)(l - 7 < 63 ? l - 7 : 63), names[i]); }
+            if (!recipe_parse(p, r, metadata)) { r->broken = 1; r->curated = 0; r->lang = NULL; if (!r->name[0]) snprintf(r->name, sizeof r->name, "%.*s", (int)(l - 7 < 63 ? l - 7 : 63), names[i]); }
             snprintf(r->file, sizeof r->file, "%s", p);
             r->source = source;
             if (source >= 0) { const Source *s = &sources[source];
@@ -259,8 +286,8 @@ static int recipes_in(const char *dir, int source, Recipe **out, int n){
             char sp[2100]; snprintf(sp, sizeof sp, "%s/source", p);
             if (!os_exists(sp)) { free(names[i]); continue; }
             sources = xrealloc(sources, sizeof(Source) * (size_t)(nsources + 1));
-            if (!source_parse(sp, &sources[nsources])) { fprintf(stderr, "source %s does not load\n", sp); exit(2); }
-            n = recipes_in(p, nsources++, out, n);
+            if (!source_parse(sp, &sources[nsources], metadata)) { fprintf(stderr, "source %s does not load\n", sp); exit(2); }
+            n = recipes_in(p, nsources++, out, n, metadata);
         }
         free(names[i]);
     }
@@ -280,7 +307,8 @@ static void sources_order(void){
           char *e = c; while (*e && *e != ' ' && *e != '\t' && *e != '\n' && *e != '\r') e++; *e = 0;
           int j = 0; while (j < nsources && strcmp(sources[j].name, c)) j++;
           if (j == nsources) { fprintf(stderr, "%s names %s, which is not a source\n", p, c); exit(2); }
-          if (rank[j] == 1 << 20) rank[j] = r++; }
+          if (rank[j] != 1 << 20) { fprintf(stderr, "%s repeats source %s\n", p, c); exit(2); }
+          rank[j] = r++; }
       if (f) fclose(f); }
     while (k < nsources) {
         int best = -1;
@@ -299,43 +327,20 @@ static void sources_order(void){
     for (int i = 0; i < nrecipes_now; i++) if (recipes_now[i].source >= 0) recipes_now[i].source = at[recipes_now[i].source];
     free(at);
 }
-static const struct { const char *name, *grammar, *match[8]; } generic_specs[] = {
-    { "csv",        "csv",        { "*.csv", NULL } },
-    { "tsv",        "tsv",        { "*.tsv", "*.tab", NULL } },
-    { "psv",        "psv",        { "*.psv", NULL } },
-    { "html",       "html",       { "*.html", "*.htm", NULL } },
-    { "c",          "c",          { "*.c", "*.h", NULL } },
-    { "cpp",        "cpp",        { "*.cpp", "*.cc", "*.cxx", "*.hpp", "*.hh", "*.hxx", NULL } },
-    { "c_sharp",    "c_sharp",    { "*.cs", NULL } },
-    { "python",     "python",     { "*.py", "*.pyi", NULL } },
-    { "javascript", "javascript", { "*.js", "*.mjs", "*.cjs", "*.jsx", NULL } },
-    { "typescript", "typescript", { "*.ts", "*.mts", "*.cts", NULL } },
-    { "tsx",        "tsx",        { "*.tsx", NULL } },
-    { "rust",       "rust",       { "*.rs", NULL } },
-    { "go",         "go",         { "*.go", NULL } },
-    { "java",       "java",       { "*.java", NULL } },
-    { "kotlin",     "kotlin",     { "*.kt", "*.kts", NULL } },
-    { "ruby",       "ruby",       { "*.rb", NULL } },
-    { "php",        "php",        { "*.php", NULL } },
-    { "bash",       "bash",       { "*.sh", "*.bash", "*.zsh", NULL } },
-    { "cmake",      "cmake",      { "*.cmake", "CMakeLists.txt", NULL } },
-    { "cuda",       "cuda",       { "*.cu", "*.cuh", NULL } },
-    { "fortran",    "fortran",    { "*.f", "*.f90", "*.f95", "*.for", NULL } },
-    { "glsl",       "glsl",       { "*.glsl", "*.vert", "*.frag", "*.comp", NULL } },
-    { "hlsl",       "hlsl",       { "*.hlsl", "*.fx", NULL } },
-    { "ispc",       "ispc",       { "*.ispc", NULL } },
-    { "julia",      "julia",      { "*.jl", NULL } },
-    { "llvm",       "llvm",       { "*.ll", NULL } },
-    { "mlir",       "mlir",       { "*.mlir", NULL } },
-    { "nasm",       "nasm",       { "*.nasm", "*.asm", "*.s", NULL } },
-    { "wgsl",       "wgsl",       { "*.wgsl", NULL } },
-    { "zig",        "zig",        { "*.zig", NULL } },
-    { "dtd",        "dtd",        { "*.dtd", NULL } },
-};
 Recipe *recipes_now; int nrecipes_now;
-int recipes_load(const char *dir, Recipe **out){
+int source_named(const Source *s, const char *name){
+    for (int a = -1; a < s->naliases; a++) {
+        const unsigned char *p = (const unsigned char *)(a < 0 ? s->name : s->aliases[a]);
+        const unsigned char *q = (const unsigned char *)name;
+        while (*p && *q && tolower(*p) == tolower(*q)) { p++; q++; }
+        if (!*p && !*q) return 1;
+    }
+    return 0;
+}
+static int recipes_load_mode(const char *dir, Recipe **out, int metadata){
     if (recipes_now) { *out = recipes_now; return nrecipes_now; }
-    Recipe *r = NULL; int n = recipes_in(dir, -1, &r, 0);
+    metadata_root = dir;
+    Recipe *r = NULL; int n = recipes_in(dir, -1, &r, 0, metadata);
     for (int i = 0; i < n; i++) if (r[i].like[0]) {                          /* it reads as another recipe does */
         int j = 0; while (j < n && strcmp(r[j].name, r[i].like)) j++;
         if (j == n || r[j].broken) { fprintf(stderr, "recipe %s reads like %s, which %s\n", r[i].name, r[i].like, j == n ? "is not a recipe" : "did not load"); r[i].broken = 1; r[i].like[0] = 0; continue; }
@@ -347,20 +352,58 @@ int recipes_load(const char *dir, Recipe **out){
         snprintf(r[i].name, sizeof r[i].name, "%s", me.name); memcpy(r[i].match, me.match, sizeof me.match); r[i].nmatch = me.nmatch; r[i].source = me.source;
         memcpy(r[i].witness, me.witness, sizeof me.witness); memcpy(r[i].lineage, me.lineage, sizeof me.lineage); r[i].trust = me.trust; r[i].like[0] = 0;
     }
-    size_t ngen = sizeof(generic_specs) / sizeof(generic_specs[0]);
-    for (size_t g = 0; g < ngen; g++) {
-        int exists = 0; for (int i = 0; i < n && !exists; i++) if (r[i].source < 0 && !strcmp(r[i].name, generic_specs[g].name)) exists = 1;
-        if (exists) continue;
-        r = xrealloc(r, sizeof(Recipe) * (size_t)(n + 1)); Recipe *x = &r[n++]; memset(x, 0, sizeof *x);
-        snprintf(x->name, sizeof x->name, "%s", generic_specs[g].name);
-        snprintf(x->file, sizeof x->file, "<generic:%s>", generic_specs[g].name);
-        snprintf(x->grammar, sizeof x->grammar, "%s", generic_specs[g].grammar);
-        for (int m = 0; generic_specs[g].match[m] && x->nmatch < 16; m++) snprintf(x->match[x->nmatch++], 256, "%s", generic_specs[g].match[m]);
-        x->source = -1; x->trust = 0.60; x->curated = 0; x->lang = NULL;
-    }
     for (int i = 0; i < n; i++) if (r[i].source < 0 && r[i].trust == 0.0) r[i].trust = 0.60;
+    for (int i = 0; i < nsources; i++) for (int a = -1; a < sources[i].naliases; a++) {
+        const char *name = a < 0 ? sources[i].name : sources[i].aliases[a];
+        for (const char *p = name; *p; p++) if (!(*p >= 'a' && *p <= 'z') && !isdigit((unsigned char)*p) && *p != '-') {
+            fprintf(stderr, "source %s has invalid name or alias %s\n", sources[i].name, name); exit(2);
+        }
+        for (int j = 0; j < i; j++) if (source_named(&sources[j], name)) {
+            fprintf(stderr, "source name or alias %s is shared by %s and %s\n", name, sources[j].name, sources[i].name); exit(2);
+        }
+        for (int b = -1; b < a; b++) if (!strcmp(name, b < 0 ? sources[i].name : sources[i].aliases[b])) {
+            fprintf(stderr, "source %s repeats name or alias %s\n", sources[i].name, name); exit(2);
+        }
+    }
     recipes_now = r; nrecipes_now = n; snprintf(order_dir, sizeof order_dir, "%s", dir); sources_order();
     *out = r; return n;
+}
+int recipes_load(const char *dir, Recipe **out){ return recipes_load_mode(dir, out, 0); }
+static void catalog_strings(FILE *out, const char *base, size_t stride, int n){
+    fputc('[', out); for (int i = 0; i < n; i++) { if (i) fputc(',', out); json_str(out, base + stride * (size_t)i); } fputc(']', out);
+}
+static void catalog_recipe(FILE *out, const Recipe *r){
+    fputs("{\"name\":", out); json_str(out, r->name);
+    fputs(",\"grammar\":", out); json_str(out, r->grammar);
+    fputs(",\"like\":", out); json_str(out, r->like);
+    fputs(",\"match\":", out); catalog_strings(out, (const char *)r->match, sizeof r->match[0], r->nmatch); fputc('}', out);
+}
+int recipes_catalog(const char *dir, FILE *out, int json){
+    char order[4096]; snprintf(order, sizeof order, "%s/order", dir);
+    if (!os_exists(order)) { fprintf(stderr, "recipe estate has no order declaration: %s\n", dir); return 2; }
+    Recipe *r = NULL; int n = recipes_load_mode(dir, &r, 1);
+    if (!nsources) { fputs("recipe estate contains no sources\n", stderr); return 2; }
+    for (int i = 0; i < n; i++) if (r[i].broken) { fprintf(stderr, "catalog recipe metadata did not load: %s\n", r[i].file); return 2; }
+    if (!json) { for (int i = 0; i < nsources; i++) fprintf(out, "%s\n", sources[i].name); return ferror(out) ? 1 : 0; }
+    fputs("{\"sources\":[", out);
+    for (int i = 0; i < nsources; i++) {
+        const Source *s = &sources[i]; if (i) fputc(',', out);
+        fputs("{\"name\":", out); json_str(out, s->name);
+        fputs(",\"aliases\":", out); catalog_strings(out, (const char *)s->aliases, sizeof s->aliases[0], s->naliases);
+        fputs(",\"witness\":", out); json_str(out, s->witness);
+        fputs(",\"lineage\":", out); json_str(out, s->lineage);
+        fputs(",\"held\":", out); json_str(out, s->held);
+        fputs(",\"roots\":", out); catalog_strings(out, (const char *)s->root, sizeof s->root[0], s->nroot);
+        fputs(",\"files\":", out); catalog_strings(out, (const char *)s->files, sizeof s->files[0], s->nfiles);
+        fputs(",\"after\":", out); catalog_strings(out, (const char *)s->after, sizeof s->after[0], s->nafter);
+        fputs(",\"reads\":", out); catalog_strings(out, (const char *)s->reads, sizeof s->reads[0], s->nreads);
+        fputs(",\"recipes\":[", out); int first = 1;
+        for (int k = 0; k < n; k++) if (r[k].source == i) { if (!first) fputc(',', out); catalog_recipe(out, &r[k]); first = 0; }
+        fputs("]}", out);
+    }
+    fputs("],\"formats\":[", out); int first = 1;
+    for (int k = 0; k < n; k++) if (r[k].source < 0) { if (!first) fputc(',', out); catalog_recipe(out, &r[k]); first = 0; }
+    fputs("]}\n", out); return ferror(out) ? 1 : 0;
 }
 Source *sources_loaded(int *n){ *n = nsources; return sources; }
 static int reads(const Source *s, const Recipe *r){ for (int i = 0; i < s->nreads; i++) if (!strcmp(s->reads[i], r->name)) return 1; return 0; }
@@ -638,7 +681,7 @@ static int recipe_input_error(void *context){
     } else if (ferror(input->plain)) { perror(input->file->path); input->failed = 1; }
     return input->failed;
 }
-void decompose_file(Ctx *c, File *f){
+static void decompose_input(Ctx *c, File *f){
     const Recipe *r = f->recipe;
     if (recipe_record_streamable(r)) {
         RecipeInput reader = {.file=f}; size_t length = strlen(f->path);
@@ -669,6 +712,11 @@ void decompose_file(Ctx *c, File *f){
         f->exact = file_matches_bytes(&f->trunk.id, src0, n);
     }
     free(src0);
+}
+void decompose_file(Ctx *c, File *f){
+    const File *previous = table_reading_file(f);
+    decompose_input(c, f);
+    table_reading_file(previous);
 }
 void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
     const Recipe *r = f->recipe;

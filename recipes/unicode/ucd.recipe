@@ -152,6 +152,9 @@ thing surrogate first-cp last-cp
 # Surrogate codepoint addresses are identifiers, not scalar characters. They
 # cannot be looked up in the scalar-only floor or encoded as UTF-8 text.
 content surrogate.cp surrogate.first-cp surrogate.last-cp
+# A block's Start Code and End Code are hexadecimal addresses, including
+# surrogate blocks. Preserve that notation for every block's bounds.
+content block.first-cp block.last-cp
 thing named-sequence cps
 thing provisional-named-sequence cps
 thing standardized-variant cps
