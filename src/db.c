@@ -13,7 +13,7 @@
 #include <string.h>
 
 typedef struct { lp_id claim, witness, lineage; uint64_t games; double sum, trust; uint8_t has_lineage, dirty; } Series;
-struct Fold { lp_strmap *series; };
+struct Fold { lp_strmap *series; lp_vec(size_t) dirty; };
 static Fold *active_fold;
 typedef struct {
     PGconn **copy, *series; int ncopy, from_ingest, witness_changed;
@@ -254,7 +254,7 @@ Fold *fold_new(void){
 void fold_free(Fold *f){
     if (!f) return;
     if (active_fold == f) active_fold = NULL;
-    lp_strmap_free(f->series); free(f);
+    lp_strmap_free(f->series); lp_vec_free(&f->dirty); free(f);
 }
 uint64_t fold_count(const Fold *f){ return f ? (uint64_t)lp_strmap_count(f->series) : 0; }
 void fold_events(Fold *f, const File *files, int nfiles){
@@ -275,10 +275,15 @@ void fold_events(Fold *f, const File *files, int nfiles){
             if (event->has_dependence) { lineage=event->dependence; has_lineage=1; observation_trust=event->dependence_trust; }
             uint8_t key[48]={0}; memcpy(key,event->claim.b,16); memcpy(key+16,source.id.b,16);
             if (has_lineage) memcpy(key+32,lineage.b,16);
-            bool fresh; Series *s=lp_strmap_get(f->series,key,sizeof key,&fresh);
+            bool fresh; size_t index=lp_strmap_put(f->series,key,sizeof key,&fresh);
+            Series *s=lp_strmap_at(f->series,index);
             if (fresh) *s=(Series){.claim=event->claim,.witness=source.id,.lineage=lineage,
                 .trust=observation_trust,.has_lineage=has_lineage};
             if (s->games==UINT64_C(9007199254740992)) { fprintf(stderr,"series exceeds exact Native game range\n"); exit(1); }
+            /* Map slots are stable even when its backing storage grows. Queue
+             * each changed series once per window, retaining cumulative games
+             * without scanning the entire earlier source on every flush. */
+            if(!s->dirty)lp_push(&f->dirty,index);
             s->games++; s->sum+=lp_score_carried(event->score); s->dirty=1;
         }
     }
@@ -288,8 +293,8 @@ static void flush_series(Fold *f, LoadStats *st){
     lp_idmap *changed=lp_idmap_new(); lp_copy copy={0}; char sql[2200];
     snprintf(sql,sizeof sql,"COPY %s (claim,witness,lineage,games,score,trust) FROM STDIN (FORMAT binary)",writer.delta);
     copy_open(&copy,writer.series,sql);
-    for (size_t i=0;i<lp_strmap_count(f->series);i++) {
-        Series *s=lp_strmap_at(f->series,i); if (!s->dirty) continue;
+    for (size_t i=0;i<f->dirty.n;i++) {
+        Series *s=lp_strmap_at(f->series,f->dirty.v[i]);
         lp_copy_row(&copy,6); lp_copy_id(&copy,&s->claim); lp_copy_id(&copy,&s->witness);
         if(s->has_lineage) lp_copy_id(&copy,&s->lineage); else lp_copy_null(&copy);
         lp_copy_i64(&copy,(int64_t)s->games); lp_copy_f64(&copy,s->sum/(double)s->games); lp_copy_f64(&copy,s->trust);
@@ -309,6 +314,7 @@ static void flush_series(Fold *f, LoadStats *st){
         PGresult *q=ask_once(writer.series,"SELECT laplace_attest_series($1::regclass,$2::blake3[])",&a);
         st->std_upd+=lp_be(PQgetvalue(q,0,0),8); PQclear(q); args_free(&a);
     }
+    f->dirty.n=0;
     lp_idmap_free(changed);
 }
 
