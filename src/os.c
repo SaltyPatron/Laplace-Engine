@@ -372,10 +372,13 @@ int os_run_logged(const char *exe, char *const argv[], const char *log, const ch
     HANDLE in = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, NULL);
     STARTUPINFOW si = { .cb = sizeof si }; si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = in; si.hStdOutput = h; si.hStdError = h;
-    char *was = getenv(var) ? _strdup(getenv(var)) : NULL; _putenv_s(var, value);   /* the child inherits it */
+    const char *existing = var ? getenv(var) : NULL;
+    char *was = existing ? _strdup(existing) : NULL;
+    if (var) _putenv_s(var, value ? value : "");   /* the child inherits it */
     PROCESS_INFORMATION pi; BOOL ok = CreateProcessW(we, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
     DWORD err = ok ? 0 : GetLastError();
-    _putenv_s(var, was ? was : ""); free(was); free(we); CloseHandle(h); if (in != INVALID_HANDLE_VALUE) CloseHandle(in);
+    if (var) _putenv_s(var, was ? was : "");
+    free(was); free(we); CloseHandle(h); if (in != INVALID_HANDLE_VALUE) CloseHandle(in);
     if (!ok) { fprintf(stderr, "%s: the process was not started (Windows error %lu)\n", exe, (unsigned long)err);
                errno = err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND ? ENOENT : ENOEXEC; return -1; }
     WaitForSingleObject(pi.hProcess, INFINITE);
