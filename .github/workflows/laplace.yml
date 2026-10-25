@@ -69,7 +69,9 @@ jobs:
           export LAPLACE_SRC=$GITHUB_WORKSPACE LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native OMP_NUM_THREADS=$(nproc) MKL_NUM_THREADS=$(nproc)
           cmake -S Laplace-Engine -B "$LAPLACE_BUILD/Laplace-Engine/icx-release" -G Ninja -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=RelWithDebInfo
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
+          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target file_reference_local
           mkdir -p "$RUNNER_TEMP/engine" && cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace" "$RUNNER_TEMP/engine/laplace"
+          cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/file_reference_local" "$RUNNER_TEMP/engine/file-reference-local"
           sha256sum "$RUNNER_TEMP/engine/laplace" | tee "$RUNNER_TEMP/engine/laplace.sha256"
       - name: Provide the pinned Rust compiler for the Tree-sitter generator
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
@@ -97,6 +99,7 @@ jobs:
       - name: checks
         run: |
           L=$RUNNER_TEMP/engine/laplace
+          "$RUNNER_TEMP/engine/file-reference-local" "$LAPLACE_TIER0"
           export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
           export TMPDIR=${RUNNER_TEMP:?}
           export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes
