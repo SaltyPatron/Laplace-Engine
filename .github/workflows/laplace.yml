@@ -69,7 +69,11 @@ jobs:
           export LAPLACE_SRC=$GITHUB_WORKSPACE LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native OMP_NUM_THREADS=$(nproc) MKL_NUM_THREADS=$(nproc)
           cmake -S Laplace-Engine -B "$LAPLACE_BUILD/Laplace-Engine/icx-release" -G Ninja -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=RelWithDebInfo
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
+          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target file_reference_local
+          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target presence_frontier
           mkdir -p "$RUNNER_TEMP/engine" && cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace" "$RUNNER_TEMP/engine/laplace"
+          cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/file_reference_local" "$RUNNER_TEMP/engine/file-reference-local"
+          cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/presence_frontier" "$RUNNER_TEMP/engine/presence-frontier"
           sha256sum "$RUNNER_TEMP/engine/laplace" | tee "$RUNNER_TEMP/engine/laplace.sha256"
       - name: Provide the pinned Rust compiler for the Tree-sitter generator
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
@@ -97,12 +101,13 @@ jobs:
       - name: checks
         run: |
           L=$RUNNER_TEMP/engine/laplace
+          "$RUNNER_TEMP/engine/file-reference-local" "$LAPLACE_TIER0"
           export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
           export TMPDIR=${RUNNER_TEMP:?}
           export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes
           python3 Laplace-Engine/tests/catalog.py "$L"
           failed=0
-          for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code; do
+          for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing; do
             if ! bash "Laplace-Engine/tests/$suite.sh" "$L"; then
               echo "::error::Engine check failed: $suite"
               failed=1
@@ -134,6 +139,10 @@ jobs:
           . Laplace-Operations/laplace.env
           export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
           bash Laplace-Engine/tests/ingest-progress.sh "$RUNNER_TEMP/engine/laplace"
+          bash Laplace-Engine/tests/cached-key-reader.sh "$RUNNER_TEMP/engine/laplace"
+          bash Laplace-Engine/tests/stream-working-set.sh "$RUNNER_TEMP/engine/laplace"
+          bash Laplace-Engine/tests/presence-frontier.sh "$RUNNER_TEMP/engine/laplace" "$RUNNER_TEMP/engine/presence-frontier"
+          bash Laplace-Engine/tests/framenet-differences.sh "$RUNNER_TEMP/engine/laplace"
       - name: Unicode ranges retain non-scalar addresses without admitting atoms
         run: |
           . Laplace-Operations/laplace.env

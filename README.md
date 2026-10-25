@@ -9,6 +9,9 @@ Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github
 | `laplace tier0` | generates tier 0 from the Unicode data and prints its fingerprint |
 | `laplace highway` | generates the highway: the types the resources list (parts of speech, relations, concepts, classes, frames, rolesets) and the mappings between them, a perf-cache beside tier 0 |
 | `laplace deploy` | makes a database a Laplace database: the database itself if the server does not have it, extensions, content schema, semantics, its tier 0 |
+| `laplace ingest --catalog` | all available sources, short aliases, content paths, recipes, grammars, filename patterns and prerequisites as JSON; no database, cache or corpus required |
+| `laplace ingest --list-sources` | every canonical source name from the same recipe estate |
+| `laplace sources --catalog` | the same complete available catalog |
 | `laplace ingest` | every source, in the order `recipes/order` gives, each with its own log; what is recorded already is passed over |
 | `laplace ingest source \| file...` | a source by its name, or files, through their recipes: decompose on every core, deduplicate trunk to leaf, record, attest |
 | `laplace index` | the indexes again, if one was dropped; `laplace deploy` makes them all from the start |
@@ -25,6 +28,8 @@ Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github
 | `laplace tree file` | a file's syntax tree as its recipe's grammar reads it, for writing recipes |
 | `laplace bench` | every native operation measured on this machine |
 | `laplace model dir` | a transformer checkpoint read as "b beats c given a" (needs MKL) |
+
+Use catalog aliases such as `ucd`, `iso639`, `ud`, `oewn`, and `omw` wherever a source name is accepted. `uca` is another alias for `unicode`, rather than a separate scheduled ingestion. The recipe estate owns the full alias list.
 
 `laplace ingest --plan` shows which recipe takes which file; `--claims` prints what the recipes attest, as text, and loads nothing.
 

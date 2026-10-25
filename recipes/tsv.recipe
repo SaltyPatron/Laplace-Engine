@@ -1,0 +1,5 @@
+name tsv
+# Packaging syntax; leaves retain the original bytes.
+match *.tsv *.tab
+class UserCuratedResource
+grammar tsv

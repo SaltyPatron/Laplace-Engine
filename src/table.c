@@ -436,14 +436,20 @@ size_t table_parts(const lp_id *id, lp_id *out, size_t cap){
 uint64_t table_end(void){ uint64_t e = __atomic_load_n(&node_top, __ATOMIC_ACQUIRE); return e < node_cap ? e : node_cap; }
 /* What each child of every node is said to be, kept on the child: a claim, a record, a tuple, a file's metadata (its
  * holder is a file). Read off the vertices' M after the decomposition, when nothing inserts. */
+static void table_kind(const lp_id *id, uint64_t said){
+    if (said == LP_SAID_HOLDS) { Node *child=table_find(id); if(child)__atomic_store_n(&child->spine,1,__ATOMIC_RELAXED); }
+    uint8_t bit = said == LP_SAID_CLAIM ? LP_KIND_CLAIM : said == LP_SAID_RECORD ? LP_KIND_RECORD : said == LP_SAID_TUPLE ? LP_KIND_TUPLE : 255;
+    if (bit != 255) { Node *child=table_find(id); if(child)__atomic_fetch_or(&child->kind,(uint8_t)(1u<<bit),__ATOMIC_RELAXED); }
+}
+void table_annotate_roots(const Ref *roots, size_t count){
+    for(size_t i=0;i<count;i++)table_kind(&roots[i].id,roots[i].said);
+}
 void table_kinds(void){
     uint64_t end = table_end();
     #pragma omp parallel for schedule(dynamic, 65536)
     for (uint64_t i = 0; i < end; i++) { Node *x = &NODE[i]; if (!x->live) continue;
         for (uint32_t v = 0; v < x->nv; v++) { uint64_t said = VSAID(VTX[x->voff + v].m); if (!said) continue;
-            if (said == LP_SAID_HOLDS) { Node *c = table_find(&VTX[x->voff + v].id); if (c) __atomic_store_n(&c->spine, 1, __ATOMIC_RELAXED); }
-            uint8_t bit = said == LP_SAID_CLAIM ? LP_KIND_CLAIM : said == LP_SAID_RECORD ? LP_KIND_RECORD : said == LP_SAID_TUPLE ? LP_KIND_TUPLE : 255;
-            if (bit != 255) { Node *c = table_find(&VTX[x->voff + v].id); if (c) __atomic_fetch_or(&c->kind, (uint8_t)(1u << bit), __ATOMIC_RELAXED); }
+            table_kind(&VTX[x->voff + v].id, said);
             if (said == LP_SAID_METADATA) __atomic_fetch_or(&x->kind, (uint8_t)(1u << LP_KIND_FILE), __ATOMIC_RELAXED); } }
 }
 static lp_ref compose_sink(void *sink, const lp_ref *ch, uint32_t n, uint8_t tier){ (void)sink; return compose(ch, n, tier); }
@@ -477,6 +483,10 @@ static uint64_t seen_sum(int forget){
     pthread_mutex_unlock(&seen_mu); return n;
 }
 uint64_t table_count(void){ return seen_sum(2); }
+uint64_t table_resident_bytes(void){
+    return (smask + 1) * sizeof *slot + table_end() * sizeof *NODE
+        + __atomic_load_n(&vtx_top, __ATOMIC_ACQUIRE) * sizeof *VTX;
+}
 void strings_forget(void);
 /* Emptied between batches: the pages handed back are zero when touched again, so the slots are empty and the nodes'
  * live marks clear without a pass over them. */

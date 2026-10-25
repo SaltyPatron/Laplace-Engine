@@ -1,0 +1,5 @@
+name psv
+# Packaging syntax; leaves retain the original bytes.
+match *.psv
+class UserCuratedResource
+grammar psv

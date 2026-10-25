@@ -18,6 +18,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
+#include <errno.h>
 
 /* How many recipes a recipe's keys are reached through: 0 when it refers to none (refer NAME RECIPE), else one more
  * than the recipes it refers to. The files of a deeper recipe are read after the shallower ones' */
@@ -251,9 +253,68 @@ static void show_record_events(const File *file){
         putchar('\n');
     }
 }
+#include "ingest_progress.h"
+/* A file is a semantic object, not a persistence boundary. Keep the ordinary
+ * grammar stream and file assembly, but share their Native working window
+ * across files. The caller's resource plan supplies a resident-byte budget;
+ * the standalone CLI retains its existing batch budget as a fallback. */
+typedef struct {
+    const char *conninfo; int threads; Fold *fold; LoadStats *stats;
+    uint64_t budget, flushes;
+    Ref *roots; size_t nroots, croots;
+    Events events;
+    File **complete; size_t ncomplete, ccomplete;
+} StreamWindow;
+static int stream_window_flush(StreamWindow *window){
+    if (!window->nroots && !window->events.n && !window->ncomplete) return 0;
+    File batch = {.said=window->roots, .nsaid=window->nroots, .ev=window->events};
+    if (load(window->conninfo, window->threads, &batch, 1, window->stats)) return 1;
+    /* A composed-file receipt means its Native closure has been committed,
+     * even when other files shared that apply. Never report it early. */
+    for (size_t i=0; i<window->ncomplete; i++) progress_file("file-composed", window->complete[i]);
+    window->nroots=window->events.n=window->ncomplete=0;
+    uint64_t buffered=window->croots*sizeof *window->roots + window->events.cap*sizeof *window->events.e
+        + window->ccomplete*sizeof *window->complete;
+    if (buffered >= window->budget) {
+        free(window->roots); free(window->events.e); free(window->complete);
+        window->roots=NULL; window->croots=0; window->events=(Events){0}; window->complete=NULL; window->ccomplete=0;
+    }
+    window->flushes++; table_reset(); return 0;
+}
+static void stream_window_root(StreamWindow *window, const Ref *root){
+    static const lp_id absent={{0}};
+    if (lp_id_eq(&root->id,&absent)) return;
+    table_annotate_roots(root, 1);
+    if (window->nroots == window->croots) {
+        window->croots = window->croots ? window->croots * 2 : 1;
+        window->roots = xrealloc(window->roots, window->croots * sizeof *window->roots);
+    }
+    window->roots[window->nroots++] = *root;
+}
+static int stream_window_add(StreamWindow *window, File *file){
+    if (file->known || file->skipped) return 0;
+    fold_events(window->fold, file, 1);
+    for (uint64_t i=0; i<file->ev.n; i++) ev_push(&window->events, &file->ev.e[i]);
+    if (file->has_file) stream_window_root(window, &file->file);
+    else {
+        stream_window_root(window, &file->trunk);
+        for (uint64_t i=0; i<file->nsaid; i++) stream_window_root(window, &file->said[i]);
+    }
+    if (file->has_lineage) stream_window_root(window, &file->lineage);
+    if (!file->partial) {
+        if (window->ncomplete == window->ccomplete) {
+            window->ccomplete = window->ccomplete ? window->ccomplete * 2 : 1;
+            window->complete = xrealloc(window->complete, window->ccomplete * sizeof *window->complete);
+        }
+        window->complete[window->ncomplete++] = file;
+    }
+    uint64_t resident = table_resident_bytes() + window->croots * sizeof *window->roots
+        + window->events.cap * sizeof *window->events.e + window->ccomplete * sizeof *window->complete;
+    return resident >= window->budget ? stream_window_flush(window) : 0;
+}
 typedef struct {
     const char *conninfo; int threads, show, loading; File *file; Fold *fold; LoadStats *stats;
-    uint64_t *events, windows; double database_seconds, *source_seconds;
+    uint64_t *events, windows; double database_seconds, *source_seconds; StreamWindow *window;
 } StreamLoad;
 static int stream_record_batch(void *context, const Ref *things, size_t n, const Ref *metadata, size_t nm, const Events *events){
     StreamLoad *stream = context; File *file = stream->file;
@@ -271,14 +332,14 @@ static int stream_record_batch(void *context, const Ref *things, size_t n, const
     *stream->events += events->n;
     double begin = now(); int result = 0;
     if (stream->loading) {
-        fold_events(stream->fold, file, 1);
-        result = load(stream->conninfo, stream->threads, file, 1, stream->stats);
+        result = stream_window_add(stream->window, file);
     }
     double elapsed = now() - begin; stream->database_seconds += elapsed;
     if (stream->source_seconds) *stream->source_seconds += elapsed;
     file->ev = previous; file->said = said; file->nsaid = nsaid; file->csaid = csaid;
     if (!result) {
-        stream->windows++; table_reset();
+        stream->windows++; if (!stream->loading) table_reset();
+        progress_file("progress", file);
         if (stream->loading) fprintf(stderr, "\r  %'llu record windows, %'llu entities and %'llu paths persisted   ",
                 (unsigned long long)stream->windows, (unsigned long long)stream->stats->ent_rows, (unsigned long long)stream->stats->phy_rows);
         else fprintf(stderr, "\r  %'llu record windows inspected, %'llu claim events reported   ",
@@ -288,7 +349,7 @@ static int stream_record_batch(void *context, const Ref *things, size_t n, const
 }
 typedef struct {
     const char *conninfo; int threads, show, loading; Fold *fold; LoadStats *stats;
-    uint64_t *events; double database_seconds;
+    uint64_t *events; double database_seconds; StreamWindow *window;
 } SourceCompletion;
 static int source_file_ready(void *context, File *file){
     SourceCompletion *source = context; double start = now();
@@ -302,11 +363,11 @@ static int source_file_ready(void *context, File *file){
         *source->events += file->ev.n;
         if (source->show) show_record_events(file);
         if (source->loading) {
-            fold_events(source->fold, file, 1);
-            if (load(source->conninfo, source->threads, file, 1, source->stats)) return 1;
+            if (stream_window_add(source->window, file)) return 1;
         }
     }
     if (source->loading && !streamed) source->database_seconds += now() - start;
+    if (!source->loading) progress_file("file-composed", file);
     if (!file->partial && getenv("LAPLACE_TRUNKS")) { char id[33]; id_text(&file->trunk.id, id); fprintf(stderr, "  trunk %s  %s\n", id, file->path); }
     return 0;
 }
@@ -426,7 +487,20 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
         printf("%-10s %'10.1f   %s\n", code ? "FAILED" : "in", now() - t, last);
         if (src[i].nfound > 1) printf("%-4s %-38s %-10s %10s   its root matches %d directories: it takes the last by name, %s\n", "", "", "", "", src[i].nfound, src[i].found);
         fflush(stdout);
-        if (code) { failed = 1; fprintf(stderr, "\n%s did not go in (exit %d); what it said is in %s\n", src[i].name, code, log); } else { went++; wentin[i] = 1; }
+        if (code) {
+            failed = 1; fprintf(stderr, "\n%s did not go in (exit %d); diagnostic: %s\n", src[i].name, code, log);
+            FILE *f = fopen(log, "r");
+            if (f) {
+                /* Keep the actual child error visible in CLI/Actions output. Bound
+                 * output even when a source produced a long progress log. */
+                char tail[16384]; size_t used, begin = 0;
+                if (!fseek(f, 0, SEEK_END)) { long size = ftell(f); if (size > (long)sizeof tail) { fseek(f, -(long)sizeof tail, SEEK_END); begin = 1; } else rewind(f); }
+                used = fread(tail, 1, sizeof tail, f); fclose(f);
+                if (begin) { while (begin < used && tail[begin] != '\n') begin++; if (begin < used) begin++; }
+                fwrite(tail + begin, 1, used - begin, stderr);
+                fputc('\n', stderr);
+            }
+        } else { went++; wentin[i] = 1; }
         if (!code && loads && before >= 0 && bytes_in > 0) { double after = db_bytes(conninfo); if (after > before) room_keep(roomf, src[i].name, (after - before) / bytes_in); }     /* what it took, for the next run's check */
     }
     printf("\n%d sources in, %d absent, %d held, %d without a recipe, %d not begun for want of room, %d not begun because what they come after is not in%s   %'.1f s\n", went, absent, held, empty, short_of_room, short_of_order, failed ? ", and one that failed: the run stops there" : "", now() - T);
@@ -446,19 +520,51 @@ static int ingest_ewkb_point(const uint8_t *e, size_t n, lp_coord *out){
     if (n < 5 || e[0] != 1) return 0; uint32_t t; memcpy(&t, e + 1, 4); size_t off = 5; if (t & 0x20000000u) off += 4;
     if (n < off + 32) return 0; for (int d = 0; d < 4; d++) { double v; memcpy(&v, e + off + 8 * d, 8); out->m[d] = (int64_t)(v * (double)LP_FIXED_ONE); } return 1;
 }
+typedef struct { lp_vertex *vertices; Ref *children; uint64_t *runs; size_t capacity; } FileRefScratch;
+/* Presence is an ID question. Reuse Native's local reference first; when its
+ * children are local, Native can compose the reference without a DB read. */
+static int ingest_local_file_ref(const lp_id *id, const uint8_t *path, size_t bytes,
+                                 uint8_t tier, FileRefScratch *scratch, Ref *out){
+    int known; *out=ref_of_id(id,&known);
+    if(known){out->tier=tier;return 1;}
+    size_t n=lp_path_vertices(path,bytes,NULL,0);
+    if(!n)return 0;
+    if(n>scratch->capacity){
+        if(n>SIZE_MAX/sizeof(Ref)||n>SIZE_MAX/sizeof(lp_vertex)||n>SIZE_MAX/sizeof(uint64_t))return -1;
+        scratch->vertices=xrealloc(scratch->vertices,n*sizeof *scratch->vertices);
+        scratch->children=xrealloc(scratch->children,n*sizeof *scratch->children);
+        scratch->runs=xrealloc(scratch->runs,n*sizeof *scratch->runs);scratch->capacity=n;
+    }
+    if(lp_path_vertices(path,bytes,scratch->vertices,n)!=n)return -1;
+    for(size_t i=0;i<n;i++){
+        scratch->children[i]=ref_of_id(&scratch->vertices[i].id,&known);
+        if(!known)return 0;
+        scratch->runs[i]=scratch->vertices[i].run;
+    }
+    if(!lp_ref_compose_runs(scratch->children,scratch->runs,n,tier,out)||!lp_id_eq(id,&out->id))return -1;
+    out->tier=tier;return 1;
+}
 static int files_recorded(const char *conninfo, File *files, int nfiles){
     File *candidate=NULL;int *owner=NULL,ncandidate=0,ccandidate=0,failed=0;
+    uint8_t *local=NULL;FileRefScratch scratch={0};
     lp_id *want = malloc(sizeof(lp_id) * (size_t)(nfiles + 1)); int *of = malloc(sizeof(int) * (size_t)(nfiles + 1)), nw = 0, found = 0;
     for (int i = 0; i < nfiles; i++) { if (files[i].skipped || files[i].known) continue; Ref os; if (file_os(files[i].recipe, &files[i], &os)) { want[nw] = os.id; of[nw++] = i; } }
+    if(nw){
+        /* A recorded parent owns its complete structural closure. An absent
+         * metadata ID therefore cannot have a recorded file above it. */
+        uint8_t *recorded=db_recorded(conninfo,want,(uint64_t)nw);int kept=0;
+        for(int i=0;i<nw;i++)if(recorded[i]){want[kept]=want[i];of[kept++]=of[i];}
+        free(recorded);nw=kept;
+    }
     PGconn *pg = nw ? db_connect(conninfo) : NULL;
     for (int level = 0; level < 8 && nw; level++) {                          /* a metadata tree factored into blocks is a few levels deep */
         lp_idmap *at = lp_idmap_new(); for (int k = 0; k < nw; k++) { bool fresh; lp_idmap_put(at, &want[k], &fresh); }
         int ncap = nw, nn = 0; lp_id *next = malloc(sizeof(lp_id) * (size_t)ncap); int *nof = malloc(sizeof(int) * (size_t)ncap);   /* an ID can be held by many: grown as they come */
-        for (int k0 = 0; k0 < nw; k0 += 10000) { int k1 = nw - k0 < 10000 ? nw : k0 + 10000; uint8_t *ab = malloc(20 + 20 * (size_t)(k1 - k0)); size_t al = ids_param(ab, want + k0, (uint32_t)(k1 - k0));
+        for (int k0 = 0; k0 < nw && !failed; k0 += 10000) { int k1 = nw - k0 < 10000 ? nw : k0 + 10000; uint8_t *ab = malloc(20 + 20 * (size_t)(k1 - k0)); size_t al = ids_param(ab, want + k0, (uint32_t)(k1 - k0));
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-            PGresult *r = PQexecParams(pg, "SELECT c.entity, st_asewkb(c.path), c.tier, st_asewkb(e.coord)"
+            PGresult *r = PQexecParams(pg, "SELECT c.entity, st_asewkb(c.path), c.tier"
                 " FROM unnest($1::blake3[]) wanted(id) JOIN public.physicality c"
-                " ON c.path @> ARRAY[wanted.id]::blake3[] JOIN public.entity e ON e.id=c.entity",
+                " ON c.path @> ARRAY[wanted.id]::blake3[]",
                 1, NULL, v, l, f, 1);
             if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "which files are recorded: %s", PQerrorMessage(pg)); PQclear(r); free(ab); failed=1; break; }
             for (int j = 0; j < PQntuples(r); j++) {
@@ -466,11 +572,14 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
                 int64_t k = lp_idmap_find(at, &vx[0].id); if (k < 0) continue;                    /* held, but not first: not its metadata */
                 lp_id c; memcpy(c.b, PQgetvalue(r, j, 0), 16);
                 if (vx[0].said == LP_SAID_METADATA && nv >= 2) {                                   /* the file's trunk */
-                    lp_coord co; if (!ingest_ewkb_point((const uint8_t *)PQgetvalue(r, j, 3), (size_t)PQgetlength(r, j, 3), &co)) continue;
                     uint16_t tier; memcpy(&tier, PQgetvalue(r, j, 2), 2); tier = ntohs(tier);
-                    if(ncandidate==ccandidate){ccandidate=ccandidate?ccandidate*2:128;candidate=xrealloc(candidate,(size_t)ccandidate*sizeof *candidate);owner=xrealloc(owner,(size_t)ccandidate*sizeof *owner);}
-                    owner[ncandidate]=of[k];File *fl=&candidate[ncandidate++];*fl=files[of[k]];
-                    memset(&fl->file, 0, sizeof fl->file); fl->file.id = c; fl->file.c = co; fl->file.tier = (uint8_t)tier; fl->file.said = 0;
+                    if(ncandidate==ccandidate){ccandidate=ccandidate?ccandidate*2:128;candidate=xrealloc(candidate,(size_t)ccandidate*sizeof *candidate);owner=xrealloc(owner,(size_t)ccandidate*sizeof *owner);local=xrealloc(local,(size_t)ccandidate);}
+                    owner[ncandidate]=of[k];File *fl=&candidate[ncandidate];*fl=files[of[k]];
+                    int have=ingest_local_file_ref(&c,(const uint8_t *)PQgetvalue(r,j,1),(size_t)PQgetlength(r,j,1),(uint8_t)tier,&scratch,&fl->file);
+                    if(have<0){fputs("file precheck: stored path disagrees with canonical Native composition\n",stderr);failed=1;break;}
+                    local[ncandidate++]=(uint8_t)have;
+                    if(!have){memset(&fl->file,0,sizeof fl->file);fl->file.id=c;fl->file.tier=(uint8_t)tier;}
+                    fl->file.said = 0;
                     fl->recorded_metadata = vx[0].id;
                     fl->has_file = 1; fl->known = 1; }
                 else { if (nn == ncap) { ncap *= 2; next = xrealloc(next, sizeof(lp_id) * (size_t)ncap); nof = xrealloc(nof, sizeof(int) * (size_t)ncap); } next[nn] = c; nof[nn++] = of[k]; } }                                         /* a metadata tree it begins: what holds that is next */
@@ -479,9 +588,45 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
         if (failed) break;
         for (int k = 0; k < nn; k++) if (!files[of[k]].known) { want[nw] = want[k]; of[nw++] = of[k]; }
     }
-    if (pg) PQfinish(pg); free(want); free(of);
-    if (failed) { free(candidate); free(owner); return -1; }
+    free(want); free(of);free(scratch.vertices);free(scratch.children);free(scratch.runs);
+    if (failed) { if(pg)PQfinish(pg);free(candidate);free(owner);free(local);return -1; }
     validate_file_contexts(conninfo,candidate,ncandidate);
+    /* Only accepted file IDs absent from local composition need a retrieval.
+     * This is a bounded-key primary-index lookup, never a join to the estate. */
+    typedef struct { lp_coord coord; int have; } StoredFileRef;
+    lp_idmap *references=lp_idmap_sized(sizeof(StoredFileRef));
+    lp_id *missing=malloc((size_t)(ncandidate?ncandidate:1)*sizeof *missing);int nmissing=0;
+    for(int i=0;i<ncandidate;i++)if(candidate[i].known&&!local[i]){
+        bool fresh;StoredFileRef *value=lp_idmap_get(references,&candidate[i].file.id,&fresh);
+        if(fresh){memset(value,0,sizeof *value);missing[nmissing++]=candidate[i].file.id;}
+    }
+    /* libpq represents one binary parameter's byte length with a signed int. */
+    const int parameter_ids=(INT_MAX-20)/20;
+    for(int begin=0;begin<nmissing&&!failed;){
+        int count=nmissing-begin;if(count>parameter_ids)count=parameter_ids;
+        uint8_t *ab=malloc(20+20*(size_t)count);size_t al=ids_param(ab,missing+begin,(uint32_t)count);
+        const char *v[]={ (const char *)ab };int lengths[]={ (int)al },formats[]={1};
+        PGresult *r=PQexecParams(pg,"SELECT wanted.id,"
+            "(SELECT st_asewkb(e.coord) FROM public.entity e WHERE e.id=wanted.id) "
+            "FROM unnest($1::blake3[]) wanted(id)",1,NULL,v,lengths,formats,1);
+        if(PQresultStatus(r)!=PGRES_TUPLES_OK){fprintf(stderr,"file reference IDs: %s",PQerrorMessage(pg));failed=1;}
+        else for(int j=0;j<PQntuples(r);j++){
+            lp_id id;memcpy(id.b,PQgetvalue(r,j,0),sizeof id.b);int64_t at=lp_idmap_find(references,&id);
+            if(at<0||PQgetisnull(r,j,1)||!ingest_ewkb_point((const uint8_t *)PQgetvalue(r,j,1),(size_t)PQgetlength(r,j,1),&((StoredFileRef *)lp_idmap_at(references,(size_t)at))->coord)){
+                fputs("file reference IDs: invalid stored reference\n",stderr);failed=1;break;
+            }
+            ((StoredFileRef *)lp_idmap_at(references,(size_t)at))->have=1;
+        }
+        PQclear(r);free(ab);begin+=count;
+    }
+    for(int i=0;i<ncandidate&&!failed;i++)if(candidate[i].known&&!local[i]){
+        int64_t at=lp_idmap_find(references,&candidate[i].file.id);
+        StoredFileRef *value=at<0?NULL:lp_idmap_at(references,(size_t)at);
+        if(!value||!value->have){fputs("file reference IDs: recorded file has no entity reference\n",stderr);failed=1;break;}
+        candidate[i].file.c=value->coord;
+    }
+    free(missing);lp_idmap_free(references);if(pg)PQfinish(pg);free(local);
+    if(failed){free(candidate);free(owner);return -1;}
     uint8_t *stale=calloc((size_t)nfiles,1);if(nfiles && !stale){perror("cached reading contexts");exit(1);}
     for(int i=0;i<ncandidate;i++)if(candidate[i].known && !files[owner[i]].known){
         File *fl=&files[owner[i]];fl->file=candidate[i].file;fl->recorded_metadata=candidate[i].recorded_metadata;fl->known=fl->has_file=1;
@@ -532,16 +677,24 @@ static int ingest_highway(const char *conninfo, const char *t0p, int threads, in
 
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
-    int highway = 0, threads = 0, do_load = 1, show_claims = 0, entities = 0, asking = 1; const char *of = NULL; extern int load_whole;
+    int highway = 0, threads = 0, do_load = 1, show_claims = 0, entities = 0, asking = 1, catalog = 0, list = 0; const char *of = NULL; extern int load_whole;
     int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "-t", .kind = 's', .at = &t0p }, { .flag = "-r", .kind = 's', .at = &rdir }, { .flag = "-j", .kind = 'i', .at = &threads },
         { .flag = "-s", .kind = 's', .at = &of },                                                       /* the files named are this source's: a part of it at a time */
         { .flag = "--highway", .kind = 'b', .at = &highway },
+        { .flag = "--catalog", .kind = 'b', .at = &catalog },
+        { .flag = "--list-sources", .kind = 'b', .at = &list },
         { .flag = "--whole", .kind = 'b', .at = &load_whole },                                          /* after a run that was cut off: every node is looked for */
         { .flag = "--no-load", .kind = 'v', .at = &do_load, .val = 0 }, { .flag = "--plan", .kind = 'v', .at = &do_load, .val = -1 },
         { .flag = "--claims", .kind = 'b', .at = &show_claims },                                        /* what the recipes attest, as text; nothing is loaded */
         { .flag = "--claims-tsv", .kind = 'b', .at = &tsv_claims },                                     /* --claims for a machine: a claim a line, its parts between tabs */
         { .flag = "--entities", .kind = 'b', .at = &entities },                                         /* what the recipes would record, entities and claims; nothing is loaded */
         { 0 } });
+    if (catalog || list) {
+        if (a < argc || of || highway || show_claims || tsv_claims || entities || do_load != 1 || (catalog && list)) {
+            fputs("Use ingest --catalog or --list-sources with optional -r recipes.\n", stderr); return 2;
+        }
+        return recipes_catalog(rdir, stdout, catalog);
+    }
     if (highway) {
         if (a < argc || of || show_claims || tsv_claims || entities || do_load < 0) { fprintf(stderr, "--highway admits only the existing highway contents; use -d, -t, -j or --no-load\n"); return 2; }
         return ingest_highway(conninfo, t0p, threads, do_load);
@@ -549,23 +702,23 @@ int cmd_ingest(int argc, char **argv){
     if (tsv_claims && entities) { fprintf(stderr, "--claims-tsv writes claims, not entities\n"); return 2; }
     if (entities || tsv_claims) show_claims = 1;
     if (show_claims) do_load = 0;
-    if (a < argc && argv[a][0] == '-') { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] [--claims-tsv] [--entities] file...\n"); return 2; }
+    if (a < argc && argv[a][0] == '-') { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] [--claims-tsv] [--entities] source|file...\n       laplace ingest [--catalog | --list-sources] [-r recipes]\n"); return 2; }
     /* what a recipe would say is shown of files: of nothing named it is no ingest of every source, and --entities, which
      * asks the database of every composition, is of files only, never a source by its name */
     if (show_claims && a >= argc) { fprintf(stderr, "--claims and --entities show what files would record: name the files\n"); return 2; }
     Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec), nsrc; Source *src = sources_loaded(&nsrc);
     if (entities) for (int i = a; i < argc; i++) { struct stat st_; if (stat(argv[i], &st_)) { fprintf(stderr, "--entities shows what files would record: %s is no file (a sample of a source: -s SOURCE FILE)\n", argv[i]); return 2; } }
     for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, "file")) file_record_stock(&rec[k]);   /* what the OS keeps of every file: the stock recipe file */
-    if (of) { int k = 0; while (k < nsrc && strcmp(src[k].name, of)) k++; if (k == nsrc) { fprintf(stderr, "%s is not a source\n", of); return 2; } walking = &src[k]; }
+    if (of) { int k = 0; while (k < nsrc && !source_named(&src[k], of)) k++; if (k == nsrc) { fprintf(stderr, "%s is not a source\n", of); return 2; } walking = &src[k]; }
     /* A bare declared source keeps its meaning when the current directory has
      * the same name. Explicit ./ or absolute paths still select file input. */
-    { int named = 0; for (int i = a; i < argc; i++) { int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++; named += k < nsrc; }
+    { int named = 0; for (int i = a; i < argc; i++) { int k = 0; while (k < nsrc && !source_named(&src[k], argv[i])) k++; named += k < nsrc; }
       if (named && named == argc - a && !of && !getenv("LAPLACE_INGEST_ONE")) {   /* sources by name: each its own run, in recipes/order, after everything it comes after */
-          int *want = calloc((size_t)nsrc, sizeof(int)); for (int i = a; i < argc; i++) for (int k = 0; k < nsrc; k++) if (!strcmp(src[k].name, argv[i])) want[k] = 1;
+          int *want = calloc((size_t)nsrc, sizeof(int)); for (int i = a; i < argc; i++) for (int k = 0; k < nsrc; k++) if (source_named(&src[k], argv[i])) want[k] = 1;
           for (int k = nsrc - 1; k >= 0; k--) if (want[k]) for (int x = 0; x < src[k].nafter; x++) for (int j = 0; j < k; j++) if (!strcmp(src[j].name, src[k].after[x])) want[j] = 1;   /* sources is in order: what one comes after is before it */
           int rc = ingest_every(a, argv, src, nsrc, rec, nrec, want); free(want); return rc; } }
     for (int i = a; i < argc; i++) {                                         /* a source by its name, or files and directories */
-        struct stat st; int k = 0; while (k < nsrc && strcmp(src[k].name, argv[i])) k++;
+        struct stat st; int k = 0; while (k < nsrc && !source_named(&src[k], argv[i])) k++;
         if (k < nsrc) {
             if (src[k].unset[0]) { fprintf(stderr, "source %s: its root names $%s, which the environment does not set (Laplace-Operations laplace.env)\n", src[k].name, src[k].unset); return 2; }
             if (!src[k].found[0]) { fprintf(stderr, "source %s is not at any of its roots\n", src[k].name); return 1; }
@@ -664,10 +817,18 @@ int cmd_ingest(int argc, char **argv){
     uint64_t batch = (uint64_t)(getenv("LAPLACE_BATCH_MB") ? atoll(getenv("LAPLACE_BATCH_MB")) : 1024) << 20;
     uint64_t bytes = 0, nev = 0; int done = 0, exact = 0, mism = 0, batches = 0; double t_dec = 0, t_rec = 0; LoadStats st = { 0 };
     Fold *fold = fold_new();                                                  /* cumulative evidence, updated in PostgreSQL as each batch flows */
+    uint64_t working_bytes = batch;
+    const char *working_setting = getenv("LAPLACE_WORKING_SET_BYTES");
+    if (working_setting && *working_setting) {
+        char *end; errno=0; unsigned long long value=strtoull(working_setting,&end,10);
+        if (errno || *end || *working_setting=='-' || !value) { fputs("LAPLACE_WORKING_SET_BYTES must be a positive byte budget\n",stderr); return 2; }
+        working_bytes=(uint64_t)value;
+    }
+    StreamWindow window = {.conninfo=conninfo, .threads=threads, .fold=fold, .stats=&st, .budget=working_bytes};
     StreamLoad *streams = calloc((size_t)nfiles, sizeof *streams);
     if (nfiles && !streams) { perror("source stream loaders"); return 1; }
     SourceCompletion completion = {.conninfo=conninfo, .threads=threads, .show=show_claims, .loading=do_load,
-        .fold=fold, .stats=&st, .events=&nev};
+        .fold=fold, .stats=&st, .events=&nev, .window=&window};
     /* Inspection has no persisted backing for projected key products. Only
      * sources without declarations or references can release each window;
      * entity dumps also need their complete requested graph. */
@@ -679,12 +840,20 @@ int cmd_ingest(int argc, char **argv){
     uint64_t *size = calloc((size_t)nfiles, 8);
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
         size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
+    if (do_load && progress_open(files, nfiles, &st)) return 1;
     #define SHOW(F) do { if (show_claims) show_record_events(F); } while (0)
     /* What was read of a file is kept for its content; a file read to its end gets its trunk. */
     #define WHOLE(F) do { File *f_ = (F); if (!f_->partial) file_close(f_); } while (0)
+    /* Keep the recorded-key reader and its Native backend caches alive for
+     * this source. Opening a backend for each known file discards those
+     * caches and repeats connection/library initialization on every replay. */
+    PGconn *key_reader = NULL;
     for (int a0 = 0; a0 < nfiles; ) {
         int b0 = a0; uint64_t sum = 0;
         int streaming = (do_load || preview_streaming) && !files[a0].known && !files[a0].skipped && recipe_record_streamable(files[a0].recipe);
+        /* Non-streaming providers retain their existing batch path. Drain any
+         * earlier stream before that path loads or resets the shared table. */
+        if (!streaming && do_load && stream_window_flush(&window)) return 1;
         if (streaming) {
             b0 = a0 + 1;
             sum = getenv("LAPLACE_RECORD_WINDOW_BYTES") ? strtoull(getenv("LAPLACE_RECORD_WINDOW_BYTES"), NULL, 10) : (UINT64_C(8) << 20);
@@ -694,9 +863,10 @@ int cmd_ingest(int argc, char **argv){
         double td = now();
         StreamLoad *stream = &streams[a0];
         *stream = (StreamLoad){.conninfo=conninfo, .threads=threads, .show=show_claims, .loading=do_load, .file=&files[a0],
-            .fold=fold, .stats=&st, .events=&nev, .source_seconds=&completion.database_seconds};
+            .fold=fold, .stats=&st, .events=&nev, .source_seconds=&completion.database_seconds, .window=&window};
         if (streaming) {
             File *file = &files[a0]; file->emit = stream_record_batch; file->emit_context = stream;
+            progress_file("file-start", file);
             file_stream_begin(file); decompose_file(CTX[0], file);
             if (!file->partial) { file->emit = NULL; file->emit_context = NULL; }
             bytes += file->bytes; done++;
@@ -709,9 +879,11 @@ int cmd_ingest(int argc, char **argv){
              * Each file's grammar records still run on all worker lanes. */
             for (int i = a0; i < b0; i++) {
                 if (restore_keys && files[i].known && say_has_keys(files[i].recipe)) {
-                    if (load_file_keys(conninfo, &files[i])) return 1;
+                    if (!key_reader) key_reader = db_connect(conninfo);
+                    if (load_file_keys(key_reader, &files[i])) { PQfinish(key_reader); return 1; }
                 }
                 if (files[i].known || files[i].skipped) continue;
+                progress_file("file-start", &files[i]);
                 decompose_file(CTX[0], &files[i]); bytes += files[i].bytes; done++;
             }
             t_dec += now() - td;
@@ -726,6 +898,7 @@ int cmd_ingest(int argc, char **argv){
             if (files[i].known || files[i].skipped) continue;
             #pragma omp task firstprivate(i)
             {
+                progress_file("file-start", &files[i]);
                 decompose_file(CTX[omp_get_thread_num()], &files[i]);
                 #pragma omp critical
                 {
@@ -752,10 +925,16 @@ int cmd_ingest(int argc, char **argv){
         for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
         if (entities) show_entities(conninfo, asking);
         if (do_load) {
-            ingest_known(conninfo, files + a0, b0 - a0);
-            fold_events(fold, files + a0, b0 - a0);
-            if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1;
+            if (streaming) {
+                if (stream_window_add(&window, &files[a0])) return 1;
+            } else {
+                ingest_known(conninfo, files + a0, b0 - a0);
+                fold_events(fold, files + a0, b0 - a0);
+                if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1;
+            }
         }
+        if (!do_load || !streaming) for (int i = a0; i < b0; i++) progress_file("file-composed", &files[i]);
+        progress_file("progress", &files[a0]);
         for (int i = a0; i < b0; i++) if (files[i].partial) { free(files[i].ev.e); files[i].ev = (Events){0}; }
         td = now(); double database_before = completion.database_seconds;
         if (say_source_poll(source_file_ready, &completion)) return 1;
@@ -765,13 +944,18 @@ int cmd_ingest(int argc, char **argv){
             for (int i = a0; i < b0; i++) { free(files[i].ev.e); memset(&files[i].ev, 0, sizeof files[i].ev); }
             /* No-load realization has no persisted backing for native key
              * products. Keep its source DAG until all continuations finish. */
-            if (do_load) table_reset();
+            if (do_load && !streaming) { if (stream_window_flush(&window)) return 1; table_reset(); }
         }
         a0 = b0;
     }
+    if (key_reader) PQfinish(key_reader);
     double source_finish = now(), database_before = completion.database_seconds;
     if (say_source_end(source_file_ready, &completion)) return 1;
     t_dec += now() - source_finish - (completion.database_seconds - database_before);
+    if (do_load && stream_window_flush(&window)) return 1;
+    if (do_load) printf("\n  streaming persistence: %'llu shared working windows, resident budget %'llu bytes\n",
+        (unsigned long long)window.flushes, (unsigned long long)window.budget);
+    free(window.roots); free(window.events.e); free(window.complete);
     free(streams);
     #undef SHOW
     #undef WHOLE
@@ -807,6 +991,7 @@ int cmd_ingest(int argc, char **argv){
           if (source_trunk(one, files, nfiles, &trunk)) { File sf; memset(&sf, 0, sizeof sf); sf.path = one->name; sf.source = one; sf.trunk = trunk; sf.file = trunk; sf.has_file = 1;
               LoadStats ss = { 0 }; double ts = now(); if (load(conninfo, threads, &sf, 1, &ss)) return 1;
               printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded");
+              st.ent_rows += ss.ent_rows; st.phy_rows += ss.phy_rows;
               { char hx[33]; id_text(&trunk.id, hx); printf("  %-44s %s\n", "its ID, the witness", hx); }
               witness_trunk = trunk.id; witness_trust = trust; has_witness_trunk = 1; witness_supersedes = one->supersede;
               for (int i = 0; i < nfiles && !has_witness_lineage; i++) if (!files[i].skipped && files[i].has_lineage) { witness_lineage = files[i].lineage.id; has_witness_lineage = 1; } }
@@ -832,5 +1017,6 @@ int cmd_ingest(int argc, char **argv){
         if (has_witness_trunk && witness_supersedes && forget_superseded(conninfo, threads, &witness_trunk)) return 1;
     }
     printf("\n== total %.1f s\n", now() - T);
+    progress_close(has_witness_trunk ? &witness_trunk : NULL);
     return mism ? 1 : 0;
 }

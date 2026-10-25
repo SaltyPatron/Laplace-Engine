@@ -17,7 +17,7 @@ struct Fold { lp_strmap *series; lp_vec(size_t) dirty; };
 static Fold *active_fold;
 typedef struct {
     PGconn **copy, *series; int ncopy, from_ingest, witness_changed;
-    char entity[96], path[96], carriers[96], delta[96], pending[96], witnesses[96], affected[96];
+    char entity[96], path[96], delta[96], pending[96], witnesses[96], affected[96];
     lp_idmap *known, *changed;
 } Loader;
 static Loader writer;
@@ -50,7 +50,6 @@ static void start_loader(const char *conninfo, int requested){
     char suffix[40]; snprintf(suffix, sizeof suffix, "%s", PQgetvalue(q, 0, 0)); PQclear(q);
     snprintf(writer.entity, sizeof writer.entity, "stage.lp_entity_%s", suffix);
     snprintf(writer.path, sizeof writer.path, "stage.lp_path_%s", suffix);
-    snprintf(writer.carriers, sizeof writer.carriers, "stage.lp_carriers_%s", suffix);
     snprintf(writer.delta, sizeof writer.delta, "stage.lp_delta_%s", suffix);
     snprintf(writer.pending, sizeof writer.pending, "stage.lp_pending_%s", suffix);
     snprintf(writer.witnesses, sizeof writer.witnesses, "stage.lp_witness_%s", suffix);
@@ -59,29 +58,40 @@ static void start_loader(const char *conninfo, int requested){
     snprintf(sql, sizeof sql,
         "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.physicality INCLUDING DEFAULTS);"
-        "CREATE UNLOGGED TABLE %s (id blake3 NOT NULL,tier smallint NOT NULL,entity_mask bit(64) NOT NULL,path_mask bit(64) NOT NULL,annotations geometry);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
+        "CREATE UNIQUE INDEX ON %s (claim,witness,lineage) NULLS NOT DISTINCT;"
         "CREATE UNLOGGED TABLE %s (LIKE public.witness INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (claim blake3 NOT NULL)",
-        writer.entity, writer.path, writer.carriers, writer.delta, writer.pending, writer.witnesses, writer.affected);
+        writer.entity, writer.path, writer.delta, writer.pending, writer.pending, writer.witnesses, writer.affected);
     statement(control, sql);
     writer.known = lp_idmap_new(); writer.changed = lp_idmap_new();
     writer.series = db_connect(conninfo);
     statement(writer.series, "BEGIN");
 }
 
-/* One parent-table set query per bounded ID window, across every tier. */
+/* One parent-table set query per allocated connection, across every tier. */
 static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, uint64_t n){
     uint8_t *hit = calloc(n ? (size_t)n : 1, 1);
-    const uint64_t window = 65536;
-    #pragma omp parallel for num_threads(npg) schedule(dynamic)
-    for (uint64_t begin = 0; begin < n; begin += window) {
-        uint64_t count = n - begin < window ? n - begin : window;
+    if (!n) return hit;
+    int lanes = (uint64_t)npg < n ? npg : (int)n;
+    /* Partition the complete frontier over the actual connection allocation.
+     * No fixed ID quota splits it into additional database round trips. */
+    #pragma omp parallel for num_threads(lanes) schedule(static,1)
+    for (int lane = 0; lane < lanes; lane++) {
+        uint64_t begin = n * (uint64_t)lane / (uint64_t)lanes;
+        uint64_t end = n * (uint64_t)(lane + 1) / (uint64_t)lanes;
+        uint64_t count = end - begin;
         lp_idmap *places = lp_idmap_sized(sizeof(uint8_t));
         for (uint64_t i = 0; i < count; i++) { bool fresh; lp_idmap_put(places, &ids[begin + i], &fresh); }
         Args a = {0}; arg_ids(&a, ids + begin, (size_t)count);
-        PGresult *q = ask_once(pg[omp_get_thread_num()], "SELECT id FROM public.entity WHERE id = ANY($1::blake3[])", &a);
+        /* Keep each index key a runtime parameter. A plain join can walk every
+         * destination index; ANY(array) in a custom plan copies the complete
+         * constant into every partition plan. The scalar proof uses ID
+         * uniqueness and runtime partition pruning without either expansion. */
+        PGresult *q = ask_once(pg[lane],
+            "SELECT wanted.id FROM unnest($1::blake3[]) wanted(id) "
+            "WHERE (SELECT true FROM public.entity e WHERE e.id=wanted.id)", &a);
         for (int row = 0; row < PQntuples(q); row++) {
             lp_id id; memcpy(id.b, PQgetvalue(q, row, 0), 16);
             int64_t at = lp_idmap_find(places, &id);
@@ -114,8 +124,9 @@ int files_known(PGconn **pg, int npg, File *files, int nfiles, LoadStats *st){
     if (count) {
         Args a = {0}; arg_ids(&a, ids, (size_t)count);
         PGresult *q = ask_once(pg[0],
-            "SELECT e.id FROM public.entity e JOIN public.physicality p ON p.entity=e.id"
-            " WHERE e.id=ANY($1::blake3[])", &a);
+            "SELECT wanted.id FROM unnest($1::blake3[]) wanted(id)"
+            " WHERE (SELECT true FROM public.entity e WHERE e.id=wanted.id)"
+            " AND (SELECT true FROM public.physicality p WHERE p.entity=wanted.id)", &a);
         lp_idmap *recorded = lp_idmap_new();
         for (int row = 0; row < PQntuples(q); row++) { lp_id id; bool fresh; memcpy(id.b, PQgetvalue(q,row,0),16); lp_idmap_put(recorded,&id,&fresh); }
         for (int i = 0; i < count; i++) if (lp_idmap_find(recorded, &ids[i]) >= 0) { files[of[i]].known = 1; found++; }
@@ -169,11 +180,10 @@ void validate_file_contexts(const char *conninfo, File *files, int nfiles){
 /* Restore only the compiled index beneath a recorded file's metadata. Entry
  * vertices terminate the walk: their product targets are not exported into RAM.
  * One set read restores a provider; none of its source bytes are reopened. */
-int load_file_keys(const char *conninfo, const File *file){
+int load_file_keys(PGconn *pg, const File *file){
     if (!file->known || !file->has_file) return 0;
     Ref marker = text_ref(CTX[0], (const uint8_t *)KEY_BINDING_TAG, sizeof KEY_BINDING_TAG - 1);
     Args args = {0}; arg_raw(&args, file->recorded_metadata.b, sizeof file->recorded_metadata.b); arg_raw(&args, marker.id.b, sizeof marker.id.b);
-    PGconn *pg = db_connect(conninfo);
     PGresult *result = ask_once(pg,
         "WITH RECURSIVE metadata(id) AS ("
         " SELECT $1::blake3"
@@ -200,7 +210,7 @@ int load_file_keys(const char *conninfo, const File *file){
     }
     PQclear(result); args_free(&args); args=(Args){0};
     if (invalid || !count) {
-        free(ids); PQfinish(pg);
+        free(ids);
         if (invalid) fprintf(stderr,"%s: invalid compiled reference entry path\n",file->path);
         else fprintf(stderr,"  restored 0 compiled reference bindings from recorded metadata: %s\n",file->path);
         return invalid;
@@ -245,7 +255,7 @@ int load_file_keys(const char *conninfo, const File *file){
     }
     if (invalid) fprintf(stderr,"%s: recorded compiled reference metadata is invalid\n",file->path);
     else fprintf(stderr,"  restored %d compiled reference bindings from recorded metadata: %s\n",PQntuples(result),file->path);
-    PQclear(result); args_free(&args); PQfinish(pg); return invalid;
+    PQclear(result); args_free(&args); return invalid;
 }
 
 Fold *fold_new(void){
@@ -304,11 +314,11 @@ static void flush_series(Fold *f, LoadStats *st){
     size_t n=lp_idmap_count(changed);
     if(n){
         snprintf(sql,sizeof sql,
-            "UPDATE %s p SET games=d.games,score=d.score,trust=d.trust,lineage=d.lineage FROM %s d"
-            " WHERE p.claim=d.claim AND p.witness=d.witness AND p.lineage IS NOT DISTINCT FROM d.lineage;"
-            "INSERT INTO %s SELECT d.* FROM %s d WHERE NOT EXISTS"
-            " (SELECT FROM %s p WHERE p.claim=d.claim AND p.witness=d.witness AND p.lineage IS NOT DISTINCT FROM d.lineage);TRUNCATE %s",
-            writer.pending,writer.delta,writer.pending,writer.delta,writer.pending,writer.delta);
+            "INSERT INTO %s (claim,witness,lineage,games,score,trust)"
+            " SELECT claim,witness,lineage,games,score,trust FROM %s"
+            " ON CONFLICT(claim,witness,lineage) DO UPDATE"
+            " SET games=EXCLUDED.games,score=EXCLUDED.score,trust=EXCLUDED.trust;TRUNCATE %s",
+            writer.pending,writer.delta,writer.delta);
         statement(writer.series,sql);
         Args a={0}; arg_text(&a,writer.pending); arg_ids(&a,lp_idmap_keys(changed),n);
         PGresult *q=ask_once(writer.series,"SELECT laplace_attest_series($1::regclass,$2::blake3[])",&a);
@@ -334,10 +344,16 @@ static void known_tree(Node *node){
     }
     free(todo.item);
 }
-static void queue_root(const lp_id *id){
-    Node *node=table_find(id); if(node && !node->keep) node->keep=3;
+static void queue_node(Nodes *frontier,Node *node){
+    if(node && !node->keep){node->keep=3;add_node(&frontier[node->tier],node);}
+}
+static void queue_root(Nodes *frontier,const lp_id *id){
+    queue_node(frontier,table_find(id));
 }
 static void prune(File *files,int nfiles,LoadStats *st){
+    /* Tiers are uint8_t. Queue a selected node once, in its actual tier,
+     * instead of scanning the complete working table at every altitude. */
+    Nodes frontier[UINT8_MAX+1]={0};
     TABLE_EACH(x) {
         /* Tier-0 is the database realizer's storage-free leaf floor. Highway
          * membership supplies an identity/coordinate, not proof that its path
@@ -346,45 +362,51 @@ static void prune(File *files,int nfiles,LoadStats *st){
         x->keep=lp_idmap_find(writer.known,&x->id)>=0 || lp_tier0_contains(T0,&x->id) ? 2 : 0;
     }
     TABLE_EACH(x) if(x->keep==2) known_tree(x);
-    TABLE_EACH(x) if(x->pin && !x->keep) x->keep=3;
+    TABLE_EACH(x) if(x->pin) queue_node(frontier,x);
     for(int i=0;i<nfiles;i++){
         File *f=&files[i]; if(f->known || f->skipped) continue;
-        if(f->has_file) queue_root(&f->file.id); else {
-            queue_root(&f->trunk.id);
-            for(uint64_t j=0;j<f->nsaid;j++) queue_root(&f->said[j].id);
+        if(f->has_file) queue_root(frontier,&f->file.id); else {
+            queue_root(frontier,&f->trunk.id);
+            for(uint64_t j=0;j<f->nsaid;j++) queue_root(frontier,&f->said[j].id);
         }
-        if(f->has_lineage) queue_root(&f->lineage.id);
+        if(f->has_lineage) queue_root(frontier,&f->lineage.id);
     }
-    if(load_whole) TABLE_EACH(x) if(!x->keep) x->keep=3;
-    int highest = 0; TABLE_EACH(x) if(x->tier > highest) highest = x->tier;
-    for(int tier=highest;tier>0;tier--){
-        Nodes candidates={0};
+    if(load_whole) TABLE_EACH(x) queue_node(frontier,x);
+    for(int tier=UINT8_MAX;tier>0;tier--){
+        Nodes *candidates=&frontier[tier];
+        while(candidates->n){
         /* Logical paths already bypass Native's binary hash spines. Explicit
-         * record-block spines are traversed immediately, never queried. */
-        int more;
-        do {
-            more=0;
-            TABLE_EACH(x) if(x->keep==3 && x->tier==(uint8_t)tier && x->spine && !x->kind){
+         * record-block spines are traversed immediately, never queried. New
+         * same-tier children append to this queue and join the same pass. */
+        size_t count=0;
+        for(size_t i=0;i<candidates->n;i++){
+            Node *x=candidates->item[i];if(x->keep!=3)continue;
+            if(x->spine && !x->kind){
                 x->keep=1;st->new_nodes++;
-                for(uint32_t i=0;i<x->nv;i++) queue_root(&VTX[x->voff+i].id);
-                more=1;
-            }
-        }while(more);
-        TABLE_EACH(x) if(x->keep==3 && x->tier==(uint8_t)tier) add_node(&candidates,x);
-        if(candidates.n){
-            lp_id *ids=malloc(candidates.n*sizeof *ids);
-            for(size_t i=0;i<candidates.n;i++) ids[i]=candidates.item[i]->id;
-            uint8_t *hit=recorded(writer.copy,writer.ncopy,ids,(uint64_t)candidates.n);
-            st->rounds++;st->checked+=(uint64_t)candidates.n;
-            for(size_t i=0;i<candidates.n;i++){
-                Node *x=candidates.item[i]; if(x->keep==2) continue;
+                for(uint32_t j=0;j<x->nv;j++) queue_root(frontier,&VTX[x->voff+j].id);
+            }else candidates->item[count++]=x;
+        }
+        candidates->n=count;
+        if(count){
+            lp_id *ids=malloc(count*sizeof *ids);
+            for(size_t i=0;i<count;i++) ids[i]=candidates->item[i]->id;
+            uint8_t *hit=recorded(writer.copy,writer.ncopy,ids,(uint64_t)count);
+            st->rounds++;st->checked+=(uint64_t)count;
+            for(size_t i=0;i<count;i++){
+                Node *x=candidates->item[i]; if(x->keep==2) continue;
                 if(hit[i]){known_tree(x);st->found++;}
-                else{x->keep=1;st->new_nodes++;for(uint32_t j=0;j<x->nv;j++)queue_root(&VTX[x->voff+j].id);}
+                else{x->keep=1;st->new_nodes++;for(uint32_t j=0;j<x->nv;j++)queue_root(frontier,&VTX[x->voff+j].id);}
             }
             free(hit);free(ids);
         }
-        free(candidates.item);
+        /* Saturated tiers may have same-tier logical children as well. Keep
+         * their frontier rather than losing it after the parent's probe. */
+        size_t next=candidates->n-count;
+        if(next)memmove(candidates->item,candidates->item+count,next*sizeof *candidates->item);
+        candidates->n=next;
+        }
     }
+    for(unsigned tier=0;tier<=UINT8_MAX;tier++)free(frontier[tier].item);
 }
 
 typedef struct { Node *node; uint64_t hilbert; lp_mask lexical; } Row;
@@ -418,12 +440,7 @@ static int hilbert_order(const void *a,const void *b){
  * statement; it never changes either the caller's staging or public rows. */
 static void merge_failure(PGconn *pg, const char *entities, const char *paths, const char *error){
     fprintf(stderr,"stage merge: %s",error);
-    char sql[8192],annotations[1024]={0};
-    if(writer.carriers[0])snprintf(annotations,sizeof annotations,
-        " UNION ALL SELECT 'recorded path annotation conflict',c.id,"
-        " 'incoming_prefix='||encode(substring(ST_AsEWKB(c.annotations) from 1 for 160),'hex')"
-        " FROM %s c JOIN public.physicality p ON p.entity=c.id"
-        " WHERE c.annotations IS NOT NULL AND laplace_path_enrich(p.path,c.annotations) IS NULL",writer.carriers);
+    char sql[8192];
     int length=snprintf(sql,sizeof sql,
         "WITH rejected(reason,id,detail) AS ("
         " SELECT 'duplicate entity',id,'rows='||count(*) FROM %s GROUP BY id HAVING count(*)<>1"
@@ -450,11 +467,11 @@ static void merge_failure(PGconn *pg, const char *entities, const char *paths, c
         " WHERE batch.entity IS NULL AND d.entity IS NULL"
         " UNION ALL SELECT 'path without entity',s.entity,'' FROM %s s"
         " LEFT JOIN %s batch ON batch.id=s.entity LEFT JOIN public.entity d ON d.id=s.entity"
-        " WHERE batch.id IS NULL AND d.id IS NULL%s)"
+        " WHERE batch.id IS NULL AND d.id IS NULL)"
         ",sample AS MATERIALIZED (SELECT reason,id,detail FROM rejected ORDER BY reason,id LIMIT 8)"
         " SELECT s.reason,s.id::text,s.detail,ST_AsEWKB(p.path) FROM sample s"
         " LEFT JOIN public.physicality p ON p.entity=s.id ORDER BY s.reason,s.id",
-        entities,paths,entities,paths,entities,paths,entities,paths,paths,entities,annotations);
+        entities,paths,entities,paths,entities,paths,entities,paths,paths,entities);
     if(length<0 || (size_t)length>=sizeof sql){fputs("stage rejection diagnostic exceeded its bound\n",stderr);return;}
     PGresult *detail=PQexec(pg,sql);
     if(PQresultStatus(detail)==PGRES_TUPLES_OK){
@@ -496,7 +513,6 @@ static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
     copy_open(&copy,pg,sql);
     for(size_t i=lo;i<hi;i++){
         const Node *x=rows[i].node; double point[4];
-        if(x->keep!=1)continue;
         for(int axis=0;axis<4;axis++)point[axis]=(double)x->m[axis]/LP_FIXED_ONE;
         size_t size=lp_ewkb_point4(point,geometry,sizeof geometry);
         lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
@@ -509,28 +525,11 @@ static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
     PathEncoding path={0};
     for(size_t i=lo;i<hi;i++){
         const Node *x=rows[i].node;
-        if(x->keep!=1)continue;
         size_t size=encode_node_path(x,&path);
         carrier_bytes(x->kind,mask);
         lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
         lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));
         lp_copy_field(&copy,path.bytes,(uint32_t)size);lp_copy_field(&copy,mask,sizeof mask);
-    }
-    copy_close(&copy);lp_buf_free(&copy.buf);
-    /* Recorded content stays pruned. Carrier-only uses send no path. A use
-     * with annotations supplies only that metadata candidate; the Native
-     * extension enriches absent annotations over the identical ordered IDs
-     * and runs, rejecting conflicting outcomes, positions or scores. */
-    copy=(lp_copy){0};
-    snprintf(sql,sizeof sql,"COPY %s (id,tier,entity_mask,path_mask,annotations) FROM STDIN (FORMAT binary)",writer.carriers);
-    copy_open(&copy,pg,sql);
-    for(size_t i=lo;i<hi;i++){
-        const Node *x=rows[i].node;if(x->keep!=2)continue;
-        uint8_t path_mask[12];carrier_bytes(rows[i].lexical,mask);carrier_bytes(x->kind,path_mask);
-        lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
-        lp_copy_field(&copy,mask,sizeof mask);lp_copy_field(&copy,path_mask,sizeof path_mask);
-        int annotated=0;for(uint32_t j=0;j<x->nv && !annotated;j++)annotated=(VTX[x->voff+j].m>>LP_M_RUN_BITS)!=0 || VTX[x->voff+j].spare!=0;
-        if(annotated){size_t size=encode_node_path(x,&path);lp_copy_field(&copy,path.bytes,(uint32_t)size);}else lp_copy_null(&copy);
     }
     copy_close(&copy);lp_buf_free(&copy.buf);
     free(path.ids);free(path.runs);free(path.spare);free(path.bytes);statement(pg,"COMMIT");
@@ -551,27 +550,21 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         int lanes=writer.ncopy;if((size_t)lanes>count)lanes=(int)count;
         #pragma omp parallel for num_threads(lanes) schedule(static,1)
         for(int lane=0;lane<lanes;lane++)copy_rows(writer.copy[lane],rows,count*(size_t)lane/(size_t)lanes,count*(size_t)(lane+1)/(size_t)lanes);
-        /* Keep the already-recorded identity in PostgreSQL while passing all
-         * carrier changes through the same checked, atomic set merge. LEFT
-         * joins retain missing pairs as NOT NULL failures, never lost input.
-         * The merge's advisory lock also protects this preparation snapshot. */
+        /* Native has already computed the canonical references and paths for
+         * these nodes. Send those proofs with mutable carrier declarations;
+         * the checked merge validates identity and enriches only absent data.
+         * No coordinate/path retrieval is needed for decomposed content. */
         char sql[1800];snprintf(sql,sizeof sql,
             "BEGIN;SELECT pg_advisory_xact_lock(1279348803,-2);"
-            "INSERT INTO %s(id,tier,coord,hilbert,mask)"
-            " SELECT c.id,c.tier,e.coord,e.hilbert,c.entity_mask FROM %s c"
-            " LEFT JOIN public.entity e ON e.id=c.id;"
-            "INSERT INTO %s(entity,tier,hilbert,path,mask)"
-            " SELECT c.id,c.tier,p.hilbert,coalesce(c.annotations,p.path),c.path_mask FROM %s c"
-            " LEFT JOIN public.physicality p ON p.entity=c.id;"
             "SELECT * FROM laplace_merge_stage('%s'::regclass,'%s'::regclass)",
-            writer.entity,writer.carriers,writer.path,writer.carriers,writer.entity,writer.path);
+            writer.entity,writer.path);
         PGresult *q=PQexec(writer.copy[0],sql);
         if(PQresultStatus(q)!=PGRES_TUPLES_OK){
             PGresult *rollback=PQexec(writer.copy[0],"ROLLBACK");PQclear(rollback);
             merge_failure(writer.copy[0],writer.entity,writer.path,PQresultErrorMessage(q));PQclear(q);exit(1);
         }
         st->ent_rows+=strtoull(PQgetvalue(q,0,0),NULL,10);st->phy_rows+=strtoull(PQgetvalue(q,0,1),NULL,10);PQclear(q);
-        snprintf(sql,sizeof sql,"TRUNCATE %s;COMMIT",writer.carriers);statement(writer.copy[0],sql);
+        statement(writer.copy[0],"COMMIT");
     }
     free(rows);TABLE_EACH(x)if(x->keep==1 || x->keep==2){bool fresh;lp_idmap_put(writer.known,&x->id,&fresh);}
     st->t_copy+=now()-begin;begin=now();flush_series(active_fold,st);st->t_sem+=now()-begin;
@@ -608,23 +601,19 @@ int merge(const char *conninfo,int npg){
     const lp_id *changed=lp_idmap_keys(writer.changed);
     for(size_t i=0;i<lp_idmap_count(writer.changed);i++){lp_copy_row(&copy,1);lp_copy_id(&copy,&changed[i]);}
     copy_close(&copy);lp_buf_free(&copy.buf);
-    /* The final registered trunk includes unchanged files too. Replace pending
-     * provisional evidence with the complete containment estate inside the same
-     * transaction as witness registration. No standings are read by the client. */
+    /* The final registered trunk includes unchanged files too. Native owns
+     * traversal and testimony reconstruction; SQL only combines affected IDs
+     * and invokes the standing fold in the witness registration transaction. */
     snprintf(sql,sizeof sql,
         "DELETE FROM %s;"
-        "WITH RECURSIVE below(id) AS (SELECT id FROM %s UNION"
-        " SELECT child FROM below b JOIN public.physicality p ON p.entity=b.id"
-        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) child),"
-        " claims AS (SELECT claim FROM %s UNION SELECT b.id FROM below b"
-        " JOIN public.physicality p ON p.entity=b.id WHERE laplace_mask_has_value(p.mask,'kind','claim')"
-        " AND laplace_path_length(p.path)>=2)"
+        "WITH claims AS (SELECT claim FROM %s UNION"
+        " SELECT claim FROM laplace_contained_series(ARRAY(SELECT id FROM %s)))"
         " SELECT laplace_attest_series('%s'::regclass,array_agg(claim)) FROM claims",
-        writer.pending,writer.witnesses,writer.affected,writer.pending);
+        writer.pending,writer.affected,writer.witnesses,writer.pending);
     /* An unchanged registered source contributes no new evidence on replay.
      * Recompute only for new series or changed witness trust/containment. */
     if(lp_idmap_count(writer.changed) || writer.witness_changed) statement(writer.series,sql);
-    snprintf(sql,sizeof sql,"DROP TABLE %s,%s,%s,%s,%s,%s,%s",writer.entity,writer.path,writer.carriers,writer.delta,writer.pending,writer.witnesses,writer.affected);
+    snprintf(sql,sizeof sql,"DROP TABLE %s,%s,%s,%s,%s,%s",writer.entity,writer.path,writer.delta,writer.pending,writer.witnesses,writer.affected);
     statement(writer.series,sql);statement(writer.series,"COMMIT");
     PQfinish(writer.series);for(int i=0;i<writer.ncopy;i++)PQfinish(writer.copy[i]);
     free(writer.copy);lp_idmap_free(writer.known);lp_idmap_free(writer.changed);writer=(Loader){0};return 0;

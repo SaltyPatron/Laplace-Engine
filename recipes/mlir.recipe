@@ -1,0 +1,5 @@
+name mlir
+# Packaging syntax; leaves retain the original bytes.
+match *.mlir
+class UserCuratedResource
+grammar mlir

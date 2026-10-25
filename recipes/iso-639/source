@@ -1,4 +1,5 @@
 name iso-639
+aliases iso639
 # Language identifiers: ISO 639-3 (SIL), 639-2 and 639-5 (Library of Congress), the IANA subtag registry.
 witness ISO 639
 class StandardsDerived
