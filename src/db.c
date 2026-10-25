@@ -124,8 +124,9 @@ int files_known(PGconn **pg, int npg, File *files, int nfiles, LoadStats *st){
     if (count) {
         Args a = {0}; arg_ids(&a, ids, (size_t)count);
         PGresult *q = ask_once(pg[0],
-            "SELECT e.id FROM public.entity e JOIN public.physicality p ON p.entity=e.id"
-            " WHERE e.id=ANY($1::blake3[])", &a);
+            "SELECT wanted.id FROM unnest($1::blake3[]) wanted(id)"
+            " WHERE (SELECT true FROM public.entity e WHERE e.id=wanted.id)"
+            " AND (SELECT true FROM public.physicality p WHERE p.entity=wanted.id)", &a);
         lp_idmap *recorded = lp_idmap_new();
         for (int row = 0; row < PQntuples(q); row++) { lp_id id; bool fresh; memcpy(id.b, PQgetvalue(q,row,0),16); lp_idmap_put(recorded,&id,&fresh); }
         for (int i = 0; i < count; i++) if (lp_idmap_find(recorded, &ids[i]) >= 0) { files[of[i]].known = 1; found++; }

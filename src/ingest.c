@@ -606,7 +606,9 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
         int count=nmissing-begin;if(count>parameter_ids)count=parameter_ids;
         uint8_t *ab=malloc(20+20*(size_t)count);size_t al=ids_param(ab,missing+begin,(uint32_t)count);
         const char *v[]={ (const char *)ab };int lengths[]={ (int)al },formats[]={1};
-        PGresult *r=PQexecParams(pg,"SELECT e.id,st_asewkb(e.coord) FROM public.entity e WHERE e.id=ANY($1::blake3[])",1,NULL,v,lengths,formats,1);
+        PGresult *r=PQexecParams(pg,"SELECT wanted.id,"
+            "(SELECT st_asewkb(e.coord) FROM public.entity e WHERE e.id=wanted.id) "
+            "FROM unnest($1::blake3[]) wanted(id)",1,NULL,v,lengths,formats,1);
         if(PQresultStatus(r)!=PGRES_TUPLES_OK){fprintf(stderr,"file reference IDs: %s",PQerrorMessage(pg));failed=1;}
         else for(int j=0;j<PQntuples(r);j++){
             lp_id id;memcpy(id.b,PQgetvalue(r,j,0),sizeof id.b);int64_t at=lp_idmap_find(references,&id);
