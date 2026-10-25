@@ -5,10 +5,11 @@ L=${1:?usage: tests/ingest-progress.sh path/to/laplace}
 here=$(cd "$(dirname "$0")" && pwd)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ingest-progress.XXXXXX")
 db=laplace_progress_$$
+cold=laplace_progress_cold_$$
 psql=${PSQL:-psql}
 dropdb=$(dirname "$(command -v "$psql")")/dropdb
 conn="host=${PGHOST:-/tmp} port=${PGPORT:-5432} user=${PGUSER:-laplace} dbname=$db"
-cleanup(){ "$dropdb" -h "${PGHOST:-/tmp}" -p "${PGPORT:-5432}" -U "${PGUSER:-laplace}" --if-exists "$db"; rm -rf "$scratch"; }
+cleanup(){ "$dropdb" -h "${PGHOST:-/tmp}" -p "${PGPORT:-5432}" -U "${PGUSER:-laplace}" --if-exists "$db"; "$dropdb" -h "${PGHOST:-/tmp}" -p "${PGPORT:-5432}" -U "${PGUSER:-laplace}" --if-exists "$cold"; rm -rf "$scratch"; }
 trap cleanup EXIT
 export LAPLACE_WORK=$scratch/work LAPLACE_DATA=$scratch/data
 export LAPLACE_RECIPES=$scratch/recipes LAPLACE_INGEST_PROGRESS_PATH=$scratch/progress.jsonl
@@ -30,6 +31,11 @@ CREATE TEMP VIEW progress AS SELECT line::jsonb AS j FROM progress_lines;
 DO \$\$
 DECLARE last_frame jsonb;
 BEGIN
+  IF EXISTS (SELECT FROM pg_stat_statements
+      WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
+        AND query LIKE 'SELECT c.entity, st_asewkb(c.path), c.tier%') THEN
+    RAISE EXCEPTION 'absent metadata IDs reached reverse-path discovery';
+  END IF;
   SELECT j INTO STRICT last_frame FROM progress WHERE j->>'event'='complete';
   IF (last_frame->>'entities')::bigint <> (SELECT count(*) FROM public.entity)
      OR (last_frame->>'physicalities')::bigint <> (SELECT count(*) FROM public.physicality)
@@ -48,4 +54,30 @@ BEGIN
   END IF;
 END \$\$;
 SQL
-echo 'ingest-progress: real committed rows, file receipts and published witness agree'
+root_reference(){
+  local selected=""
+  if [[ -n ${2:-} ]]; then
+    [[ $2 =~ ^[0-9a-f]{32}$ ]] || return 1
+    selected="WHERE w.id='$2'::blake3"
+  fi
+  "$psql" -XwAt -v ON_ERROR_STOP=1 -d "$1" -c \
+    "SELECT jsonb_agg(jsonb_build_array(w.id::text,e.tier,e.hilbert,encode(ST_AsEWKB(e.coord),'hex')) ORDER BY w.id)
+       FROM public.witness w JOIN public.entity e ON e.id=w.id $selected;"
+}
+before=$(root_reference "$conn")
+"$L" ingest -d "$conn" -j 2 unicode > "$scratch/replay.log" 2>&1 || { cat "$scratch/replay.log"; exit 1; }
+grep -q 'files recorded already' "$LAPLACE_WORK/logs/ingest/unicode.log"
+[[ "$before" == "$(root_reference "$conn")" ]] || { echo 'unchanged precheck changed the source reference'; exit 1; }
+# Reuse an unread recorded file while adding a new one. Its locally composed
+# or indexed reference must give the same source geometry as a cold reading.
+printf 'Unicode fixture description\n' > "$LAPLACE_DATA/UCD/Public/UCD/latest/ReadMe.txt"
+"$L" ingest -d "$conn" -j 2 unicode > "$scratch/partial-replay.log" 2>&1 || { cat "$scratch/partial-replay.log"; exit 1; }
+grep -q 'files recorded already' "$LAPLACE_WORK/logs/ingest/unicode.log"
+cold_conn="host=${PGHOST:-/tmp} port=${PGPORT:-5432} user=${PGUSER:-laplace} dbname=$cold"
+"$L" deploy -d "$cold_conn" > "$scratch/cold-deploy.log" 2>&1 || { cat "$scratch/cold-deploy.log"; exit 1; }
+"$L" ingest -d "$cold_conn" -j 2 unicode > "$scratch/cold.log" 2>&1 || { cat "$scratch/cold.log"; exit 1; }
+cold_id=$("$psql" -XwAt -v ON_ERROR_STOP=1 -d "$cold_conn" -c 'SELECT id::text FROM public.witness')
+# Earlier release witnesses may legitimately remain. Compare the new release,
+# rather than requiring the warm database to discard its admitted history.
+[[ "$(root_reference "$conn" "$cold_id")" == "$(root_reference "$cold_conn" "$cold_id")" ]] || { echo 'partial replay disagrees with cold source ID/coordinates/tier/Hilbert'; exit 1; }
+echo 'ingest-progress: committed receipts, unchanged reuse and warm/cold source reference parity passed'

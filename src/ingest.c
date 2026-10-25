@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 /* How many recipes a recipe's keys are reached through: 0 when it refers to none (refer NAME RECIPE), else one more
  * than the recipes it refers to. The files of a deeper recipe are read after the shallower ones' */
@@ -462,19 +463,51 @@ static int ingest_ewkb_point(const uint8_t *e, size_t n, lp_coord *out){
     if (n < 5 || e[0] != 1) return 0; uint32_t t; memcpy(&t, e + 1, 4); size_t off = 5; if (t & 0x20000000u) off += 4;
     if (n < off + 32) return 0; for (int d = 0; d < 4; d++) { double v; memcpy(&v, e + off + 8 * d, 8); out->m[d] = (int64_t)(v * (double)LP_FIXED_ONE); } return 1;
 }
+typedef struct { lp_vertex *vertices; Ref *children; uint64_t *runs; size_t capacity; } FileRefScratch;
+/* Presence is an ID question. Reuse Native's local reference first; when its
+ * children are local, Native can compose the reference without a DB read. */
+static int ingest_local_file_ref(const lp_id *id, const uint8_t *path, size_t bytes,
+                                 uint8_t tier, FileRefScratch *scratch, Ref *out){
+    int known; *out=ref_of_id(id,&known);
+    if(known){out->tier=tier;return 1;}
+    size_t n=lp_path_vertices(path,bytes,NULL,0);
+    if(!n)return 0;
+    if(n>scratch->capacity){
+        if(n>SIZE_MAX/sizeof(Ref)||n>SIZE_MAX/sizeof(lp_vertex)||n>SIZE_MAX/sizeof(uint64_t))return -1;
+        scratch->vertices=xrealloc(scratch->vertices,n*sizeof *scratch->vertices);
+        scratch->children=xrealloc(scratch->children,n*sizeof *scratch->children);
+        scratch->runs=xrealloc(scratch->runs,n*sizeof *scratch->runs);scratch->capacity=n;
+    }
+    if(lp_path_vertices(path,bytes,scratch->vertices,n)!=n)return -1;
+    for(size_t i=0;i<n;i++){
+        scratch->children[i]=ref_of_id(&scratch->vertices[i].id,&known);
+        if(!known)return 0;
+        scratch->runs[i]=scratch->vertices[i].run;
+    }
+    if(!lp_ref_compose_runs(scratch->children,scratch->runs,n,tier,out)||!lp_id_eq(id,&out->id))return -1;
+    out->tier=tier;return 1;
+}
 static int files_recorded(const char *conninfo, File *files, int nfiles){
     File *candidate=NULL;int *owner=NULL,ncandidate=0,ccandidate=0,failed=0;
+    uint8_t *local=NULL;FileRefScratch scratch={0};
     lp_id *want = malloc(sizeof(lp_id) * (size_t)(nfiles + 1)); int *of = malloc(sizeof(int) * (size_t)(nfiles + 1)), nw = 0, found = 0;
     for (int i = 0; i < nfiles; i++) { if (files[i].skipped || files[i].known) continue; Ref os; if (file_os(files[i].recipe, &files[i], &os)) { want[nw] = os.id; of[nw++] = i; } }
+    if(nw){
+        /* A recorded parent owns its complete structural closure. An absent
+         * metadata ID therefore cannot have a recorded file above it. */
+        uint8_t *recorded=db_recorded(conninfo,want,(uint64_t)nw);int kept=0;
+        for(int i=0;i<nw;i++)if(recorded[i]){want[kept]=want[i];of[kept++]=of[i];}
+        free(recorded);nw=kept;
+    }
     PGconn *pg = nw ? db_connect(conninfo) : NULL;
     for (int level = 0; level < 8 && nw; level++) {                          /* a metadata tree factored into blocks is a few levels deep */
         lp_idmap *at = lp_idmap_new(); for (int k = 0; k < nw; k++) { bool fresh; lp_idmap_put(at, &want[k], &fresh); }
         int ncap = nw, nn = 0; lp_id *next = malloc(sizeof(lp_id) * (size_t)ncap); int *nof = malloc(sizeof(int) * (size_t)ncap);   /* an ID can be held by many: grown as they come */
-        for (int k0 = 0; k0 < nw; k0 += 10000) { int k1 = nw - k0 < 10000 ? nw : k0 + 10000; uint8_t *ab = malloc(20 + 20 * (size_t)(k1 - k0)); size_t al = ids_param(ab, want + k0, (uint32_t)(k1 - k0));
+        for (int k0 = 0; k0 < nw && !failed; k0 += 10000) { int k1 = nw - k0 < 10000 ? nw : k0 + 10000; uint8_t *ab = malloc(20 + 20 * (size_t)(k1 - k0)); size_t al = ids_param(ab, want + k0, (uint32_t)(k1 - k0));
             const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-            PGresult *r = PQexecParams(pg, "SELECT c.entity, st_asewkb(c.path), c.tier, st_asewkb(e.coord)"
+            PGresult *r = PQexecParams(pg, "SELECT c.entity, st_asewkb(c.path), c.tier"
                 " FROM unnest($1::blake3[]) wanted(id) JOIN public.physicality c"
-                " ON c.path @> ARRAY[wanted.id]::blake3[] JOIN public.entity e ON e.id=c.entity",
+                " ON c.path @> ARRAY[wanted.id]::blake3[]",
                 1, NULL, v, l, f, 1);
             if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "which files are recorded: %s", PQerrorMessage(pg)); PQclear(r); free(ab); failed=1; break; }
             for (int j = 0; j < PQntuples(r); j++) {
@@ -482,11 +515,14 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
                 int64_t k = lp_idmap_find(at, &vx[0].id); if (k < 0) continue;                    /* held, but not first: not its metadata */
                 lp_id c; memcpy(c.b, PQgetvalue(r, j, 0), 16);
                 if (vx[0].said == LP_SAID_METADATA && nv >= 2) {                                   /* the file's trunk */
-                    lp_coord co; if (!ingest_ewkb_point((const uint8_t *)PQgetvalue(r, j, 3), (size_t)PQgetlength(r, j, 3), &co)) continue;
                     uint16_t tier; memcpy(&tier, PQgetvalue(r, j, 2), 2); tier = ntohs(tier);
-                    if(ncandidate==ccandidate){ccandidate=ccandidate?ccandidate*2:128;candidate=xrealloc(candidate,(size_t)ccandidate*sizeof *candidate);owner=xrealloc(owner,(size_t)ccandidate*sizeof *owner);}
-                    owner[ncandidate]=of[k];File *fl=&candidate[ncandidate++];*fl=files[of[k]];
-                    memset(&fl->file, 0, sizeof fl->file); fl->file.id = c; fl->file.c = co; fl->file.tier = (uint8_t)tier; fl->file.said = 0;
+                    if(ncandidate==ccandidate){ccandidate=ccandidate?ccandidate*2:128;candidate=xrealloc(candidate,(size_t)ccandidate*sizeof *candidate);owner=xrealloc(owner,(size_t)ccandidate*sizeof *owner);local=xrealloc(local,(size_t)ccandidate);}
+                    owner[ncandidate]=of[k];File *fl=&candidate[ncandidate];*fl=files[of[k]];
+                    int have=ingest_local_file_ref(&c,(const uint8_t *)PQgetvalue(r,j,1),(size_t)PQgetlength(r,j,1),(uint8_t)tier,&scratch,&fl->file);
+                    if(have<0){fputs("file precheck: stored path disagrees with canonical Native composition\n",stderr);failed=1;break;}
+                    local[ncandidate++]=(uint8_t)have;
+                    if(!have){memset(&fl->file,0,sizeof fl->file);fl->file.id=c;fl->file.tier=(uint8_t)tier;}
+                    fl->file.said = 0;
                     fl->recorded_metadata = vx[0].id;
                     fl->has_file = 1; fl->known = 1; }
                 else { if (nn == ncap) { ncap *= 2; next = xrealloc(next, sizeof(lp_id) * (size_t)ncap); nof = xrealloc(nof, sizeof(int) * (size_t)ncap); } next[nn] = c; nof[nn++] = of[k]; } }                                         /* a metadata tree it begins: what holds that is next */
@@ -495,9 +531,43 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
         if (failed) break;
         for (int k = 0; k < nn; k++) if (!files[of[k]].known) { want[nw] = want[k]; of[nw++] = of[k]; }
     }
-    if (pg) PQfinish(pg); free(want); free(of);
-    if (failed) { free(candidate); free(owner); return -1; }
+    free(want); free(of);free(scratch.vertices);free(scratch.children);free(scratch.runs);
+    if (failed) { if(pg)PQfinish(pg);free(candidate);free(owner);free(local);return -1; }
     validate_file_contexts(conninfo,candidate,ncandidate);
+    /* Only accepted file IDs absent from local composition need a retrieval.
+     * This is a bounded-key primary-index lookup, never a join to the estate. */
+    typedef struct { lp_coord coord; int have; } StoredFileRef;
+    lp_idmap *references=lp_idmap_sized(sizeof(StoredFileRef));
+    lp_id *missing=malloc((size_t)(ncandidate?ncandidate:1)*sizeof *missing);int nmissing=0;
+    for(int i=0;i<ncandidate;i++)if(candidate[i].known&&!local[i]){
+        bool fresh;StoredFileRef *value=lp_idmap_get(references,&candidate[i].file.id,&fresh);
+        if(fresh){memset(value,0,sizeof *value);missing[nmissing++]=candidate[i].file.id;}
+    }
+    /* libpq represents one binary parameter's byte length with a signed int. */
+    const int parameter_ids=(INT_MAX-20)/20;
+    for(int begin=0;begin<nmissing&&!failed;){
+        int count=nmissing-begin;if(count>parameter_ids)count=parameter_ids;
+        uint8_t *ab=malloc(20+20*(size_t)count);size_t al=ids_param(ab,missing+begin,(uint32_t)count);
+        const char *v[]={ (const char *)ab };int lengths[]={ (int)al },formats[]={1};
+        PGresult *r=PQexecParams(pg,"SELECT e.id,st_asewkb(e.coord) FROM public.entity e WHERE e.id=ANY($1::blake3[])",1,NULL,v,lengths,formats,1);
+        if(PQresultStatus(r)!=PGRES_TUPLES_OK){fprintf(stderr,"file reference IDs: %s",PQerrorMessage(pg));failed=1;}
+        else for(int j=0;j<PQntuples(r);j++){
+            lp_id id;memcpy(id.b,PQgetvalue(r,j,0),sizeof id.b);int64_t at=lp_idmap_find(references,&id);
+            if(at<0||PQgetisnull(r,j,1)||!ingest_ewkb_point((const uint8_t *)PQgetvalue(r,j,1),(size_t)PQgetlength(r,j,1),&((StoredFileRef *)lp_idmap_at(references,(size_t)at))->coord)){
+                fputs("file reference IDs: invalid stored reference\n",stderr);failed=1;break;
+            }
+            ((StoredFileRef *)lp_idmap_at(references,(size_t)at))->have=1;
+        }
+        PQclear(r);free(ab);begin+=count;
+    }
+    for(int i=0;i<ncandidate&&!failed;i++)if(candidate[i].known&&!local[i]){
+        int64_t at=lp_idmap_find(references,&candidate[i].file.id);
+        StoredFileRef *value=at<0?NULL:lp_idmap_at(references,(size_t)at);
+        if(!value||!value->have){fputs("file reference IDs: recorded file has no entity reference\n",stderr);failed=1;break;}
+        candidate[i].file.c=value->coord;
+    }
+    free(missing);lp_idmap_free(references);if(pg)PQfinish(pg);free(local);
+    if(failed){free(candidate);free(owner);return -1;}
     uint8_t *stale=calloc((size_t)nfiles,1);if(nfiles && !stale){perror("cached reading contexts");exit(1);}
     for(int i=0;i<ncandidate;i++)if(candidate[i].known && !files[owner[i]].known){
         File *fl=&files[owner[i]];fl->file=candidate[i].file;fl->recorded_metadata=candidate[i].recorded_metadata;fl->known=fl->has_file=1;

@@ -131,6 +131,16 @@ file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/laplace_reader_source.h"
      CONTENT "#define LAPLACE_READER_SOURCE_ID \"${LAPLACE_READER_SOURCE_ID}\"\n")
 configure_file(src/config.h.in ${CMAKE_CURRENT_BINARY_DIR}/laplace_config.h @ONLY)
 target_include_directories(laplace_engine PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+if(NOT WIN32)
+  add_executable(file_reference_local EXCLUDE_FROM_ALL tests/file-reference-local.c src/table.c)
+  target_include_directories(file_reference_local PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}
+    ${LAPLACE_NATIVE}/include ${LAPLACE_NATIVE}/src ${LAPLACE_BLAKE3_DIR}
+    ${LAPLACE_ICU_DIR}/include ${LAPLACE_PG_DIR}/include)
+  target_compile_options(file_reference_local PRIVATE ${LP_C_FLAGS} -UNDEBUG
+    -ffunction-sections -fdata-sections -Wno-unused-function -Wno-missing-field-initializers)
+  target_link_options(file_reference_local PRIVATE -Wl,--gc-sections)
+  target_link_libraries(file_reference_local PRIVATE laplace_static lp_crmath BLAKE3::blake3 OpenMP::OpenMP_C)
+endif()
 if(WIN32)
   # libpq's import library and zlib's from their installs (Laplace-Operations dependencies.tsv); the C runtime and
   # Win32 give what dl, m and pthread give on Linux.
