@@ -37,6 +37,8 @@ static int matches_node(const lp_id *id, const uint8_t *bytes, size_t length, si
     return 1;
 }
 int file_matches_bytes(const lp_id *id, const uint8_t *bytes, size_t length){
+    const lp_id absent={{0}};
+    if (!length && lp_id_eq(id,&absent)) return 1;
     size_t at = 0; return matches_node(id, bytes, length, &at) && at == length;
 }
 

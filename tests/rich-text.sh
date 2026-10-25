@@ -27,6 +27,8 @@ printf '&NotEqualTilde; &#128; &#0;' > "$scratch/inputs/references.html"
 printf 'alpha\nbeta' > "$scratch/inputs/paragraphs.txt"
 printf '<p>alpha</p><p>beta</p>' > "$scratch/inputs/paragraphs.html"
 printf 'alpha<br/>beta' > "$scratch/inputs/break.html"
+: > "$scratch/inputs/empty.html"
+printf '<script>not visible</script>' > "$scratch/inputs/script-only.html"
 "$L" ingest --entities --no-load -j 2 -d 'host=127.0.0.1 port=1 connect_timeout=1' "$scratch/inputs" > "$scratch/output.log" 2>&1 || { cat "$scratch/output.log"; exit 1; }
 trunk(){ sed -n "s/.*trunk \([0-9a-f]\{32\}\).*\/$1.*/\1/p" "$scratch/output.log" | tail -n 1; }
 word=$(trunk word.txt)
@@ -39,5 +41,7 @@ for pair in references paragraphs; do
   [[ $(trunk "$pair.html") == "$(trunk "$pair.txt")" ]] || { echo "rich-text: $pair differs"; cat "$scratch/output.log"; exit 1; }
 done
 [[ $(trunk break.html) == "$(trunk paragraphs.txt)" ]] || { echo 'rich-text: explicit line break differs'; cat "$scratch/output.log"; exit 1; }
+[[ -z $(trunk empty.html) ]] || { echo 'rich-text: empty input manufactured content'; exit 1; }
+[[ $(trunk script-only.html) == 00000000000000000000000000000000 ]] || { echo 'rich-text: excluded content became product'; cat "$scratch/output.log"; exit 1; }
 grep -q 'mismatched 0' "$scratch/output.log"
 echo 'rich-text: inline boundaries, attributes, references, excluded content, paragraph boundaries and exact packaging reconstruction passed'
