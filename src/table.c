@@ -355,7 +355,7 @@ static inline void tier_floor(Node *x, uint8_t tier){
     uint8_t t = __atomic_load_n(&x->tier, __ATOMIC_RELAXED);
     while (tier < t && !__atomic_compare_exchange_n(&x->tier, &t, tier, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) ;
 }
-uint8_t ref_above(const Ref *r, size_t n){ uint8_t t = 0; for (size_t i = 0; i < n; i++) if (r[i].tier > t) t = r[i].tier; if (t == UINT8_MAX) { fputs("composition exceeds the Native tier representation\n", stderr); exit(2); } return (uint8_t)(t + 1); }
+uint8_t ref_above(const Ref *r, size_t n){ uint8_t t = 0; for (size_t i = 0; i < n; i++) if (r[i].tier > t) t = r[i].tier; if (t == UINT8_MAX) { if(n==1)return t; fputs("composition exceeds the Native tier representation\n", stderr); exit(2); } return (uint8_t)(t + 1); }
 /* What a child is within this path, above its run: what it is said to be and, a claim of a record, how the record said
  * it (lp_m_full); the spare bits carry a score. Zero above the run is a child said nothing of. */
 static inline uint64_t m_above(const Ref *c){ return lp_m_full(1, c->said, c->outcome, c->position) & ~((1ull << LP_M_RUN_BITS) - 1); }
