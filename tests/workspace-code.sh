@@ -69,15 +69,27 @@ class PointerProducts {
         ++*p;
     }
     public static unsafe int Next(int* p) { return *p + 1; }
+    public static unsafe int Contextual(int[] values) {
+        int required, async, partial;
+        fixed (int* p = values) required = ReadValue(p, 1);
+        async = required;
+        partial = async;
+        return partial;
+    }
+    public required int Count { get; init; }
+    public async System.Threading.Tasks.Task Load() { await System.Threading.Tasks.Task.Yield(); }
 }
 CS
 for workers in 1 4; do
   out=$("$L" ingest --claims-tsv -j "$workers" -s workspace-code "$w/unsafe.cs" 2> "$scratch/unsafe-$workers.log" | tr -d '\r') || fail "C# unsafe products: $out $(cat "$scratch/unsafe-$workers.log")"
-  for name in Read Write Next; do
+  for name in Read Write Next Contextual Load; do
     grep -Fq $'\tdeclared identifier\t'"$name" <<< "$out" || fail "C# lost $name: $out"
   done
   grep -Fq 'return *(int*)p' <<< "$out" || fail "C# cast indirection was lost: $out"
   grep -Fq '*(p + 1) = value' <<< "$out" || fail "C# arithmetic indirection was lost: $out"
+  for name in required async partial; do
+    grep -Fq $'\treferenced identifier\t'"$name" <<< "$out" || fail "C# contextual identifier $name was lost: $out"
+  done
   grep -q 'unresolved obligations: 0 ' <<< "$out" || fail "C# unsafe fields unresolved: $out"
   grep '^claim' <<< "$out" | LC_ALL=C sort > "$scratch/unsafe-$workers.claims"
 done
