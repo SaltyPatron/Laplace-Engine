@@ -85,12 +85,13 @@ static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, uint64_t n){
         lp_idmap *places = lp_idmap_sized(sizeof(uint8_t));
         for (uint64_t i = 0; i < count; i++) { bool fresh; lp_idmap_put(places, &ids[begin + i], &fresh); }
         Args a = {0}; arg_ids(&a, ids + begin, (size_t)count);
-        /* This is an unnamed, custom parameter plan (ask_once), so PostgreSQL
-         * sees the actual ID array. A join to unnest can choose a merge join
-         * that walks every destination index; membership keeps the keys in
-         * the index condition instead of turning them into a join frontier. */
+        /* Keep each index key a runtime parameter. A plain join can walk every
+         * destination index; ANY(array) in a custom plan copies the complete
+         * constant into every partition plan. The scalar proof uses ID
+         * uniqueness and runtime partition pruning without either expansion. */
         PGresult *q = ask_once(pg[lane],
-            "SELECT e.id FROM public.entity e WHERE e.id=ANY($1::blake3[])", &a);
+            "SELECT wanted.id FROM unnest($1::blake3[]) wanted(id) "
+            "WHERE (SELECT true FROM public.entity e WHERE e.id=wanted.id)", &a);
         for (int row = 0; row < PQntuples(q); row++) {
             lp_id id; memcpy(id.b, PQgetvalue(q, row, 0), 16);
             int64_t at = lp_idmap_find(places, &id);
@@ -123,8 +124,9 @@ int files_known(PGconn **pg, int npg, File *files, int nfiles, LoadStats *st){
     if (count) {
         Args a = {0}; arg_ids(&a, ids, (size_t)count);
         PGresult *q = ask_once(pg[0],
-            "SELECT e.id FROM public.entity e JOIN public.physicality p ON p.entity=e.id"
-            " WHERE e.id=ANY($1::blake3[])", &a);
+            "SELECT wanted.id FROM unnest($1::blake3[]) wanted(id)"
+            " WHERE (SELECT true FROM public.entity e WHERE e.id=wanted.id)"
+            " AND (SELECT true FROM public.physicality p WHERE p.entity=wanted.id)", &a);
         lp_idmap *recorded = lp_idmap_new();
         for (int row = 0; row < PQntuples(q); row++) { lp_id id; bool fresh; memcpy(id.b, PQgetvalue(q,row,0),16); lp_idmap_put(recorded,&id,&fresh); }
         for (int i = 0; i < count; i++) if (lp_idmap_find(recorded, &ids[i]) >= 0) { files[of[i]].known = 1; found++; }
