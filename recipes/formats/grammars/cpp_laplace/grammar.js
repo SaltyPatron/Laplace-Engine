@@ -6,10 +6,7 @@ module.exports = grammar(require('./upstream/cpp.js'), {
   conflicts: ($, original) => original.concat(C.workspaceConflicts($), [
     [$._declarator, $.type_specifier, $.expression, $.macro_declaration],
     [$._block_item, $._initializer_directive],
-    [$.comma_expression, $._initializer_value],
-    ...['preproc_if', 'preproc_ifdef', 'preproc_else', 'preproc_elif', 'preproc_elifdef'].flatMap(name => [
-      [$._top_level_item, $[name + '_in_function']], [$._block_item, $[name + '_in_function']]
-    ])
+    [$.comma_expression, $._initializer_value]
   ]),
   rules: {
     optional_parameter_declaration: $ => seq(

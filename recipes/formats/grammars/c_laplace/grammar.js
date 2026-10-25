@@ -7,8 +7,11 @@ const workspaceConflicts = $ => [
     [$.declaration, $._declaration_modifiers],
     [$.expression, $.macro_declaration],
     [$.argument_list, $.macro_type_arguments],
-    ...['preproc_if', 'preproc_ifdef', 'preproc_else', 'preproc_elif', 'preproc_elifdef'].map(name =>
-      [$[name], $[name + '_in_function']])
+    ...['preproc_if', 'preproc_ifdef', 'preproc_else', 'preproc_elif', 'preproc_elifdef'].flatMap(name => [
+      [$[name], $[name + '_in_function']],
+      [$._top_level_item, $[name + '_in_function']],
+      [$._block_item, $[name + '_in_function']]
+    ])
 ];
 module.exports = grammar(upstream, {
   name: 'c_laplace',
