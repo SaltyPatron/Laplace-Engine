@@ -140,6 +140,14 @@ if(NOT WIN32)
     -ffunction-sections -fdata-sections -Wno-unused-function -Wno-missing-field-initializers)
   target_link_options(file_reference_local PRIVATE -Wl,--gc-sections)
   target_link_libraries(file_reference_local PRIVATE laplace_static lp_crmath BLAKE3::blake3 OpenMP::OpenMP_C)
+  add_executable(presence_frontier EXCLUDE_FROM_ALL tests/presence-frontier.c src/db.c src/pg.c)
+  target_include_directories(presence_frontier PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}
+    ${LAPLACE_NATIVE}/include ${LAPLACE_NATIVE}/src ${LAPLACE_BLAKE3_DIR}
+    ${LAPLACE_ICU_DIR}/include ${LAPLACE_PG_DIR}/include)
+  target_compile_options(presence_frontier PRIVATE ${LP_C_FLAGS} -UNDEBUG
+    -ffunction-sections -fdata-sections -Wno-unused-function -Wno-missing-field-initializers)
+  target_link_options(presence_frontier PRIVATE -Wl,--gc-sections)
+  target_link_libraries(presence_frontier PRIVATE laplace_static lp_crmath BLAKE3::blake3 pq OpenMP::OpenMP_C)
 endif()
 if(WIN32)
   # libpq's import library and zlib's from their installs (Laplace-Operations dependencies.tsv); the C runtime and
