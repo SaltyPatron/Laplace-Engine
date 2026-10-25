@@ -102,7 +102,7 @@ typedef struct { char path[64], sep[8], is[8]; int seplen, islen, pieces, padded
  *   trim
  * A kind the recipe says nothing of is passed through: what is inside it stands where it stands. */
 typedef enum { G_GROUP = 1, G_VALUE, G_TEXT, G_MEMBER, G_SKIP, G_NOTE } GNodeKind;
-enum { G_XML = 1, G_JSON, G_TURTLE, G_CSV, G_DELIMITED, G_LINES, G_SQL, G_SQL_ESCAPE };
+enum { G_XML = 1, G_JSON, G_TURTLE, G_CSV, G_DELIMITED, G_LINES, G_SQL, G_SQL_ESCAPE, G_HTML };
 
 #define G_PATH_STEPS 8
 typedef struct { TSSymbol symbol; TSFieldId field; uint8_t flags; } GPathStep;
@@ -141,7 +141,7 @@ typedef struct { char count[64], group[48], member[8][48]; uint8_t nmember, radi
  * the walker retains only the active scope chain, never a second AST. */
 typedef struct { char open[48], close[48], empty[48], name[64]; GPath identity; } GScope;
 typedef struct {
-    GRule rule[48]; int n, resolve, trim; uint8_t quoted, escaped, padded;
+    GRule rule[128]; int n, resolve, trim; uint8_t quoted, escaped, padded, gaps;
     uint16_t grammar_id;
     uint32_t symbol_count, *sym_rule_offset;
     uint16_t *sym_rules;
@@ -224,6 +224,7 @@ int s_cursor(const Layout *layout, TSNode root, const uint8_t *source, size_t le
 /* A recipe's line, if it lays the file out: 1 when it was one, 0 when it is something else, -1 when it is written wrong
  * (what is wrong is said). tok is the line's first word; the rest of the line is read with strtok. */
 int layout_says(Layout *l, const char *path, char *tok);
+size_t html_unescape(const uint8_t *, size_t, uint8_t *);
 
 /* Single-pass streaming cursor over outermost tier records */
 /* A parsed outer packaging window. Record iteration skips each returned

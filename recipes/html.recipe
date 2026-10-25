@@ -1,7 +1,8 @@
 name html
-# Source code as its syntax tree, by the tree-sitter grammar html ($LAPLACE_GRAMMARS, built from $LAPLACE_GRAMMAR_SRC by
-# tools/build_grammars.sh): each node the composition of its children with the bytes between them, so the file
-# recomposes byte for byte; leaves are text.
+# Recover character content through the compiled HTML projection, then compose
+# it through the shared Native text kernel. Inline markup never splits a word.
+# The original syntax and bytes remain in the file's packaging metadata.
 match *.html *.htm
 class UserCuratedResource
 grammar html
+product-format html_text

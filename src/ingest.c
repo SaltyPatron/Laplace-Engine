@@ -526,7 +526,7 @@ typedef struct { lp_vertex *vertices; Ref *children; uint64_t *runs; size_t capa
 static int ingest_local_file_ref(const lp_id *id, const uint8_t *path, size_t bytes,
                                  uint8_t tier, FileRefScratch *scratch, Ref *out){
     int known; *out=ref_of_id(id,&known);
-    if(known){out->tier=tier;return 1;}
+    if(known){if(tier>out->tier)out->tier=tier;return 1;}
     size_t n=lp_path_vertices(path,bytes,NULL,0);
     if(!n)return 0;
     if(n>scratch->capacity){
@@ -541,6 +541,7 @@ static int ingest_local_file_ref(const lp_id *id, const uint8_t *path, size_t by
         if(!known)return 0;
         scratch->runs[i]=scratch->vertices[i].run;
     }
+    uint8_t floor=ref_above(scratch->children,n);if(tier<floor)tier=floor;
     if(!lp_ref_compose_runs(scratch->children,scratch->runs,n,tier,out)||!lp_id_eq(id,&out->id))return -1;
     out->tier=tier;return 1;
 }

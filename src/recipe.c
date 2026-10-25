@@ -192,6 +192,12 @@ static int recipe_parse(const char *path, Recipe *r, int metadata){
             }
             fclose(format);
         }
+        else if (!strcmp(tok, "product-format")) {
+            char name[64], *argument = strtok(NULL, " \t\r\n");
+            if (!argument || strlen(argument) >= sizeof name || strtok(NULL, " \t\r\n")) { fclose(f); r->program_state = NULL; return 0; }
+            snprintf(name, sizeof name, "%s", argument);
+            if (!metadata && !recipe_product_format(r, name)) { fclose(f); r->program_state = NULL; return 0; }
+        }
         else if (metadata) continue;                                    /* inventory needs no grammar, cache or database */
         else { int sv = r->native ? r->native->says(r, path, tok)           /* a line of the native grammar the recipe names */
                               : say_says(r, path, tok);                     /* the file's layout and the disposition of its parts */
@@ -709,7 +715,7 @@ static void decompose_input(Ctx *c, File *f){
     f->bytes = n; decompose_bytes(c, f, src0, n, 1);
     if (f->recipe && f->recipe->curated) f->exact = 1;
     else {
-        f->exact = file_matches_bytes(&f->trunk.id, src0, n);
+        f->exact = file_matches_bytes(f->has_packaging ? &f->packaging.id : &f->trunk.id, src0, n);
     }
     free(src0);
 }
@@ -717,6 +723,26 @@ void decompose_file(Ctx *c, File *f){
     const File *previous = table_reading_file(f);
     decompose_input(c, f);
     table_reading_file(previous);
+}
+typedef struct { uint8_t *bytes; size_t length, capacity; int boundary; } ProductText;
+static void product_append(ProductText *text, const void *bytes, size_t length){
+    if (length > SIZE_MAX - text->length) { fputs("product text exceeds address space\n", stderr); exit(2); }
+    size_t needed = text->length + length;
+    if (needed > text->capacity) {
+        size_t capacity = needed > SIZE_MAX/2 ? needed : needed*2;
+        text->bytes = xrealloc(text->bytes, capacity); text->capacity = capacity;
+    }
+    if (length) memcpy(text->bytes + text->length, bytes, length);
+    text->length = needed;
+}
+static int product_text(void *sink, int event, const SField *field){
+    ProductText *text = sink;
+    if (event == S_OPEN || event == S_CLOSE) { if (text->length) text->boundary = 1; }
+    else if (event == S_FIELD && field->kind == S_TEXT && field->value_length) {
+        if (text->boundary && text->length && text->bytes[text->length - 1] != '\n') product_append(text, "\n", 1);
+        text->boundary = 0; product_append(text, field->value, field->value_length);
+    }
+    return S_VISIT_OK;
 }
 void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
     const Recipe *r = f->recipe;
@@ -737,6 +763,13 @@ void decompose_bytes(Ctx *c, File *f, uint8_t *src, size_t n, int first){
     if (!t) { fprintf(stderr, "%s: Tree-sitter could not parse the input\n", f->path); exit(2); }
     TSNode root = ts_tree_root_node(t);
     f->trunk = ast_cursor(root, src, 0, (uint32_t)n);
+    if (r->product) {
+        ProductText product = {0};
+        if (!s_cursor(r->product, root, src, n, product_text, &product)) { fprintf(stderr, "%s: product projection failed\n", f->path); exit(2); }
+        f->packaging = f->trunk; f->has_packaging = 1;
+        f->trunk = text_ref(c, product.bytes, product.length);
+        free(product.bytes);
+    }
     ts_tree_delete(t);
 }
 

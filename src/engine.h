@@ -177,10 +177,12 @@ typedef struct {
     int broken; char file[512];                       /* it did not load: it stops the source it belongs to, and no other */
     int curated;                                      /* it attests: a curated source, mined for what it says, not kept byte for byte */
     void *say;                                        /* the file's layout and the disposition of its parts, as the recipe configures them (say.c) */
+    void *product;                                    /* compiled format projection, independent of retained packaging */
     const struct NativeGrammar *native;               /* the grammar the recipe names, when it is a reading of the engine's own, not tree-sitter's */
     void *native_recipe;                              /* what that grammar's own lines said */
     uint8_t program_hash[32]; void *program_state;     /* effective recipe/format source; state exists only while compiling */
 } Recipe;
+int recipe_product_format(Recipe *, const char *);
 void recipe_program_line(Recipe *recipe, const char *path, const char *line);
 void recipe_reading_hash(const Recipe *recipe, uint8_t out[32]);
 int program_file_hash(const char *path, uint8_t out[32]);
@@ -233,7 +235,7 @@ typedef int (*record_batch_fn)(void *, const Ref *, size_t, const Ref *, size_t,
 struct FileAssembly;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */
-typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage; int has_lineage; uint64_t bytes, incomplete; int exact, skipped, known; RecipeCoverage coverage; Events ev;
+typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage, packaging; int has_packaging, has_lineage; uint64_t bytes, incomplete; int exact, skipped, known; RecipeCoverage coverage; Events ev;
                  const Source *source;                 /* the source it is a file of, or NULL for a file given by itself */
                  double trust;                         /* how far its witness is trusted */
                  Ref file; int has_file;               /* the file in the DAG: its trunk, over its metadata and its content */

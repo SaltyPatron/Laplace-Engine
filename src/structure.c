@@ -311,7 +311,7 @@ int layout_says(Layout *l, const char *path, char *tok){
     if (!strcmp(tok, "levels")) { char *v; while ((v = strtok(NULL, " \t\r\n")) && l->nlevels < 8) {
             str_set(l->levels[l->nlevels], 32, v); l->level_lengths[l->nlevels] = (uint8_t)strlen(l->levels[l->nlevels]); l->nlevels++; }
         if (!l->nlevels) { fprintf(stderr, "%s: levels NAME...\n", path); return -1; } return 1; }
-    if (!strcmp(tok, "resolve")) { char *v = strtok(NULL, " \t\r\n"); l->g.resolve = v && !strcmp(v, "xml") ? G_XML : v && !strcmp(v, "json") ? G_JSON : v && !strcmp(v, "turtle") ? G_TURTLE : v && !strcmp(v, "csv") ? G_CSV : v && !strcmp(v, "delimited") ? G_DELIMITED : v && !strcmp(v, "lines") ? G_LINES : v && !strcmp(v, "sql") ? G_SQL : 0;
+    if (!strcmp(tok, "resolve")) { char *v = strtok(NULL, " \t\r\n"); l->g.resolve = v && !strcmp(v, "xml") ? G_XML : v && !strcmp(v, "json") ? G_JSON : v && !strcmp(v, "turtle") ? G_TURTLE : v && !strcmp(v, "csv") ? G_CSV : v && !strcmp(v, "delimited") ? G_DELIMITED : v && !strcmp(v, "lines") ? G_LINES : v && !strcmp(v, "sql") ? G_SQL : v && !strcmp(v, "html") ? G_HTML : 0;
         if (!l->g.resolve) { fprintf(stderr, "%s: resolve xml | json | turtle | csv | lines | delimited [quoted] [escaped CHAR]\n", path); return -1; }
         char *option;
         while ((option = strtok(NULL, " \t\r\n"))) {
@@ -324,8 +324,13 @@ int layout_says(Layout *l, const char *path, char *tok){
             } else { fprintf(stderr, "%s: unknown resolve option %s\n", path, option); return -1; }
         }
         return 1; }
+    if (!strcmp(tok, "gaps")) {
+        char *kind = strtok(NULL, " \t\r\n");
+        if (!kind || strcmp(kind, "text") || strtok(NULL, " \t\r\n")) return -1;
+        l->g.gaps = 1; return 1;
+    }
     if (!strcmp(tok, "node")) { char *ty = strtok(NULL, " \t\r\n"), *wh = strtok(NULL, " \t\r\n"), *w;
-        if (!ty || !wh || l->g.n == 48) { fprintf(stderr, "%s: node TYPE group | value | text | member | note | skip ...\n", path); return -1; }
+        if (!ty || !wh || l->g.n == (int)(sizeof l->g.rule/sizeof *l->g.rule)) { fprintf(stderr, "%s: node TYPE group | value | text | member | note | skip ...\n", path); return -1; }
         GRule *r=!strcmp(ty,"@record")?&l->g.record_fallback:&l->g.rule[l->g.n++];
         memset(r, 0, sizeof *r); str_set(r->type, sizeof r->type, ty);
         r->what = !strcmp(wh, "group") ? G_GROUP : !strcmp(wh, "value") ? G_VALUE : !strcmp(wh, "text") ? G_TEXT : !strcmp(wh, "member") ? G_MEMBER : !strcmp(wh, "skip") ? G_SKIP : !strcmp(wh, "note") ? G_NOTE : 0;
@@ -1302,6 +1307,12 @@ static void g_text(GW *w, TSNode nd, int raw, const uint8_t **p, uint32_t *n){
     int padded = raw & 2, trim = raw & 4; raw &= 1;
     uint32_t len = ts_node_end_byte(nd) - ts_node_start_byte(nd);
     const uint8_t *s = decode_text(&w->input->decode, w->src + ts_node_start_byte(nd), &len);
+    if (!raw && w->l->g.resolve == G_HTML) {
+        uint8_t *decoded = scratch_alloc((size_t)len*2 + 8);
+        size_t length = html_unescape(s, len, decoded);
+        if (length > UINT32_MAX) { fputs("HTML text exceeds parser byte range\n", stderr); exit(2); }
+        *p=decoded; *n=(uint32_t)length; return;
+    }
     if (padded) s = padding_off(s, &len, w->l->g.escaped);
     if (!raw && w->l->g.resolve == G_SQL && quoted_node(&w->l->g, nd)) {
         SqlLiteral literal;
@@ -1453,6 +1464,19 @@ typedef struct {
     uint8_t count_input, count_member, count_omitted;
 } CursorFrame;
 
+static int cursor_gap(const Layout *layout, const GInput *input, uint32_t *at, TSPoint *point,
+                      uint32_t end, TSPoint end_point, s_visit_fn visit, void *sink){
+    if (!layout->g.gaps || end <= *at) return 1;
+    SField field = {.value=input->src+*at, .value_length=end-*at, .kind=S_TEXT,
+        .flags=S_FIELD_JOIN, .grammar=layout->g.grammar_id,
+        .range=source_range(input, (TSRange){*point,end_point,*at,end})};
+    if (layout->g.resolve==G_HTML) {
+        uint8_t *decoded=scratch_alloc((size_t)field.value_length*2+8);
+        field.value_length=(uint32_t)html_unescape(field.value,field.value_length,decoded); field.value=decoded;
+    }
+    *at=end; *point=end_point;
+    return (visit(sink,S_FIELD,&field)&S_VISIT_OK)!=0;
+}
 static int cursor_project(const Layout *layout, TSNode root, const GInput *input, s_visit_fn visit, void *sink,
                           const uint8_t *name, uint32_t name_length, int list, int flatten);
 static int cursor_scope_project(const Layout *layout, TSNode root, TSRange range, const GInput *input, s_visit_fn visit, void *sink);
@@ -2002,9 +2026,10 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
     size_t stack_mark = tls_scratch.stack_used, capacity = 32, count = 1;
     CursorFrame *frames = scratch_stack_alloc(capacity * sizeof *frames);
     frames[0] = (CursorFrame){.node=root, .value_mark=scratch_mark(), .context_name=name, .context_length=name_length, .context_list=(uint8_t)list};
-    int valid = 1;
+    int valid = 1; uint32_t surface_at=ts_node_start_byte(root); TSPoint surface_point=ts_node_start_point(root);
     while (count) {
         CursorFrame *frame = &frames[count - 1];
+        if (!cursor_gap(layout,input,&surface_at,&surface_point,ts_node_start_byte(frame->node),ts_node_start_point(frame->node),visit,sink)) {valid=0;break;}
         const GRule *rule = frame->route || frame->node.id == omit ? NULL : rule_at(&worker, frame->node, frame->field, frame->parent);
         if(!rule && count==1 && layout->g.record_fallback.what){
             rule=&layout->g.record_fallback;
@@ -2135,6 +2160,7 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
             }
         }
 after_rule:
+        if (layout->g.gaps && !children) { surface_at=ts_node_end_byte(frame->node); surface_point=ts_node_end_point(frame->node); }
         if (children && ts_tree_cursor_goto_first_child(cursor)) {
             if (cursor_child(frame, cursor)) goto push_child;
             ts_tree_cursor_goto_parent(cursor);
@@ -2151,6 +2177,7 @@ after_rule:
                     .grammar=layout->g.grammar_id, .kind=S_VALUE, .flags=S_FIELD_DERIVED};
                 if (!visit(sink, S_FIELD, &number)) { valid = 0; break; }
             }
+            if (!cursor_gap(layout,input,&surface_at,&surface_point,ts_node_end_byte(frame->node),ts_node_end_point(frame->node),visit,sink)) {valid=0;break;}
             if (frame->close_scope && !close_field(visit, sink, &frame->closing)) { valid = 0; break; }
             int counted_member = frame->count_member;
             if (!--count) break;

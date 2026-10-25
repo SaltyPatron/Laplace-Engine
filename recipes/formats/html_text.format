@@ -1,0 +1,59 @@
+# Character content is projected across inline wrappers before UAX #29 runs.
+# Packaging, including attributes and original references, is retained separately.
+grammar html
+resolve html
+gaps text
+node text text join
+node entity text join
+node start_tag skip
+node end_tag skip
+node self_closing_tag skip
+node comment skip
+node doctype skip
+node script_element skip
+node style_element skip
+node element skip when start_tag/tag_name is head casefold
+node element group when start_tag/tag_name is address casefold
+node element group when start_tag/tag_name is aside casefold
+node element group when start_tag/tag_name is blockquote casefold
+node element group when start_tag/tag_name is caption casefold
+node element group when start_tag/tag_name is dd casefold
+node element group when start_tag/tag_name is details casefold
+node element group when start_tag/tag_name is dialog casefold
+node element group when start_tag/tag_name is dl casefold
+node element group when start_tag/tag_name is dt casefold
+node element group when start_tag/tag_name is fieldset casefold
+node element group when start_tag/tag_name is figcaption casefold
+node element group when start_tag/tag_name is figure casefold
+node element group when start_tag/tag_name is footer casefold
+node element group when start_tag/tag_name is form casefold
+node element group when start_tag/tag_name is header casefold
+node element group when start_tag/tag_name is hgroup casefold
+node element group when start_tag/tag_name is main casefold
+node element group when start_tag/tag_name is nav casefold
+node element group when start_tag/tag_name is ol casefold
+node element group when start_tag/tag_name is pre casefold
+node element group when start_tag/tag_name is summary casefold
+node element group when start_tag/tag_name is table casefold
+node element group when start_tag/tag_name is tbody casefold
+node element group when start_tag/tag_name is td casefold
+node element group when start_tag/tag_name is tfoot casefold
+node element group when start_tag/tag_name is th casefold
+node element group when start_tag/tag_name is thead casefold
+node element group when start_tag/tag_name is ul casefold
+node element group when start_tag/tag_name is p casefold
+node element group when start_tag/tag_name is div casefold
+node element group when start_tag/tag_name is li casefold
+node element group when start_tag/tag_name is section casefold
+node element group when start_tag/tag_name is article casefold
+node element group when start_tag/tag_name is h1 casefold
+node element group when start_tag/tag_name is h2 casefold
+node element group when start_tag/tag_name is h3 casefold
+node element group when start_tag/tag_name is h4 casefold
+node element group when start_tag/tag_name is h5 casefold
+node element group when start_tag/tag_name is h6 casefold
+node element group when start_tag/tag_name is tr casefold
+node element group when start_tag/tag_name is br casefold
+node element group when start_tag/tag_name is hr casefold
+node element group when self_closing_tag/tag_name is br casefold
+node element group when self_closing_tag/tag_name is hr casefold

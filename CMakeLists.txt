@@ -72,6 +72,7 @@ set(ENGINE_SOURCES
     src/record_diagnostics.c
     src/record_values.c
     src/record_surface.c
+    src/reference_html.c
     src/record_output.c
 )
 if(TARGET laplace_model)
@@ -112,7 +113,7 @@ target_compile_options(laplace_engine PRIVATE ${LP_C_FLAGS} -Wno-missing-field-i
 set(_reader_contract "")
 foreach(_reader_root IN ITEMS "${CMAKE_CURRENT_SOURCE_DIR}" "${LAPLACE_NATIVE}" "${LAPLACE_TREESITTER}/lib")
   file(GLOB_RECURSE _reader_inputs CONFIGURE_DEPENDS RELATIVE "${_reader_root}"
-       "${_reader_root}/src/*.c" "${_reader_root}/src/*.h"
+       "${_reader_root}/src/*.c" "${_reader_root}/src/*.h" "${_reader_root}/src/*.inc"
        "${_reader_root}/include/*.h" "${_reader_root}/manifest/*.tsv" "${_reader_root}/manifest/*.toml")
   list(SORT _reader_inputs)
   foreach(_reader_input IN LISTS _reader_inputs)
