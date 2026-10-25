@@ -37,5 +37,18 @@ int main(int argc, char **argv){
     { char *av[] = { (char *)exe, "child-stdin", NULL };
       int r = os_run_logged(exe, av, log, "LAPLACE_TEST", "1"); first_line(line, sizeof line);
       printf("the child's input is NUL: returned %d, log says %s", r, line); if (r || strncmp(line, "nothing", 7)) fails++; }
+    { char *av[] = { (char *)exe, "child-env", NULL };
+      _putenv_s("LAPLACE_TEST", "preserved");
+      int r = os_run_logged(exe, av, log, NULL, NULL); first_line(line, sizeof line);
+      printf("no override preserves the child environment: returned %d, log says %s", r, line);
+      if (r || strncmp(line, "preserved", 9) || !getenv("LAPLACE_TEST") || strcmp(getenv("LAPLACE_TEST"), "preserved")) fails++;
+      r = os_run_logged(exe, av, log, "LAPLACE_TEST", "temporary"); first_line(line, sizeof line);
+      printf("an override restores the parent's value: returned %d, log says %s", r, line);
+      if (r || strncmp(line, "temporary", 9) || !getenv("LAPLACE_TEST") || strcmp(getenv("LAPLACE_TEST"), "preserved")) fails++;
+      _putenv_s("LAPLACE_TEST", ""); }
+    { char *av[] = { "C:/no/such/program.exe", NULL }; errno = 0;
+      int r = os_run_logged(av[0], av, log, NULL, NULL);
+      printf("failed start without an override: returned %d, errno %d\n", r, errno);
+      if (r != -1 || errno != ENOENT) fails++; }
     remove(log); printf(fails ? "FAILED %d\n" : "ok\n", fails); return fails;
 }
