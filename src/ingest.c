@@ -844,6 +844,10 @@ int cmd_ingest(int argc, char **argv){
     #define SHOW(F) do { if (show_claims) show_record_events(F); } while (0)
     /* What was read of a file is kept for its content; a file read to its end gets its trunk. */
     #define WHOLE(F) do { File *f_ = (F); if (!f_->partial) file_close(f_); } while (0)
+    /* Keep the recorded-key reader and its Native backend caches alive for
+     * this source. Opening a backend for each known file discards those
+     * caches and repeats connection/library initialization on every replay. */
+    PGconn *key_reader = NULL;
     for (int a0 = 0; a0 < nfiles; ) {
         int b0 = a0; uint64_t sum = 0;
         int streaming = (do_load || preview_streaming) && !files[a0].known && !files[a0].skipped && recipe_record_streamable(files[a0].recipe);
@@ -875,7 +879,8 @@ int cmd_ingest(int argc, char **argv){
              * Each file's grammar records still run on all worker lanes. */
             for (int i = a0; i < b0; i++) {
                 if (restore_keys && files[i].known && say_has_keys(files[i].recipe)) {
-                    if (load_file_keys(conninfo, &files[i])) return 1;
+                    if (!key_reader) key_reader = db_connect(conninfo);
+                    if (load_file_keys(key_reader, &files[i])) { PQfinish(key_reader); return 1; }
                 }
                 if (files[i].known || files[i].skipped) continue;
                 progress_file("file-start", &files[i]);
@@ -943,6 +948,7 @@ int cmd_ingest(int argc, char **argv){
         }
         a0 = b0;
     }
+    if (key_reader) PQfinish(key_reader);
     double source_finish = now(), database_before = completion.database_seconds;
     if (say_source_end(source_file_ready, &completion)) return 1;
     t_dec += now() - source_finish - (completion.database_seconds - database_before);

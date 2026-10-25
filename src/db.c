@@ -180,11 +180,10 @@ void validate_file_contexts(const char *conninfo, File *files, int nfiles){
 /* Restore only the compiled index beneath a recorded file's metadata. Entry
  * vertices terminate the walk: their product targets are not exported into RAM.
  * One set read restores a provider; none of its source bytes are reopened. */
-int load_file_keys(const char *conninfo, const File *file){
+int load_file_keys(PGconn *pg, const File *file){
     if (!file->known || !file->has_file) return 0;
     Ref marker = text_ref(CTX[0], (const uint8_t *)KEY_BINDING_TAG, sizeof KEY_BINDING_TAG - 1);
     Args args = {0}; arg_raw(&args, file->recorded_metadata.b, sizeof file->recorded_metadata.b); arg_raw(&args, marker.id.b, sizeof marker.id.b);
-    PGconn *pg = db_connect(conninfo);
     PGresult *result = ask_once(pg,
         "WITH RECURSIVE metadata(id) AS ("
         " SELECT $1::blake3"
@@ -211,7 +210,7 @@ int load_file_keys(const char *conninfo, const File *file){
     }
     PQclear(result); args_free(&args); args=(Args){0};
     if (invalid || !count) {
-        free(ids); PQfinish(pg);
+        free(ids);
         if (invalid) fprintf(stderr,"%s: invalid compiled reference entry path\n",file->path);
         else fprintf(stderr,"  restored 0 compiled reference bindings from recorded metadata: %s\n",file->path);
         return invalid;
@@ -256,7 +255,7 @@ int load_file_keys(const char *conninfo, const File *file){
     }
     if (invalid) fprintf(stderr,"%s: recorded compiled reference metadata is invalid\n",file->path);
     else fprintf(stderr,"  restored %d compiled reference bindings from recorded metadata: %s\n",PQntuples(result),file->path);
-    PQclear(result); args_free(&args); PQfinish(pg); return invalid;
+    PQclear(result); args_free(&args); return invalid;
 }
 
 Fold *fold_new(void){

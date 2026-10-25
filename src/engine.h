@@ -276,7 +276,7 @@ uint64_t keys_revision(void);
 typedef void (*key_binding_fn)(void *, const Ref *);
 size_t keys_file_export(uint64_t file, key_binding_fn, void *);
 void keys_restore(const lp_id *hash, const KeyField *, const KeyRank *);
-int load_file_keys(const char *conninfo, const File *);
+int load_file_keys(PGconn *pg, const File *);
 void keys_reader_file(uint64_t file);
 int keys_file_reads(uint64_t file);
 Ref file_context_value(const File *);
