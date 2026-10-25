@@ -7,18 +7,29 @@
 set -euo pipefail
 L=${1:?usage: tests/supersede.sh path/to/laplace}; here=$(cd "$(dirname "$0")" && pwd)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/supersede.XXXXXX")
+# Recipe and environment paths are read by the native executable, not Bash.
+if command -v cygpath >/dev/null 2>&1; then
+  scratch=$(cygpath -m "$scratch"); here=$(cygpath -m "$here")
+fi
 db=lp_supersede_$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
 conn="host=${PGHOST:-/tmp} port=${PGPORT:-5432} user=${PGUSER:-laplace} dbname=$db"
 dropdb=${DROPDB:-$(dirname "${PSQL:-$(command -v psql)}")/dropdb}
-trap '"$dropdb" -h "${PGHOST:-/tmp}" -p "${PGPORT:-5432}" -U "${PGUSER:-laplace}" --if-exists "$db" >/dev/null 2>&1 || true; rm -rf "$scratch"' EXIT
+cleanup(){
+  "$dropdb" -h "${PGHOST:-/tmp}" -p "${PGPORT:-5432}" -U "${PGUSER:-laplace}" --if-exists "$db" >/dev/null 2>&1 || true
+  local target base; target=$(cd "$scratch" && pwd -P); base=$(cd "${TMPDIR:-/tmp}" && pwd -P)
+  case "$target" in "$base"/supersede.*) rm -rf -- "$scratch";; *) return 1;; esac
+}
+trap cleanup EXIT
 fail(){ echo "supersede: $*" >&2; exit 1; }
 export LAPLACE_WORK=$scratch/work LAPLACE_RECIPES=$scratch/recipes
+export LAPLACE_FIRMWARE=${LAPLACE_FIRMWARE:-$here/../firmware/program.firmware}
 cp -r "${LAPLACE_RECIPES_FROM:-$here/../recipes}" "$LAPLACE_RECIPES"
 tree=$scratch/tree; mkdir -p "$LAPLACE_RECIPES/supersede-tree" "$tree"
 printf 'name supersede-tree\nwitness Supersede Tree\nclass UserCuratedResource\nroot %s\nsupersede\nreads python\n' "$tree" > "$LAPLACE_RECIPES/supersede-tree/source"
 
 "$L" deploy -d "$conn" >"$scratch/deploy.log" 2>&1 || fail "deploy: $(tail -5 "$scratch/deploy.log")"
-held(){ "$L" hop -d "$conn" "$1" 2>&1 | grep -q 'nothing recorded' && echo no || echo yes; }
+held(){ local result; result=$("$L" hop -d "$conn" "$1" 2>&1) || fail "hop $1: $result"
+        grep -q 'nothing recorded' <<< "$result" && echo no || echo yes; }
 # a named source is ingested by a run of its own, which logs to $LAPLACE_WORK/logs/ingest/NAME.log
 ingest(){ "$L" ingest -d "$conn" -j 2 supersede-tree >"$scratch/$1.run" 2>&1 || fail "ingest $1: $(tail -20 "$scratch/$1.run")"
           cp "$LAPLACE_WORK/logs/ingest/supersede-tree.log" "$scratch/$1.log"; }
