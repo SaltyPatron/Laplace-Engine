@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <errno.h>
 
 /* How many recipes a recipe's keys are reached through: 0 when it refers to none (refer NAME RECIPE), else one more
  * than the recipes it refers to. The files of a deeper recipe are read after the shallower ones' */
@@ -253,9 +254,67 @@ static void show_record_events(const File *file){
     }
 }
 #include "ingest_progress.h"
+/* A file is a semantic object, not a persistence boundary. Keep the ordinary
+ * grammar stream and file assembly, but share their Native working window
+ * across files. The caller's resource plan supplies a resident-byte budget;
+ * the standalone CLI retains its existing batch budget as a fallback. */
+typedef struct {
+    const char *conninfo; int threads; Fold *fold; LoadStats *stats;
+    uint64_t budget, flushes;
+    Ref *roots; size_t nroots, croots;
+    Events events;
+    File **complete; size_t ncomplete, ccomplete;
+} StreamWindow;
+static int stream_window_flush(StreamWindow *window){
+    if (!window->nroots && !window->events.n && !window->ncomplete) return 0;
+    File batch = {.said=window->roots, .nsaid=window->nroots, .ev=window->events};
+    if (load(window->conninfo, window->threads, &batch, 1, window->stats)) return 1;
+    /* A composed-file receipt means its Native closure has been committed,
+     * even when other files shared that apply. Never report it early. */
+    for (size_t i=0; i<window->ncomplete; i++) progress_file("file-composed", window->complete[i]);
+    window->nroots=window->events.n=window->ncomplete=0;
+    uint64_t buffered=window->croots*sizeof *window->roots + window->events.cap*sizeof *window->events.e
+        + window->ccomplete*sizeof *window->complete;
+    if (buffered >= window->budget) {
+        free(window->roots); free(window->events.e); free(window->complete);
+        window->roots=NULL; window->croots=0; window->events=(Events){0}; window->complete=NULL; window->ccomplete=0;
+    }
+    window->flushes++; table_reset(); return 0;
+}
+static void stream_window_root(StreamWindow *window, const Ref *root){
+    static const lp_id absent={{0}};
+    if (lp_id_eq(&root->id,&absent)) return;
+    table_annotate_roots(root, 1);
+    if (window->nroots == window->croots) {
+        window->croots = window->croots ? window->croots * 2 : 1;
+        window->roots = xrealloc(window->roots, window->croots * sizeof *window->roots);
+    }
+    window->roots[window->nroots++] = *root;
+}
+static int stream_window_add(StreamWindow *window, File *file){
+    if (file->known || file->skipped) return 0;
+    fold_events(window->fold, file, 1);
+    for (uint64_t i=0; i<file->ev.n; i++) ev_push(&window->events, &file->ev.e[i]);
+    if (file->has_file) stream_window_root(window, &file->file);
+    else {
+        stream_window_root(window, &file->trunk);
+        for (uint64_t i=0; i<file->nsaid; i++) stream_window_root(window, &file->said[i]);
+    }
+    if (file->has_lineage) stream_window_root(window, &file->lineage);
+    if (!file->partial) {
+        if (window->ncomplete == window->ccomplete) {
+            window->ccomplete = window->ccomplete ? window->ccomplete * 2 : 1;
+            window->complete = xrealloc(window->complete, window->ccomplete * sizeof *window->complete);
+        }
+        window->complete[window->ncomplete++] = file;
+    }
+    uint64_t resident = table_resident_bytes() + window->croots * sizeof *window->roots
+        + window->events.cap * sizeof *window->events.e + window->ccomplete * sizeof *window->complete;
+    return resident >= window->budget ? stream_window_flush(window) : 0;
+}
 typedef struct {
     const char *conninfo; int threads, show, loading; File *file; Fold *fold; LoadStats *stats;
-    uint64_t *events, windows; double database_seconds, *source_seconds;
+    uint64_t *events, windows; double database_seconds, *source_seconds; StreamWindow *window;
 } StreamLoad;
 static int stream_record_batch(void *context, const Ref *things, size_t n, const Ref *metadata, size_t nm, const Events *events){
     StreamLoad *stream = context; File *file = stream->file;
@@ -273,14 +332,13 @@ static int stream_record_batch(void *context, const Ref *things, size_t n, const
     *stream->events += events->n;
     double begin = now(); int result = 0;
     if (stream->loading) {
-        fold_events(stream->fold, file, 1);
-        result = load(stream->conninfo, stream->threads, file, 1, stream->stats);
+        result = stream_window_add(stream->window, file);
     }
     double elapsed = now() - begin; stream->database_seconds += elapsed;
     if (stream->source_seconds) *stream->source_seconds += elapsed;
     file->ev = previous; file->said = said; file->nsaid = nsaid; file->csaid = csaid;
     if (!result) {
-        stream->windows++; table_reset();
+        stream->windows++; if (!stream->loading) table_reset();
         progress_file("progress", file);
         if (stream->loading) fprintf(stderr, "\r  %'llu record windows, %'llu entities and %'llu paths persisted   ",
                 (unsigned long long)stream->windows, (unsigned long long)stream->stats->ent_rows, (unsigned long long)stream->stats->phy_rows);
@@ -291,7 +349,7 @@ static int stream_record_batch(void *context, const Ref *things, size_t n, const
 }
 typedef struct {
     const char *conninfo; int threads, show, loading; Fold *fold; LoadStats *stats;
-    uint64_t *events; double database_seconds;
+    uint64_t *events; double database_seconds; StreamWindow *window;
 } SourceCompletion;
 static int source_file_ready(void *context, File *file){
     SourceCompletion *source = context; double start = now();
@@ -305,12 +363,11 @@ static int source_file_ready(void *context, File *file){
         *source->events += file->ev.n;
         if (source->show) show_record_events(file);
         if (source->loading) {
-            fold_events(source->fold, file, 1);
-            if (load(source->conninfo, source->threads, file, 1, source->stats)) return 1;
+            if (stream_window_add(source->window, file)) return 1;
         }
     }
     if (source->loading && !streamed) source->database_seconds += now() - start;
-    progress_file("file-composed", file);
+    if (!source->loading) progress_file("file-composed", file);
     if (!file->partial && getenv("LAPLACE_TRUNKS")) { char id[33]; id_text(&file->trunk.id, id); fprintf(stderr, "  trunk %s  %s\n", id, file->path); }
     return 0;
 }
@@ -758,10 +815,18 @@ int cmd_ingest(int argc, char **argv){
     uint64_t batch = (uint64_t)(getenv("LAPLACE_BATCH_MB") ? atoll(getenv("LAPLACE_BATCH_MB")) : 1024) << 20;
     uint64_t bytes = 0, nev = 0; int done = 0, exact = 0, mism = 0, batches = 0; double t_dec = 0, t_rec = 0; LoadStats st = { 0 };
     Fold *fold = fold_new();                                                  /* cumulative evidence, updated in PostgreSQL as each batch flows */
+    uint64_t working_bytes = batch;
+    const char *working_setting = getenv("LAPLACE_WORKING_SET_BYTES");
+    if (working_setting && *working_setting) {
+        char *end; errno=0; unsigned long long value=strtoull(working_setting,&end,10);
+        if (errno || *end || *working_setting=='-' || !value) { fputs("LAPLACE_WORKING_SET_BYTES must be a positive byte budget\n",stderr); return 2; }
+        working_bytes=(uint64_t)value;
+    }
+    StreamWindow window = {.conninfo=conninfo, .threads=threads, .fold=fold, .stats=&st, .budget=working_bytes};
     StreamLoad *streams = calloc((size_t)nfiles, sizeof *streams);
     if (nfiles && !streams) { perror("source stream loaders"); return 1; }
     SourceCompletion completion = {.conninfo=conninfo, .threads=threads, .show=show_claims, .loading=do_load,
-        .fold=fold, .stats=&st, .events=&nev};
+        .fold=fold, .stats=&st, .events=&nev, .window=&window};
     /* Inspection has no persisted backing for projected key products. Only
      * sources without declarations or references can release each window;
      * entity dumps also need their complete requested graph. */
@@ -780,6 +845,9 @@ int cmd_ingest(int argc, char **argv){
     for (int a0 = 0; a0 < nfiles; ) {
         int b0 = a0; uint64_t sum = 0;
         int streaming = (do_load || preview_streaming) && !files[a0].known && !files[a0].skipped && recipe_record_streamable(files[a0].recipe);
+        /* Non-streaming providers retain their existing batch path. Drain any
+         * earlier stream before that path loads or resets the shared table. */
+        if (!streaming && do_load && stream_window_flush(&window)) return 1;
         if (streaming) {
             b0 = a0 + 1;
             sum = getenv("LAPLACE_RECORD_WINDOW_BYTES") ? strtoull(getenv("LAPLACE_RECORD_WINDOW_BYTES"), NULL, 10) : (UINT64_C(8) << 20);
@@ -789,7 +857,7 @@ int cmd_ingest(int argc, char **argv){
         double td = now();
         StreamLoad *stream = &streams[a0];
         *stream = (StreamLoad){.conninfo=conninfo, .threads=threads, .show=show_claims, .loading=do_load, .file=&files[a0],
-            .fold=fold, .stats=&st, .events=&nev, .source_seconds=&completion.database_seconds};
+            .fold=fold, .stats=&st, .events=&nev, .source_seconds=&completion.database_seconds, .window=&window};
         if (streaming) {
             File *file = &files[a0]; file->emit = stream_record_batch; file->emit_context = stream;
             progress_file("file-start", file);
@@ -850,11 +918,15 @@ int cmd_ingest(int argc, char **argv){
         for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
         if (entities) show_entities(conninfo, asking);
         if (do_load) {
-            ingest_known(conninfo, files + a0, b0 - a0);
-            fold_events(fold, files + a0, b0 - a0);
-            if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1;
+            if (streaming) {
+                if (stream_window_add(&window, &files[a0])) return 1;
+            } else {
+                ingest_known(conninfo, files + a0, b0 - a0);
+                fold_events(fold, files + a0, b0 - a0);
+                if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1;
+            }
         }
-        for (int i = a0; i < b0; i++) progress_file("file-composed", &files[i]);
+        if (!do_load || !streaming) for (int i = a0; i < b0; i++) progress_file("file-composed", &files[i]);
         progress_file("progress", &files[a0]);
         for (int i = a0; i < b0; i++) if (files[i].partial) { free(files[i].ev.e); files[i].ev = (Events){0}; }
         td = now(); double database_before = completion.database_seconds;
@@ -865,13 +937,17 @@ int cmd_ingest(int argc, char **argv){
             for (int i = a0; i < b0; i++) { free(files[i].ev.e); memset(&files[i].ev, 0, sizeof files[i].ev); }
             /* No-load realization has no persisted backing for native key
              * products. Keep its source DAG until all continuations finish. */
-            if (do_load) table_reset();
+            if (do_load && !streaming) { if (stream_window_flush(&window)) return 1; table_reset(); }
         }
         a0 = b0;
     }
     double source_finish = now(), database_before = completion.database_seconds;
     if (say_source_end(source_file_ready, &completion)) return 1;
     t_dec += now() - source_finish - (completion.database_seconds - database_before);
+    if (do_load && stream_window_flush(&window)) return 1;
+    if (do_load) printf("\n  streaming persistence: %'llu shared working windows, resident budget %'llu bytes\n",
+        (unsigned long long)window.flushes, (unsigned long long)window.budget);
+    free(window.roots); free(window.events.e); free(window.complete);
     free(streams);
     #undef SHOW
     #undef WHOLE

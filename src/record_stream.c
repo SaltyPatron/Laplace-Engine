@@ -173,6 +173,7 @@ static void journal_products(DeferredRecords *records, DeferredJob *job, const R
     job->products = journal_seek(records->products, 0, SEEK_END); job->ready = 1;
     uint64_t counts[2] = {n, nm}; journal_write(records->products, counts, sizeof counts);
     journal_write(records->products, things, n * sizeof(Ref)); journal_write(records->products, metadata, nm * sizeof(Ref));
+    table_annotate_roots(things,n); table_annotate_roots(metadata,nm);
     for (size_t i = 0; i < n; i++) table_pin(&things[i].id);
     for (size_t i = 0; i < nm; i++) table_pin(&metadata[i].id);
 }
