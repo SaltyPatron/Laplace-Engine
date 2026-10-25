@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static size_t dag_node(Dag *d, const lp_id *id, int *fresh_out){
+static size_t dag_vertex(Dag *d, const lp_id *id, int *fresh_out){
     if (!d->m) d->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(d->m, id, &fresh);
     if (fresh) { lp_reserve((void **)&d->n, &d->cn, d->nn + 1, sizeof(WNode)); memset(&d->n[d->nn], 0, sizeof(WNode)); d->n[d->nn].id = *id; d->n[d->nn].in_head = NONE; d->nn++; }
     if (fresh_out) *fresh_out = fresh; return i;
@@ -46,7 +46,7 @@ void tally_under(const Dag *d, const double *cnt, lp_idmap *per_claim, lp_idmap 
  * standing as its own record, counts: the claim said, not the same content standing elsewhere. Above it, whatever
  * holds what was reached, but a file's metadata. */
 int walk_up(Dag *d, const lp_id *claims, size_t n, uint64_t *rows){
-    lp_idmap *front = lp_idmap_new(); for (size_t i = 0; i < n; i++) { lp_idmap_put(front, &claims[i], NULL); dag_node(d, &claims[i], NULL); }
+    lp_idmap *front = lp_idmap_new(); for (size_t i = 0; i < n; i++) { lp_idmap_put(front, &claims[i], NULL); dag_vertex(d, &claims[i], NULL); }
     int level = 0; lp_vec(lp_vertex) vx = { 0 };
     while (lp_idmap_count(front) && level < 64) {
         int nh = 0; Hold *h = holds_any(lp_idmap_keys(front), (int)lp_idmap_count(front), &nh); *rows += (uint64_t)nh;
@@ -58,7 +58,7 @@ int walk_up(Dag *d, const lp_id *claims, size_t n, uint64_t *rows){
                 uint32_t sd = vx.v[v].said;
                 if (level == 0 && sd != LP_SAID_CLAIM && sd != LP_SAID_RECORD) continue;
                 if (level > 0 && sd == LP_SAID_METADATA) continue;
-                if (pi == NONE) { pi = dag_node(d, &h[j].entity, &fresh); d->n[pi].metadata = nv && vx.v[0].said == LP_SAID_METADATA; }
+                if (pi == NONE) { pi = dag_vertex(d, &h[j].entity, &fresh); d->n[pi].metadata = nv && vx.v[0].said == LP_SAID_METADATA; }
                 Edge *e = dag_edge(d, pi, (size_t)lp_idmap_find(d->m, &vx.v[v].id), &vx.v[v]);
                 if (level == 0) { e->claim = 1; e->rec = sd == LP_SAID_RECORD; if (v && vx.v[v - 1].said == LP_SAID_VOICE) { e->voiced = 1; e->voice = vx.v[v - 1].id; } } }
             if (pi != NONE && fresh) lp_idmap_put(next, &h[j].entity, NULL);
@@ -129,12 +129,12 @@ Attested *attested(PGconn *pg, const lp_id *claims, int n, int *nout, uint64_t *
 enum { C_TOP = 1, C_SRC, C_FILE, C_BLOCK, C_REC, C_LEAF };
 typedef lp_vec(lp_id) IdVec;
 static void child(Dag *d, size_t pi, const lp_vertex *v, uint8_t cls, IdVec *next){
-    int fresh; size_t ci = dag_node(d, &v->id, &fresh); Edge *e = dag_edge(d, pi, ci, v);
+    int fresh; size_t ci = dag_vertex(d, &v->id, &fresh); Edge *e = dag_edge(d, pi, ci, v);
     if (d->n[ci].alone && v->said == LP_SAID_RECORD) { e->claim = 1; e->rec = 1; }     /* a claim found standing alone already: this is another of its records */
     if (fresh || (cls == C_REC && d->n[ci].cls == C_LEAF)) { d->n[ci].cls = cls; if (cls != C_LEAF) lp_push(next, v->id); }
 }
 int walk_down(PGconn *pg, const lp_id *top, Dag *d, uint64_t *rows){
-    size_t ti = dag_node(d, top, NULL); d->n[ti].cls = C_TOP;
+    size_t ti = dag_vertex(d, top, NULL); d->n[ti].cls = C_TOP;
     IdVec front = { 0 }; lp_push(&front, *top); int level = 0; lp_vec(lp_vertex) vx = { 0 };
     while (front.n && level < 64) {
         IdVec next = { 0 };
@@ -152,7 +152,7 @@ int walk_down(PGconn *pg, const lp_id *top, Dag *d, uint64_t *rows){
                     int has = 0; for (size_t v = 0; v < nv && !has; v++) has = vx.v[v].said == LP_SAID_CLAIM;
                     if (!has) { d->n[ei].alone = 1; for (size_t k2 = d->n[ei].in_head; k2 != NONE; k2 = d->e[k2].in_next) if (d->e[k2].said == LP_SAID_RECORD) { d->e[k2].claim = 1; d->e[k2].rec = 1; } continue; }   /* a claim said alone: its own record where it stands as one (where a record says it, that record's vertex counts it) */
                     for (size_t v = 0; v < nv; v++) { if (vx.v[v].said != LP_SAID_CLAIM) continue;
-                        int fresh; size_t ci = dag_node(d, &vx.v[v].id, &fresh); if (fresh) d->n[ci].cls = C_LEAF;
+                        int fresh; size_t ci = dag_vertex(d, &vx.v[v].id, &fresh); if (fresh) d->n[ci].cls = C_LEAF;
                         Edge *e = dag_edge(d, ei, ci, &vx.v[v]); e->claim = 1;
                         if (v && vx.v[v - 1].said == LP_SAID_VOICE) { e->voiced = 1; e->voice = vx.v[v - 1].id; } }
                     continue; }

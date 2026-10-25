@@ -28,19 +28,20 @@ printf 'def kept_unchanged():\n    return 0\n' > "$tree/b.py"
 printf 'def removed_since():\n    return 9\n' > "$tree/gone.py"
 ingest first
 [ "$(held alpha_version_one)" = yes ] && [ "$(held removed_since)" = yes ] || fail "the first reading is not held"
-grep -q "the source's earlier readings *none" "$scratch/first.log" || fail "a first reading superseded something: $(grep -A3 'earlier readings' "$scratch/first.log")"
+witness_id(){ "${PSQL:-psql}" -XwAt -v ON_ERROR_STOP=1 -d "$conn" -c 'SELECT id::text FROM public.witness ORDER BY id'; }
+first=$(witness_id)
+[[ "$first" =~ ^[0-9a-f]{32}$ ]] || fail "first reading did not register exactly one witness: $first"
 
 printf 'def beta_version_two():\n    return 2\n' > "$tree/a.py"; rm "$tree/gone.py"
 ingest second
-grep -q "superseded" "$scratch/second.log" || fail "the second reading superseded nothing: $(tail -30 "$scratch/second.log")"
+second=$(witness_id)
+[[ "$second" =~ ^[0-9a-f]{32}$ && "$second" != "$first" ]] || fail "changed reading did not replace the earlier witness: $second"
 [ "$(held beta_version_two)" = yes ] || fail "the new content is not held"
 [ "$(held kept_unchanged)" = yes ] || fail "a file both readings hold was taken out"
 [ "$(held alpha_version_one)" = no ] || fail "a changed file's former content is still held"
 [ "$(held removed_since)" = no ] || fail "a removed file is still held"
-n=$("$L" sources -d "$conn" 2>&1 | grep -c 'Supersede Tree' || true)
-[ "$n" -le 1 ] || fail "the source has $n witnesses"
 
 ingest third
-grep -q "the source's earlier readings *none" "$scratch/third.log" || fail "an unchanged reading superseded something"
+[ "$(witness_id)" = "$second" ] || fail "an unchanged reading changed the registered witness"
 [ "$(held beta_version_two)" = yes ] && [ "$(held kept_unchanged)" = yes ] || fail "an unchanged reading took out what it holds"
 echo "supersede: a changed file's former content and a removed file go with the earlier reading; a shared file and an unchanged reading stay"

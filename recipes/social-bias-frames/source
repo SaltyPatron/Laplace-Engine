@@ -1,4 +1,5 @@
 name social-bias-frames
+aliases sbf
 # The README: "the data splits from v2 of Social Bias Frames / Social Bias Inference Corpus": posts, and what MTurk
 # workers said of each; and the same aggregated per post.
 witness Social Bias Frames
