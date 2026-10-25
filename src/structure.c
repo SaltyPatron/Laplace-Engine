@@ -1576,7 +1576,10 @@ static int records_open(SRecords *records, const Layout *layout, const uint8_t *
     TSParser *parser = lp_tls_parser(layout->g.grammar_id);
     if (!parser || !ts_parser_set_included_ranges(parser, NULL, 0)) return 0;
     size_t prefix = length; TSTree *tree;
-    int framing = tail && layout->g.scope_count;
+    /* Top-level AST records need the same grammar-boundary recovery as scope
+     * events. Byte-halving a large declaration can repeatedly admit only its
+     * tiny leading comment and reparse the remaining megabytes. */
+    int framing = tail && (layout->g.scope_count || layout->g.record_children);
     for (;;) {
         ts_parser_reset(parser);
         GInput input = {.src=source, .length=(uint32_t)prefix}; input.range.end_byte = (uint32_t)prefix;
@@ -1897,7 +1900,11 @@ static int cursor_injection(GW *worker, TSNode payload, const Layout *inner, int
     if (action & S_VISIT_SKIP) return close_field(visit, sink, &field);
     if (input.range.start_byte != input.range.end_byte || (raw & 8)) {
         TSTree *tree = parse_input_tree(inner, &input);
-        if (!tree) { fputs("injected field does not parse completely\n", stderr); return 0; }
+        if (!tree) {
+            fprintf(stderr, "injected field %.*s at bytes %u..%u does not parse completely\n",
+                    (int)field.name_length, field.name, input.range.start_byte, input.range.end_byte);
+            return 0;
+        }
         int valid = cursor_project(inner, ts_tree_root_node(tree), &input, visit, sink,
                                    field.name, field.name_length, 1, 1);
         ts_tree_delete(tree);

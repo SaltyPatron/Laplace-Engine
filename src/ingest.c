@@ -792,6 +792,7 @@ int cmd_ingest(int argc, char **argv){
 
     /* Unchanged published files are found from stat metadata before opening
      * their contents. Novel files are subsequently pruned trunk to leaf. */
+    fflush(stdout); /* Keep catalog/coverage output before any worker's failure in redirected logs. */
     int nknown = 0; ctx_open(threads);
     /* Reading a reference depends on the source's provider estate, not only
      * this file's bytes. Stat/reader identities suffice to invalidate that
@@ -841,7 +842,7 @@ int cmd_ingest(int argc, char **argv){
     uint64_t *size = calloc((size_t)nfiles, 8);
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
         size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
-    if (do_load && progress_open(files, nfiles, &st)) return 1;
+    if (progress_open(files, nfiles, &st)) return 1;
     #define SHOW(F) do { if (show_claims) show_record_events(F); } while (0)
     /* What was read of a file is kept for its content; a file read to its end gets its trunk. */
     #define WHOLE(F) do { File *f_ = (F); if (!f_->partial) file_close(f_); } while (0)
@@ -885,7 +886,7 @@ int cmd_ingest(int argc, char **argv){
                 }
                 if (files[i].known || files[i].skipped) continue;
                 progress_file("file-start", &files[i]);
-                decompose_file(CTX[0], &files[i]); bytes += files[i].bytes; done++;
+                decompose_file(CTX[0], &files[i]); progress_file("file-composed", &files[i]); bytes += files[i].bytes; done++;
             }
             t_dec += now() - td;
         } else {
@@ -901,6 +902,7 @@ int cmd_ingest(int argc, char **argv){
             {
                 progress_file("file-start", &files[i]);
                 decompose_file(CTX[omp_get_thread_num()], &files[i]);
+                progress_file("file-composed", &files[i]);
                 #pragma omp critical
                 {
                     bytes += files[i].bytes; done++;

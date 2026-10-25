@@ -1,0 +1,3 @@
+# PL/pgSQL SQL statements assign INTO targets; plain SQL creates a table there.
+grammar plpgsql_sql
+include sql_nodes

@@ -56,6 +56,160 @@ for spec in 'c:function_definition:doubled' 'cpp:function_definition:tripled' 'c
 done
 echo 'workspace-code: typed declarations and semantic identifiers retained across C, C++, C#, Python, TypeScript and SQL'
 
+# Raw C packaging includes declaration macros and conditional fragments which
+# only become complete C after preprocessing. Preserve both branches and every
+# comment/continuation byte while still rejecting malformed ordinary C.
+cat > "$w/macros.c" <<'C'
+#define DECLARE_SCALAR(name, value) \
+    /* the comment belongs to this macro */ \
+    int name(void) { return value; }
+DECLARE_SCALAR(first, 1) DECLARE_SCALAR(second, 2)
+PG_MODULE_MAGIC_EXT(.name = "workspace", .version = "1");
+static const float coefficients[] = {
+#define SCALE(x) 1.0f/x
+  SCALE(3), SCALE(7)
+#undef SCALE
+};
+#if __has_include(<stdint.h>)
+#include <stdint.h>
+#endif
+#if defined(ADDRESS_SANITIZER)
+__attribute__((no_sanitize("signed-integer-overflow")))
+#endif
+LP_API int Loop(void) {
+    int n = 0;
+    ADVANCE_MAP('x', 1, 'y', 2,);
+    STBI__IDCT_1D(n, n, n, n, n, n, n, n)
+    TABLE_EACH(node) n++;
+    TABLE_EACH(node) { n += node->live; }
+    switch (n) {
+      case 0: break;
+#ifdef EPERM
+      case EPERM: return 1;
+#endif
+      default: break;
+    }
+    return n;
+}
+static
+#ifdef STBI_THREAD_LOCAL
+STBI_THREAD_LOCAL
+#endif
+const char *thread_message;
+int Fallback(int value) {
+#if defined(ACCELERATED)
+    if (value) { return value; } else
+#endif
+    { return 0; }
+}
+int Conditional(int value) {
+#if defined(POSITIVE)
+    if (value > 0)
+#else
+    if (value < 0)
+#endif
+    { return value; }
+    return 0;
+}
+int Assembly(int value) {
+    int result;
+    __asm__ __volatile__ (
+#if defined(WIDE)
+        "wide" : [out]"=r"(result) : [in]"r"(value)
+#else
+        "narrow" : [out]"=r"(result) : [in]"r"(value)
+#endif
+    );
+    return result;
+}
+int AssemblyCommon(int value) {
+    int result;
+    __asm__ __volatile__ (
+#if defined(WIDE)
+        "wide"
+#else
+        "narrow"
+#endif
+        : "=r"(result) : "r"(value)
+    );
+    return result;
+}
+int AssemblyMS(void) {
+    int result;
+    __asm {
+      mov eax, 1
+      cpuid
+      mov result, edx
+    }
+    if (result) __asm int 3;
+    return result;
+}
+static int CALLBACK Callback(void *context) { return context != 0; }
+int Varargs(va_list values) {
+    return (int)va_arg(values, long long) + va_arg(values, const char *)[0];
+}
+C
+for ending in lf crlf; do
+  if [ "$ending" = crlf ]; then awk '{printf "%s\r\n", $0}' "$w/macros.c" > "$w/macros-crlf.c"; input=$w/macros-crlf.c; else input=$w/macros.c; fi
+  out=$("$L" ingest --claims-tsv -j 4 -s workspace-code "$input" 2> "$scratch/macros-$ending.log" | tr -d '\r') || fail "C preprocessor $ending: $(cat "$scratch/macros-$ending.log")"
+  for name in Loop Fallback Conditional Assembly AssemblyCommon AssemblyMS Callback Varargs; do
+    grep -Fq $'\tdeclared identifier\t'"$name" <<< "$out" || fail "C preprocessor lost $name"
+  done
+  grep -Fq $'\treferenced identifier\teax' <<< "$out" || fail 'MS assembly operands were not inspected'
+  grep -q 'mismatched 0' <<< "$out" || fail 'C preprocessor packaging changed'
+  grep -q 'unresolved obligations: 0 ' <<< "$out" || fail 'C preprocessor fields unresolved'
+done
+printf 'int Broken(int x) { if (x) return 1; else }\n' > "$w/broken.c"
+if "$L" ingest --no-load -s workspace-code "$w/broken.c" > "$scratch/broken-c.log" 2>&1; then fail 'ordinary dangling C else was accepted'; fi
+printf 'int Broken(void) { return 1 }\n' > "$w/broken.c"
+if "$L" tree -g c_laplace -n 1000 "$w/broken.c" > "$scratch/broken-tree.log" 2>&1; then fail 'tree inspection reported recovered C as valid'; fi
+grep -q '(MISSING ;)' "$scratch/broken-tree.log" || fail 'tree inspection hid missing punctuation'
+echo 'workspace-code: C macro declarations, conditional fragments and assembly retained with LF and CRLF; malformed C rejected'
+
+cat > "$w/defaults.cpp" <<'CPP'
+#include <vector>
+#include <array>
+int Braced(std::vector<int> values = {}, std::array<long, 2> pair = {1, 2}) {
+    return values.empty() ? (int)pair[0] : values[0];
+}
+CPP
+out=$("$L" ingest --claims-tsv -j 4 -s workspace-code "$w/defaults.cpp" 2> "$scratch/defaults.log" | tr -d '\r') || fail "C++ braced defaults: $(cat "$scratch/defaults.log")"
+grep -Fq $'\tdeclared identifier\tBraced' <<< "$out" || fail 'C++ braced defaults lost the declaration'
+grep -Fq 'values = {}' <<< "$out" || fail 'C++ empty braced default was lost'
+grep -Fq 'pair = {1, 2}' <<< "$out" || fail 'C++ populated braced default was lost'
+grep -q 'mismatched 0' <<< "$out" || fail 'C++ braced default packaging changed'
+echo 'workspace-code: C++ braced default arguments retained through the shared C packaging profile'
+
+# One declaration may exceed the working window. Framing must keep its grammar
+# boundary and the following declaration, with the same products at either size.
+{
+  printf '// generated declaration\nstatic const unsigned table[] = {'
+  for ((i=0;i<512;i++)); do printf '%d,' "$i"; done
+  printf '};\nint Following(void) { return table[1]; }\n'
+} > "$w/window.c"
+for window in 97 8388608; do
+  out=$(LAPLACE_RECORD_WINDOW_BYTES=$window "$L" ingest --claims-tsv -j 4 -s workspace-code "$w/window.c" 2> "$scratch/window-$window.log" | tr -d '\r') || fail "C record window $window: $(cat "$scratch/window-$window.log")"
+  grep -Fq $'\tdeclared identifier\tFollowing' <<< "$out" || fail 'C record window lost the following function'
+  grep -q 'mismatched 0' <<< "$out" || fail 'C record window changed packaging'
+  grep '^claim' <<< "$out" | LC_ALL=C sort > "$scratch/window-$window.claims"
+done
+cmp "$scratch/window-97.claims" "$scratch/window-8388608.claims" || fail 'C claims changed with record window size'
+echo 'workspace-code: oversized declarations retain exact packaging and identical claims across record windows'
+
+# The workspace uses import types inside generic result objects and arrays.
+cat > "$w/imports.ts" <<'TS'
+export function ImportedTypes() {
+  return apiGet<{ rows: import('./types').SourceRosterRow[]; value: import('./types').Box<number> }>('/rows');
+}
+TS
+out=$("$L" ingest --claims-tsv -j 4 -s workspace-code "$w/imports.ts" 2> "$scratch/imports.log" | tr -d '\r') || fail "TypeScript import types: $(cat "$scratch/imports.log")"
+grep -Fq $'\tdeclared identifier\tImportedTypes' <<< "$out" || fail 'TypeScript import types lost the declaration'
+grep -Fq "import('./types').SourceRosterRow[]" <<< "$out" || fail 'TypeScript array import type was lost'
+grep -q 'mismatched 0' <<< "$out" || fail 'TypeScript import type packaging changed'
+printf "type Broken = import('./types').;\n" > "$w/broken.ts"
+if "$L" ingest --no-load -s workspace-code "$w/broken.ts" > "$scratch/broken-ts.log" 2>&1; then fail 'malformed TypeScript import type was accepted'; fi
+echo 'workspace-code: TypeScript imported array/generic types retained; malformed import type rejected'
+
 # Valid unsafe code in the installed workspace uses a cast or pointer arithmetic
 # as the operand of indirection. Neither form may fall back to unparsed text.
 cat > "$w/unsafe.cs" <<'CS'
@@ -70,11 +224,13 @@ class PointerProducts {
     }
     public static unsafe int Next(int* p) { return *p + 1; }
     public static unsafe int Contextual(int[] values) {
-        int required, async, partial;
+        int required, async, partial, field;
         fixed (int* p = values) required = ReadValue(p, 1);
         async = required;
         partial = async;
-        return partial;
+        field = partial;
+        int[] selected = [field, partial];
+        return selected[0];
     }
     public required int Count { get; init; }
     public async System.Threading.Tasks.Task Load() { await System.Threading.Tasks.Task.Yield(); }
@@ -87,7 +243,7 @@ for workers in 1 4; do
   done
   grep -Fq 'return *(int*)p' <<< "$out" || fail "C# cast indirection was lost: $out"
   grep -Fq '*(p + 1) = value' <<< "$out" || fail "C# arithmetic indirection was lost: $out"
-  for name in required async partial; do
+  for name in required async partial field; do
     grep -Fq $'\treferenced identifier\t'"$name" <<< "$out" || fail "C# contextual identifier $name was lost: $out"
   done
   grep -q 'unresolved obligations: 0 ' <<< "$out" || fail "C# unsafe fields unresolved: $out"
@@ -116,9 +272,16 @@ CREATE FUNCTION escaped_body(value integer) RETURNS integer
 AS E'SELECT \x64ependency(value) + \u0032' LANGUAGE sql;
 CREATE FUNCTION procedural_body(value integer) RETURNS integer
 LANGUAGE plpgsql SET search_path = public AS $body$
-DECLARE result integer;
+DECLARE result integer; other integer; call text;
 BEGIN
   SELECT dependency(value) INTO result;
+  SELECT dependency(value), value INTO STRICT result, other FROM widgets;
+  INSERT INTO widgets(id) VALUES (value) RETURNING id INTO result;
+  call := 'dependency';
+  IF call LIKE 'dep\_%' ESCAPE '\' THEN
+    RAISE NOTICE 'first line '
+      'second line';
+  END IF;
   IF result IS NULL THEN RETURN 0; END IF;
   RETURN result + dependency(value);
 END
@@ -150,3 +313,13 @@ for body in 'SELECT FROM' 'BEGIN RETURN +; END' ''; do
   grep -q 'does not parse completely' "$scratch/broken-sql.log" || fail 'malformed SQL failed for an unrelated reason'
 done
 echo 'workspace-code: SQL/PLpgSQL bodies inspected, literals decoded, worker parity held, malformed and empty bodies rejected'
+
+# The outer psql/template grammar admits the function annotations declared in
+# Laplace's sqldefines.h.in, without changing plain SQL body admission.
+for attribute in LAPLACE_IMMUTABLE_STRICT LAPLACE_IMMUTABLE LAPLACE_STABLE_STRICT LAPLACE_VOLATILE_STRICT; do
+  printf 'CREATE FUNCTION templated(value integer) RETURNS integer LANGUAGE sql %s AS $$SELECT value$$;\n' "$attribute" > "$w/template.sql"
+  out=$("$L" ingest --claims-tsv -j 1 -s workspace-code "$w/template.sql" 2> "$scratch/template.log" | tr -d '\r') || fail "SQL template $attribute: $(cat "$scratch/template.log")"
+  grep -Fq $'\tdeclared identifier\ttemplated' <<< "$out" || fail "SQL template lost its declaration: $attribute"
+  grep -q 'mismatched 0' <<< "$out" || fail "SQL template packaging changed: $attribute"
+done
+echo 'workspace-code: declared SQL template annotations retained and their SQL bodies inspected'

@@ -15,3 +15,38 @@
 @@ -579 +579 @@
 -    _sql_statement_expr: $ => alias($._sql_statement, $.sql_expression),
 +    _sql_statement_expr: $ => alias($._sql_statement, $.sql_statement),
+@@ -838 +838 @@
+-    string_literal: _ => token(/'([^']|'')*'/),
++    string_literal: _ => token(/'([^']|'')*'(([ \t\f\v]|--[^\n\r]*)*[\n\r]([ \t\n\r\f\v]+|--[^\n\r]*[\n\r])*'([^']|'')*')*/),
+--- a/plpgsql/src/scanner.c
++++ b/plpgsql/src/scanner.c
+@@ -700 +700,28 @@
+-        if (is_plpgsql_statement_start(word)) return false;
++        if (is_plpgsql_statement_start(word)) {
++          /* PL/pgSQL unreserved keywords can name variables. Keep the target
++           * in this token when assignment or field/subscript syntax follows;
++           * otherwise let the grammar read the statement keyword. */
++          if (!(strcmp(word, "assert") == 0 ||
++             strcmp(word, "call") == 0 ||
++             strcmp(word, "close") == 0 ||
++             strcmp(word, "commit") == 0 ||
++             strcmp(word, "continue") == 0 ||
++             strcmp(word, "do") == 0 ||
++             strcmp(word, "elsif") == 0 ||
++             strcmp(word, "exception") == 0 ||
++             strcmp(word, "execute") == 0 ||
++             strcmp(word, "exit") == 0 ||
++             strcmp(word, "fetch") == 0 ||
++             strcmp(word, "get") == 0 ||
++             strcmp(word, "move") == 0 ||
++             strcmp(word, "open") == 0 ||
++             strcmp(word, "perform") == 0 ||
++             strcmp(word, "raise") == 0 ||
++             strcmp(word, "return") == 0 ||
++             strcmp(word, "rollback") == 0)) return false;
++          while (lexer->lookahead == ' ' || lexer->lookahead == '\t' ||
++                 lexer->lookahead == '\r' || lexer->lookahead == '\n')
++            lexer->advance(lexer, false);
++          if (lexer->lookahead != ':' && lexer->lookahead != '=' &&
++              lexer->lookahead != '.' && lexer->lookahead != '[') return false;
++        }
