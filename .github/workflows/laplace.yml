@@ -141,6 +141,7 @@ jobs:
           bash Laplace-Engine/tests/ingest-progress.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/stream-working-set.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/presence-frontier.sh "$RUNNER_TEMP/engine/laplace" "$RUNNER_TEMP/engine/presence-frontier"
+          bash Laplace-Engine/tests/framenet-differences.sh "$RUNNER_TEMP/engine/laplace"
       - name: Unicode ranges retain non-scalar addresses without admitting atoms
         run: |
           . Laplace-Operations/laplace.env

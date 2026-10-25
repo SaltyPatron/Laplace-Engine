@@ -1,0 +1,6 @@
+name framenet-differences
+# Release 1.7's DifferencesR1.6-R1.7.xml is a literal comparison report, not
+# well-formed XML: its FrameNet_Diff root writes old=r1.6 new=r1.7 unquoted.
+# Preserve the publisher's report through Native text composition as written.
+match DifferencesR1.6-R1.7.xml
+grammar text
