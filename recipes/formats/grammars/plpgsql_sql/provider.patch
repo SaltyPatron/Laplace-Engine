@@ -1,0 +1,70 @@
+--- a/postgres/grammar.js
++++ b/postgres/grammar.js
+@@ -12 +12 @@
+-  name: 'postgres',
++  name: 'plpgsql_sql',
+@@ -35,0 +36,2 @@
++    [$.a_expr],
++    [$.into_clause, $.unreserved_keyword],
+@@ -617,6 +619,6 @@
+-        prec.left(20, prec.dynamic(20, seq($.kw_create, optional($.OptTemp), $.kw_table, $.qualified_name, '(', optional($.OptTableElementList), ')', optional($.OptInherit), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
+-        prec.right(5, prec.dynamic(5, seq($.kw_create, optional($.OptTemp), $.kw_table, $.kw_if, $.kw_not, $.kw_exists, $.qualified_name, '(', optional($.OptTableElementList), ')', optional($.OptInherit), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
+-        seq($.kw_create, optional($.OptTemp), $.kw_table, $.qualified_name, $.kw_of, $.any_name, optional($.OptTypedTableElementList), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)),
+-        prec.right(5, prec.dynamic(5, seq($.kw_create, optional($.OptTemp), $.kw_table, $.kw_if, $.kw_not, $.kw_exists, $.qualified_name, $.kw_of, $.any_name, optional($.OptTypedTableElementList), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
+-        prec.left(11, prec.dynamic(11, seq($.kw_create, optional($.OptTemp), $.kw_table, $.qualified_name, $.kw_partition, $.kw_of, $.qualified_name, optional($.OptTypedTableElementList), $.PartitionBoundSpec, optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
+-        prec.right(5, prec.dynamic(5, seq($.kw_create, optional($.OptTemp), $.kw_table, $.kw_if, $.kw_not, $.kw_exists, $.qualified_name, $.kw_partition, $.kw_of, $.qualified_name, optional($.OptTypedTableElementList), $.PartitionBoundSpec, optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace))))
++        prec.left(20, prec.dynamic(20, seq($.kw_create, optional($.OptTemp), $.kw_table, field('name', $.qualified_name), '(', optional($.OptTableElementList), ')', optional($.OptInherit), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
++        prec.right(5, prec.dynamic(5, seq($.kw_create, optional($.OptTemp), $.kw_table, $.kw_if, $.kw_not, $.kw_exists, field('name', $.qualified_name), '(', optional($.OptTableElementList), ')', optional($.OptInherit), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
++        seq($.kw_create, optional($.OptTemp), $.kw_table, field('name', $.qualified_name), $.kw_of, $.any_name, optional($.OptTypedTableElementList), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)),
++        prec.right(5, prec.dynamic(5, seq($.kw_create, optional($.OptTemp), $.kw_table, $.kw_if, $.kw_not, $.kw_exists, field('name', $.qualified_name), $.kw_of, $.any_name, optional($.OptTypedTableElementList), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
++        prec.left(11, prec.dynamic(11, seq($.kw_create, optional($.OptTemp), $.kw_table, field('name', $.qualified_name), $.kw_partition, $.kw_of, $.qualified_name, optional($.OptTypedTableElementList), $.PartitionBoundSpec, optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
++        prec.right(5, prec.dynamic(5, seq($.kw_create, optional($.OptTemp), $.kw_table, $.kw_if, $.kw_not, $.kw_exists, field('name', $.qualified_name), $.kw_partition, $.kw_of, $.qualified_name, optional($.OptTypedTableElementList), $.PartitionBoundSpec, optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace))))
+@@ -1599 +1601 @@
+-        seq($.kw_language, $.NonReservedWord_or_Sconst),
++        seq($.kw_language, field('language', $.NonReservedWord_or_Sconst)),
+@@ -1676 +1678 @@
+-        seq($.kw_language, $.NonReservedWord_or_Sconst)
++        seq($.kw_language, field('language', $.NonReservedWord_or_Sconst))
+@@ -2173 +2175 @@
+-    returning_clause: $ => seq($.kw_returning, optional($.returning_with_clause), $.target_list),
++    returning_clause: $ => seq($.kw_returning, optional($.returning_with_clause), $.target_list, optional($.into_clause)),
+@@ -2315 +2317,2 @@
+-    into_clause: $ => seq($.kw_into, $.OptTempTableName),
++    into_clause: $ => seq($.kw_into, optional($.kw_strict), $.plpgsql_into_targets),
++    plpgsql_into_targets: $ => seq($.columnref, repeat(seq(',', $.columnref))),
+@@ -2711 +2714 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_like, $.a_expr, $.kw_escape, $.a_expr))),
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_like, $.a_expr, $.kw_escape, $.a_expr))),
+@@ -2713 +2716 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_not, $.kw_like, $.a_expr, $.kw_escape, $.a_expr))),
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_not, $.kw_like, $.a_expr, $.kw_escape, $.a_expr))),
+@@ -2715 +2718 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_ilike, $.a_expr, $.kw_escape, $.a_expr))),
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_ilike, $.a_expr, $.kw_escape, $.a_expr))),
+@@ -2717 +2720 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_not, $.kw_ilike, $.a_expr, $.kw_escape, $.a_expr))),
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_not, $.kw_ilike, $.a_expr, $.kw_escape, $.a_expr))),
+@@ -2719 +2722 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_similar, $.kw_to, $.a_expr, $.kw_escape, $.a_expr))),
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_similar, $.kw_to, $.a_expr, $.kw_escape, $.a_expr))),
+@@ -2721 +2724 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_not, $.kw_similar, $.kw_to, $.a_expr, $.kw_escape, $.a_expr))),
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_not, $.kw_similar, $.kw_to, $.a_expr, $.kw_escape, $.a_expr))),
+@@ -3066 +3069 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_similar, $.a_expr, $.kw_escape, $.a_expr)))
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_similar, $.a_expr, $.kw_escape, $.a_expr)))
+--- a/postgres/src/scanner.c
++++ b/postgres/src/scanner.c
+@@ -20,3 +20,3 @@
+-void *tree_sitter_postgres_external_scanner_create(void) { return NULL; }
+-void tree_sitter_postgres_external_scanner_destroy(void *payload) { (void)payload; }
+-unsigned tree_sitter_postgres_external_scanner_serialize(void *payload, char *buffer) {
++void *tree_sitter_plpgsql_sql_external_scanner_create(void) { return NULL; }
++void tree_sitter_plpgsql_sql_external_scanner_destroy(void *payload) { (void)payload; }
++unsigned tree_sitter_plpgsql_sql_external_scanner_serialize(void *payload, char *buffer) {
+@@ -25 +25 @@
+-void tree_sitter_postgres_external_scanner_deserialize(void *payload, const char *buffer, unsigned length) {
++void tree_sitter_plpgsql_sql_external_scanner_deserialize(void *payload, const char *buffer, unsigned length) {
+@@ -54 +54 @@
+-bool tree_sitter_postgres_external_scanner_scan(
++bool tree_sitter_plpgsql_sql_external_scanner_scan(

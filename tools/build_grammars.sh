@@ -48,6 +48,7 @@ generator=
 generate() {
   local definition=$1 package generated key=${2:-}
   package=$(dirname "$definition")
+  [[ $(basename "$definition") != grammar.json ]] || package=$(dirname "$package")
   [[ ! -f "$package/src/parser.c" ]] || return 0
   if [[ -z "$generator" ]]; then
     generator=${LAPLACE_TREESITTER_CLI:-$(command -v tree-sitter || true)}

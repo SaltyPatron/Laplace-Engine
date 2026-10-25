@@ -780,9 +780,10 @@ static void tree_print(TSTreeCursor *cur, const uint8_t *src, int depth, long *l
         if (*left <= 0) return;
         TSNode nd = ts_tree_cursor_current_node(cur); const char *field = ts_tree_cursor_current_field_name(cur);
         uint32_t a = ts_node_start_byte(nd), b = ts_node_end_byte(nd);
-        if (ts_node_is_named(nd) || ts_node_child_count(nd)) {
+        if (ts_node_is_named(nd) || ts_node_is_missing(nd) || ts_node_is_error(nd) || ts_node_child_count(nd)) {
             (*left)--; printf("%*s", depth * 2, ""); if (field) printf("%s: ", field);
-            printf("(%s) [%u, %u]", ts_node_type(nd), a, b);
+            printf("(%s%s) [%u, %u]", ts_node_is_missing(nd) ? "MISSING " : "", ts_node_type(nd), a, b);
+            if (ts_node_has_error(nd) && !ts_node_is_error(nd) && !ts_node_is_missing(nd)) printf(" contains errors");
             if (!ts_node_child_count(nd)) { printf("  "); fwrite(src + a, 1, b - a > 60 ? 60 : b - a, stdout); if (b - a > 60) printf("\xE2\x80\xA6"); }
             putchar('\n');
         }
@@ -802,9 +803,10 @@ int cmd_tree(int argc, char **argv){
     size_t n; uint8_t *src = read_all(argv[a], &n); if (!src) { perror(argv[a]); return 1; }
     TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, lang);
     TSTree *t = ts_parser_parse_string(ps, NULL, (const char *)src, (uint32_t)n);
-    TSTreeCursor cur = ts_tree_cursor_new(ts_tree_root_node(t));
+    TSNode root = ts_tree_root_node(t); int malformed = ts_node_has_error(root);
+    TSTreeCursor cur = ts_tree_cursor_new(root);
     tree_print(&cur, src, 0, &nodes);
     if (nodes <= 0) printf("\xE2\x80\xA6 (more: -n)\n");
     ts_tree_cursor_delete(&cur); ts_tree_delete(t); ts_parser_delete(ps); free(src);
-    return 0;
+    return malformed ? 1 : 0;
 }

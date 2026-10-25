@@ -132,6 +132,25 @@ static Ref identifier_ref(const char *const *parts,unsigned n){
     for (unsigned i=0; i<n; i++) child[i]=text_ref(CTX[0],(const uint8_t *)parts[i],strlen(parts[i]));
     return n==1 ? child[0] : compose(child,n,ref_above(child,n));
 }
+/* A foundation change can be reviewed against the declared components without
+ * changing a registry or building a cache. Slot positions and edges stay stable. */
+static int identifier_report(Hw *h){
+    puts("list\tslot\tstored_id\tcanonical_id");
+    for (int li=0; li<h->nl; li++) {
+        size_t count; Frozen *slots=frozen_read(h->l[li].name,&count);
+        for (size_t i=0; i<count; i++) {
+            const Frozen *slot=&slots[i]; lp_id canonical=slot->id;
+            if (slot->key[0]) {
+                const char *parts[2]; unsigned n=frozen_parts(slot,slot->key,parts);
+                canonical=identifier_ref(parts,n).id;
+            } else if (!slot->retired) { free(slots); return 1; }
+            char stored[33],computed[33]; id_text(&slot->id,stored); id_text(&canonical,computed);
+            printf("%s\t%zu\t%s\t%s\n",h->l[li].name,i,stored,computed);
+        }
+        free(slots);
+    }
+    return ferror(stdout) ? 1 : 0;
+}
 /* Slots retain their positions even when an old prose-derived ID is corrected.
  * Aliases are redirected in one pass, rather than rescanning all keys per slot. */
 static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
@@ -242,13 +261,15 @@ static int swap_in(const char *path, const char *fresh){
 
 int cmd_highway(int argc, char **argv){
     const char *outp = lp_highway_path();
-    int fingerprint = 0, refresh = 0;
+    int fingerprint = 0, refresh = 0, identities = 0;
     for (int a = 1; a < argc; a++) {
         if (!strcmp(argv[a], "-o") && a + 1 < argc) outp = argv[++a];
         else if (!strcmp(argv[a], "--fingerprint")) fingerprint = 1;
         else if (!strcmp(argv[a], "--refresh")) refresh = 1;
-        else { fprintf(stderr, "usage: laplace highway [-o highway.bin] [--fingerprint] [--refresh]\n"); return 2; }
+        else if (!strcmp(argv[a], "--identities")) identities = 1;
+        else { fprintf(stderr, "usage: laplace highway [-o highway.bin] [--fingerprint] [--refresh] [--identities]\n"); return 2; }
     }
+    if (identities && (fingerprint || refresh)) { fputs("--identities is an independent registry read\n",stderr); return 2; }
     if (fingerprint) {
         const lp_highway *h = lp_highway_map(outp);
         if (!h) { fprintf(stderr, "cannot map existing highway at %s\n", outp); return 1; }
@@ -261,9 +282,10 @@ int cmd_highway(int argc, char **argv){
     tier0_open(NULL); table_init(); ctx_open(threads); HW = NULL;           /* the highway being made is read by nothing while it is made */
     Recipe *rc = NULL; int ns=0,nrc=refresh ? recipes_load(laplace_recipes(), &rc) : 0;
     Source *src=refresh ? sources_loaded(&ns) : NULL;
-    printf("laplace highway   canonical identifiers from frozen manifests\n"); fflush(stdout);
+    if (!identities) { printf("laplace highway   canonical identifiers from frozen manifests\n"); fflush(stdout); }
     Hw hw = { 0 }; H = &hw;
     if (!lists_read(&hw)) return 1;
+    if (identities) return identifier_report(&hw);
     int any_absent = !refresh;
     for (int i = 0; i < ns; i++) {
         int says = 0; for (int k = 0; k < nrc; k++) says |= rc[k].source == i && !rc[k].broken && say_has_highway(&rc[k]);

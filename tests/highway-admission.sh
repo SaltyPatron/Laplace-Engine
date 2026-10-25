@@ -13,6 +13,10 @@ before=$(sha256sum "$LAPLACE_HIGHWAY")
 grep -Eq '^fingerprint [0-9a-f]{64}$' "$scratch/fingerprint.log"
 [[ "$before" == "$(sha256sum "$LAPLACE_HIGHWAY")" ]]
 echo 'PASS fingerprint reads the artifact without rewriting it'
+"$L" highway --identities > "$scratch/identities.tsv"
+awk -F '\t' 'NR == 1 { if ($0 != "list\tslot\tstored_id\tcanonical_id") exit 1; next } { if (NF != 4 || $3 != $4) exit 1; count++ } END { if (!count) exit 1 }' "$scratch/identities.tsv"
+[[ "$before" == "$(sha256sum "$LAPLACE_HIGHWAY")" ]]
+echo 'PASS registry identities agree with Native composition without rewriting the cache'
 "$L" ingest --highway --no-load -j 2 > "$scratch/valid.log" 2>&1
 grep -Eq 'validated; no database access' "$scratch/valid.log"
 echo 'PASS existing artifact validates with an unreachable database'

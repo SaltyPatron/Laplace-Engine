@@ -24,6 +24,7 @@ static const Param
     OUT_FL   = { "output", "-o", ARG_PATH, "LAPLACE_FLAGS, else tier 0's path with .flags", "tier0.flags" },
     OUT_HW   = { "output", "-o", ARG_PATH, "LAPLACE_HIGHWAY, else tier 0's path with .highway", "highway.bin" },
     FINGERPRINT = { "fingerprint", "--fingerprint", ARG_FLAG, NULL, "read the existing highway fingerprint without generation" },
+    IDENTITIES = { "identities", "--identities", ARG_FLAG, NULL, "report stored and canonical highway identifier IDs as TSV, without changing the registry" },
     FIRMWARE = { "firmware", "--firmware", ARG_PATH, "LAPLACE_FIRMWARE", "the firmware: how a standing is read, how far a search walks, how many claims are read and what is refused" },
     SEED     = { "seed", "--seed", ARG_INT, "the clock", "N: the seed that breaks ties between claims taken" },
     FAN      = { "fan", "--fan", ARG_INT, "the firmware's", "to measure against the firmware: over the firmware's fan" },
@@ -80,7 +81,7 @@ static const Arg A_NONE[] = { END };
 static const Arg A_SOURCES[] = { O(CATALOG), END };
 static const Arg A_TIER0[] = { O(UCD), O(OUT_T0), END };
 static const Arg A_FLAGS[] = { O(UCD), O(OUT_FL), END };
-static const Arg A_HIGHWAY[] = { O(OUT_HW), O(FINGERPRINT), END };
+static const Arg A_HIGHWAY[] = { O(OUT_HW), O(FINGERPRINT), O(IDENTITIES), END };
 static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(HIGHWAY), O(WHOLE), O(NO_LOAD), O(PLAN), O(CATALOG), O(LIST_SOURCES), O(CLAIMS), O(CLAIMS_TSV), O(ENTITIES),
                                 { &WHAT, ARG_MANY, NULL, NULL }, END };
 static const Arg A_MERGE[] = { O(CONNINFO), { &JOBS, 0, NULL, "every processor" }, END };

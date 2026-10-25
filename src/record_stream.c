@@ -306,7 +306,12 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
                 if (collector.prepared) collector.prepared->reserve = batch[i].state == S_RECORD_RESERVE;
                 int valid = s_cursor_record(layout, &batch[i], pipeline->source, pipeline->length, record_collect_fields, &collector);
                 if (!bind_keys) scratch_restore(mark);
-                if (!valid) __atomic_store_n(&pipeline->failed, 1, __ATOMIC_RELEASE);
+                if (!valid) {
+                    fprintf(stderr, "\n  %s: %s record %llu at byte %llu does not satisfy its compiled recipe\n",
+                            pipeline->recipe->name, pipeline->file->path,
+                            (unsigned long long)batch[i].ordinal, (unsigned long long)worker->kr.at);
+                    __atomic_store_n(&pipeline->failed, 1, __ATOMIC_RELEASE);
+                }
             }
             if (bind_keys) scratch_leave(&prepared[lane].arena, previous);
             table_reading_file(previous_file);

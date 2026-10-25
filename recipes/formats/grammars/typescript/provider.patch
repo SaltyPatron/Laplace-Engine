@@ -1,0 +1,103 @@
+--- a/typescript/src/grammar.json
++++ b/typescript/src/grammar.json
+@@ -9302,0 +9303,4 @@
++          "name": "import_type"
++        },
++        {
++          "type": "SYMBOL",
+@@ -11078,0 +11083,90 @@
++    },
++    "import_type": {
++      "type": "PREC_RIGHT",
++      "value": "call",
++      "content": {
++        "type": "SEQ",
++        "members": [
++          {
++            "type": "SYMBOL",
++            "name": "import"
++          },
++          {
++            "type": "STRING",
++            "value": "("
++          },
++          {
++            "type": "FIELD",
++            "name": "module",
++            "content": {
++              "type": "SYMBOL",
++              "name": "string"
++            }
++          },
++          {
++            "type": "CHOICE",
++            "members": [
++              {
++                "type": "SEQ",
++                "members": [
++                  {
++                    "type": "STRING",
++                    "value": ","
++                  },
++                  {
++                    "type": "FIELD",
++                    "name": "attributes",
++                    "content": {
++                      "type": "SYMBOL",
++                      "name": "object"
++                    }
++                  }
++                ]
++              },
++              {
++                "type": "BLANK"
++              }
++            ]
++          },
++          {
++            "type": "STRING",
++            "value": ")"
++          },
++          {
++            "type": "REPEAT",
++            "content": {
++              "type": "SEQ",
++              "members": [
++                {
++                  "type": "STRING",
++                  "value": "."
++                },
++                {
++                  "type": "FIELD",
++                  "name": "name",
++                  "content": {
++                    "type": "SYMBOL",
++                    "name": "_type_identifier"
++                  }
++                }
++              ]
++            }
++          },
++          {
++            "type": "CHOICE",
++            "members": [
++              {
++                "type": "FIELD",
++                "name": "type_arguments",
++                "content": {
++                  "type": "SYMBOL",
++                  "name": "type_arguments"
++                }
++              },
++              {
++                "type": "BLANK"
++              }
++            ]
++          }
++        ]
++      }
+@@ -11302,0 +11397,4 @@
++    ],
++    [
++      "primary_expression",
++      "import_type"

@@ -3,13 +3,15 @@
 @@ -12 +12 @@
 -  name: 'postgres',
 +  name: 'postgresql_expr',
-@@ -49,4 +49 @@
+@@ -35,0 +36 @@
++    [$.a_expr],
+@@ -49,4 +50 @@
 -    source_file: $ => seq(
 -      repeat(seq(optional($.toplevel_stmt), ';')),
 -      optional($.toplevel_stmt)
 -    ),
 +    source_file: $ => $.PLpgSQL_Expr,
-@@ -617,6 +614,6 @@
+@@ -617,6 +615,6 @@
 -        prec.left(20, prec.dynamic(20, seq($.kw_create, optional($.OptTemp), $.kw_table, $.qualified_name, '(', optional($.OptTableElementList), ')', optional($.OptInherit), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
 -        prec.right(5, prec.dynamic(5, seq($.kw_create, optional($.OptTemp), $.kw_table, $.kw_if, $.kw_not, $.kw_exists, $.qualified_name, '(', optional($.OptTableElementList), ')', optional($.OptInherit), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
 -        seq($.kw_create, optional($.OptTemp), $.kw_table, $.qualified_name, $.kw_of, $.any_name, optional($.OptTypedTableElementList), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)),
@@ -22,12 +24,33 @@
 +        prec.right(5, prec.dynamic(5, seq($.kw_create, optional($.OptTemp), $.kw_table, $.kw_if, $.kw_not, $.kw_exists, field('name', $.qualified_name), $.kw_of, $.any_name, optional($.OptTypedTableElementList), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
 +        prec.left(11, prec.dynamic(11, seq($.kw_create, optional($.OptTemp), $.kw_table, field('name', $.qualified_name), $.kw_partition, $.kw_of, $.qualified_name, optional($.OptTypedTableElementList), $.PartitionBoundSpec, optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
 +        prec.right(5, prec.dynamic(5, seq($.kw_create, optional($.OptTemp), $.kw_table, $.kw_if, $.kw_not, $.kw_exists, field('name', $.qualified_name), $.kw_partition, $.kw_of, $.qualified_name, optional($.OptTypedTableElementList), $.PartitionBoundSpec, optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace))))
-@@ -1599 +1596 @@
+@@ -1599 +1597 @@
 -        seq($.kw_language, $.NonReservedWord_or_Sconst),
 +        seq($.kw_language, field('language', $.NonReservedWord_or_Sconst)),
-@@ -1676 +1673 @@
+@@ -1676 +1674 @@
 -        seq($.kw_language, $.NonReservedWord_or_Sconst)
 +        seq($.kw_language, field('language', $.NonReservedWord_or_Sconst))
+@@ -2711 +2709 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_like, $.a_expr, $.kw_escape, $.a_expr))),
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_like, $.a_expr, $.kw_escape, $.a_expr))),
+@@ -2713 +2711 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_not, $.kw_like, $.a_expr, $.kw_escape, $.a_expr))),
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_not, $.kw_like, $.a_expr, $.kw_escape, $.a_expr))),
+@@ -2715 +2713 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_ilike, $.a_expr, $.kw_escape, $.a_expr))),
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_ilike, $.a_expr, $.kw_escape, $.a_expr))),
+@@ -2717 +2715 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_not, $.kw_ilike, $.a_expr, $.kw_escape, $.a_expr))),
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_not, $.kw_ilike, $.a_expr, $.kw_escape, $.a_expr))),
+@@ -2719 +2717 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_similar, $.kw_to, $.a_expr, $.kw_escape, $.a_expr))),
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_similar, $.kw_to, $.a_expr, $.kw_escape, $.a_expr))),
+@@ -2721 +2719 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_not, $.kw_similar, $.kw_to, $.a_expr, $.kw_escape, $.a_expr))),
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_not, $.kw_similar, $.kw_to, $.a_expr, $.kw_escape, $.a_expr))),
+@@ -3066 +3064 @@
+-        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_similar, $.a_expr, $.kw_escape, $.a_expr)))
++        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_similar, $.a_expr, $.kw_escape, $.a_expr)))
 --- a/postgres/src/scanner.c
 +++ b/postgres/src/scanner.c
 @@ -20,3 +20,3 @@
