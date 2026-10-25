@@ -36,8 +36,12 @@ int main(int argc,char **argv){
     resident[0]=pair;resident_count=1;
     assert(ingest_local_file_ref(&parent.id,path,bytes,parent.tier,&scratch,&result)==1);
     equal_ref(&parent,&result);
+    assert(ingest_local_file_ref(&parent.id,path,bytes,1,&scratch,&result)==1);
+    equal_ref(&parent,&result);
     resident[1]=parent;resident_count=2;
     assert(ingest_local_file_ref(&parent.id,NULL,0,parent.tier,&scratch,&result)==1);
+    equal_ref(&parent,&result);
+    assert(ingest_local_file_ref(&parent.id,NULL,0,1,&scratch,&result)==1);
     equal_ref(&parent,&result);
     resident_count=0;
     uint64_t runs[]={3,2};Ref weighted;

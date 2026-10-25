@@ -540,6 +540,18 @@ static int format_says(Recipe *r, const char *name, unsigned depth){
     }
     valid = valid && !ferror(file); fclose(file); return valid ? 1 : -1;
 }
+int recipe_product_format(Recipe *r, const char *name){
+    Recipe projection = {0}; projection.program_state = r->program_state;
+    if (format_says(&projection, name, 0) <= 0 || !projection.say) return 0;
+    Say *s = projection.say;
+    if (!layout_compile_recipe(&s->lay, projection.grammar, sizeof projection.grammar)) return 0;
+    if (r->grammar[0] && strcmp(r->grammar, projection.grammar)) {
+        fprintf(stderr, "%s: product and packaging must use the same grammar\n", r->name); return 0;
+    }
+    snprintf(r->grammar, sizeof r->grammar, "%s", projection.grammar);
+    r->product = &s->lay;
+    return 1;
+}
 int say_says(Recipe *r, const char *path, char *tok){
     Say *s = r->say; if (!s) s = r->say = calloc(1, sizeof(Say)); s->laid_line = 0;
     char nm[160], a2[64], *at;

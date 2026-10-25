@@ -166,8 +166,18 @@ void file_close(File *f){
     Ref os; int has_os = file_os(f->recipe, f, &os);                       /* the OS's record of it, one node (say.c) */
     if (!has_os && !f->nsaid) { f->file = f->trunk; f->file.said = 0; f->has_file = 1; return; }
     Ref part[3]; uint32_t np = 0;
-    if (has_os) part[np++] = said_metadata(os);
-    part[np] = f->trunk; part[np++].said = 0;
+    if (f->has_packaging) {
+        Ref metadata[2]; uint32_t count = 0;
+        if (has_os) metadata[count++] = os;
+        const lp_id absent={{0}};
+        if (!lp_id_eq(&f->packaging.id,&absent)) {
+            Ref original[2] = {string_ref((const uint8_t *)"packaging", 9), f->packaging};
+            metadata[count++] = said_tuple(compose(original, 2, ref_above(original, 2)));
+        }
+        part[np++] = said_metadata(compose(metadata, count, ref_above(metadata, count)));
+    } else if (has_os) part[np++] = said_metadata(os);
+    const lp_id absent={{0}};
+    if (!f->has_packaging || !lp_id_eq(&f->trunk.id,&absent)) { part[np] = f->trunk; part[np++].said = 0; }
     if (f->nsaid) { part[np++] = recs_of(f->said, f->nsaid); free(f->said); f->said = NULL; f->nsaid = 0; }
     f->file = compose(part, np, ref_above(part, np)); f->file.said = 0; f->has_file = 1;
     if (!f->source) f->witness = f->file;
