@@ -59,6 +59,12 @@ jobs:
         with: { repository: "${{ github.repository_owner }}/Laplace-Native", path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
+      - uses: actions/checkout@v4
+        with:
+          repository: "${{ github.repository_owner }}/Laplace-postgres"
+          ref: ef56db99366a5607c649a7fe3a513ea103394473
+          path: Laplace-postgres
+          token: "${{ secrets.LAPLACE_CHECKOUT }}"
       # Every job runs the binary its own run built (tests/ci-own-binary.py): the build directory is the runner's, shared
       # by every run, so a job after this one reads the binary this job hands over, never the directory.
       - name: workflow contract
@@ -124,6 +130,12 @@ jobs:
             failed=1
           fi
           exit "$failed"
+      - name: Start PostgreSQL with the extension from this Native revision
+        run: |
+          . Laplace-Operations/laplace.env
+          . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
+          export LAPLACE_NATIVE="$GITHUB_WORKSPACE/Laplace-Native"
+          python3 Laplace-Engine/tools/ci/postgres.py start "$RUNNER_TEMP/engine-pg" --source "$GITHUB_WORKSPACE/Laplace-postgres"
       - name: Verify ingestion staging under a scoped database identity
         run: |
           . Laplace-Operations/laplace.env
@@ -155,6 +167,9 @@ jobs:
           . Laplace-Operations/laplace.env
           export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
           LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/translate.sh "$RUNNER_TEMP/engine/laplace"
+      - name: Stop the private PostgreSQL instance
+        if: always()
+        run: python3 Laplace-Engine/tools/ci/postgres.py stop "$RUNNER_TEMP/engine-pg"
   # Every source in recipes/order is where its recipe says, on the data host (Laplace-Engine#60): the plan walks each
   # source's root and matches its files to recipes, without the database, and fails on a source whose root is unset, at
   # none of its roots or holding no files. Its own job: what it finds is the data's, and does not hold the deploy.

@@ -886,7 +886,7 @@ int cmd_ingest(int argc, char **argv){
                 }
                 if (files[i].known || files[i].skipped) continue;
                 progress_file("file-start", &files[i]);
-                decompose_file(CTX[0], &files[i]); progress_file("file-composed", &files[i]); bytes += files[i].bytes; done++;
+                decompose_file(CTX[0], &files[i]); if (!do_load) progress_file("file-composed", &files[i]); bytes += files[i].bytes; done++;
             }
             t_dec += now() - td;
         } else {
@@ -902,7 +902,7 @@ int cmd_ingest(int argc, char **argv){
             {
                 progress_file("file-start", &files[i]);
                 decompose_file(CTX[omp_get_thread_num()], &files[i]);
-                progress_file("file-composed", &files[i]);
+                if (!do_load) progress_file("file-composed", &files[i]);
                 #pragma omp critical
                 {
                     bytes += files[i].bytes; done++;
