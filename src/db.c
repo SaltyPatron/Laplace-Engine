@@ -527,7 +527,6 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
             writer.entity,writer.path);
         PGresult *q=db_command(writer.copy[0],sql);
         if(PQresultStatus(q)!=PGRES_TUPLES_OK){
-            PGresult *rollback=PQexec(writer.copy[0],"ROLLBACK");PQclear(rollback);
             merge_failure(writer.copy[0],writer.entity,writer.path,PQresultErrorMessage(q));PQclear(q);exit(1);
         }
         st->ent_rows+=strtoull(PQgetvalue(q,0,0),NULL,10);st->phy_rows+=strtoull(PQgetvalue(q,0,1),NULL,10);PQclear(q);
