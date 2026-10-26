@@ -314,7 +314,7 @@ static int stream_window_add(StreamWindow *window, File *file){
 }
 typedef struct {
     const char *conninfo; int threads, show, loading; File *file; Fold *fold; LoadStats *stats;
-    uint64_t *events, windows; double database_seconds, *source_seconds; StreamWindow *window;
+    uint64_t *events; double database_seconds, *source_seconds; StreamWindow *window;
 } StreamLoad;
 static int stream_record_batch(void *context, const Ref *things, size_t n, const Ref *metadata, size_t nm, const Events *events){
     StreamLoad *stream = context; File *file = stream->file;
@@ -338,12 +338,12 @@ static int stream_record_batch(void *context, const Ref *things, size_t n, const
     if (stream->source_seconds) *stream->source_seconds += elapsed;
     file->ev = previous; file->said = said; file->nsaid = nsaid; file->csaid = csaid;
     if (!result) {
-        stream->windows++; if (!stream->loading) table_reset();
+        if (!stream->loading) table_reset();
         progress_file("progress", file);
-        if (stream->loading) fprintf(stderr, "\r  %'llu record windows, %'llu entities and %'llu paths persisted   ",
-                (unsigned long long)stream->windows, (unsigned long long)stream->stats->ent_rows, (unsigned long long)stream->stats->phy_rows);
-        else fprintf(stderr, "\r  %'llu record windows inspected, %'llu claim events reported   ",
-                (unsigned long long)stream->windows, (unsigned long long)*stream->events);
+        const char *name=strrchr(file->path,'/');name=name?name+1:file->path;
+        if (progress_console() && stream->loading) fprintf(stderr, "\r  %s: %'llu records read; %'llu new entities, %'llu new paths committed   ",
+                name,(unsigned long long)file->records,(unsigned long long)stream->stats->ent_rows,(unsigned long long)stream->stats->phy_rows);
+        else if(progress_console()) fprintf(stderr, "\r  %s: %'llu records inspected   ",name,(unsigned long long)file->records);
     }
     return result;
 }
@@ -906,7 +906,7 @@ int cmd_ingest(int argc, char **argv){
                 #pragma omp critical
                 {
                     bytes += files[i].bytes; done++;
-                    fprintf(stderr, "\r  %d/%d files  %.1f MB  %.1f MB/s  %'llu nodes   ", done, nfiles - nknown, bytes / 1e6, bytes / 1e6 / (now() - t), (unsigned long long)table_count());
+                    if(progress_console()) fprintf(stderr, "\r  %d/%d files  %.1f MB  %.1f MB/s  %'llu nodes   ", done, nfiles - nknown, bytes / 1e6, bytes / 1e6 / (now() - t), (unsigned long long)table_count());
                 }
             }
         }
@@ -978,6 +978,7 @@ int cmd_ingest(int argc, char **argv){
            (unsigned long long)st.checked, (unsigned long long)st.rounds, (unsigned long long)st.found);
     printf("  %-44s %8.2f s   %'llu entities, %'llu paths (%'.0f rows/s)\n", "COPY into every partition", st.t_copy,
            (unsigned long long)st.ent_rows, (unsigned long long)st.phy_rows, (st.ent_rows + st.phy_rows) / (st.t_copy > 0 ? st.t_copy : 1));
+    printf("  %-44s %8.2f s\n", "streamed series application", st.t_sem);
     { const Source *one = NULL; int many = 0; Ref trunk;                    /* one source, every file of it recorded: its trunk, last of all */
       for (int i = 0; i < nfiles; i++) { if (files[i].skipped) continue; if (!files[i].source) { many = 1; break; } if (!one) one = files[i].source; else if (one != files[i].source) many = 1; }
       /* The witness is the source's trunk (Semantics: Attestations, Witnesses): its trust and lineage are the source's,
@@ -1015,7 +1016,9 @@ int cmd_ingest(int argc, char **argv){
             }
             lp_idmap_free(seen);
         }
+        double publication_started=now();
         if (load_register(conninfo, threads, roots, nr) || merge(conninfo, threads)) { free(roots); return 1; }
+        printf("  %-44s %8.2f s\n", "source registration and final series", now()-publication_started);
         free(roots);
         if (has_witness_trunk && witness_supersedes && forget_superseded(conninfo, threads, &witness_trunk)) return 1;
     }
