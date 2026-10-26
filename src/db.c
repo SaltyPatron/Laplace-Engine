@@ -15,6 +15,7 @@
 typedef struct { lp_id claim, witness, lineage; uint64_t games; double sum, trust; uint8_t has_lineage, dirty, staged; } Series;
 struct Fold { lp_strmap *series; lp_vec(size_t) dirty; };
 static Fold *active_fold;
+typedef struct { lp_mask lexical; uint8_t tier,kind,metadata; } Published;
 typedef struct {
     PGconn **copy, *series; int ncopy, from_ingest, witness_changed;
     char entity[96], path[96], delta[96], pending[96], witnesses[96], affected[96];
@@ -31,9 +32,10 @@ static void start_loader(const char *conninfo, int requested){
     PGresult *q = PQexec(control, "SELECT greatest(1, current_setting('max_connections')::int"
         " - current_setting('superuser_reserved_connections')::int"
         " - current_setting('reserved_connections')::int - (SELECT count(*) FROM pg_stat_activity) - 4),"
-        " to_regprocedure('public.laplace_attest_stage(regclass,regclass)') IS NOT NULL");
+        " to_regprocedure('public.laplace_attest_stage(regclass,regclass)') IS NOT NULL"
+        " AND to_regprocedure('public.laplace_present_stage(regclass,regclass,name,name)') IS NOT NULL");
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "ingest connections: %s", PQerrorMessage(control)); exit(1); }
-    if(strcmp(PQgetvalue(q,0,1),"t")){fputs("ingest requires the installed Native series batch API (laplace 1.35)\n",stderr);PQclear(q);PQfinish(control);exit(1);}
+    if(strcmp(PQgetvalue(q,0,1),"t")){fputs("ingest requires the installed Native classified batch API (laplace 1.37)\n",stderr);PQclear(q);PQfinish(control);exit(1);}
     int available = atoi(PQgetvalue(q, 0, 0)); PQclear(q);
     int cores = omp_get_max_threads();
     if (requested <= 0 || requested > cores) requested = cores;
@@ -56,16 +58,18 @@ static void start_loader(const char *conninfo, int requested){
     snprintf(writer.affected, sizeof writer.affected, "stage.lp_affected_%s", suffix);
     char sql[1800];
     snprintf(sql, sizeof sql,
-        "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS);"
-        "CREATE UNLOGGED TABLE %s (LIKE stage.physicality INCLUDING DEFAULTS);"
+        "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS,present boolean NOT NULL);"
+        "ALTER TABLE %s ALTER coord DROP NOT NULL,ALTER hilbert DROP NOT NULL;"
+        "CREATE UNLOGGED TABLE %s (LIKE stage.physicality INCLUDING DEFAULTS,present boolean NOT NULL);"
+        "ALTER TABLE %s ALTER path DROP NOT NULL,ALTER hilbert DROP NOT NULL;"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, staged boolean NOT NULL);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
         "CREATE UNIQUE INDEX ON %s (claim,witness,lineage) NULLS NOT DISTINCT;"
         "CREATE UNLOGGED TABLE %s (LIKE public.witness INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (claim blake3 PRIMARY KEY)",
-        writer.entity, writer.path, writer.delta, writer.pending, writer.pending, writer.witnesses, writer.affected);
+        writer.entity,writer.entity,writer.path,writer.path,writer.delta,writer.pending,writer.pending,writer.witnesses,writer.affected);
     statement(control, sql);
-    writer.known = lp_idmap_new(); writer.changed = lp_idmap_new();
+    writer.known = lp_idmap_sized(sizeof(Published)); writer.changed = lp_idmap_new();
     writer.series = db_connect(conninfo);
     statement(writer.series, "BEGIN");
 }
@@ -378,7 +382,11 @@ static void prune(File *files,int nfiles,LoadStats *st){
     for(unsigned tier=0;tier<=UINT8_MAX;tier++)free(frontier[tier].item);
 }
 
-typedef struct { Node *node; uint64_t hilbert; lp_mask lexical; } Row;
+typedef struct { Node *node; uint64_t hilbert; lp_mask lexical; uint8_t annotations; } Row;
+static int path_annotations(const Node *node){
+    for(uint32_t i=0;i<node->nv;i++)if(VTX[node->voff+i].spare)return 1;
+    return 0;
+}
 /* A tuple containing an explicit frozen lexical class carries that class.
  * This caches its own constituents, not a claim's inferred subject standing.
  * Conflicting classes have no single enum summary; retain the full path. */
@@ -477,26 +485,32 @@ static size_t encode_node_path(const Node *x,PathEncoding *path){
 }
 static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
     lp_copy copy={0}; char sql[512]; uint8_t geometry[128],mask[12];
-    snprintf(sql,sizeof sql,"BEGIN;COPY %s (id,tier,coord,hilbert,mask) FROM STDIN (FORMAT binary);"
-        "COPY %s (entity,tier,hilbert,path,mask) FROM STDIN (FORMAT binary);COMMIT",writer.entity,writer.path);
+    snprintf(sql,sizeof sql,"BEGIN;COPY %s (id,tier,coord,hilbert,mask,present) FROM STDIN (FORMAT binary);"
+        "COPY %s (entity,tier,hilbert,path,mask,present) FROM STDIN (FORMAT binary);COMMIT",writer.entity,writer.path);
     copy_open(&copy,pg,sql);
     for(size_t i=lo;i<hi;i++){
-        const Node *x=rows[i].node; double point[4];
-        for(int axis=0;axis<4;axis++)point[axis]=(double)x->m[axis]/LP_FIXED_ONE;
-        size_t size=lp_ewkb_point4(point,geometry,sizeof geometry);
-        lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
+        const Node *x=rows[i].node;uint8_t present=x->keep==2;
+        lp_copy_row(&copy,6);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
+        if(present){lp_copy_null(&copy);lp_copy_null(&copy);}
+        else{
+            double point[4];for(int axis=0;axis<4;axis++)point[axis]=(double)x->m[axis]/LP_FIXED_ONE;
+            size_t size=lp_ewkb_point4(point,geometry,sizeof geometry);
+            lp_copy_field(&copy,geometry,(uint32_t)size);
+            lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));
+        }
         carrier_bytes(rows[i].lexical,mask);
-        lp_copy_field(&copy,geometry,(uint32_t)size);lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));lp_copy_field(&copy,mask,sizeof mask);
+        lp_copy_field(&copy,mask,sizeof mask);lp_copy_field(&copy,&present,1);
     }
     copy_next(&copy);
     PathEncoding path={0};
     for(size_t i=lo;i<hi;i++){
-        const Node *x=rows[i].node;
-        size_t size=encode_node_path(x,&path);
+        const Node *x=rows[i].node;uint8_t present=x->keep==2;
         carrier_bytes(x->kind,mask);
-        lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
-        lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));
-        lp_copy_field(&copy,path.bytes,(uint32_t)size);lp_copy_field(&copy,mask,sizeof mask);
+        lp_copy_row(&copy,6);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
+        if(present)lp_copy_null(&copy);else lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));
+        if(present && !rows[i].annotations)lp_copy_null(&copy);
+        else{size_t size=encode_node_path(x,&path);lp_copy_field(&copy,path.bytes,(uint32_t)size);}
+        lp_copy_field(&copy,mask,sizeof mask);lp_copy_field(&copy,&present,1);
     }
     copy_close(&copy);lp_buf_free(&copy.buf);
     free(path.ids);free(path.runs);free(path.spare);free(path.bytes);
@@ -510,9 +524,24 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     }
     TABLE_EACH(x) if(x->len<2)x->kind&=(uint8_t)~(1u<<LP_KIND_CLAIM);
     double begin=now();prune(files,nfiles,st);st->t_dedup+=now()-begin;begin=now();
-    size_t count=0;TABLE_EACH(x)if(x->keep==1 || (x->keep==2 && x->kind))count++;
-    Row *rows=malloc((count?count:1)*sizeof *rows);size_t at=0;
-    TABLE_EACH(x)if(x->keep==1 || (x->keep==2 && x->kind)){lp_coord c;memcpy(c.m,x->m,sizeof c.m);rows[at++]=(Row){x,lp_hilbert4(&c),tuple_mask(x)};}
+    lp_vec(Row) selected={0};
+    TABLE_EACH(x)if(x->keep==1 || x->keep==2){
+        lp_mask lexical=tuple_mask(x);uint8_t annotations=x->keep==2?path_annotations(x):0;
+        if(x->keep==2){
+            if(!x->kind && !lexical && !annotations)continue;
+            const Published *seen=lp_idmap_lookup(writer.known,&x->id);
+            if(!annotations && seen && seen->metadata && seen->tier<=x->tier
+                && (seen->kind & x->kind)==x->kind && (!lexical || seen->lexical==lexical))continue;
+        }
+        uint64_t hilbert=0;
+        if(x->keep==1){lp_coord c;memcpy(c.m,x->m,sizeof c.m);hilbert=lp_hilbert4(&c);}
+        lp_push(&selected,((Row){x,hilbert,lexical,annotations}));
+    }
+    size_t count=selected.n;Row *rows=selected.v;
+    size_t complete=0,metadata=0,overlays=0;
+    for(size_t i=0;i<count;i++)if(rows[i].node->keep==1)complete++;
+        else{metadata++;overlays+=rows[i].annotations!=0;}
+    fprintf(stderr,"batch transport: %zu complete payloads, %zu existing metadata IDs, %zu annotation overlays\n",complete,metadata,overlays);
     qsort(rows,count,sizeof *rows,hilbert_order);
     if(count){
         int lanes=writer.ncopy;if((size_t)lanes>count)lanes=(int)count;
@@ -531,7 +560,13 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         }
         st->ent_rows+=strtoull(PQgetvalue(q,0,0),NULL,10);st->phy_rows+=strtoull(PQgetvalue(q,0,1),NULL,10);PQclear(q);
     }
-    free(rows);TABLE_EACH(x)if(x->keep==1 || x->keep==2){bool fresh;lp_idmap_put(writer.known,&x->id,&fresh);}
+    for(size_t i=0;i<count;i++){
+        const Row *row=rows+i;Published *seen=lp_idmap_get(writer.known,&row->node->id,NULL);
+        if(!seen->metadata || row->node->tier<seen->tier)seen->tier=row->node->tier;
+        if(row->lexical)seen->lexical=row->lexical;
+        seen->kind|=row->node->kind;seen->metadata=1;
+    }
+    lp_vec_free(&selected);TABLE_EACH(x)if(x->keep==1 || x->keep==2)lp_idmap_put(writer.known,&x->id,NULL);
     st->t_copy+=now()-begin;begin=now();flush_series(active_fold,st);st->t_sem+=now()-begin;
     DbTraffic after=db_traffic();
     fprintf(stderr,"batch database: %llu tier rounds, %llu SQL commands, %llu COPY streams; startup and source registration separate\n",
