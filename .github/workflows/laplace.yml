@@ -11,10 +11,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Every night main's parity runs whatever changed: what the monorepo's CLI and Laplace-Native do moves the comparison
-  # too, and neither is a path here.
-  schedule:
-    - cron: "17 9 * * *"
 permissions:
   contents: read
   pull-requests: read
@@ -92,6 +88,7 @@ jobs:
           . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
           export LAPLACE_OPERATIONS="$GITHUB_WORKSPACE/Laplace-Operations"
           bash Laplace-Engine/tools/build_grammars.sh Laplace-Engine/recipes/formats/grammars "$LAPLACE_GRAMMARS"
+          python3 Laplace-Engine/tests/grammar-build-cache.py
       - name: Prepare canonical caches for this run from local Unicode and frozen manifests
         run: |
           set -euo pipefail
@@ -176,7 +173,7 @@ jobs:
   plan:
     # Corpus availability is an estate audit, not a software build requirement.
     # PRs qualify all recipes plus actual ingestion on scoped database fixtures.
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.verify_estate)
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_estate
     needs: engine
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
@@ -203,11 +200,10 @@ jobs:
   # The parity harness (Laplace#1885 step 1): iso-639 ingested by the monorepo's published CLI and by this build, each
   # into a scratch database (laplace_parity_*, dropped after), and what each recorded compared. Its differences are
   # findings, written to the job summary; the job fails only when the harness cannot run. Its own job, as plan is.
-  # It runs when the change can move what an ingest records (the engine job's changes step), every night, and on a
-  # dispatch; after plan, so the short job does not wait out the long one on the one runner.
+  # Estate ingestion is an explicit operator audit; ordinary builds never start it.
   parity:
     needs: [engine, plan]
-    if: ${{ !cancelled() && needs.engine.result == 'success' && needs.engine.outputs.parity == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.verify_estate)) }}
+    if: ${{ !cancelled() && needs.engine.result == 'success' && needs.engine.outputs.parity == 'true' && github.event_name == 'workflow_dispatch' && inputs.verify_estate }}
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
       - name: Select this run's canonical cache closure
