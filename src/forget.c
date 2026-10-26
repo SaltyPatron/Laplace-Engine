@@ -16,9 +16,15 @@ static void candidates_open(PGconn *pg){
 static uint64_t sweep_candidates(PGconn *pg){
     exec(pg,"DO $sweep$ DECLARE n bigint; BEGIN LOOP"
         " TRUNCATE forget_round;"
+        /* Decode every path once per round. A correlated geometry predicate
+         * became a materialized nested-loop anti join over every candidate and
+         * every physicality; shared source replacement made that quadratic. */
+        " WITH referenced AS MATERIALIZED (SELECT DISTINCT v.id FROM public.physicality p"
+        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) v(id)"
+        " JOIN forget_candidates c ON c.id=v.id WHERE p.entity<>v.id)"
         " INSERT INTO forget_round SELECT c.id FROM forget_candidates c"
         " WHERE NOT EXISTS(SELECT FROM public.witness w WHERE w.id=c.id OR w.lineage=c.id)"
-        " AND NOT EXISTS(SELECT FROM public.physicality p WHERE p.path @> ARRAY[c.id]::blake3[] AND p.entity<>c.id);"
+        " AND NOT EXISTS(SELECT FROM referenced r WHERE r.id=c.id);"
         " GET DIAGNOSTICS n=ROW_COUNT; EXIT WHEN n=0;"
         " DELETE FROM public.consensus c USING forget_round d WHERE c.claim=d.id;"
         " DELETE FROM public.physicality p USING forget_round d WHERE p.entity=d.id;"
