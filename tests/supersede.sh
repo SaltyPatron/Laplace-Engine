@@ -25,7 +25,9 @@ export LAPLACE_WORK=$scratch/work LAPLACE_RECIPES=$scratch/recipes
 export LAPLACE_FIRMWARE=${LAPLACE_FIRMWARE:-$here/../firmware/program.firmware}
 cp -r "${LAPLACE_RECIPES_FROM:-$here/../recipes}" "$LAPLACE_RECIPES"
 tree=$scratch/tree; mkdir -p "$LAPLACE_RECIPES/supersede-tree" "$tree"
-printf 'name supersede-tree\nwitness Supersede Tree\nclass UserCuratedResource\nroot %s\nsupersede\nreads python\n' "$tree" > "$LAPLACE_RECIPES/supersede-tree/source"
+sed 's/^match .*/match *.pyi/' "$LAPLACE_RECIPES/workspace-code/python.recipe" > "$LAPLACE_RECIPES/supersede-tree/python.recipe"
+sed 's/^match .*/match *.py/' "$LAPLACE_RECIPES/python.recipe" > "$LAPLACE_RECIPES/supersede-tree/raw.recipe"
+printf 'name supersede-tree\nwitness Supersede Tree\nclass UserCuratedResource\nroot %s\nsupersede\n' "$tree" > "$LAPLACE_RECIPES/supersede-tree/source"
 
 "$L" deploy -d "$conn" >"$scratch/deploy.log" 2>&1 || fail "deploy: $(tail -5 "$scratch/deploy.log")"
 held(){ local result; result=$("$L" hop -d "$conn" "$1" 2>&1) || fail "hop $1: $result"
@@ -37,10 +39,14 @@ ingest(){ "$L" ingest -d "$conn" -j 2 supersede-tree >"$scratch/$1.run" 2>&1 || 
 printf 'def alpha_version_one():\n    return 1\n' > "$tree/a.py"
 printf 'def kept_unchanged():\n    return 0\n' > "$tree/b.py"
 printf 'def removed_since():\n    return 9\n' > "$tree/gone.py"
+# Cross a complete Native registration window with real identifier claims.
+for ((i=0; i<2800; i++)); do printf 'def shared_symbol_%04d():\n    return 0\n' "$i"; done > "$tree/wide.pyi"
 ingest first
 [ "$(held alpha_version_one)" = yes ] && [ "$(held removed_since)" = yes ] || fail "the first reading is not held"
 witness_id(){ "${PSQL:-psql}" -XwAt -v ON_ERROR_STOP=1 -d "$conn" -c 'SELECT id::text FROM public.witness ORDER BY id'; }
 first=$(witness_id)
+claims=$("${PSQL:-psql}" -XwAt -v ON_ERROR_STOP=1 -d "$conn" -c 'SELECT count(*) FROM public.consensus')
+[[ "$claims" -ge 8200 ]] || fail "wide source lost claims across registration windows: $claims"
 [[ "$first" =~ ^[0-9a-f]{32}$ ]] || fail "first reading did not register exactly one witness: $first"
 
 printf 'def beta_version_two():\n    return 2\n' > "$tree/a.py"; rm "$tree/gone.py"
@@ -49,6 +55,8 @@ second=$(witness_id)
 [[ "$second" =~ ^[0-9a-f]{32}$ && "$second" != "$first" ]] || fail "changed reading did not replace the earlier witness: $second"
 [ "$(held beta_version_two)" = yes ] || fail "the new content is not held"
 [ "$(held kept_unchanged)" = yes ] || fail "a file both readings hold was taken out"
+claims=$("${PSQL:-psql}" -XwAt -v ON_ERROR_STOP=1 -d "$conn" -c 'SELECT count(*) FROM public.consensus')
+[[ "$claims" -ge 8200 ]] || fail "supersession lost wide-source standings: $claims"
 [ "$(held alpha_version_one)" = no ] || fail "a changed file's former content is still held"
 [ "$(held removed_since)" = no ] || fail "a removed file is still held"
 
