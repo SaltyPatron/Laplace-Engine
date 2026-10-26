@@ -18,8 +18,6 @@ const char *laplace_db(void);                        /* LAPLACE_CONNINFO: a libp
 const char *laplace_recipes(void);                   /* LAPLACE_RECIPES */
 const char *laplace_grammars(void);                  /* LAPLACE_GRAMMARS */
 const char *laplace_ucd(void);                       /* LAPLACE_UCD */
-/* Bound each Native containment frontier for admission, supersession and replay. */
-#define STANDINGS_CLAIMS_PER_WINDOW 8192
 PGconn *db_connect(const char *conninfo);            /* exits with the server's message if it cannot */
 void db_connect_many(const char *conninfo, int n, PGconn **out);   /* n of them, opened together */
 const char *db_noted(void);                          /* the conninfo of the last db_connect */
@@ -330,6 +328,9 @@ Ref  string_ref(const uint8_t *s, size_t n);                          /* text as
 void ev_push(Events *, const Event *);
 
 typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, std_new, std_upd, known; double t_dedup, t_copy, t_sem, t_read, t_play, t_led; } LoadStats;
+typedef struct { uint64_t commands, copy_streams; } DbTraffic;
+DbTraffic db_traffic(void);
+PGresult *db_command(PGconn *, const char *sql);
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
 typedef struct { lp_id id, lineage; double trust; int has_lineage; } LoadWitness;
 int load_register(const char *conninfo, int npg, const LoadWitness *, size_t count);
@@ -403,6 +404,7 @@ static inline lp_path col_path(const PGresult *q, int r, int c){ return lp_path_
 static inline lp_rating col_rating(const PGresult *q, int r, int c){ lp_rating x = { col_f64(q, r, c), col_f64(q, r, c + 1), col_f64(q, r, c + 2) }; return x; }
 /* A COPY ... FROM STDIN (FORMAT binary) begun on the connection: rows with Native's lp_copy_*, flushed as it fills. */
 void copy_open(lp_copy *, PGconn *, const char *sql);
+void copy_next(lp_copy *);                                          /* finish this stream and enter the next COPY in the same command */
 void copy_close(lp_copy *);                                           /* the trailer, the last flush, the server's answer: exits on a failure */
 
 /* One statement over a set of IDs, on every connection at once (pg.c): the IDs grouped by where each can be, each group

@@ -69,16 +69,33 @@ static void replay_open(PGconn *pg,char table[96]){
     char sql[256];snprintf(sql,sizeof sql,"CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS)",table);exec(pg,sql);
 }
 static void replay_close(PGconn *pg,const char *table){char sql[160];snprintf(sql,sizeof sql,"DROP TABLE %s",table);exec(pg,sql);}
+static int replay_export(PGconn *pg,int files,FILE *out){
+    char sql[1024];
+    snprintf(sql,sizeof sql,
+        "COPY (SELECT claim::text,trunk::text,games::numeric::text,tokens::numeric::text,score::text,\"position\"::text"
+        " FROM public.laplace_attested(ARRAY(SELECT claim FROM replay_claims ORDER BY claim),%s)"
+        " WHERE witness OR %s ORDER BY claim,trunk) TO STDOUT (FORMAT text)",files?"true":"false",files?"true":"false");
+    PGresult *result=PQexec(pg,sql);
+    if(PQresultStatus(result)!=PGRES_COPY_OUT){fprintf(stderr,"replay export: %s",PQerrorMessage(pg));PQclear(result);return 1;}
+    PQclear(result);char *data=NULL;int bytes;
+    while((bytes=PQgetCopyData(pg,&data,0))>0){
+        if(fwrite(data,1,(size_t)bytes,out)!=(size_t)bytes){perror("replay export");PQfreemem(data);return 1;}
+        PQfreemem(data);data=NULL;
+    }
+    if(bytes==-2){fprintf(stderr,"replay export: %s",PQerrorMessage(pg));return 1;}
+    int failed=0;
+    while((result=PQgetResult(pg))){
+        if(PQresultStatus(result)!=PGRES_COMMAND_OK){fprintf(stderr,"replay export: %s",PQresultErrorMessage(result));failed=1;}
+        PQclear(result);
+    }
+    return failed;
+}
 int standings_replay(PGconn *pg,const lp_id *claims,size_t n,uint64_t *played,uint64_t *orphaned){
     *played=*orphaned=0;if(!n)return 0;
     int owns=PQtransactionStatus(pg)==PQTRANS_IDLE;if(owns)exec(pg,"BEGIN");
     char table[96];replay_open(pg,table);
-    for(size_t begin=0;begin<n;begin+=STANDINGS_CLAIMS_PER_WINDOW){
-        size_t count=n-begin;if(count>STANDINGS_CLAIMS_PER_WINDOW)count=STANDINGS_CLAIMS_PER_WINDOW;
-        Args window={0};arg_text(&window,table);arg_ids(&window,claims+begin,count);
-        PQclear(ask_once(pg,"SELECT laplace_attest_series($1::regclass,$2::blake3[])",&window));args_free(&window);
-        printf("  standings %zu/%zu claims prepared in transaction\n",begin+count,n);fflush(stdout);
-    }
+    Args selected={0};arg_text(&selected,table);arg_ids(&selected,claims,n);
+    PQclear(ask_once(pg,"SELECT laplace_attest_series($1::regclass,$2::blake3[])",&selected));args_free(&selected);
     Args args={0};arg_ids(&args,claims,n);
     PGresult *q=ask_once(pg,"SELECT count(*),"
         " (SELECT count(DISTINCT id) FROM unnest($1::blake3[]) id)-count(*)"
@@ -100,25 +117,14 @@ int cmd_replay(int argc,char **argv){
         " UNION SELECT claim FROM public.consensus;"
         " CREATE TEMP TABLE replay_before ON COMMIT DROP AS SELECT * FROM public.consensus");
     if(out){
-        exec(pg,"DECLARE replay_export NO SCROLL CURSOR FOR SELECT claim FROM replay_claims ORDER BY claim");
-        for(;;){
-            PGresult *q=ask_once(pg,"FETCH 8192 FROM replay_export",NULL);size_t n=(size_t)PQntuples(q);
-            if(!n){PQclear(q);break;}lp_id *ids=malloc(n*sizeof *ids);if(!ids){perror("replay export IDs");exit(1);}
-            for(size_t i=0;i<n;i++)ids[i]=*col_id(q,(int)i,0);PQclear(q);print_rows(pg,ids,n,files,out);free(ids);
-        }
-        exec(pg,"CLOSE replay_export");fclose(out);
+        if(replay_export(pg,files,out)){fclose(out);PQfinish(pg);return 1;}fclose(out);
     }
     exec(pg,"DELETE FROM public.consensus c WHERE NOT EXISTS(SELECT FROM public.physicality p"
         " WHERE p.entity=c.claim AND laplace_mask_has_value(p.mask,'kind','claim') AND laplace_path_length(p.path)>=2);"
         " DELETE FROM replay_claims c WHERE NOT EXISTS(SELECT FROM public.physicality p"
         " WHERE p.entity=c.claim AND laplace_mask_has_value(p.mask,'kind','claim') AND laplace_path_length(p.path)>=2)");
     char table[96],sql[1800];replay_open(pg,table);
-    snprintf(sql,sizeof sql,
-        "DO $rebuild$ DECLARE batch blake3[]; last_id blake3; BEGIN LOOP"
-        " SELECT array_agg(claim ORDER BY claim) INTO batch FROM"
-        " (SELECT claim FROM replay_claims WHERE last_id IS NULL OR claim>last_id ORDER BY claim LIMIT %d) selected;"
-        " EXIT WHEN batch IS NULL; PERFORM laplace_attest_series('%s'::regclass,batch);"
-        " last_id:=batch[cardinality(batch)]; END LOOP; END $rebuild$",STANDINGS_CLAIMS_PER_WINDOW,table);
+    snprintf(sql,sizeof sql,"SELECT laplace_attest_stage('%s'::regclass,'replay_claims'::regclass)",table);
     exec(pg,sql);replay_close(pg,table);
     PGresult *q=ask_once(pg,
         "SELECT count(*) FILTER(WHERE b.claim IS NOT NULL AND a.claim IS NOT NULL AND"
