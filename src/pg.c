@@ -5,6 +5,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
+
+static _Atomic uint64_t commands,copy_streams;
+DbTraffic db_traffic(void){
+    return (DbTraffic){atomic_load_explicit(&commands,memory_order_relaxed),
+        atomic_load_explicit(&copy_streams,memory_order_relaxed)};
+}
+PGresult *db_command(PGconn *pg,const char *sql){
+    atomic_fetch_add_explicit(&commands,1,memory_order_relaxed);
+    return PQexec(pg,sql);
+}
 
 static SqlArg *arg_next(Args *a){ if (a->n >= ARGS_MAX) { fprintf(stderr, "a statement of more than %d parameters\n", ARGS_MAX); exit(1); } SqlArg *x = &a->a[a->n++]; x->b.n = 0; return x; }
 void arg_ids(Args *a, const lp_id *ids, size_t n){ SqlArg *x = arg_next(a); lp_pg_ids(&x->b, id_oid, ids, n); x->binary = 1; }
@@ -34,6 +45,7 @@ PGresult *ask(PGconn *pg, const char *sql, Args *a){
 }
 PGresult *ask_once(PGconn *pg, const char *sql, Args *a){
     const char *v[ARGS_MAX]; int l[ARGS_MAX], f[ARGS_MAX]; args_out(a, v, l, f);
+    atomic_fetch_add_explicit(&commands,1,memory_order_relaxed);
     return checked(pg, PQexecParams(pg, sql, a ? a->n : 0, NULL, v, l, f, 1), sql);
 }
 PGresult *ask_try(PGconn *pg, const char *sql, Args *a){
@@ -42,19 +54,36 @@ PGresult *ask_try(PGconn *pg, const char *sql, Args *a){
     if (s == PGRES_TUPLES_OK || s == PGRES_COMMAND_OK) return r;
     PQclear(r); return NULL;
 }
-void exec(PGconn *pg, const char *sql){ PQclear(checked(pg, PQexec(pg, sql), sql)); }
+void exec(PGconn *pg, const char *sql){ PQclear(checked(pg, db_command(pg, sql), sql)); }
 
 /* ---- COPY: rows flushed to the server as the buffer fills */
 static int put(void *pg, const uint8_t *b, size_t n){ return PQputCopyData((PGconn *)pg, (const char *)b, (int)n) == 1; }
 void copy_open(lp_copy *c, PGconn *pg, const char *sql){
-    PGresult *r = PQexec(pg, sql);
+    PGresult *r = db_command(pg, sql);
     if (PQresultStatus(r) != PGRES_COPY_IN) { fprintf(stderr, "%s: %s", sql, PQerrorMessage(pg)); exit(1); }
-    PQclear(r); lp_copy_start(c, (size_t)1 << 22, put, pg);
+    PQclear(r);atomic_fetch_add_explicit(&copy_streams,1,memory_order_relaxed);
+    lp_copy_start(c, (size_t)1 << 22, put, pg);
 }
-void copy_close(lp_copy *c){
+static PGresult *copy_finish(lp_copy *c){
     PGconn *pg = c->ctx;
     if (!lp_copy_end(c) || PQputCopyEnd(pg, NULL) != 1) { fprintf(stderr, "COPY: %s", PQerrorMessage(pg)); exit(1); }
-    PGresult *r; while ((r = PQgetResult(pg))) { if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "COPY: %s", PQerrorMessage(pg)); exit(1); } PQclear(r); }
+    PGresult *r; while ((r = PQgetResult(pg))) {
+        if (PQresultStatus(r) == PGRES_COPY_IN) return r;
+        if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "COPY: %s", PQerrorMessage(pg)); exit(1); }
+        PQclear(r);
+    }
+    return NULL;
+}
+void copy_next(lp_copy *c){
+    PGconn *pg=c->ctx;PGresult *r=copy_finish(c);
+    if(!r){fputs("COPY: expected the next stream in the batch\n",stderr);exit(1);}
+    PQclear(r);lp_buf_free(&c->buf);*c=(lp_copy){0};
+    atomic_fetch_add_explicit(&copy_streams,1,memory_order_relaxed);
+    lp_copy_start(c,(size_t)1<<22,put,pg);
+}
+void copy_close(lp_copy *c){
+    PGresult *r=copy_finish(c);
+    if(r){PQclear(r);fputs("COPY: unconsumed stream in the batch\n",stderr);exit(1);}
 }
 
 /* ---- options: each the flag, what it holds, and where; the arguments that follow are the command's own */

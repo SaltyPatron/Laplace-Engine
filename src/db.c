@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { lp_id claim, witness, lineage; uint64_t games; double sum, trust; uint8_t has_lineage, dirty; } Series;
+typedef struct { lp_id claim, witness, lineage; uint64_t games; double sum, trust; uint8_t has_lineage, dirty, staged; } Series;
 struct Fold { lp_strmap *series; lp_vec(size_t) dirty; };
 static Fold *active_fold;
 typedef struct {
@@ -31,9 +31,9 @@ static void start_loader(const char *conninfo, int requested){
     PGresult *q = PQexec(control, "SELECT greatest(1, current_setting('max_connections')::int"
         " - current_setting('superuser_reserved_connections')::int"
         " - current_setting('reserved_connections')::int - (SELECT count(*) FROM pg_stat_activity) - 4),"
-        " to_regprocedure('public.laplace_path_enrich(geometry,geometry)') IS NOT NULL");
+        " to_regprocedure('public.laplace_attest_stage(regclass,regclass)') IS NOT NULL");
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "ingest connections: %s", PQerrorMessage(control)); exit(1); }
-    if(strcmp(PQgetvalue(q,0,1),"t")){fputs("ingest requires the installed laplace 1.25 annotation merge upgrade\n",stderr);PQclear(q);PQfinish(control);exit(1);}
+    if(strcmp(PQgetvalue(q,0,1),"t")){fputs("ingest requires the installed Native series batch API (laplace 1.35)\n",stderr);PQclear(q);PQfinish(control);exit(1);}
     int available = atoi(PQgetvalue(q, 0, 0)); PQclear(q);
     int cores = omp_get_max_threads();
     if (requested <= 0 || requested > cores) requested = cores;
@@ -58,7 +58,7 @@ static void start_loader(const char *conninfo, int requested){
     snprintf(sql, sizeof sql,
         "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.physicality INCLUDING DEFAULTS);"
-        "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
+        "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, staged boolean NOT NULL);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
         "CREATE UNIQUE INDEX ON %s (claim,witness,lineage) NULLS NOT DISTINCT;"
         "CREATE UNLOGGED TABLE %s (LIKE public.witness INCLUDING DEFAULTS);"
@@ -70,37 +70,16 @@ static void start_loader(const char *conninfo, int requested){
     statement(writer.series, "BEGIN");
 }
 
-/* One parent-table set query per allocated connection, across every tier. */
-static uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, uint64_t n){
-    uint8_t *hit = calloc(n ? (size_t)n : 1, 1);
-    if (!n) return hit;
-    int lanes = (uint64_t)npg < n ? npg : (int)n;
-    /* Partition the complete frontier over the actual connection allocation.
-     * No fixed ID quota splits it into additional database round trips. */
-    #pragma omp parallel for num_threads(lanes) schedule(static,1)
-    for (int lane = 0; lane < lanes; lane++) {
-        uint64_t begin = n * (uint64_t)lane / (uint64_t)lanes;
-        uint64_t end = n * (uint64_t)(lane + 1) / (uint64_t)lanes;
-        uint64_t count = end - begin;
-        lp_idmap *places = lp_idmap_sized(sizeof(uint8_t));
-        for (uint64_t i = 0; i < count; i++) { bool fresh; lp_idmap_put(places, &ids[begin + i], &fresh); }
-        Args a = {0}; arg_ids(&a, ids + begin, (size_t)count);
-        /* Keep each index key a runtime parameter. A plain join can walk every
-         * destination index; ANY(array) in a custom plan copies the complete
-         * constant into every partition plan. The scalar proof uses ID
-         * uniqueness and runtime partition pruning without either expansion. */
-        PGresult *q = ask_once(pg[lane],
-            "SELECT wanted.id FROM unnest($1::blake3[]) wanted(id) "
-            "WHERE (SELECT true FROM public.entity e WHERE e.id=wanted.id)", &a);
-        for (int row = 0; row < PQntuples(q); row++) {
-            lp_id id; memcpy(id.b, PQgetvalue(q, row, 0), 16);
-            int64_t at = lp_idmap_find(places, &id);
-            if (at >= 0) *(uint8_t *)lp_idmap_at(places, (size_t)at) = 1;
-        }
-        for (uint64_t i = 0; i < count; i++) { int64_t at = lp_idmap_find(places, &ids[begin + i]); hit[begin + i] = *(const uint8_t *)lp_idmap_at(places, (size_t)at); }
-        PQclear(q); args_free(&a); lp_idmap_free(places);
+/* A complete tier frontier is one Native indexed presence request. */
+static uint8_t *recorded(PGconn **pg,int npg,const lp_id *ids,uint64_t n){
+    (void)npg;uint8_t *hit=calloc(n?(size_t)n:1,1);if(!n)return hit;
+    Args input={0};arg_ids(&input,ids,(size_t)n);
+    PGresult *result=ask_once(pg[0],"SELECT ordinal FROM public.laplace_present_ids($1::blake3[])",&input);
+    for(int row=0;row<PQntuples(result);row++){
+        int64_t ordinal=(int64_t)lp_be(PQgetvalue(result,row,0),8);
+        if(ordinal>0 && (uint64_t)ordinal<=n)hit[(size_t)ordinal-1]=1;
     }
-    return hit;
+    PQclear(result);args_free(&input);return hit;
 }
 uint8_t *db_recorded(const char *conninfo, const lp_id *ids, uint64_t n){
     PGconn *pg = db_connect(conninfo); uint8_t *hit = recorded(&pg, 1, ids, n); PQfinish(pg); return hit;
@@ -283,7 +262,7 @@ void fold_events(Fold *f, const File *files, int nfiles){
             if (event->kind!=EV_CLAIM || !node || node->len<2) continue;
             lp_id lineage=file->lineage.id; uint8_t has_lineage=(uint8_t)file->has_lineage; double observation_trust=trust;
             if (event->has_dependence) { lineage=event->dependence; has_lineage=1; observation_trust=event->dependence_trust; }
-            uint8_t key[48]={0}; memcpy(key,event->claim.b,16); memcpy(key+16,source.id.b,16);
+            uint8_t key[49]={0}; memcpy(key,event->claim.b,16); memcpy(key+16,source.id.b,16); key[48]=has_lineage;
             if (has_lineage) memcpy(key+32,lineage.b,16);
             bool fresh; size_t index=lp_strmap_put(f->series,key,sizeof key,&fresh);
             Series *s=lp_strmap_at(f->series,index);
@@ -299,33 +278,23 @@ void fold_events(Fold *f, const File *files, int nfiles){
     }
 }
 static void flush_series(Fold *f, LoadStats *st){
-    if (!f) return;
-    lp_idmap *changed=lp_idmap_new(); lp_copy copy={0}; char sql[2200];
-    snprintf(sql,sizeof sql,"COPY %s (claim,witness,lineage,games,score,trust) FROM STDIN (FORMAT binary)",writer.delta);
+    if (!f || !f->dirty.n) return;
+    lp_copy copy={0}; char sql[512];
+    snprintf(sql,sizeof sql,"COPY %s (claim,witness,lineage,games,score,trust,staged) FROM STDIN (FORMAT binary)",writer.delta);
     copy_open(&copy,writer.series,sql);
     for (size_t i=0;i<f->dirty.n;i++) {
         Series *s=lp_strmap_at(f->series,f->dirty.v[i]);
-        lp_copy_row(&copy,6); lp_copy_id(&copy,&s->claim); lp_copy_id(&copy,&s->witness);
+        lp_copy_row(&copy,7); lp_copy_id(&copy,&s->claim); lp_copy_id(&copy,&s->witness);
         if(s->has_lineage) lp_copy_id(&copy,&s->lineage); else lp_copy_null(&copy);
         lp_copy_i64(&copy,(int64_t)s->games); lp_copy_f64(&copy,s->sum/(double)s->games); lp_copy_f64(&copy,s->trust);
-        bool fresh; lp_idmap_put(changed,&s->claim,&fresh); lp_idmap_put(writer.changed,&s->claim,&fresh); s->dirty=0;
+        lp_copy_field(&copy,&s->staged,1);s->staged=1;
+        lp_idmap_put(writer.changed,&s->claim,NULL); s->dirty=0;
     }
     copy_close(&copy); lp_buf_free(&copy.buf);
-    size_t n=lp_idmap_count(changed);
-    if(n){
-        snprintf(sql,sizeof sql,
-            "INSERT INTO %s (claim,witness,lineage,games,score,trust)"
-            " SELECT claim,witness,lineage,games,score,trust FROM %s"
-            " ON CONFLICT(claim,witness,lineage) DO UPDATE"
-            " SET games=EXCLUDED.games,score=EXCLUDED.score,trust=EXCLUDED.trust;TRUNCATE %s",
-            writer.pending,writer.delta,writer.delta);
-        statement(writer.series,sql);
-        Args a={0}; arg_text(&a,writer.pending); arg_ids(&a,lp_idmap_keys(changed),n);
-        PGresult *q=ask_once(writer.series,"SELECT laplace_attest_series($1::regclass,$2::blake3[])",&a);
-        st->std_upd+=lp_be(PQgetvalue(q,0,0),8); PQclear(q); args_free(&a);
-    }
+    Args a={0}; arg_text(&a,writer.pending); arg_text(&a,writer.delta);
+    PGresult *q=ask_once(writer.series,"SELECT laplace_apply_series($1::regclass,$2::regclass)",&a);
+    st->std_upd+=lp_be(PQgetvalue(q,0,0),8); PQclear(q); args_free(&a);
     f->dirty.n=0;
-    lp_idmap_free(changed);
 }
 
 typedef struct { Node **item; size_t n,cap; } Nodes;
@@ -507,9 +476,9 @@ static size_t encode_node_path(const Node *x,PathEncoding *path){
     return size;
 }
 static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
-    lp_copy copy={0}; char sql[256]; uint8_t geometry[128],mask[12];
-    statement(pg,"BEGIN");
-    snprintf(sql,sizeof sql,"COPY %s (id,tier,coord,hilbert,mask) FROM STDIN (FORMAT binary)",writer.entity);
+    lp_copy copy={0}; char sql[512]; uint8_t geometry[128],mask[12];
+    snprintf(sql,sizeof sql,"BEGIN;COPY %s (id,tier,coord,hilbert,mask) FROM STDIN (FORMAT binary);"
+        "COPY %s (entity,tier,hilbert,path,mask) FROM STDIN (FORMAT binary);COMMIT",writer.entity,writer.path);
     copy_open(&copy,pg,sql);
     for(size_t i=lo;i<hi;i++){
         const Node *x=rows[i].node; double point[4];
@@ -519,9 +488,7 @@ static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
         carrier_bytes(rows[i].lexical,mask);
         lp_copy_field(&copy,geometry,(uint32_t)size);lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));lp_copy_field(&copy,mask,sizeof mask);
     }
-    copy_close(&copy);lp_buf_free(&copy.buf);copy=(lp_copy){0};
-    snprintf(sql,sizeof sql,"COPY %s (entity,tier,hilbert,path,mask) FROM STDIN (FORMAT binary)",writer.path);
-    copy_open(&copy,pg,sql);
+    copy_next(&copy);
     PathEncoding path={0};
     for(size_t i=lo;i<hi;i++){
         const Node *x=rows[i].node;
@@ -532,10 +499,11 @@ static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
         lp_copy_field(&copy,path.bytes,(uint32_t)size);lp_copy_field(&copy,mask,sizeof mask);
     }
     copy_close(&copy);lp_buf_free(&copy.buf);
-    free(path.ids);free(path.runs);free(path.spare);free(path.bytes);statement(pg,"COMMIT");
+    free(path.ids);free(path.runs);free(path.spare);free(path.bytes);
 }
 int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     start_loader(conninfo,npg);table_kinds();
+    DbTraffic before=db_traffic();uint64_t tier_rounds=st->rounds;
     for(int i=0;i<nfiles;i++)for(uint64_t j=0;j<files[i].ev.n;j++){
         const Event *event=&files[i].ev.e[j];Node *node=table_find(&event->claim);
         if(node)node->kind|=(uint8_t)(1u<<(event->kind==EV_RECORD?LP_KIND_RECORD:node->len>=2?LP_KIND_CLAIM:LP_KIND_TUPLE));
@@ -555,19 +523,21 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
          * the checked merge validates identity and enriches only absent data.
          * No coordinate/path retrieval is needed for decomposed content. */
         char sql[1800];snprintf(sql,sizeof sql,
-            "BEGIN;SELECT pg_advisory_xact_lock(1279348803,-2);"
             "SELECT * FROM laplace_merge_stage('%s'::regclass,'%s'::regclass)",
             writer.entity,writer.path);
-        PGresult *q=PQexec(writer.copy[0],sql);
+        PGresult *q=db_command(writer.copy[0],sql);
         if(PQresultStatus(q)!=PGRES_TUPLES_OK){
             PGresult *rollback=PQexec(writer.copy[0],"ROLLBACK");PQclear(rollback);
             merge_failure(writer.copy[0],writer.entity,writer.path,PQresultErrorMessage(q));PQclear(q);exit(1);
         }
         st->ent_rows+=strtoull(PQgetvalue(q,0,0),NULL,10);st->phy_rows+=strtoull(PQgetvalue(q,0,1),NULL,10);PQclear(q);
-        statement(writer.copy[0],"COMMIT");
     }
     free(rows);TABLE_EACH(x)if(x->keep==1 || x->keep==2){bool fresh;lp_idmap_put(writer.known,&x->id,&fresh);}
     st->t_copy+=now()-begin;begin=now();flush_series(active_fold,st);st->t_sem+=now()-begin;
+    DbTraffic after=db_traffic();
+    fprintf(stderr,"batch database: %llu tier rounds, %llu SQL commands, %llu COPY streams; startup and source registration separate\n",
+        (unsigned long long)(st->rounds-tier_rounds),(unsigned long long)(after.commands-before.commands),
+        (unsigned long long)(after.copy_streams-before.copy_streams));
     if(!writer.from_ingest)return merge(conninfo,npg);
     return 0;
 }
@@ -601,20 +571,14 @@ int merge(const char *conninfo,int npg){
     const lp_id *changed=lp_idmap_keys(writer.changed);
     for(size_t i=0;i<lp_idmap_count(writer.changed);i++){lp_copy_row(&copy,1);lp_copy_id(&copy,&changed[i]);}
     copy_close(&copy);lp_buf_free(&copy.buf);
-    /* The registered trunk includes unchanged files too. Native reconstructs
-     * its testimony; SQL keeps claim IDs in the database and invokes the same
-     * bounded solver windows as replay, within this registration transaction. */
+    /* The registered trunk includes unchanged files too. Keep the complete
+     * changed set in PostgreSQL and calculate it in one shared Native context. */
     snprintf(sql,sizeof sql,
         "DELETE FROM %s;"
         "INSERT INTO %s SELECT claim FROM laplace_contained_series(ARRAY(SELECT id FROM %s))"
         " ON CONFLICT DO NOTHING;"
-        "DO $registration$ DECLARE batch blake3[]; last_id blake3; done bigint:=0; BEGIN LOOP"
-        " SELECT array_agg(claim ORDER BY claim) INTO batch FROM"
-        " (SELECT claim FROM %s WHERE last_id IS NULL OR claim>last_id ORDER BY claim LIMIT %d) selected;"
-        " EXIT WHEN batch IS NULL; PERFORM laplace_attest_series('%s'::regclass,batch);"
-        " done:=done+cardinality(batch); RAISE NOTICE 'standings %% claims prepared in registration transaction',done;"
-        " last_id:=batch[cardinality(batch)]; END LOOP; END $registration$",
-        writer.pending,writer.affected,writer.witnesses,writer.affected,STANDINGS_CLAIMS_PER_WINDOW,writer.pending);
+        "SELECT laplace_attest_stage('%s'::regclass,'%s'::regclass)",
+        writer.pending,writer.affected,writer.witnesses,writer.pending,writer.affected);
     /* An unchanged registered source contributes no new evidence on replay.
      * Recompute only for new series or changed witness trust/containment. */
     if(lp_idmap_count(writer.changed) || writer.witness_changed) statement(writer.series,sql);
