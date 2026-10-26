@@ -10,6 +10,12 @@ static struct {
     const char *source;
 } ingest_progress;
 
+/* A supervising application renders the structured stream. Carriage-return
+ * status belongs only to a terminal, never to redirected CI/service logs. */
+static int progress_console(void){
+    return !ingest_progress.out && isatty(fileno(stderr));
+}
+
 static void progress_write(const char *event, File *file, const lp_id *source_id) {
     if (!ingest_progress.out) return;
     FILE *out = ingest_progress.out;

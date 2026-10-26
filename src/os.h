@@ -76,6 +76,8 @@ ssize_t getline(char **line, size_t *cap, FILE *f);
 #define strdup _strdup
 #define read _read
 #define close _close
+#define isatty _isatty
+#define fileno _fileno
 #define CLOCK_MONOTONIC 1
 #include <direct.h>
 #define mkdir(path, mode) _mkdir(path)
