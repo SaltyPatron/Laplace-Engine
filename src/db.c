@@ -62,7 +62,7 @@ static void start_loader(const char *conninfo, int requested){
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
         "CREATE UNIQUE INDEX ON %s (claim,witness,lineage) NULLS NOT DISTINCT;"
         "CREATE UNLOGGED TABLE %s (LIKE public.witness INCLUDING DEFAULTS);"
-        "CREATE UNLOGGED TABLE %s (claim blake3 NOT NULL)",
+        "CREATE UNLOGGED TABLE %s (claim blake3 PRIMARY KEY)",
         writer.entity, writer.path, writer.delta, writer.pending, writer.pending, writer.witnesses, writer.affected);
     statement(control, sql);
     writer.known = lp_idmap_new(); writer.changed = lp_idmap_new();
@@ -601,15 +601,20 @@ int merge(const char *conninfo,int npg){
     const lp_id *changed=lp_idmap_keys(writer.changed);
     for(size_t i=0;i<lp_idmap_count(writer.changed);i++){lp_copy_row(&copy,1);lp_copy_id(&copy,&changed[i]);}
     copy_close(&copy);lp_buf_free(&copy.buf);
-    /* The final registered trunk includes unchanged files too. Native owns
-     * traversal and testimony reconstruction; SQL only combines affected IDs
-     * and invokes the standing fold in the witness registration transaction. */
+    /* The registered trunk includes unchanged files too. Native reconstructs
+     * its testimony; SQL keeps claim IDs in the database and invokes the same
+     * bounded solver windows as replay, within this registration transaction. */
     snprintf(sql,sizeof sql,
         "DELETE FROM %s;"
-        "WITH claims AS (SELECT claim FROM %s UNION"
-        " SELECT claim FROM laplace_contained_series(ARRAY(SELECT id FROM %s)))"
-        " SELECT laplace_attest_series('%s'::regclass,array_agg(claim)) FROM claims",
-        writer.pending,writer.affected,writer.witnesses,writer.pending);
+        "INSERT INTO %s SELECT claim FROM laplace_contained_series(ARRAY(SELECT id FROM %s))"
+        " ON CONFLICT DO NOTHING;"
+        "DO $registration$ DECLARE batch blake3[]; last_id blake3; done bigint:=0; BEGIN LOOP"
+        " SELECT array_agg(claim ORDER BY claim) INTO batch FROM"
+        " (SELECT claim FROM %s WHERE last_id IS NULL OR claim>last_id ORDER BY claim LIMIT %d) selected;"
+        " EXIT WHEN batch IS NULL; PERFORM laplace_attest_series('%s'::regclass,batch);"
+        " done:=done+cardinality(batch); RAISE NOTICE 'standings %% claims prepared in registration transaction',done;"
+        " last_id:=batch[cardinality(batch)]; END LOOP; END $registration$",
+        writer.pending,writer.affected,writer.witnesses,writer.affected,STANDINGS_CLAIMS_PER_WINDOW,writer.pending);
     /* An unchanged registered source contributes no new evidence on replay.
      * Recompute only for new series or changed witness trust/containment. */
     if(lp_idmap_count(writer.changed) || writer.witness_changed) statement(writer.series,sql);

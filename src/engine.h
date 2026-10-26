@@ -18,6 +18,8 @@ const char *laplace_db(void);                        /* LAPLACE_CONNINFO: a libp
 const char *laplace_recipes(void);                   /* LAPLACE_RECIPES */
 const char *laplace_grammars(void);                  /* LAPLACE_GRAMMARS */
 const char *laplace_ucd(void);                       /* LAPLACE_UCD */
+/* Bound each Native containment frontier for admission, supersession and replay. */
+#define STANDINGS_CLAIMS_PER_WINDOW 8192
 PGconn *db_connect(const char *conninfo);            /* exits with the server's message if it cannot */
 void db_connect_many(const char *conninfo, int n, PGconn **out);   /* n of them, opened together */
 const char *db_noted(void);                          /* the conninfo of the last db_connect */

@@ -7,9 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* The same bounded Native solver window for explicit replay and source
- * supersession. A whole corpus's claim IDs must not become one GIN frontier. */
-#define REPLAY_CLAIMS_PER_WINDOW 8192
 
 static lp_id *strands_named(int argc, char **argv, int a, int *ns, Hold **hs, int *nhs){
     Ctx *c = lp_text_new(T0); if (!HW) HW = lp_highway_map(NULL);
@@ -76,8 +73,8 @@ int standings_replay(PGconn *pg,const lp_id *claims,size_t n,uint64_t *played,ui
     *played=*orphaned=0;if(!n)return 0;
     int owns=PQtransactionStatus(pg)==PQTRANS_IDLE;if(owns)exec(pg,"BEGIN");
     char table[96];replay_open(pg,table);
-    for(size_t begin=0;begin<n;begin+=REPLAY_CLAIMS_PER_WINDOW){
-        size_t count=n-begin;if(count>REPLAY_CLAIMS_PER_WINDOW)count=REPLAY_CLAIMS_PER_WINDOW;
+    for(size_t begin=0;begin<n;begin+=STANDINGS_CLAIMS_PER_WINDOW){
+        size_t count=n-begin;if(count>STANDINGS_CLAIMS_PER_WINDOW)count=STANDINGS_CLAIMS_PER_WINDOW;
         Args window={0};arg_text(&window,table);arg_ids(&window,claims+begin,count);
         PQclear(ask_once(pg,"SELECT laplace_attest_series($1::regclass,$2::blake3[])",&window));args_free(&window);
         printf("  standings %zu/%zu claims prepared in transaction\n",begin+count,n);fflush(stdout);
@@ -121,7 +118,7 @@ int cmd_replay(int argc,char **argv){
         " SELECT array_agg(claim ORDER BY claim) INTO batch FROM"
         " (SELECT claim FROM replay_claims WHERE last_id IS NULL OR claim>last_id ORDER BY claim LIMIT %d) selected;"
         " EXIT WHEN batch IS NULL; PERFORM laplace_attest_series('%s'::regclass,batch);"
-        " last_id:=batch[cardinality(batch)]; END LOOP; END $rebuild$",REPLAY_CLAIMS_PER_WINDOW,table);
+        " last_id:=batch[cardinality(batch)]; END LOOP; END $rebuild$",STANDINGS_CLAIMS_PER_WINDOW,table);
     exec(pg,sql);replay_close(pg,table);
     PGresult *q=ask_once(pg,
         "SELECT count(*) FILTER(WHERE b.claim IS NOT NULL AND a.claim IS NOT NULL AND"
