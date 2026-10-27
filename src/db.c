@@ -142,25 +142,24 @@ void validate_file_contexts(const char *conninfo, File *files, int nfiles){
     Args args={0};arg_ids(&args,ids,count);arg_ids(&args,ids+count,count);arg_raw(&args,tag.id.b,sizeof tag.id.b);
     arg_ids(&args,ids+2*count,count);arg_raw(&args,binding.id.b,sizeof binding.id.b);
     PGconn *pg=db_connect(conninfo);
-    /* Context belongs to these files' metadata. Walking up from every context
-     * in the database scans the source estate even for one already-known file.
-     * Descend only the supplied metadata roots by their primary keys. Compiled
-     * entries are terminals: their target content is not metadata of this file. */
+    /* file_binding_metadata appends the reading context last, and file_close
+     * and file_stream_finish append that compiled index last in file metadata.
+     * Follow that ordered tail instead of reading every exported binding.
+     * Native owns path lookup and packed/RLE endpoint decoding. */
     PGresult *result=ask_once(pg,
         "WITH RECURSIVE wanted(id,reading,metadata) AS ("
         " SELECT * FROM unnest($1::blake3[],$2::blake3[],$4::blake3[])),"
         " metadata(file,id,reading) AS ("
         " SELECT id,metadata,reading FROM wanted"
         " UNION SELECT m.file,k.id,m.reading FROM metadata m"
-        " JOIN public.physicality p ON p.entity=m.id"
-        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) k(id)"
+        " CROSS JOIN LATERAL public.laplace_paths(ARRAY[m.id]) p"
+        " CROSS JOIN LATERAL (SELECT public.laplace_path_last(p.path)) k(id)"
         " WHERE NOT laplace_path_starts(p.path,$3::blake3)"
         " AND NOT laplace_path_starts(p.path,$5::blake3) AND k.id<>m.id)"
         " SELECT DISTINCT m.file FROM metadata m"
-        " JOIN public.physicality p ON p.entity=m.id"
-        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) k(id)"
+        " CROSS JOIN LATERAL public.laplace_paths(ARRAY[m.id]) p"
         " WHERE laplace_path_starts(p.path,$3::blake3) AND laplace_path_length(p.path)=2"
-        " AND k.id<>$3::blake3 AND k.id<>m.reading",&args);
+        " AND public.laplace_path_last(p.path)<>m.reading",&args);
     lp_idmap *invalid=lp_idmap_new();
     for(int row=0;row<PQntuples(result);row++){lp_id id;bool fresh;memcpy(id.b,PQgetvalue(result,row,0),16);lp_idmap_put(invalid,&id,&fresh);}
     for(int i=0;i<nfiles;i++)if(files[i].known && lp_idmap_find(invalid,&files[i].file.id)>=0){

@@ -33,7 +33,7 @@ Use catalog aliases such as `ucd`, `iso639`, `ud`, `oewn`, and `omw` wherever a 
 
 `laplace ingest --plan` shows which recipe takes which file; `--claims` prints what the recipes attest, as text, and loads nothing.
 
-Ingestion requires Laplace-postgres 1.37 or later. Native tier descent classifies the
+Ingestion requires Laplace-postgres 1.39 or later. Native tier descent classifies the
 formed working set once; binary COPY carries those classifications into private
 `UNLOGGED` staging. New IDs carry their canonical payload. Known IDs carry changed
 metadata and any path annotations, without resending coordinates or Hilbert values.
@@ -44,6 +44,14 @@ addressed metadata updates. Batch logs report complete payloads, existing metada
 IDs, annotation overlays, tier rounds, SQL commands and COPY streams. Command counts
 exclude startup and source registration and are not measurements of network round
 trips.
+
+Recorded-file context validation uses `laplace_paths` and `laplace_path_last`.
+The writer appends the reading-context entry after its compiled bindings and
+appends that compiled index last in file metadata. Replay follows that ordered
+metadata tail, stopping at a context or binding entry; it does not scan every
+exported binding or descend into its target content. GIN constituent keys are
+sets and cannot supply this order. Native decodes endpoints from packed paths
+and compressed runs.
 
 The read commands (`hop`, `translate`, `degrees`, `pull`) plan trips. The road classes are the identifier systems, the highway's type lists: words in each language, a wordnet's synsets, the ILI, ISO 639 languages, FrameNet frames, frame elements and lexical units, VerbNet classes and roles, PropBank rolesets, VerbAtlas frames, parts of speech, dependency relations, lexicographer files. The interchanges are the mapping strands where a route changes class: lexicalizations, CILI's maps, SemLink, the Predicate Matrix, MapNet, VerbAtlas, WordFrameNet, FrameBase. A road's speed is its confidence, each hop pays a turn penalty, and a node holding more claims than the firmware's fan (NOUN, `eng`) is a fan-limited node, reached and not crossed. A* plans a trip that changes class at interchanges, with highway nodes as the landmarks that give its heuristic, and the highway ROM (`laplace highway`: the type lists and the mapping edges) is the precomputed freeway network. As built, the reads run Dijkstra, best-first with an estimate of 0, over claims read from the database, and never walk the highway ROM's edges. The acceptance trip is `dog` → its OEWN synset → `i46360` → `[犬, jpn]`, printed leg by leg.
 

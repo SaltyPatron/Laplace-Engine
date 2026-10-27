@@ -89,6 +89,8 @@ Ref file_context_value(const File *file){
     return text_ref(CTX[0],text,sizeof text);
 }
 static int file_binding_metadata(File *file, Ref *out){
+    /* Replay reads the context along the ordered metadata tail. Keep it after
+     * all compiled bindings; both file closers append this whole index last. */
     if (file->bindings_attached) return 0;
     file->bindings_attached = 1;
     FileBlock block = {0};
