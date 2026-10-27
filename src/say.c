@@ -272,11 +272,15 @@ void record_execute(RecordWorker *sink, const SemanticRecord *t, int32_t root, u
     }
     while (np_) { np_--; record_group_claims(k, pend[np_].e0, pend[np_].has ? &pend[np_].about : NULL); }
     record_publish_keys(k, t, root, 0);
-    /* the part itself, whole, with what it says, into the file's content tree as its record (records_of). A part the
-     * recipe does not speak of (a row its where leaves out) is in no tree: a recipe that says what a file's parts are
-     * reads a curated source, mined for what it says and not kept byte for byte (Storage: curated sources are mined for
-     * knowledge, not recorded bit-perfect) */
-    Ref T; int whole = speaks ? record_entity(k, t, root, &T) : 0;
+    /* A named curated record holds its thing and its claims. Composing all
+     * packaging fields beside that thing would record pointers and JSON keys
+     * as another entity of it. Unnamed records retain their content tree. */
+    Ref T; int whole=0;
+    if (speaks) {
+        int named=0;
+        for (int i=0; i<s->nthing && !named; i++) named=record_field_named(&t->n[root],s->thing[i].tier,strlen(s->thing[i].tier));
+        whole=named ? record_thing(k,t,root,&T,0)>0 : record_entity(k,t,root,&T);
+    }
     record_build_provenance(k, t, root, ev0, whole ? &T : NULL);
     k->binding_phase = binding_phase;
     tls_back(&previous);
