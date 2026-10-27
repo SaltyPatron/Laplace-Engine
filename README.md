@@ -63,6 +63,8 @@ cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
 
 `laplace tier0` and `laplace highway` generate the two client-side memory-mapped perf-caches (`tier0.bin` and `highway.bin`). Every highway node (`ili`, `Synset`, `fnframe`, `fnfe`, `fnlu`, `vnclass`, `pbroleset`, `vaframe`, ISO 639 language code) is the canonical Tier-0 composition of its own identifier string (`i46360`, `oewn-00001740-n`, `abandon.01`, `va:0001f`, `leave-51.2`, `eng`), deterministic from `tier0.bin` alone, with fixed-width bit-banger masks (`upos`, `lexfile`, `deprel`, `vnrole`, `kind`) and crosswalk interchanges baked into `highway.bin`. Generating or using `highway.bin` does not require raw corpus definitions on disk or a `.nodes` sidecar dump.
 
+CILI's published WordNet 3.0, WordNet 3.1 and Open Dutch WordNet 1.3 maps resolve release-specific pointers through the `wordnet-3.0`, `wordnet-3.1` and `odwn-1.3` key namespaces to existing ILI records. These keys add neither entities nor mask slots. `highway --refresh` reads the maps through their recipes; ordinary `highway` reconstructs keys from Native's frozen `manifest/slots/keys.tsv.gz`. That metadata accepts `namespace/key/target-list/target-slot` tab-separated rows alongside the original `list/key/slot` rows. Cross-list keys select the self-contained `LPHW0003` envelope, requiring Native's namespace-aware reader; caches with only original rows retain `LPHW0002`.
+
 `laplace deploy` creates or updates extensions, schema, indexes and database settings, and ensures the Tier-0 floor and Highway identifier entities exist in PostgreSQL.
 
 

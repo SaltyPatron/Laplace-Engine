@@ -223,15 +223,21 @@ static int frozen_keys(Hw *h){
     int ok=1;
     while (gzgets(file,line,sizeof line)) {
         if (line[0]=='#') continue;
-        char *key=strchr(line,'\t'), *slot=key ? strrchr(key+1,'\t') : NULL;
-        if (!key || !slot) { ok=0; break; } *key++=0; *slot++=0;
+        line[strcspn(line,"\r\n")]=0;
+        char *field[4]={line}; int nf=1;
+        for (char *p=line; *p; p++) if (*p=='\t') {
+            if (nf==4) { ok=0; break; } *p=0; field[nf++]=p+1;
+        }
+        if (!ok || (nf!=3 && nf!=4)) { ok=0; break; }
+        char *space=field[0], *key=field[1], *target=nf==4 ? field[2] : space, *slot=field[nf-1];
+        if (!*space || strlen(space)>=sizeof h->l[0].name || !*key || strlen(key)>1000 || *slot<'0' || *slot>'9') { ok=0; break; }
         char *end; unsigned long at=strtoul(slot,&end,10);
-        end+=strspn(end,"\r\n");
-        int li=-1; for (int i=0; i<h->nl; i++) if (!strcmp(h->l[i].name,line)) li=i;
-        if (*end || li<0 || at>=h->l[li].n || h->l[li].t[at].tier==UINT8_MAX || strlen(key)>1000) { ok=0; break; }
-        Key *existing=key_find(h,li,key);
-        if (existing && !lp_id_eq(&existing->id,&h->l[li].t[at].id)) { ok=0; break; }
-        key_put(h,li,key,&h->l[li].t[at].id);
+        int li=-1; for (int i=0; i<h->nl; i++) if (!strcmp(h->l[i].name,target)) li=i;
+        if (*end || li<0 || at>=h->l[li].n || h->l[li].t[at].tier==UINT8_MAX) { ok=0; break; }
+        lp_id id=h->l[li].t[at].id; int source=list_of(h,space,NULL);
+        Key *existing=key_find(h,source,key);
+        if (existing && !lp_id_eq(&existing->id,&id)) { ok=0; break; }
+        key_put(h,source,key,&id);
     }
     if (!gzeof(file)) ok=0;
     if (gzclose(file)!=Z_OK) ok=0;
@@ -367,6 +373,7 @@ int cmd_highway(int argc, char **argv){
     line(&layout,"records\t%u\nedges-count\t%zu\n",total,ne);
     for (int i=0; i<hw.nl; i++) {
         const List *list=hw.l+i;
+        if (!list->n) continue; /* key-only namespaces own no records or mask slots */
         line(&layout,"list\t%s\t%s\t%u\t%zu\n",list->name,list->say[0]?list->say:list->name,list->first,list->n);
         size_t nz; Frozen *frozen=frozen_read(list->name,&nz);
         for (size_t slot=0; slot<list->n; slot++) {
@@ -390,12 +397,27 @@ int cmd_highway(int argc, char **argv){
         const BankSpec *b=banks+i;
         line(&layout,"bank\t%s\t%s\t%s\t%s\t%u\t%u\t%s\n",b->name,b->list,b->group,b->carrier,b->width,b->offset,b->flags?"flags":"enum");
     }
-    size_t nkeys=0,stray=0;
+    size_t nkeys=0,nreferences=0,stray=0; lp_idindex *reference_ids=NULL;
     for (size_t i=0; i<lp_strmap_count(hw.keys); i++) {
         const Key *key=lp_strmap_at(hw.keys,i); size_t bytes; const char *text=lp_strmap_key(hw.keys,i,&bytes)+sizeof(int);
-        int64_t slot=slot_in(hw.l+key->list,&key->id); if (slot<0) { stray++; continue; }
+        int64_t slot=slot_in(hw.l+key->list,&key->id);
+        if (slot<0) {
+            if (!reference_ids) { reference_ids=lp_idindex_build(rec,total,sizeof *rec); if (!reference_ids) return 1; }
+            uint64_t probe=0; int64_t at;
+            while ((at=lp_idindex_find(reference_ids,&key->id,&probe))>=0 && rec[at].pad==LP_HIGHWAY_RETIRED) {}
+            if (at<0) { stray++; continue; }
+            /* Lists have contiguous frozen ranges. Empty key namespaces can
+             * share a boundary but never own the record at that boundary. */
+            int lo=0,hi=hw.nl;
+            while (lo<hi) { int mid=lo+(hi-lo)/2; if (hw.l[mid].first<=(uint64_t)at) lo=mid+1; else hi=mid; }
+            const List *target=hw.l+lo-1;
+            line(&keys,"%s\t%.*s\t%s\t%llu\n",hw.l[key->list].name,(int)(bytes-sizeof(int)),text,
+                target->name,(unsigned long long)((uint64_t)at-target->first));
+            nreferences++; continue;
+        }
         line(&keys,"%s\t%.*s\t%lld\n",hw.l[key->list].name,(int)(bytes-sizeof(int)),text,(long long)slot); nkeys++;
     }
+    lp_idindex_free(reference_ids);
     lp_edge *edges=xrealloc(NULL,sizeof *edges*(ne+1));
     for (size_t i=0; i<ne; i++) edges[i]=(lp_edge){ed[i].from,ed[i].to};
     char fresh[4300]; snprintf(fresh,sizeof fresh,"%s.new",outp);
@@ -409,8 +431,9 @@ int cmd_highway(int argc, char **argv){
     for (int l = 0; l < hw.nl; l++) printf("  %-28s %'zu\n", hw.l[l].say[0] ? hw.l[l].say : hw.l[l].name, hw.l[l].n);
     if (lost) { printf("  %'zu mappings name a key no list holds, or a type of another list: left out\n", lost);
         for (int q = 0; q < nls; q++) printf("    %-10s to %-10s %'9zu   for instance %s%s%s%s\n", hw.l[ls[q].la].name, hw.l[ls[q].lb].name, ls[q].n, ls[q].ex[0][0] ? ls[q].ex[0] : "", ls[q].ex[0][0] && ls[q].ex[1][0] ? ", " : "", ls[q].ex[1][0] ? ls[q].ex[1] : "", ""); }
-    if (stray) printf("  %'zu keys name something that is not a type of their list: left out\n", stray);
-    printf("\n%s: %'u types in %d lists, %'zu edges, %'zu embedded keys (%'zu by way of other keys); %d banks   (%.1f s)\nfingerprint ", outp, total, hw.nl, ne, nkeys, added, bit, now() - T);
+    if (nreferences) printf("  %'zu source pointer keys resolve to existing records in another list (embedded in the highway)\n",nreferences);
+    if (stray) printf("  %'zu keys name no active highway record: left out\n", stray);
+    printf("\n%s: %'u types in %d lists, %'zu edges, %'zu embedded keys (%'zu by way of other keys); %d banks   (%.1f s)\nfingerprint ", outp, total, hw.nl, ne, nkeys+nreferences, added, bit, now() - T);
     for (int i = 0; i < 32; i++) printf("%02x", fp[i]); printf("\n");
     (void)nrc; return 0;
 }

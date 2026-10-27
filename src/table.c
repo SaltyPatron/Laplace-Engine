@@ -458,9 +458,10 @@ static lp_ref compose_sink(void *sink, const lp_ref *ch, uint32_t n, uint8_t tie
 /* Text, decomposed by Laplace-Native and recorded here. */
 Ctx **CTX; const lp_highway *HW;
 Ref highway_typed(const char *list, const uint8_t *kv, size_t kn, int *has){
-    *has = 0; Ref x; memset(&x, 0, sizeof x); if (!HW || !kn || kn >= 128) return x; const lp_list *l = lp_highway_list(HW, list); if (!l) return x;
-    char key[128]; memcpy(key, kv, kn); key[kn] = 0; int64_t slot = lp_highway_key(HW, l, key); if (slot < 0) return x;
-    const lp_tier0_record *rec = lp_highway_at(HW, l, (uint32_t)slot); if (!rec) return x;
+    *has = 0; Ref x; memset(&x, 0, sizeof x); if (!HW || !kn || kn > 1000) return x;
+    char key[1001]; memcpy(key, kv, kn); key[kn] = 0;
+    const lp_list *typed=lp_highway_list(HW,list);
+    const lp_tier0_record *rec = lp_highway_resolve(HW, typed ? typed->name : list, key); if (!rec) return x;
     x.id = rec->id; memcpy(x.c.m, rec->m, 32); x.tier = (uint8_t)rec->pad; *has = 1; return x;
 }
 void ctx_open(int threads){
