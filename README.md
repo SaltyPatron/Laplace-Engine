@@ -2,6 +2,34 @@
 
 Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github.com/SaltyPatron/Laplace-Native) and working against a PostgreSQL database extended by [Laplace-postgres](https://github.com/SaltyPatron/Laplace-postgres). The documentation is [Laplace-Wiki](https://github.com/SaltyPatron/Laplace-Wiki), published at <https://saltypatron.github.io/Laplace-Wiki/>; each source under `recipes/` has its page under the wiki's Corpora.
 
+## Closed parallel publication
+
+Creation composes leaves upward; recorded-subtree pruning still runs trunks
+downward. Publication uses the actual newly admitted DAG, independently of
+semantic tier. Native `lp_dag_levels` computes its dependency barriers before
+any writes. A cross-lane dependency requires an earlier committed wave;
+dependencies inside one lane can share its atomic entity/path transaction.
+Cycles fail before publication. Runs remain compressed during scheduling.
+
+Each bounded libpq lane owns its staging pair and publishes through the same
+`laplace_merge_stage` owner. Canonical ID prefixes assign disjoint destination
+leaves; rows within each lane remain Hilbert ordered. A useful transport window
+uses COPY's existing 4 MiB grain to size active concurrency. Small windows use
+one writer; this affects execution grain, never admission or identity.
+
+Every child wave finishes before a parent wave begins. Interruption may retain
+complete branches, while a later replay still descends through an absent trunk.
+No two-phase commit is needed. Continuous series updates and final witness
+registration retain their separate source transaction, explicitly using read
+committed visibility of completed structural waves.
+
+The ingest phase report separates Native preparation, staging COPY and paired
+publication. `tests/publication-waves.py` uses real PostgreSQL databases to
+compare serial and parallel stored state, observe subtree closure during writes,
+kill and resume a writer, and verify unchanged replay. Native's DAG tests also
+exercise shared/repeated edges, owner-local cohorts, cycles and a 200,000-node
+dependency chain without C recursion.
+
 ## Commands
 
 | Command | What it does |

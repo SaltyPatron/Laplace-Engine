@@ -979,8 +979,11 @@ int cmd_ingest(int argc, char **argv){
     if (!do_load) { fold_free(fold); return mism ? 1 : 0; }
     printf("  %-44s %8.2f s   %'llu IDs checked in %llu rounds, %'llu subtrees already recorded\n", "deduplication, trunk to leaf", st.t_dedup,
            (unsigned long long)st.checked, (unsigned long long)st.rounds, (unsigned long long)st.found);
-    printf("  %-44s %8.2f s   %'llu entities, %'llu paths (%'.0f rows/s)\n", "COPY into every partition", st.t_copy,
+    printf("  %-44s %8.2f s   %'llu entities, %'llu paths (%'.0f rows/s)\n", "structure persistence", st.t_copy,
            (unsigned long long)st.ent_rows, (unsigned long long)st.phy_rows, (st.ent_rows + st.phy_rows) / (st.t_copy > 0 ? st.t_copy : 1));
+    printf("    %-42s %8.2f s\n", "Native selection and dependency order", st.t_prepare);
+    printf("    %-42s %8.2f s\n", "parallel staging COPY", st.t_transfer);
+    printf("    %-42s %8.2f s   %llu closed dependency waves, up to %llu writers\n", "parallel paired publication", st.t_publish, (unsigned long long)st.publish_waves, (unsigned long long)st.publish_lanes);
     printf("  %-44s %8.2f s\n", "streamed series application", st.t_sem);
     { const Source *one = NULL; int many = 0; Ref trunk;                    /* one source, every file of it recorded: its trunk, last of all */
       for (int i = 0; i < nfiles; i++) { if (files[i].skipped) continue; if (!files[i].source) { many = 1; break; } if (!one) one = files[i].source; else if (one != files[i].source) many = 1; }

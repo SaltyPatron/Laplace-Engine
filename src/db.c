@@ -11,6 +11,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <limits.h>
 
 typedef struct { lp_id claim, witness, lineage; uint64_t games; double sum, trust; uint8_t has_lineage, dirty, staged; } Series;
 struct Fold { lp_strmap *series; lp_vec(size_t) dirty; };
@@ -18,7 +20,8 @@ static Fold *active_fold;
 typedef struct { lp_mask lexical; uint8_t tier,kind,metadata; } Published;
 typedef struct {
     PGconn **copy, *series; int ncopy, from_ingest, witness_changed;
-    char entity[96], path[96], delta[96], pending[96], witnesses[96], affected[96];
+    char (*entity)[96], (*path)[96];
+    char delta[96], pending[96], witnesses[96], affected[96];
     lp_idmap *known, *changed;
 } Loader;
 static Loader writer;
@@ -44,34 +47,46 @@ static void start_loader(const char *conninfo, int requested){
     writer.ncopy = requested < available ? requested : available;
     if (writer.ncopy < 1) writer.ncopy = 1;
     writer.copy = calloc((size_t)writer.ncopy, sizeof *writer.copy);
+    writer.entity = calloc((size_t)writer.ncopy, sizeof *writer.entity);
+    writer.path = calloc((size_t)writer.ncopy, sizeof *writer.path);
+    if (!writer.copy || !writer.entity || !writer.path || writer.ncopy > UINT16_MAX) {
+        fputs("ingest: cannot allocate bounded publication lanes\n", stderr); exit(1);
+    }
     writer.copy[0] = control;
     for (int i = 1; i < writer.ncopy; i++) writer.copy[i] = db_connect(conninfo);
     statement(control, "SELECT laplace_ensure_stage()");
     q = PQexec(control, "SELECT pg_current_xact_id()::text");
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "ingest identity: %s", PQerrorMessage(control)); exit(1); }
     char suffix[40]; snprintf(suffix, sizeof suffix, "%s", PQgetvalue(q, 0, 0)); PQclear(q);
-    snprintf(writer.entity, sizeof writer.entity, "stage.lp_entity_%s", suffix);
-    snprintf(writer.path, sizeof writer.path, "stage.lp_path_%s", suffix);
+    for (int lane=0; lane<writer.ncopy; lane++) {
+        snprintf(writer.entity[lane], sizeof writer.entity[lane], "stage.lp_entity_%s_%d", suffix, lane);
+        snprintf(writer.path[lane], sizeof writer.path[lane], "stage.lp_path_%s_%d", suffix, lane);
+    }
     snprintf(writer.delta, sizeof writer.delta, "stage.lp_delta_%s", suffix);
     snprintf(writer.pending, sizeof writer.pending, "stage.lp_pending_%s", suffix);
     snprintf(writer.witnesses, sizeof writer.witnesses, "stage.lp_witness_%s", suffix);
     snprintf(writer.affected, sizeof writer.affected, "stage.lp_affected_%s", suffix);
     char sql[1800];
+    for (int lane=0; lane<writer.ncopy; lane++) {
+        snprintf(sql, sizeof sql,
+            "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS,present boolean NOT NULL);"
+            "ALTER TABLE %s ALTER coord DROP NOT NULL,ALTER hilbert DROP NOT NULL;"
+            "CREATE UNLOGGED TABLE %s (LIKE stage.physicality INCLUDING DEFAULTS,present boolean NOT NULL);"
+            "ALTER TABLE %s ALTER path DROP NOT NULL,ALTER hilbert DROP NOT NULL",
+            writer.entity[lane],writer.entity[lane],writer.path[lane],writer.path[lane]);
+        statement(control, sql);
+    }
     snprintf(sql, sizeof sql,
-        "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS,present boolean NOT NULL);"
-        "ALTER TABLE %s ALTER coord DROP NOT NULL,ALTER hilbert DROP NOT NULL;"
-        "CREATE UNLOGGED TABLE %s (LIKE stage.physicality INCLUDING DEFAULTS,present boolean NOT NULL);"
-        "ALTER TABLE %s ALTER path DROP NOT NULL,ALTER hilbert DROP NOT NULL;"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, staged boolean NOT NULL);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
         "CREATE UNIQUE INDEX ON %s (claim,witness,lineage) NULLS NOT DISTINCT;"
         "CREATE UNLOGGED TABLE %s (LIKE public.witness INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (claim blake3 PRIMARY KEY)",
-        writer.entity,writer.entity,writer.path,writer.path,writer.delta,writer.pending,writer.pending,writer.witnesses,writer.affected);
+        writer.delta,writer.pending,writer.pending,writer.witnesses,writer.affected);
     statement(control, sql);
     writer.known = lp_idmap_sized(sizeof(Published)); writer.changed = lp_idmap_new();
     writer.series = db_connect(conninfo);
-    statement(writer.series, "BEGIN");
+    statement(writer.series, "BEGIN ISOLATION LEVEL READ COMMITTED");
 }
 
 /* A complete tier frontier is one Native indexed presence request. */
@@ -382,7 +397,25 @@ static void prune(File *files,int nfiles,LoadStats *st){
     for(unsigned tier=0;tier<=UINT8_MAX;tier++)free(frontier[tier].item);
 }
 
-typedef struct { Node *node; uint64_t hilbert; lp_mask lexical; uint8_t annotations; } Row;
+typedef struct { Node *node; uint64_t hilbert; lp_mask lexical; uint32_t wave; uint16_t lane; uint8_t annotations; } Row;
+/* A dependency edge is about the newly admitted in-memory DAG, not domain tier.
+ * Recorded descendants and perf-cache leaves need no publication dependency.
+ * Repeated path vertices are visited as stored; their runs are never expanded. */
+static int publication_child(void *context,size_t parent,size_t *cursor,size_t *out,size_t *distance){
+    unsigned lanes=*(const unsigned *)context;
+    Node *node=NODE+parent;
+    if(!node->live || node->keep!=1)return 1;
+    while(*cursor<node->nv){
+        const Vtx *vertex=VTX+node->voff+(*cursor)++;
+        Node *child=table_find(&vertex->id);
+        if(child && child->keep==1){
+            *out=(size_t)(child-NODE);
+            *distance=((unsigned)node->id.b[0]*lanes/256u != (unsigned)child->id.b[0]*lanes/256u);
+            return 0;
+        }
+    }
+    return 1;
+}
 static int path_annotations(const Node *node){
     for(uint32_t i=0;i<node->nv;i++)if(VTX[node->voff+i].spare)return 1;
     return 0;
@@ -409,7 +442,10 @@ static void carrier_bytes(lp_mask value,uint8_t out[12]){
     for(unsigned bit=0;bit<64;bit++) if(value&(UINT64_C(1)<<bit)) out[4+(bit>>3)]|=(uint8_t)(0x80u>>(bit&7));
 }
 static int hilbert_order(const void *a,const void *b){
-    const Row *x=a,*y=b;return x->hilbert<y->hilbert?-1:x->hilbert>y->hilbert?1:memcmp(x->node->id.b,y->node->id.b,16);
+    const Row *x=a,*y=b;
+    if(x->wave!=y->wave)return x->wave<y->wave?-1:1;
+    if(x->lane!=y->lane)return x->lane<y->lane?-1:1;
+    return x->hilbert<y->hilbert?-1:x->hilbert>y->hilbert?1:memcmp(x->node->id.b,y->node->id.b,16);
 }
 /* Rejected COPY input is retained. Identify the actual violated invariant
  * without weakening validation or dumping the batch/content into the log.
@@ -483,10 +519,10 @@ static size_t encode_node_path(const Node *x,PathEncoding *path){
     if(lp_ewkb_runs_spare(path->ids,path->runs,path->spare,x->nv,path->bytes,size)!=size){fputs("native path size changed during COPY\n",stderr);exit(1);}
     return size;
 }
-static void copy_rows(PGconn *pg,const Row *rows,size_t lo,size_t hi){
+static void copy_rows(PGconn *pg,int lane,const Row *rows,size_t lo,size_t hi){
     lp_copy copy={0}; char sql[512]; uint8_t geometry[128],mask[12];
     snprintf(sql,sizeof sql,"BEGIN;COPY %s (id,tier,coord,hilbert,mask,present) FROM STDIN (FORMAT binary);"
-        "COPY %s (entity,tier,hilbert,path,mask,present) FROM STDIN (FORMAT binary);COMMIT",writer.entity,writer.path);
+        "COPY %s (entity,tier,hilbert,path,mask,present) FROM STDIN (FORMAT binary);COMMIT",writer.entity[lane],writer.path[lane]);
     copy_open(&copy,pg,sql);
     for(size_t i=lo;i<hi;i++){
         const Node *x=rows[i].node;uint8_t present=x->keep==2;
@@ -535,31 +571,81 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         }
         uint64_t hilbert=0;
         if(x->keep==1){lp_coord c;memcpy(c.m,x->m,sizeof c.m);hilbert=lp_hilbert4(&c);}
-        lp_push(&selected,((Row){x,hilbert,lexical,annotations}));
+        lp_push(&selected,((Row){.node=x,.hilbert=hilbert,.lexical=lexical,.annotations=annotations}));
     }
     size_t count=selected.n;Row *rows=selected.v;
+    double persistence_begin=begin;
     size_t complete=0,metadata=0,overlays=0;
     for(size_t i=0;i<count;i++)if(rows[i].node->keep==1)complete++;
         else{metadata++;overlays+=rows[i].annotations!=0;}
     fprintf(stderr,"batch transport: %zu complete payloads, %zu existing metadata IDs, %zu annotation overlays\n",complete,metadata,overlays);
-    qsort(rows,count,sizeof *rows,hilbert_order);
-    if(count){
-        int lanes=writer.ncopy;if((size_t)lanes>count)lanes=(int)count;
-        #pragma omp parallel for num_threads(lanes) schedule(static,1)
-        for(int lane=0;lane<lanes;lane++)copy_rows(writer.copy[lane],rows,count*(size_t)lane/(size_t)lanes,count*(size_t)(lane+1)/(size_t)lanes);
-        /* Native has already computed the canonical references and paths for
-         * these nodes. Send those proofs with mutable carrier declarations;
-         * the checked merge validates identity and enriches only absent data.
-         * No coordinate/path retrieval is needed for decomposed content. */
-        char sql[1800];snprintf(sql,sizeof sql,
-            "SELECT * FROM laplace_merge_stage('%s'::regclass,'%s'::regclass)",
-            writer.entity,writer.path);
-        PGresult *q=db_command(writer.copy[0],sql);
-        if(PQresultStatus(q)!=PGRES_TUPLES_OK){
-            merge_failure(writer.copy[0],writer.entity,writer.path,PQresultErrorMessage(q));PQclear(q);exit(1);
-        }
-        st->ent_rows+=strtoull(PQgetvalue(q,0,0),NULL,10);st->phy_rows+=strtoull(PQgetvalue(q,0,1),NULL,10);PQclear(q);
+    /* A lane needs a useful transport window. Reuse COPY's existing 4 MiB
+     * grain instead of opening parallel applies for a handful of tiny rows.
+     * This sizes concurrency only; it never excludes input or changes identity. */
+    uint64_t payload=0;
+    for(size_t i=0;i<count;i++){
+        const Row *row=rows+i;
+        payload+=row->node->keep==1 ? 176u+(uint64_t)32*row->node->nv
+            : 114u+(row->annotations?9u+(uint64_t)32*row->node->nv:0);
     }
+    uint64_t wanted=payload/((uint64_t)1<<22);
+    unsigned lanes=wanted<(uint64_t)writer.ncopy?(unsigned)wanted:(unsigned)writer.ncopy;
+    if(!lanes)lanes=1;
+    if(st->publish_lanes<lanes)st->publish_lanes=lanes;
+    size_t nodes=(size_t)table_end();
+    if(nodes>SIZE_MAX/sizeof(size_t)){fputs("publication graph exceeds addressable memory\n",stderr);exit(1);}
+    size_t *levels=count?malloc(nodes*sizeof *levels):NULL;
+    if(count && (!levels || !lp_dag_levels(nodes,publication_child,&lanes,levels))){
+        fprintf(stderr,"invalid Native publication DAG: %s\n",strerror(errno));exit(1);
+    }
+    for(size_t i=0;i<count;i++){
+        size_t depth=rows[i].node->keep==1?levels[rows[i].node-NODE]:1;
+        if(depth>UINT32_MAX){fputs("publication wave exceeds addressable row metadata\n",stderr);exit(1);}
+        rows[i].wave=(uint32_t)depth;
+        /* Prefix ownership keeps concurrent writers on disjoint canonical
+         * range leaves, while every lane's actual rows remain Hilbert ordered. */
+        rows[i].lane=(uint16_t)((unsigned)rows[i].node->id.b[0]*lanes/256u);
+    }
+    free(levels);
+    qsort(rows,count,sizeof *rows,hilbert_order);
+    st->t_prepare+=now()-begin;
+    size_t *bounds=malloc(((size_t)lanes+1)*sizeof *bounds);
+    if(!bounds){perror("publication lane bounds");exit(1);}
+    uint64_t waves=0;
+    for(size_t lo=0;lo<count;){
+        size_t hi=lo+1;while(hi<count && rows[hi].wave==rows[lo].wave)hi++;
+        size_t at=lo;
+        for(unsigned lane=0;lane<lanes;lane++){
+            bounds[lane]=at;
+            while(at<hi && rows[at].lane==(uint16_t)lane)at++;
+        }
+        bounds[lanes]=hi;
+        double phase=now();
+        #pragma omp parallel for num_threads(lanes) schedule(static,1)
+        for(unsigned lane=0;lane<lanes;lane++)if(bounds[lane]<bounds[lane+1])
+            copy_rows(writer.copy[lane],lane,rows,bounds[lane],bounds[lane+1]);
+        st->t_transfer+=now()-phase;phase=now();
+        uint64_t entities=0,paths=0;
+        #pragma omp parallel for num_threads(lanes) schedule(static,1) reduction(+:entities,paths)
+        for(unsigned lane=0;lane<lanes;lane++)if(bounds[lane]<bounds[lane+1]){
+            char sql[512];snprintf(sql,sizeof sql,
+                "SELECT * FROM laplace_merge_stage('%s'::regclass,'%s'::regclass)",
+                writer.entity[lane],writer.path[lane]);
+            PGresult *q=db_command(writer.copy[lane],sql);
+            if(PQresultStatus(q)!=PGRES_TUPLES_OK){
+                merge_failure(writer.copy[lane],writer.entity[lane],writer.path[lane],PQresultErrorMessage(q));
+                PQclear(q);exit(1);
+            }
+            entities+=strtoull(PQgetvalue(q,0,0),NULL,10);
+            paths+=strtoull(PQgetvalue(q,0,1),NULL,10);PQclear(q);
+        }
+        /* A parent wave starts only after EVERY child wave transaction has
+         * committed. A failed/cancelled lane can leave complete branches, never
+         * a visible trunk whose missing subtree a later replay would prune. */
+        st->ent_rows+=entities;st->phy_rows+=paths;
+        st->t_publish+=now()-phase;waves++;lo=hi;
+    }
+    free(bounds);st->publish_waves+=waves;
     for(size_t i=0;i<count;i++){
         const Row *row=rows+i;Published *seen=lp_idmap_get(writer.known,&row->node->id,NULL);
         if(!seen->metadata || row->node->tier<seen->tier)seen->tier=row->node->tier;
@@ -567,7 +653,7 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         seen->kind|=row->node->kind;seen->metadata=1;
     }
     lp_vec_free(&selected);TABLE_EACH(x)if(x->keep==1 || x->keep==2)lp_idmap_put(writer.known,&x->id,NULL);
-    st->t_copy+=now()-begin;begin=now();flush_series(active_fold,st);st->t_sem+=now()-begin;
+    st->t_copy+=now()-persistence_begin;begin=now();flush_series(active_fold,st);st->t_sem+=now()-begin;
     DbTraffic after=db_traffic();
     fprintf(stderr,"batch database: %llu tier rounds, %llu SQL commands, %llu COPY streams; startup and source registration separate\n",
         (unsigned long long)(st->rounds-tier_rounds),(unsigned long long)(after.commands-before.commands),
@@ -616,10 +702,14 @@ int merge(const char *conninfo,int npg){
     /* An unchanged registered source contributes no new evidence on replay.
      * Recompute only for new series or changed witness trust/containment. */
     if(lp_idmap_count(writer.changed) || writer.witness_changed) statement(writer.series,sql);
-    snprintf(sql,sizeof sql,"DROP TABLE %s,%s,%s,%s,%s,%s",writer.entity,writer.path,writer.delta,writer.pending,writer.witnesses,writer.affected);
+    for(int lane=0;lane<writer.ncopy;lane++){
+        snprintf(sql,sizeof sql,"DROP TABLE %s,%s",writer.entity[lane],writer.path[lane]);
+        statement(writer.series,sql);
+    }
+    snprintf(sql,sizeof sql,"DROP TABLE %s,%s,%s,%s",writer.delta,writer.pending,writer.witnesses,writer.affected);
     statement(writer.series,sql);statement(writer.series,"COMMIT");
     PQfinish(writer.series);for(int i=0;i<writer.ncopy;i++)PQfinish(writer.copy[i]);
-    free(writer.copy);lp_idmap_free(writer.known);lp_idmap_free(writer.changed);writer=(Loader){0};return 0;
+    free(writer.copy);free(writer.entity);free(writer.path);lp_idmap_free(writer.known);lp_idmap_free(writer.changed);writer=(Loader){0};return 0;
 }
 int cmd_merge(int argc,char **argv){
     const char *conninfo=laplace_db();
