@@ -134,25 +134,33 @@ static bool binding_point(void *context, const lp_ewkb_span *span){
 void validate_file_contexts(const char *conninfo, File *files, int nfiles){
     size_t count=0;for(int i=0;i<nfiles;i++)if(files[i].known)count++;
     if(!count)return;
-    lp_id *ids=malloc(count*2*sizeof *ids);if(!ids){perror("recorded reading contexts");exit(1);}
+    lp_id *ids=malloc(count*3*sizeof *ids);if(!ids){perror("recorded reading contexts");exit(1);}
     size_t at=0;
-    for(int i=0;i<nfiles;i++)if(files[i].known){ids[at]=files[i].file.id;ids[count+at]=file_context_value(&files[i]).id;at++;}
+    for(int i=0;i<nfiles;i++)if(files[i].known){ids[at]=files[i].file.id;ids[count+at]=file_context_value(&files[i]).id;ids[2*count+at]=files[i].recorded_metadata;at++;}
     Ref tag=text_ref(CTX[0],(const uint8_t *)KEY_CONTEXT_TAG,sizeof KEY_CONTEXT_TAG-1);
+    Ref binding=text_ref(CTX[0],(const uint8_t *)KEY_BINDING_TAG,sizeof KEY_BINDING_TAG-1);
     Args args={0};arg_ids(&args,ids,count);arg_ids(&args,ids+count,count);arg_raw(&args,tag.id.b,sizeof tag.id.b);
+    arg_ids(&args,ids+2*count,count);arg_raw(&args,binding.id.b,sizeof binding.id.b);
     PGconn *pg=db_connect(conninfo);
+    /* Context belongs to these files' metadata. Walking up from every context
+     * in the database scans the source estate even for one already-known file.
+     * Descend only the supplied metadata roots by their primary keys. Compiled
+     * entries are terminals: their target content is not metadata of this file. */
     PGresult *result=ask_once(pg,
-        "WITH RECURSIVE contexts(id,reading) AS ("
-        " SELECT p.entity,k.id FROM public.physicality p"
+        "WITH RECURSIVE wanted(id,reading,metadata) AS ("
+        " SELECT * FROM unnest($1::blake3[],$2::blake3[],$4::blake3[])),"
+        " metadata(file,id,reading) AS ("
+        " SELECT id,metadata,reading FROM wanted"
+        " UNION SELECT m.file,k.id,m.reading FROM metadata m"
+        " JOIN public.physicality p ON p.entity=m.id"
         " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) k(id)"
-        " WHERE p.path @> ARRAY[$3::blake3] AND laplace_path_starts(p.path,$3::blake3)"
-        " AND laplace_path_length(p.path)=2 AND k.id<>$3::blake3"
-        " UNION SELECT parent.entity,c.reading FROM contexts c"
-        " JOIN public.physicality child ON child.entity=c.id"
-        " JOIN public.physicality parent ON parent.path @> ARRAY[c.id]::blake3[]"
-        " WHERE NOT laplace_mask_has_value(child.mask,'kind','file'))"
-        " SELECT wanted.id FROM unnest($1::blake3[],$2::blake3[]) wanted(id,reading)"
-        " JOIN contexts c ON c.id=wanted.id GROUP BY wanted.id"
-        " HAVING bool_or(c.reading<>wanted.reading)",&args);
+        " WHERE NOT laplace_path_starts(p.path,$3::blake3)"
+        " AND NOT laplace_path_starts(p.path,$5::blake3) AND k.id<>m.id)"
+        " SELECT DISTINCT m.file FROM metadata m"
+        " JOIN public.physicality p ON p.entity=m.id"
+        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) k(id)"
+        " WHERE laplace_path_starts(p.path,$3::blake3) AND laplace_path_length(p.path)=2"
+        " AND k.id<>$3::blake3 AND k.id<>m.reading",&args);
     lp_idmap *invalid=lp_idmap_new();
     for(int row=0;row<PQntuples(result);row++){lp_id id;bool fresh;memcpy(id.b,PQgetvalue(result,row,0),16);lp_idmap_put(invalid,&id,&fresh);}
     for(int i=0;i<nfiles;i++)if(files[i].known && lp_idmap_find(invalid,&files[i].file.id)>=0){
