@@ -52,7 +52,7 @@ jobs:
           echo "parity=$parity" >> "$GITHUB_OUTPUT"
           echo "parity: $parity ($EVENT)" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/Laplace-Native", ref: e2decf847b3de1223f0de9050ffa4f0993c13101, path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
+        with: { repository: "${{ github.repository_owner }}/Laplace-Native", ref: 1a3500b63647d2ca32da4b08d5609eee8aa5bb81, path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
@@ -151,6 +151,7 @@ jobs:
           bash Laplace-Engine/tests/ingest-progress.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/cached-key-reader.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/cili-versions.sh "$RUNNER_TEMP/engine/laplace"
+          bash Laplace-Engine/tests/record-thing.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/stream-working-set.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/rich-text-db.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/presence-frontier.sh "$RUNNER_TEMP/engine/laplace" "$RUNNER_TEMP/engine/presence-frontier"

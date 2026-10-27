@@ -9,11 +9,11 @@ header
 tier field by \t
 empty NULL id:NULL vn:NULL wn:NULL mcr:NULL fn:NULL pb:NULL eso:NULL mcr:ili-30-NULL-v
 
-# Resource-qualified references resolve through the cache. A class number or
-# WordNet offset is a pointer, not the identifier text of the thing it names.
-# Missing edition-specific pointers remain diagnosed; no newer class is guessed.
-type 5_VN_CLASS vnclass matching ^vn:(.*)$
-type 7_VN_SUBCLASS vnclass matching ^vn:(.*)$
+# Resource-qualified references resolve through the cache. A class identifier
+# absent from that cache remains the source's own identifier content, as frames
+# and rolesets do. Unresolved WordNet offsets remain pointers, never new ILIs.
+type 5_VN_CLASS vnclass matching ^vn:(.*)$ node
+type 7_VN_SUBCLASS vnclass matching ^vn:(.*)$ node
 # A sense key carries lexical facts as well as an ILI pointer. Its English
 # lexicalization is shared with WordNet's [lemma, language, concept] identity;
 # the packaging prefix and numeric sense key never become that identity.
@@ -48,11 +48,12 @@ part 20_MCR_SUMO by : pieces 2
 part 21_MCR_TO by : pieces 2
 part 22_MCR_LEXNAME by : pieces 2
 part 24_WN_SENSEFREC by : pieces 2
+part 25_WN_SYNSET_REL_NUM by : pieces 2
 part 26_ESO_CLASS by : pieces 2
 part 27_ESO_ROLE by : pieces 2
 
-# These repeat class-number keys or database relationship bookkeeping.
-omit 6_VN_CLASS_NUMBER 8_VN_SUBCLASS_NUMBER 25_WN_SYNSET_REL_NUM
+# These repeat the class identifiers already held by columns 5 and 7.
+omit 6_VN_CLASS_NUMBER 8_VN_SUBCLASS_NUMBER
 content *
 # All nonempty semantic cells, in source order, form ONE n-ary strand. A role
 # pair's complete context stays together instead of playing its repeated
@@ -77,6 +78,9 @@ thing 20_MCR_SUMO 2
 thing 21_MCR_TO 2
 thing 22_MCR_LEXNAME 2
 thing 24_WN_SENSEFREC 2
+# README: "25_WN_SYNSET_REL_NUM: this column contains the information of the
+# number of relations of the WordNet 3.0 verb sense." This is stated content.
+thing 25_WN_SYNSET_REL_NUM 2
 thing 26_ESO_CLASS 2
 thing 27_ESO_ROLE 2
 thing row of *
