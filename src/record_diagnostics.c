@@ -13,7 +13,8 @@ const DiagnosticLabel record_diagnostic_labels[DIAG_COUNT] = {
     {"line", 4, UINT64_C(0xbf4ba5ad694f5907)},
     {"no list in the highway:", 23, UINT64_C(0x9c679eb7e39af651)},
     {"value equal to its thing:", 25, UINT64_C(0x50c83810e5074575)},
-    {"a key no list of the highway holds, left out of the path:", 57, UINT64_C(0xb5c022f381bb9b49)}
+    {"a key no list of the highway holds, left out of the path:", 57, UINT64_C(0xb5c022f381bb9b49)},
+    {"ambiguous highway pointer:", 26, 0}
 };
 
 static struct { char recipe[64], name[160]; uint64_t n; char what; } *OBL; static size_t NOBL, COBL; static uint64_t OBL_MORE;

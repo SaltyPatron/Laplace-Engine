@@ -4,7 +4,7 @@
 /* Bounded per-worker obligations and source-level diagnostic totals. */
 #include "record_worker.h"
 
-enum { DIAG_ATTEST, DIAG_HOLDS, DIAG_RELATE, DIAG_LINE_PREDICATE, DIAG_LINE, DIAG_NO_LIST, DIAG_SELF_VALUE, DIAG_UNRESOLVED_KEY, DIAG_COUNT };
+enum { DIAG_ATTEST, DIAG_HOLDS, DIAG_RELATE, DIAG_LINE_PREDICATE, DIAG_LINE, DIAG_NO_LIST, DIAG_SELF_VALUE, DIAG_UNRESOLVED_KEY, DIAG_AMBIGUOUS_KEY, DIAG_COUNT };
 extern const DiagnosticLabel record_diagnostic_labels[DIAG_COUNT];
 void record_note_open_name(RecordWorker *, const uint8_t *, uint32_t, uint64_t);
 void record_note_unhandled(RecordWorker *sink, const SemanticValue *value);

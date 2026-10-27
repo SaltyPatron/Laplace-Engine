@@ -7,7 +7,7 @@ name wsd-evaluation-framework
 witness Word Sense Disambiguation: A Unified Evaluation Framework
 class AcademicCurated
 root $LAPLACE_DATA/WSD
-held its root is empty on hart-server and HART-DESKTOP; the corpus is its keeper's to supply (Laplace-Operations data.tsv: WSD)
+# Acquisition is declared in Laplace-Operations/data.tsv (WSD).
 # Data_Validation/sample-dataset holds semeval2015.data.xml and semeval2015.gold.key.txt, byte for byte the files of
 # Evaluation_Datasets/semeval2015: they are read there, under that directory's name.
 except */sample-dataset/*
