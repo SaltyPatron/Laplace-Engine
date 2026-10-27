@@ -678,7 +678,7 @@ static int ingest_highway(const char *conninfo, const char *t0p, int threads, in
 
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
-    int highway = 0, threads = 0, do_load = 1, show_claims = 0, entities = 0, asking = 1, catalog = 0, list = 0; const char *of = NULL; extern int load_whole;
+    int highway = 0, threads = 0, do_load = 1, show_claims = 0, entities = 0, catalog = 0, list = 0; const char *of = NULL; extern int load_whole;
     int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "-t", .kind = 's', .at = &t0p }, { .flag = "-r", .kind = 's', .at = &rdir }, { .flag = "-j", .kind = 'i', .at = &threads },
         { .flag = "-s", .kind = 's', .at = &of },                                                       /* the files named are this source's: a part of it at a time */
         { .flag = "--highway", .kind = 'b', .at = &highway },
@@ -701,6 +701,9 @@ int cmd_ingest(int argc, char **argv){
         return ingest_highway(conninfo, t0p, threads, do_load);
     }
     if (tsv_claims && entities) { fprintf(stderr, "--claims-tsv writes claims, not entities\n"); return 2; }
+    /* An explicit no-load preview is entirely local. Plain --entities may
+     * annotate the preview with database presence, but must not override it. */
+    int asking = do_load > 0;
     if (entities || tsv_claims) show_claims = 1;
     if (show_claims) do_load = 0;
     if (a < argc && argv[a][0] == '-') { fprintf(stderr, "usage: laplace ingest [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] [--no-load] [--plan] [--claims] [--claims-tsv] [--entities] source|file...\n       laplace ingest [--catalog | --list-sources] [-r recipes]\n"); return 2; }

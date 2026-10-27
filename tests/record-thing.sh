@@ -25,7 +25,10 @@ fi
 grep -q $'^claim\t.*Antonym' <<< "$output"
 grep -q $'^claim\t.*IsA' <<< "$output"
 grep -q 'the strength with which this edge expresses this assertion' <<< "$output"
-dump=$("$engine" ingest --no-load --entities -s conceptnet "$file" 2>&1) || { printf '%s\n' "$dump" >&2; exit 1; }
+# A reachable database without Laplace is still irrelevant to a local preview.
+# CI supplies a real PostgreSQL server; this also works when none is running.
+preview_conn="host='${PGHOST:-/tmp}' port=${PGPORT:-5432} user=${PGUSER:-laplace} dbname=postgres connect_timeout=1"
+dump=$("$engine" ingest --no-load --entities -d "$preview_conn" -s conceptnet "$file" 2>&1) || { printf '%s\n' "$dump" >&2; exit 1; }
 entities=$(grep '^  tier ' <<< "$dump")
 if grep -Eq 'parts +(weight|surfaceText|rAntonym|rIsA)([[:space:]]|$)' <<< "$entities"; then
   printf 'a packaging key or relation URI became an entity: %s\n' "$entities" >&2
