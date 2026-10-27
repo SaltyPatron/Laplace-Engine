@@ -52,13 +52,13 @@ jobs:
           echo "parity=$parity" >> "$GITHUB_OUTPUT"
           echo "parity: $parity ($EVENT)" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/Laplace-Native", ref: 1a3500b63647d2ca32da4b08d5609eee8aa5bb81, path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
+        with: { repository: "${{ github.repository_owner }}/Laplace-Native", ref: 1224202d1cb52607682e3502c303047ac3c05adf, path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
         with:
           repository: "${{ github.repository_owner }}/Laplace-postgres"
-          ref: 877f4875801c8cb4cb3eaf31204a40080bee78bb
+          ref: e2534890320a82a7f3e6afa5e2567100acd68409
           path: Laplace-postgres
           token: "${{ secrets.LAPLACE_CHECKOUT }}"
       # Every job runs the binary its own run built (tests/ci-own-binary.py): the build directory is the runner's, shared
@@ -153,6 +153,7 @@ jobs:
           bash Laplace-Engine/tests/cili-versions.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/record-thing.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/stream-working-set.sh "$RUNNER_TEMP/engine/laplace"
+          python3 Laplace-Engine/tests/publication-waves.py "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/rich-text-db.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/presence-frontier.sh "$RUNNER_TEMP/engine/laplace" "$RUNNER_TEMP/engine/presence-frontier"
           bash Laplace-Engine/tests/framenet-differences.sh "$RUNNER_TEMP/engine/laplace"

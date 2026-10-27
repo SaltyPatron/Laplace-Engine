@@ -327,7 +327,7 @@ void table_reset(void);                                                      /* 
 Ref  string_ref(const uint8_t *s, size_t n);                          /* text as its entity, remembered per thread */
 void ev_push(Events *, const Event *);
 
-typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, std_new, std_upd, known; double t_dedup, t_copy, t_sem, t_read, t_play, t_led; } LoadStats;
+typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, std_new, std_upd, known, publish_waves, publish_lanes; double t_prepare, t_transfer, t_publish, t_dedup, t_copy, t_sem, t_read, t_play, t_led; } LoadStats;
 typedef struct { uint64_t commands, copy_streams; } DbTraffic;
 DbTraffic db_traffic(void);
 PGresult *db_command(PGconn *, const char *sql);
