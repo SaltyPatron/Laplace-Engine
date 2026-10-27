@@ -978,6 +978,7 @@ int cmd_ingest(int argc, char **argv){
            (unsigned long long)st.checked, (unsigned long long)st.rounds, (unsigned long long)st.found);
     printf("  %-44s %8.2f s   %'llu entities, %'llu paths (%'.0f rows/s)\n", "COPY into every partition", st.t_copy,
            (unsigned long long)st.ent_rows, (unsigned long long)st.phy_rows, (st.ent_rows + st.phy_rows) / (st.t_copy > 0 ? st.t_copy : 1));
+    printf("  %-44s %8.2f s\n", "continuous standing updates", st.t_sem);
     { const Source *one = NULL; int many = 0; Ref trunk;                    /* one source, every file of it recorded: its trunk, last of all */
       for (int i = 0; i < nfiles; i++) { if (files[i].skipped) continue; if (!files[i].source) { many = 1; break; } if (!one) one = files[i].source; else if (one != files[i].source) many = 1; }
       /* The witness is the source's trunk (Semantics: Attestations, Witnesses): its trust and lineage are the source's,
@@ -1015,7 +1016,10 @@ int cmd_ingest(int argc, char **argv){
             }
             lp_idmap_free(seen);
         }
+        double registration_begin=now();
+        fputs("  registering Native witness testimony and standings\n",stderr);
         if (load_register(conninfo, threads, roots, nr) || merge(conninfo, threads)) { free(roots); return 1; }
+        printf("  %-44s %8.2f s\n", "witness registration", now()-registration_begin);
         free(roots);
         if (has_witness_trunk && witness_supersedes && forget_superseded(conninfo, threads, &witness_trunk)) return 1;
     }
