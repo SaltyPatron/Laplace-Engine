@@ -1,0 +1,12 @@
+name cili-map-odwn13
+# CILI's Open Dutch WordNet 1.3 owl:sameAs map resolves that release's
+# synset pointers to the same canonical ILI content used by the other maps.
+match ili-map-odwn13.ttl
+format turtle
+where triple/subject matches ^ili:i[0-9]+$
+
+thing triple subject matching ^ili:(i[0-9]+)$
+content subject
+types ili "Interlingual index concept" triple
+keyed ili triple subject matching ^ili:(i[0-9]+)$
+keyed odwn-1.3 triple property[predicate=owl:sameAs]/object_list matching ^odwn13:(.*)$

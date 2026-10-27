@@ -14,6 +14,7 @@ static lp_id *strands_named(int argc, char **argv, int a, int *ns, Hold **hs, in
     for (int i = 0; i < np && i < MAXPARTS; i++) { const char *p = argv[a + i]; have[i] = strcmp(p, "?") != 0; if (!have[i]) continue;
         const char *colon = strchr(p, ':'); int typed = 0;
         if (colon && colon > p && colon[1]) { char list[64]; snprintf(list, sizeof list, "%.*s", (int)(colon - p), p); Ref r = highway_typed(list, (const uint8_t *)colon + 1, strlen(colon + 1), &typed); if (typed) part[i] = r.id; }
+        if (typed<0) { fprintf(stderr,"%s: ambiguous highway pointer; name its canonical target explicitly\n",p); exit(2); }
         if (!typed) part[i] = lp_text_decompose(c, (const uint8_t *)p, strlen(p), NULL, NULL).id;
         key[nk++] = part[i];
         char hx[33]; id_text(&part[i], hx); printf("  part %d   %-24s %s%s\n", i + 1, p, hx, typed ? "   (a type of the highway)" : ""); }

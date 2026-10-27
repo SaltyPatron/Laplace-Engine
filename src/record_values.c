@@ -238,7 +238,11 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
         for (int j = 0; j < nk; j++) { if (kf.n) { kp = (const uint8_t *)kf.k[j]; kn = strlen(kf.k[j]); } Ref v = string_ref(kp, kn);     /* each template's key in turn: the first a list knows */
             for (uint8_t i = 0; i < d->ntargets; i++) {
                 const TargetCode *target = &d->targets[i];
-                int has = 0; *out = highway_typed(target->name, kp, kn, &has); if (has) return 1;
+                int has = 0; *out = highway_typed(target->name, kp, kn, &has); if (has>0) return 1;
+                if (has<0) {
+                    if (record_value_once(k,t,c)) record_obligation_note(k,'o',&record_diagnostic_labels[DIAG_AMBIGUOUS_KEY],x->name,x->nlen,kp,kn);
+                    return 0;
+                }
                 const lp_list *L = HW ? lp_highway_list(HW, target->name) : NULL; if (L && lp_highway_slot(HW, L, &v.id) >= 0) { *out = v; return 1; }
             } }
         if (d->k.node) { if (record_value_once(k, t, c)) record_obligation_note(k, 'm', d->road_label, x->name, x->nlen, NULL, 0); *out = string_ref(kp, kn); return 1; }
