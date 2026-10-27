@@ -65,6 +65,8 @@ cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
 
 CILI's published WordNet 3.0, WordNet 3.1 and Open Dutch WordNet 1.3 maps resolve release-specific pointers through the `wordnet-3.0`, `wordnet-3.1` and `odwn-1.3` key namespaces to existing ILI records. These keys add neither entities nor mask slots. `highway --refresh` reads the maps through their recipes; ordinary `highway` reconstructs keys from Native's frozen `manifest/slots/keys.tsv.gz`. That metadata accepts `namespace/key/target-list/target-slot` tab-separated rows alongside the original `list/key/slot` rows. Cross-list keys select the self-contained `LPHW0003` envelope, requiring Native's namespace-aware reader; caches with only original rows retain `LPHW0002`.
 
+A source pointer may name several concepts: CILI's WordNet 3.1 map contains 47 such pointers. Every distinct target is retained and can be enumerated through Native. A recipe's singular `type` lookup reports an ambiguous pointer as an unresolved obligation and makes no selection; provenance commands require an explicit canonical target. Neither row order nor a composed surrogate chooses a concept.
+
 `laplace deploy` creates or updates extensions, schema, indexes and database settings, and ensures the Tier-0 floor and Highway identifier entities exist in PostgreSQL.
 
 

@@ -17,11 +17,11 @@
 #include <zlib.h>
 
 typedef struct { char name[32], say[64]; Ref *t; size_t n, cap; lp_idmap *map; uint32_t first; int bank; } List;
-typedef struct { int list; lp_id id; } Key;                                  /* a resource's key of a type: by its list's place and the key's bytes (lp_strmap) */
-typedef struct { int list; char *key, *to; int done; } Alias;
+typedef struct { int list; lp_id id; uint32_t more; } Key;                   /* a resource's key can name several existing concepts */
+typedef struct { int list; char *key, *to; } Alias;
 typedef struct { int la, lb; char *ka, *kb; } PEdge;
 typedef struct { int la, lb; uint32_t from, to; } Edge;
-struct Hw { List *l; int nl; lp_strmap *keys; lp_vec(Alias) a; lp_vec(PEdge) e; };
+struct Hw { List *l; int nl; lp_strmap *keys; lp_vec(Key) extra_keys; lp_vec(Alias) a; lp_vec(PEdge) e; };
 static int list_of(Hw *h, const char *name, const char *say){
     for (int i = 0; i < h->nl; i++) if (!strcmp(h->l[i].name, name)) { if (say && !h->l[i].say[0]) snprintf(h->l[i].say, sizeof h->l[i].say, "%s", say); return i; }
     h->l = xrealloc(h->l, sizeof(List) * (size_t)(h->nl + 1)); List *l = &h->l[h->nl]; memset(l, 0, sizeof *l);
@@ -44,12 +44,17 @@ static Key *key_find(Hw *h, int list, const char *key){ char k[1024]; return h->
 static int key_put(Hw *h, int list, const char *key, const lp_id *id){
     if (!h->keys) h->keys = lp_strmap_sized(sizeof(Key));
     char k[1024]; bool fresh; Key *x = lp_strmap_get(h->keys, k, key_of(list, key, k), &fresh);
-    if (!fresh) return 0;                                                    /* the first that names a key keeps it */
-    x->list = list; x->id = *id; return 1;
+    if (!fresh) {
+        for (const Key *target=x; target; target=target->more ? h->extra_keys.v+target->more-1 : NULL)
+            if (lp_id_eq(&target->id,id)) return 0;
+        if (h->extra_keys.n>=UINT32_MAX-1) { fputs("too many highway key targets\n",stderr); exit(1); }
+        Key extra={list,*id,x->more}; lp_push(&h->extra_keys,extra); x->more=(uint32_t)h->extra_keys.n; return 1;
+    }
+    *x=(Key){list,*id,0}; return 1;
 }
 void hw_key(Hw *h, const char *list, Ref thing, const char *key){ key_put(h, list_of(h, list, NULL), key, &thing.id); }
 void hw_alias(Hw *h, const char *list, const char *key, const char *to){
-    lp_push(&h->a, (Alias){ list_of(h, list, NULL), strdup(key), strdup(to), 0 });
+    lp_push(&h->a, (Alias){ list_of(h, list, NULL), strdup(key), strdup(to) });
 }
 void hw_edge(Hw *h, const char *la, const char *ka, const char *lb, const char *kb){
     lp_push(&h->e, (PEdge){ list_of(h, la, NULL), list_of(h, lb, NULL), strdup(ka), strdup(kb) });
@@ -159,9 +164,11 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
         List *l=h->l+li; size_t nz; Frozen *fz=frozen_read(l->name,&nz);
         lp_idmap *first=lp_idmap_sized(sizeof(char *)), *remap=lp_idmap_sized(sizeof(lp_id));
         for (size_t k=0; k<lp_strmap_count(h->keys); k++) {
-            Key *entry=lp_strmap_at(h->keys,k); if (entry->list!=li) continue;
-            bool fresh; size_t at=lp_idmap_put(first,&entry->id,&fresh);
-            if (fresh) { size_t len; const char *key=lp_strmap_key(h->keys,k,&len)+sizeof(int); *(const char **)lp_idmap_at(first,at)=key; }
+            for (Key *entry=lp_strmap_at(h->keys,k); entry; entry=entry->more ? h->extra_keys.v+entry->more-1 : NULL) {
+                if (entry->list!=li) continue;
+                bool fresh; size_t at=lp_idmap_put(first,&entry->id,&fresh);
+                if (fresh) { size_t len; const char *key=lp_strmap_key(h->keys,k,&len)+sizeof(int); *(const char **)lp_idmap_at(first,at)=key; }
+            }
         }
         size_t capacity=nz+l->n+1; Ref *t=xrealloc(NULL,sizeof *t*capacity); size_t n=0;
         uint8_t *placed=calloc(l->n+1,1);
@@ -192,8 +199,10 @@ static void freeze(Hw *h, size_t *added, size_t *retired, size_t *kept){
             *(lp_id *)lp_idmap_at(remap,lp_idmap_put(remap,&l->t[old].id,NULL))=value.id; (*added)++;
         }
         for (size_t k=0; k<lp_strmap_count(h->keys); k++) {
-            Key *entry=lp_strmap_at(h->keys,k); if (entry->list!=li) continue;
-            int64_t at=lp_idmap_find(remap,&entry->id); if (at>=0) entry->id=*(lp_id *)lp_idmap_at(remap,(size_t)at);
+            for (Key *entry=lp_strmap_at(h->keys,k); entry; entry=entry->more ? h->extra_keys.v+entry->more-1 : NULL) {
+                if (entry->list!=li) continue;
+                int64_t at=lp_idmap_find(remap,&entry->id); if (at>=0) entry->id=*(lp_id *)lp_idmap_at(remap,(size_t)at);
+            }
         }
         for (size_t slot=0; slot<nz; slot++) {
             if (t[slot].tier==UINT8_MAX) continue;
@@ -236,7 +245,7 @@ static int frozen_keys(Hw *h){
         if (*end || li<0 || at>=h->l[li].n || h->l[li].t[at].tier==UINT8_MAX) { ok=0; break; }
         lp_id id=h->l[li].t[at].id; int source=list_of(h,space,NULL);
         Key *existing=key_find(h,source,key);
-        if (existing && !lp_id_eq(&existing->id,&id)) { ok=0; break; }
+        if (nf==3 && existing && !lp_id_eq(&existing->id,&id)) { ok=0; break; }
         key_put(h,source,key,&id);
     }
     if (!gzeof(file)) ok=0;
@@ -313,7 +322,13 @@ int cmd_highway(int argc, char **argv){
     }
     /* a key that names what another names: until no key is added */
     size_t added = 0; for (int more = 1; more; ) { more = 0;
-        for (size_t i = 0; i < hw.a.n; i++) { Alias *a = &hw.a.v[i]; if (a->done) continue; Key *t = key_find(&hw, a->list, a->to); if (!t) continue; lp_id id = t->id; a->done = 1; if (key_put(&hw, a->list, a->key, &id)) { added++; more = 1; } } }
+        for (size_t i = 0; i < hw.a.n; i++) { Alias *a = &hw.a.v[i]; Key *t = key_find(&hw, a->list, a->to); if (!t) continue;
+            lp_id id=t->id; lp_vec(lp_id) alternatives={0};
+            for (uint32_t next=t->more; next; next=hw.extra_keys.v[next-1].more) lp_push(&alternatives,hw.extra_keys.v[next-1].id);
+            if (key_put(&hw,a->list,a->key,&id)) { added++; more=1; }
+            for (size_t j=0; j<alternatives.n; j++) if (key_put(&hw,a->list,a->key,alternatives.v+j)) { added++; more=1; }
+            lp_vec_free(&alternatives);
+        } }
     BankSpec banks[64]; int nbank = banks_read(&hw, banks); if (nbank < 0) return 1;
     /* every list in its frozen order: slots never move */
     size_t fz_new, fz_retired, fz_kept; freeze(&hw, &fz_new, &fz_retired, &fz_kept);
@@ -329,7 +344,7 @@ int cmd_highway(int argc, char **argv){
     size_t ecap = hw.e.n + 1; Edge *ed = malloc(sizeof(Edge) * ecap); size_t ne = 0, lost = 0;
     typedef struct { int la, lb; size_t n; char ex[2][96]; } Lost; Lost ls[64]; int nls = 0;          /* what was left out, by the lists, with one of each side that no list holds */
     for (size_t i = 0; i < hw.e.n; i++) { const PEdge *p = &hw.e.v[i]; Key *a = key_find(&hw, p->la, p->ka), *b = key_find(&hw, p->lb, p->kb);
-        int64_t from = a ? slot_in(&hw.l[p->la], &a->id) : -1, to = b ? slot_in(&hw.l[p->lb], &b->id) : -1;
+        int64_t from = a && !a->more ? slot_in(&hw.l[p->la], &a->id) : -1, to = b && !b->more ? slot_in(&hw.l[p->lb], &b->id) : -1;
         if (from < 0 || to < 0) { lost++; int q = 0; while (q < nls && !(ls[q].la == p->la && ls[q].lb == p->lb)) q++;
             if (q == nls && nls < 64) { memset(&ls[nls], 0, sizeof ls[0]); ls[nls].la = p->la; ls[nls].lb = p->lb; nls++; }
             if (q < nls) { ls[q].n++; if (from < 0 && !ls[q].ex[0][0]) snprintf(ls[q].ex[0], 96, "%s", p->ka); if (to < 0 && !ls[q].ex[1][0]) snprintf(ls[q].ex[1], 96, "%s", p->kb); }
@@ -399,7 +414,9 @@ int cmd_highway(int argc, char **argv){
     }
     size_t nkeys=0,nreferences=0,stray=0; lp_idindex *reference_ids=NULL;
     for (size_t i=0; i<lp_strmap_count(hw.keys); i++) {
-        const Key *key=lp_strmap_at(hw.keys,i); size_t bytes; const char *text=lp_strmap_key(hw.keys,i,&bytes)+sizeof(int);
+        size_t bytes; const char *text=lp_strmap_key(hw.keys,i,&bytes)+sizeof(int);
+        const Key *first=lp_strmap_at(hw.keys,i); int multiple=first->more!=0;
+        for (const Key *key=first; key; key=key->more ? hw.extra_keys.v+key->more-1 : NULL) {
         int64_t slot=slot_in(hw.l+key->list,&key->id);
         if (slot<0) {
             if (!reference_ids) { reference_ids=lp_idindex_build(rec,total,sizeof *rec); if (!reference_ids) return 1; }
@@ -415,7 +432,10 @@ int cmd_highway(int argc, char **argv){
                 target->name,(unsigned long long)((uint64_t)at-target->first));
             nreferences++; continue;
         }
-        line(&keys,"%s\t%.*s\t%lld\n",hw.l[key->list].name,(int)(bytes-sizeof(int)),text,(long long)slot); nkeys++;
+        if (multiple) {
+            line(&keys,"%s\t%.*s\t%s\t%lld\n",hw.l[key->list].name,(int)(bytes-sizeof(int)),text,hw.l[key->list].name,(long long)slot); nreferences++;
+        } else { line(&keys,"%s\t%.*s\t%lld\n",hw.l[key->list].name,(int)(bytes-sizeof(int)),text,(long long)slot); nkeys++; }
+        }
     }
     lp_idindex_free(reference_ids);
     lp_edge *edges=xrealloc(NULL,sizeof *edges*(ne+1));
@@ -431,7 +451,7 @@ int cmd_highway(int argc, char **argv){
     for (int l = 0; l < hw.nl; l++) printf("  %-28s %'zu\n", hw.l[l].say[0] ? hw.l[l].say : hw.l[l].name, hw.l[l].n);
     if (lost) { printf("  %'zu mappings name a key no list holds, or a type of another list: left out\n", lost);
         for (int q = 0; q < nls; q++) printf("    %-10s to %-10s %'9zu   for instance %s%s%s%s\n", hw.l[ls[q].la].name, hw.l[ls[q].lb].name, ls[q].n, ls[q].ex[0][0] ? ls[q].ex[0] : "", ls[q].ex[0][0] && ls[q].ex[1][0] ? ", " : "", ls[q].ex[1][0] ? ls[q].ex[1] : "", ""); }
-    if (nreferences) printf("  %'zu source pointer keys resolve to existing records in another list (embedded in the highway)\n",nreferences);
+    if (nreferences) printf("  %'zu source pointer keys resolve to existing records (embedded in the highway)\n",nreferences);
     if (stray) printf("  %'zu keys name no active highway record: left out\n", stray);
     printf("\n%s: %'u types in %d lists, %'zu edges, %'zu embedded keys (%'zu by way of other keys); %d banks   (%.1f s)\nfingerprint ", outp, total, hw.nl, ne, nkeys+nreferences, added, bit, now() - T);
     for (int i = 0; i < 32; i++) printf("%02x", fp[i]); printf("\n");

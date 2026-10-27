@@ -461,7 +461,9 @@ Ref highway_typed(const char *list, const uint8_t *kv, size_t kn, int *has){
     *has = 0; Ref x; memset(&x, 0, sizeof x); if (!HW || !kn || kn > 1000) return x;
     char key[1001]; memcpy(key, kv, kn); key[kn] = 0;
     const lp_list *typed=lp_highway_list(HW,list);
-    const lp_tier0_record *rec = lp_highway_resolve(HW, typed ? typed->name : list, key); if (!rec) return x;
+    const char *space=typed ? typed->name : list; uint32_t cursor=0;
+    const lp_tier0_record *rec=lp_highway_resolve_next(HW,space,key,&cursor); if (!rec) return x;
+    if (lp_highway_resolve_next(HW,space,key,&cursor)) { *has=-1; return x; }
     x.id = rec->id; memcpy(x.c.m, rec->m, 32); x.tier = (uint8_t)rec->pad; *has = 1; return x;
 }
 void ctx_open(int threads){

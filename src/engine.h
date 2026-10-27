@@ -138,7 +138,7 @@ uint64_t table_end(void);
 #define TABLE_EACH(x) for (Node *x = NODE, *x##_end = NODE + table_end(); x < x##_end; x++) if (x->live)
 extern const lp_tier0_record *T0;
 extern const lp_highway *HW;                                          /* the highway, when it is there: types and their mask bits */
-Ref    highway_typed(const char *list, const uint8_t *key, size_t n, int *has);   /* a type by a source's key of it: the highway's record as a reference; has = 0 when the list does not know the key */
+Ref    highway_typed(const char *list, const uint8_t *key, size_t n, int *has);   /* existing canonical record: has=1 unique, 0 absent, -1 ambiguous */
 
 void   tier0_open(const char *path);                                  /* maps tier 0 or exits */
 void   table_init(void);
