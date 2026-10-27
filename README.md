@@ -30,6 +30,14 @@ kill and resume a writer, and verify unchanged replay. Native's DAG tests also
 exercise shared/repeated edges, owner-local cohorts, cycles and a 200,000-node
 dependency chain without C recursion.
 
+`src/pg_plan.c` owns prepared SQL by connection lifetime and copied SQL contents.
+libpq reset/destruction events release its Native map. A reused connection
+address or mutable query buffer cannot select another session's statement.
+The driver leaves custom/generic planning and parallel-append policy to the
+declared database settings; connection setup does not override them. The live
+`pg_plan_lifecycle` acceptance covers reset, multiple connections, query-buffer
+reuse and retention of the caller's planner policy.
+
 ## Commands
 
 | Command | What it does |

@@ -56,11 +56,6 @@ static PGconn *connect_one(const char *conninfo){
     PGconn *pg = PQconnectdb(conninfo);
     if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "Database connection failed: %s", PQerrorMessage(pg)); exit(1); }
     PQclear(PQexec(pg, "SET client_min_messages = warning"));
-    /* A named leaf keeps parallel_workers at 0, so a one-partition lookup stays one process.
-     * A statement on the parent is many leaves: Gather uses the workers setup.sh already sized.
-     * The database default stays off (a 1 ms lookup must not start workers). Measured on
-     * laplace_containers of Sherlock Holmes: 3780 ms with it off, 573 ms with it on, 101 rows either way. */
-    PQclear(PQexec(pg, "SET enable_parallel_append = on"));
     if (!id_oid && !omp_in_parallel()) { PGresult *r = PQexec(pg, "SELECT 'blake3'::regtype::oid");          /* a database not deployed yet has no such type */
                    if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) id_oid = (uint32_t)strtoul(PQgetvalue(r, 0, 0), NULL, 10); PQclear(r); }
     return pg;
@@ -81,26 +76,6 @@ PGconn *db_read(const char *conninfo){
     snprintf(snapshot, sizeof snapshot, "%s", PQgetvalue(r, 0, 0)); PQclear(r);
     return pg;
 }
-/* A query that is asked again and again is planned once for the connection: over the partitions of entity and
- * physicality, planning a lookup takes several times what answering it does. Results come in binary. */
-PGresult *db_ask(PGconn *pg, const char *sql, int n, const char *const *v, const int *l, const int *f){
-    static struct { PGconn *pg; const char *sql; } known[64]; static int nknown; int k = 0;
-    #pragma omp critical(db_ask)
-    {
-        while (k < nknown && !(known[k].pg == pg && known[k].sql == sql)) k++;
-        if (k == nknown && nknown < 64) {
-            char name[16]; snprintf(name, sizeof name, "q%d", k);
-            if (!nknown || known[nknown - 1].pg != pg) { int had = 0; for (int i = 0; i < nknown; i++) had |= known[i].pg == pg; if (!had) PQclear(PQexec(pg, "SET plan_cache_mode = force_generic_plan")); }
-            PGresult *r = PQprepare(pg, name, sql, n, NULL);
-            if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "prepare: %s", PQerrorMessage(pg)); exit(1); }
-            PQclear(r); known[nknown].pg = pg; known[nknown++].sql = sql;
-        }
-    }
-    if (k >= 64) return PQexecParams(pg, sql, n, NULL, v, l, f, 1);
-    char name[16]; snprintf(name, sizeof name, "q%d", k);
-    return PQexecPrepared(pg, name, n, v, l, f, 1);
-}
-
 int main(int argc, char **argv){
     if (argc > 1 && !strcmp(argv[1], "describe")) { op_describe(stdout); return 0; }          /* the catalog, for every other surface */
     if (argc > 2 && !strcmp(argv[1], "help") && op_named(argv[2])) { op_usage(stdout, op_named(argv[2])); return 0; }

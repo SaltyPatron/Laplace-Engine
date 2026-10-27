@@ -23,7 +23,7 @@ void db_connect_many(const char *conninfo, int n, PGconn **out);   /* n of them,
 const char *db_noted(void);                          /* the conninfo of the last db_connect */
 PGconn *db_read(const char *conninfo);               /* db_connect for a read: one world, a repeatable-read snapshot every connection of the command shares */
 const char *db_snapshot(void);                       /* that snapshot, for the pool's connections; NULL outside a read */
-PGresult *db_ask(PGconn *, const char *sql, int n, const char *const *v, const int *l, const int *f);   /* planned once for the connection; sql: a literal */
+#include "pg_plan.h"
 
 /* ---- the personality firmware: a pull's decisions, read from a file, never from the records (firmware.c) */
 enum { FW_HOP, FW_SEARCH, FW_TRANSLATE, FW_FOLLOWS, FW_PULL, FW_OPS };

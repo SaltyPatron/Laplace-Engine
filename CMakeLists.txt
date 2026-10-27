@@ -39,6 +39,7 @@ set(ENGINE_SOURCES
     src/op.c
     src/os.c
     src/pg.c
+    src/pg_plan.c
     src/table.c
     src/recipe.c
     src/ingest.c
@@ -195,6 +196,18 @@ else()
   target_link_options(laplace_engine PRIVATE -Wl,--no-as-needed ${TBBMALLOC_PROXY} -Wl,--as-needed)
   set_property(TARGET laplace_engine APPEND PROPERTY BUILD_RPATH ${TBBMALLOC_DIR})
   set_property(TARGET laplace_engine APPEND PROPERTY INSTALL_RPATH ${TBBMALLOC_DIR})
+endif()
+
+# The transport plan owner is exercised against a real configured server.
+add_executable(pg_plan_lifecycle EXCLUDE_FROM_ALL tests/pg-plan-lifecycle.c src/pg_plan.c)
+target_include_directories(pg_plan_lifecycle PRIVATE src ${LAPLACE_NATIVE}/include ${LAPLACE_PG_DIR}/include)
+target_compile_options(pg_plan_lifecycle PRIVATE ${LP_C_FLAGS})
+if(WIN32)
+  target_compile_options(pg_plan_lifecycle PRIVATE /UNDEBUG)
+  target_link_libraries(pg_plan_lifecycle PRIVATE laplace_static ${LAPLACE_PG_DIR}/lib/libpq.lib)
+else()
+  target_compile_options(pg_plan_lifecycle PRIVATE -UNDEBUG)
+  target_link_libraries(pg_plan_lifecycle PRIVATE laplace_static pq)
 endif()
 
 include(GNUInstallDirs)
