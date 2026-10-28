@@ -113,12 +113,27 @@ static int32_t text_int(const SemanticRecord *t, int32_t row, const char *name, 
 }
 
 static Ref subtree(TNode *tn, int i, int depth, int n){
-    Ref part[256]; uint32_t np = 0; int put = 0;
+    size_t mark = scratch_mark(); uint32_t capacity = 1;
+    for (int c = tn[i].first; c >= 0 && depth < n; c = tn[c].next) capacity++;
+    Ref *part = scratch_alloc(sizeof(Ref) * capacity); uint32_t np = 0; int put = 0;
     for (int c = tn[i].first; c >= 0 && depth < n; c = tn[c].next) {
-        if (!put && c > i && np < 256) { part[np++] = tn[i].head; put = 1; }
-        if (np < 256) { part[np] = subtree(tn, c, depth + 1, n); part[np].said = 0; np++; } }
-    if (!put && np < 256) part[np++] = tn[i].head;
-    return np == 1 ? part[0] : compose(part, np, ref_above(part, np));
+        if (!put && c > i) { part[np++] = tn[i].head; put = 1; }
+        part[np] = subtree(tn, c, depth + 1, n); part[np].said = 0; np++; }
+    if (!put) part[np++] = tn[i].head;
+    Ref result = np == 1 ? part[0] : compose(part, np, ref_above(part, np));
+    scratch_restore(mark); return result;
+}
+
+/* A local key resolves a row; its value is not the occurrence. Keep the
+ * canonical row ordinal in the tree's [relation, thing, ordinal] heads so
+ * repeated equal things cannot erase which occurrence a parent edge names.
+ * Ordinals belong to this ordered record, independently of source key values. */
+static Ref tree_ordinal(uint32_t value){
+    uint8_t digits[10]; size_t count = 0;
+    do { digits[count++] = (uint8_t)('0' + value % 10); value /= 10; } while (value);
+    for (size_t a = 0, b = count - 1; a < b; a++, b--) {
+        uint8_t byte = digits[a]; digits[a] = digits[b]; digits[b] = byte; }
+    Ref ordinal = record_text(digits, count); ordinal.said = 0; return ordinal;
 }
 
 static uint32_t record_rows(RecordWorker *k, const SemanticRecord *t, int32_t root, Ref *part, uint32_t cap){
@@ -141,13 +156,13 @@ static uint32_t record_rows(RecordWorker *k, const SemanticRecord *t, int32_t ro
         int32_t *id = scratch_alloc(sizeof(int32_t) * nrow); int nw = 0, *at = scratch_alloc(sizeof(int) * nrow);
         for (uint32_t r = 0; r < nrow; r++) { int ok; int32_t x = key ? text_int(t, rows[r], key, &ok) : 0; if (!key || !ok) continue;   /* a range or an empty node: no word of the tree */
             Ref w, rel; if (!record_thing(k, t, rows[r], &w, 0)) continue; if (!field_of(k, t, rows[r], s->tree_rel, &rel)) rel = empty;
-            w.said = 0; rel.said = 0; Ref p2[2] = { rel, w }; tn[nw].head = said_tuple(compose(p2, 2, ref_above(p2, 2))); tn[nw].first = tn[nw].last = -1; tn[nw].next = -1; id[nw] = x; at[nw] = (int)r; nw++; }
-        int nroot = 0, roots[64];
+            w.said = 0; rel.said = 0; Ref head[3] = { rel, w, tree_ordinal((uint32_t)nw + 1) }; tn[nw].head = said_tuple(compose(head, 3, ref_above(head, 3))); tn[nw].first = tn[nw].last = -1; tn[nw].next = -1; id[nw] = x; at[nw] = (int)r; nw++; }
+        int nroot = 0, *roots = scratch_alloc(sizeof(int) * nrow);
         for (int i = 0; i < nw; i++) { int ok; int32_t h = text_int(t, rows[at[i]], s->tree_head, &ok); tn[i].parent = -2;
-            if (ok && h == 0) { tn[i].parent = -1; if (nroot < 64) roots[nroot++] = i; continue; }
+            if (ok && h == 0) { tn[i].parent = -1; roots[nroot++] = i; continue; }
             for (int j = 0; ok && j < nw; j++) if (id[j] == h && j != i) { tn[i].parent = j; break; }
             if (tn[i].parent >= 0) { int p = tn[i].parent; if (tn[p].last < 0) tn[p].first = i; else tn[tn[p].last].next = i; tn[p].last = i; } }
-        if (nroot) { Ref rt[64]; for (int i = 0; i < nroot; i++) { rt[i] = subtree(tn, roots[i], 0, nw); rt[i].said = 0; }
+        if (nroot) { Ref *rt = scratch_alloc(sizeof(Ref) * (size_t)nroot); for (int i = 0; i < nroot; i++) { rt[i] = subtree(tn, roots[i], 0, nw); rt[i].said = 0; }
             Ref x = nroot == 1 ? rt[0] : compose(rt, (uint32_t)nroot, ref_above(rt, (size_t)nroot)); x.said = 0; part[np++] = x; } }
     scratch_restore(mark);
     return np;

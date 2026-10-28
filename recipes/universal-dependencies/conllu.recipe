@@ -29,7 +29,9 @@ dependence relation DerivedCalculation
 always
 attest DEPREL base of ^
 attest relation base of ^/^/^
-# ID numbers the rows of one record and HEAD points at a row by it: keys, written nowhere.
+# ID numbers the rows of one record and HEAD points at a row by it. Source key
+# values are written nowhere; tree heads retain canonical occurrence ordinals
+# so references to repeated equal words remain distinct within this record.
 key row ID within record
 when HEAD is 0
 omit HEAD
