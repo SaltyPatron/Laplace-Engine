@@ -158,7 +158,7 @@ static MetadataTree metadata_read(PGconn *pg,const lp_id *roots,size_t count,siz
     for(size_t i=0;i<count;i++)metadata_node(&tree,roots+i);
     size_t begin=0,end=lp_idmap_count(tree.nodes);
     /* Match COPY's 4 MiB transport grain; this windows the complete input. */
-    const size_t grain=((size_t)1<<22)/20;
+    const size_t grain=DB_ID_WINDOW;
     while(begin<end){
         for(size_t at=begin;at<end;){
             size_t stop=at+((end-at)<grain?end-at:grain);lp_vec(lp_id) wanted={0};

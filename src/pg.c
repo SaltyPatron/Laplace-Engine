@@ -62,7 +62,7 @@ void copy_open(lp_copy *c, PGconn *pg, const char *sql){
     PGresult *r = db_command(pg, sql);
     if (PQresultStatus(r) != PGRES_COPY_IN) { fprintf(stderr, "%s: %s", sql, PQerrorMessage(pg)); exit(1); }
     PQclear(r);atomic_fetch_add_explicit(&copy_streams,1,memory_order_relaxed);
-    lp_copy_start(c, (size_t)1 << 22, put, pg);
+    lp_copy_start(c, DB_TRANSPORT_BYTES, put, pg);
 }
 static PGresult *copy_finish(lp_copy *c){
     PGconn *pg = c->ctx;
@@ -79,7 +79,7 @@ void copy_next(lp_copy *c){
     if(!r){fputs("COPY: expected the next stream in the batch\n",stderr);exit(1);}
     PQclear(r);lp_buf_free(&c->buf);*c=(lp_copy){0};
     atomic_fetch_add_explicit(&copy_streams,1,memory_order_relaxed);
-    lp_copy_start(c,(size_t)1<<22,put,pg);
+    lp_copy_start(c,DB_TRANSPORT_BYTES,put,pg);
 }
 void copy_close(lp_copy *c){
     PGresult *r=copy_finish(c);

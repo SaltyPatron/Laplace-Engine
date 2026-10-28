@@ -393,6 +393,9 @@ void arg_raw(Args *, const void *bytes, size_t n);                    /* bytes a
 void args_reset(Args *);                                              /* empty, its buffers kept for the next statement */
 void args_free(Args *);
 PGresult *ask(PGconn *, const char *sql, Args *);                     /* planned once for the connection (db_ask); exits on an error */
+/* One transport grain, independent of admitted set size. Binary ID arrays
+ * have a 20-byte header and one length word per fixed-width identity. */
+enum { DB_TRANSPORT_BYTES=1u<<22, DB_ID_WINDOW=(DB_TRANSPORT_BYTES-20)/(sizeof(lp_id)+sizeof(uint32_t)) };
 PGresult *ask_once(PGconn *, const char *sql, Args *);                /* a statement made for this call alone (a partition named in it) */
 PGresult *ask_try(PGconn *, const char *sql, Args *);                 /* the same, NULL when the database refuses it (a table not made yet) */
 void exec(PGconn *, const char *sql);                                 /* a statement with nothing to read back */

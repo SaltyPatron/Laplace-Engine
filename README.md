@@ -48,6 +48,16 @@ order and runs. `tests/metadata-replay.py` uses actual Tatoeba recipes to compar
 unchanged replay, cached-provider restoration and changed-provider context
 invalidation against cold database readings.
 
+`src/read_text.c` owns selected-ID CLI text and parts. One append-only child
+arena retains ordered runs for every fetched node; traversal uses an explicit
+occurrence stack. Only newly discovered IDs form another database frontier.
+Metadata reads, selected text frontiers and COPY share the declared 4 MiB
+transport grain, with windows over complete inputs. Display byte limits unwind
+active branches safely for later reads. Claim and voice annotations retain their
+existing role outside the CLI's content text. `tests/reader-depth.py` qualifies
+4,096 genuine nested tiers, repeated reads without another fetch, bounded
+projection of a 100,000-occurrence run, display limits, Unicode and cycle rejection.
+
 ## Commands
 
 | Command | What it does |

@@ -45,6 +45,7 @@ set(ENGINE_SOURCES
     src/ingest.c
     src/db.c
     src/read.c
+    src/read_text.c
     src/fills.c
     src/pull.c
     src/firmware.c
@@ -211,6 +212,18 @@ else()
 endif()
 
 include(GNUInstallDirs)
+add_executable(reader_depth EXCLUDE_FROM_ALL tests/reader-depth.c src/pg.c src/pg_plan.c)
+target_include_directories(reader_depth PRIVATE src ${LAPLACE_NATIVE}/include ${LAPLACE_PG_DIR}/include)
+target_compile_options(reader_depth PRIVATE ${LP_C_FLAGS})
+if(WIN32)
+  target_include_directories(reader_depth BEFORE PRIVATE src/win)
+  target_sources(reader_depth PRIVATE src/os.c)
+  target_compile_options(reader_depth PRIVATE /UNDEBUG)
+  target_link_libraries(reader_depth PRIVATE laplace_static lp_crmath BLAKE3::blake3 ${LAPLACE_PG_DIR}/lib/libpq.lib OpenMP::OpenMP_C shlwapi)
+else()
+  target_compile_options(reader_depth PRIVATE -UNDEBUG)
+  target_link_libraries(reader_depth PRIVATE laplace_static lp_crmath BLAKE3::blake3 pq OpenMP::OpenMP_C)
+endif()
 # One relocatable recipe runtime is consumed by the modular CLI and managed hosts.
 # Its executable is the canonical Engine, with the same compiled grammars and estate.
 install(TARGETS laplace_engine
