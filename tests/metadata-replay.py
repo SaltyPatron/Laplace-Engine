@@ -67,14 +67,15 @@ def main():
             base.update(LAPLACE_DATA=str(root / "data"), LAPLACE_RECIPES=str(root / 'missing-build-checkout'),
                         LAPLACE_INGEST_ONE="1", LAPLACE_WORKING_SET_BYTES=str(1 << 28))
 
-            def ingest(db, name):
+            def ingest(db, name, explicit_root=False):
                 env = base.copy()
                 work = root / (name + "-work")
                 work.mkdir()
                 env["LAPLACE_WORK"] = str(work)
                 conn = " ".join(f"{key}='{value.replace(chr(39), chr(92)+chr(39))}'" for key, value in
                                 [("host", host), ("port", port), ("user", user), ("dbname", db)])
-                result = subprocess.run([str(engine), "ingest", "-r", str(recipes), "-d", conn, "-j", "2", "tatoeba"],
+                selection = ['-s', 'tatoeba', str(data)] if explicit_root else ['tatoeba']
+                result = subprocess.run([str(engine), "ingest", "-r", str(recipes), "-d", conn, "-j", "2", *selection],
                                         env=env, capture_output=True, text=True, timeout=180)
                 text = result.stdout + result.stderr
                 (root / (name + ".log")).write_text(text, encoding="utf-8")
@@ -94,9 +95,11 @@ def main():
                 """)
 
             warm = database("warm")
-            ingest(warm, "initial")
+            initial = ingest(warm, "initial", explicit_root=True)
+            assert sql(warm, 'SELECT count(*) FROM public.witness') == '1', 'explicit registered root lost its corpus witness'
             before = fingerprint(warm)
             replay = ingest(warm, "unchanged")
+            assert source_reference(warm, initial) == source_reference(warm, replay), 'explicit root and named source disagree'
             assert re.search(r"2 files recorded already", replay), replay
             assert fingerprint(warm) == before, "unchanged replay changed canonical state"
 

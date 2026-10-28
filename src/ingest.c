@@ -713,7 +713,21 @@ int cmd_ingest(int argc, char **argv){
     Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec), nsrc; Source *src = sources_loaded(&nsrc);
     if (entities) for (int i = a; i < argc; i++) { struct stat st_; if (stat(argv[i], &st_)) { fprintf(stderr, "--entities shows what files would record: %s is no file (a sample of a source: -s SOURCE FILE)\n", argv[i]); return 2; } }
     for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, "file")) file_record_stock(&rec[k]);   /* what the OS keeps of every file: the stock recipe file */
-    if (of) { int k = 0; while (k < nsrc && !source_named(&src[k], of)) k++; if (k == nsrc) { fprintf(stderr, "%s is not a source\n", of); return 2; } walking = &src[k]; }
+    if (of) {
+        int k = 0; while (k < nsrc && !source_named(&src[k], of)) k++;
+        if (k == nsrc) { fprintf(stderr, "%s is not a source\n", of); return 2; }
+        walking = &src[k];
+        /* The registered root is the complete source, whether an operator names
+         * it or supplies that same directory to an installed client. Only a
+         * genuine slice suppresses the corpus witness. Preserve explicit file
+         * selection for claim inspection, which requires file input. */
+        char selected[4096], declared[4096];
+        if (!show_claims && a + 1 == argc && src[k].found[0]
+            && realpath(argv[a], selected) && realpath(src[k].found, declared)
+            && !strcmp(selected, declared)) {
+            argv[a] = src[k].name; of = NULL; walking = NULL;
+        }
+    }
     /* A bare declared source keeps its meaning when the current directory has
      * the same name. Explicit ./ or absolute paths still select file input. */
     { int named = 0; for (int i = a; i < argc; i++) { int k = 0; while (k < nsrc && !source_named(&src[k], argv[i])) k++; named += k < nsrc; }
