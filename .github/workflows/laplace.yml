@@ -52,7 +52,7 @@ jobs:
           echo "parity=$parity" >> "$GITHUB_OUTPUT"
           echo "parity: $parity ($EVENT)" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/Laplace-Native", ref: 1224202d1cb52607682e3502c303047ac3c05adf, path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
+        with: { repository: "${{ github.repository_owner }}/Laplace-Native", ref: 36aba90b274c5745ab4956527689f35973c51c6b, path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
@@ -113,6 +113,7 @@ jobs:
           export TMPDIR=${RUNNER_TEMP:?}
           export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes
           python3 Laplace-Engine/tests/catalog.py "$L"
+          python3 Laplace-Engine/tests/utf8-input.py "$L" "$RUNNER_TEMP/engine/reader-depth"
           failed=0
           for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing rich-text; do
             if ! bash "Laplace-Engine/tests/$suite.sh" "$L"; then

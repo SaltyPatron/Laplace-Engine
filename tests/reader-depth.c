@@ -11,6 +11,10 @@ uint32_t id_oid;
 void *xrealloc(void *memory,size_t bytes){void *p=realloc(memory,bytes?bytes:1);assert(p);return p;}
 
 int main(int argc,char **argv){
+    if(argc==2 && !strcmp(argv[1],"--id-stdin")){
+        uint8_t bytes[128];size_t count=fread(bytes,1,sizeof bytes,stdin);lp_id id;char hex[33];
+        assert(!ferror(stdin) && count && lp_id_codepoints_utf8(bytes,count,&id));lp_id_hex(&id,hex);puts(hex);return 0;
+    }
     if(argc==2){
         T0=lp_tier0_map(argv[1]);assert(T0);lp_id a,b,c,root_id,missing;
         lp_id_codepoint(65,&a);lp_id_codepoint(66,&b);lp_id_codepoint(67,&c);

@@ -58,6 +58,10 @@ existing role outside the CLI's content text. `tests/reader-depth.py` qualifies
 4,096 genuine nested tiers, repeated reads without another fetch, bounded
 projection of a 100,000-occurrence run, display limits, Unicode and cycle rejection.
 
+Native's shared Windows process manifest preserves UTF-8 before CRT argument
+conversion. `tests/utf8-input.py` compares scalar/grapheme argument identities
+against raw UTF-8 bytes and verifies byte-exact parsing through a Unicode path.
+
 ## Commands
 
 | Command | What it does |
