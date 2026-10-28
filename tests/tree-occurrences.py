@@ -48,6 +48,27 @@ with tempfile.TemporaryDirectory(prefix="laplace-tree-occurrences-") as scratch:
         "Distinct occurrence-reference graphs collapsed to one record: "
         + str(identities))
 
+    # Real Lichess opening rows: the PGN capture is packaging, not a second
+    # copy of the moves in the opening's semantic subject. A longer opening
+    # must retain every move, not collapse to its first move.
+    opening = root / 'a.tsv'
+    opening.write_text('eco\tname\tpgn\nA00\tAmar Opening\t1. Nh3\n'
+                       'A00\tAmar Opening: Paris Gambit\t1. Nh3 d5 2. g3 e5 3. f4\n', encoding='utf-8')
+    expected = [
+        ['Nh3', 'opening name', 'Amar Opening'],
+        ['Nh3', 'Encyclopaedia of Chess Openings code', 'A00'],
+        ['[Nh3, d5, g3, e5, f4]', 'opening name', 'Amar Opening: Paris Gambit'],
+        ['[Nh3, d5, g3, e5, f4]', 'Encyclopaedia of Chess Openings code', 'A00'],
+    ]
+    for workers in (1, 4):
+        result = subprocess.run([str(engine), 'ingest', '--claims-tsv', '-j', str(workers),
+                                 '-r', str(recipes), '-s', 'openings', str(opening)],
+                                env=dict(os.environ, LAPLACE_RECIPES=str(recipes)),
+                                capture_output=True, text=True, encoding='utf-8', errors='replace')
+        assert result.returncode == 0, result.stdout + result.stderr
+        claims = [line.split('\t')[3:] for line in result.stdout.splitlines() if line.startswith('claim\t')]
+        assert claims == expected, claims
+
     # The same tree directive also serves an ordinary XML source. Its
     # arbitrary integer keys locate rows; changing those keys cannot change
     # the retained graph. These are not CoNLL-U token numbers.

@@ -8,7 +8,7 @@ content eco name source move commentary annotation
 # The ordered SAN sequence is the opening's content. ECO is a classification,
 # not an identity or a game result. No win/loss evidence is invented.
 thing moves of move
-thing opening pgn/moves
+thing opening preserve pgn/moves
 relation "opening name" name
 relation "Encyclopaedia of Chess Openings code" eco
 attest opening name eco
