@@ -45,7 +45,7 @@ static void pool_open(void){
     #pragma omp parallel for num_threads(npool) schedule(static, 1)
     for (int i = 0; i < npool; i++) { PGconn *c = PQconnectdb(ci);
         if (PQstatus(c) != CONNECTION_OK) { fprintf(stderr, "%s", PQerrorMessage(c)); exit(1); }
-        PQclear(PQexec(c, "SET client_min_messages = warning")); PQclear(PQexec(c, "SET enable_parallel_append = on")); pool[i] = c; }
+        PQclear(PQexec(c, "SET client_min_messages = warning")); pool[i] = c; }
     if (times_on()) fprintf(stderr, "times: %d connections opened in %.1f ms\n", npool, (now() - t0) * 1000);
     const char *snap = db_snapshot();                                    /* a read: every leaf read at the instant the command's first statement saw */
     if (snap) for (int i = 0; i < npool; i++) {
