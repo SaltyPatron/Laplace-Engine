@@ -38,6 +38,16 @@ declared database settings; connection setup does not override them. The live
 `pg_plan_lifecycle` acceptance covers reset, multiple connections, query-buffer
 reuse and retention of the caller's planner policy.
 
+`src/db.c` owns one metadata DAG reader for recorded-file context checks and
+compiled-key restoration. It fetches complete ID frontiers through Native's
+indexed path API, reads shared metadata nodes once, and stops at context/key
+entries before following their referenced product. Root visits preserve each
+file's scope. Context validation starts at the selected file metadata, avoiding
+a database-wide upward walk from the common tag. Key fields retain their stored
+order and runs. `tests/metadata-replay.py` uses actual Tatoeba recipes to compare
+unchanged replay, cached-provider restoration and changed-provider context
+invalidation against cold database readings.
+
 ## Commands
 
 | Command | What it does |

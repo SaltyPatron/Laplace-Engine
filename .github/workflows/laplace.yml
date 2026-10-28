@@ -58,7 +58,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: "${{ github.repository_owner }}/Laplace-postgres"
-          ref: c8fc1ef0b847e84cae813366ff94d3ff79845b2d
+          ref: a881b71b495c41c68514c126ec5610c9fe5b3a74
           path: Laplace-postgres
           token: "${{ secrets.LAPLACE_CHECKOUT }}"
       # Every job runs the binary its own run built (tests/ci-own-binary.py): the build directory is the runner's, shared
@@ -156,6 +156,7 @@ jobs:
           export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
           bash Laplace-Engine/tests/ingest-progress.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/cached-key-reader.sh "$RUNNER_TEMP/engine/laplace"
+          python3 Laplace-Engine/tests/metadata-replay.py "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/cili-versions.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/record-thing.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/stream-working-set.sh "$RUNNER_TEMP/engine/laplace"

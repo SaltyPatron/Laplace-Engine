@@ -137,6 +137,84 @@ int ingest_known(const char *conninfo, File *files, int nfiles){
     PGconn *pg = db_connect(conninfo); int count = files_known(&pg,1,files,nfiles,NULL); PQfinish(pg); return count;
 }
 
+/* Metadata is an ordered Native DAG, not a recursive SQL relation expansion.
+ * Both context checks and compiled-key restore use these same set frontiers.
+ * Tagged entries terminate traversal: their referenced product is never read. */
+typedef struct { lp_id parts[5]; } MetadataEntry;
+typedef struct { size_t first,count,entry; uint64_t visited; uint8_t terminal; } MetadataNode;
+typedef struct {
+    lp_idmap *nodes; lp_vec(size_t) children; lp_vec(MetadataEntry) entries;
+    lp_id markers[2]; size_t arity; uint64_t generation;
+} MetadataTree;
+static size_t metadata_node(MetadataTree *tree,const lp_id *id){
+    bool fresh;size_t index=lp_idmap_put(tree->nodes,id,&fresh);
+    if(fresh)*(MetadataNode *)lp_idmap_at(tree->nodes,index)=(MetadataNode){.entry=SIZE_MAX};
+    return index;
+}
+static MetadataTree metadata_read(PGconn *pg,const lp_id *roots,size_t count,size_t arity){
+    MetadataTree tree={.nodes=lp_idmap_sized(sizeof(MetadataNode)),.arity=arity};
+    tree.markers[0]=text_ref(CTX[0],(const uint8_t *)KEY_CONTEXT_TAG,sizeof KEY_CONTEXT_TAG-1).id;
+    tree.markers[1]=text_ref(CTX[0],(const uint8_t *)KEY_BINDING_TAG,sizeof KEY_BINDING_TAG-1).id;
+    for(size_t i=0;i<count;i++)metadata_node(&tree,roots+i);
+    size_t begin=0,end=lp_idmap_count(tree.nodes);
+    /* Match COPY's 4 MiB transport grain; this windows the complete input. */
+    const size_t grain=((size_t)1<<22)/20;
+    while(begin<end){
+        for(size_t at=begin;at<end;){
+            size_t stop=at+((end-at)<grain?end-at:grain);lp_vec(lp_id) wanted={0};
+            for(;at<stop;at++){
+                const lp_id *id=lp_idmap_key(tree.nodes,at);
+                if(lp_tier0_codepoint(T0,id)<0)lp_push(&wanted,*id);
+            }
+            if(!wanted.n){lp_vec_free(&wanted);continue;}
+            Args args={0};arg_ids(&args,wanted.v,wanted.n);
+            PGresult *result=ask(pg,"SELECT entity,path FROM public.laplace_paths($1::public.blake3[])",&args);
+            for(int row=0;row<PQntuples(result);row++){
+                lp_id id=*col_id(result,row,0);int64_t index=lp_idmap_find(tree.nodes,&id);if(index<0)continue;
+                lp_path path=col_path(result,row,1);MetadataNode node={.first=tree.children.n,.entry=SIZE_MAX};
+                lp_id first=path.n?lp_path_id(path,0):(lp_id){{0}};
+                node.terminal=path.n && (lp_id_eq(&first,tree.markers) || lp_id_eq(&first,tree.markers+1));
+                if(node.terminal){
+                    if(lp_path_len(path)==arity){
+                        MetadataEntry entry={0};size_t expanded=0;
+                        for(size_t k=0;k<path.n;k++){
+                            lp_id child=lp_path_id(path,k);uint32_t run=lp_path_run(path,k);
+                            for(uint32_t r=0;r<run;r++)entry.parts[expanded++]=child;
+                        }
+                        node.entry=tree.entries.n;lp_push(&tree.entries,entry);
+                    }
+                }else for(size_t k=0;k<path.n;k++){
+                    lp_id child=lp_path_id(path,k);size_t next=metadata_node(&tree,&child);lp_push(&tree.children,next);node.count++;
+                }
+                *(MetadataNode *)lp_idmap_at(tree.nodes,(size_t)index)=node;
+            }
+            PQclear(result);args_free(&args);lp_vec_free(&wanted);
+        }
+        begin=end;end=lp_idmap_count(tree.nodes);
+    }
+    return tree;
+}
+typedef void (*MetadataVisit)(const MetadataEntry *,void *);
+static void metadata_visit(MetadataTree *tree,const lp_id *root,MetadataVisit visit,void *context){
+    int64_t first=lp_idmap_find(tree->nodes,root);if(first<0)return;
+    uint64_t generation=++tree->generation;lp_vec(size_t) pending={0};lp_push(&pending,(size_t)first);
+    while(pending.n){
+        MetadataNode *node=lp_idmap_at(tree->nodes,pending.v[--pending.n]);
+        if(node->visited==generation)continue;node->visited=generation;
+        if(node->entry!=SIZE_MAX)visit(tree->entries.v+node->entry,context);
+        if(!node->terminal)for(size_t k=0;k<node->count;k++)lp_push(&pending,tree->children.v[node->first+k]);
+    }
+    lp_vec_free(&pending);
+}
+static void metadata_free(MetadataTree *tree){
+    lp_idmap_free(tree->nodes);lp_vec_free(&tree->children);lp_vec_free(&tree->entries);
+}
+typedef struct {const lp_id *tag;lp_id expected;int invalid;} MetadataContext;
+static void metadata_context(const MetadataEntry *entry,void *context){
+    MetadataContext *reading=context;
+    if(lp_id_eq(entry->parts,reading->tag) && !lp_id_eq(entry->parts+1,&reading->expected))reading->invalid=1;
+}
+
 static bool binding_point(void *context, const lp_ewkb_span *span){
     double point[4]; if (span->count != 1 || !lp_ewkb_vertex(span, 0, point)) return false;
     lp_coord *coord = context;
@@ -149,70 +227,35 @@ static bool binding_point(void *context, const lp_ewkb_span *span){
 void validate_file_contexts(const char *conninfo, File *files, int nfiles){
     size_t count=0;for(int i=0;i<nfiles;i++)if(files[i].known)count++;
     if(!count)return;
-    lp_id *ids=malloc(count*2*sizeof *ids);if(!ids){perror("recorded reading contexts");exit(1);}
-    size_t at=0;
-    for(int i=0;i<nfiles;i++)if(files[i].known){ids[at]=files[i].file.id;ids[count+at]=file_context_value(&files[i]).id;at++;}
-    Ref tag=text_ref(CTX[0],(const uint8_t *)KEY_CONTEXT_TAG,sizeof KEY_CONTEXT_TAG-1);
-    Args args={0};arg_ids(&args,ids,count);arg_ids(&args,ids+count,count);arg_raw(&args,tag.id.b,sizeof tag.id.b);
-    PGconn *pg=db_connect(conninfo);
-    PGresult *result=ask_once(pg,
-        "WITH RECURSIVE contexts(id,reading) AS ("
-        " SELECT p.entity,k.id FROM public.physicality p"
-        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) k(id)"
-        " WHERE p.path @> ARRAY[$3::blake3] AND laplace_path_starts(p.path,$3::blake3)"
-        " AND laplace_path_length(p.path)=2 AND k.id<>$3::blake3"
-        " UNION SELECT parent.entity,c.reading FROM contexts c"
-        " JOIN public.physicality child ON child.entity=c.id"
-        " JOIN public.physicality parent ON parent.path @> ARRAY[c.id]::blake3[]"
-        " WHERE NOT laplace_mask_has_value(child.mask,'kind','file'))"
-        " SELECT wanted.id FROM unnest($1::blake3[],$2::blake3[]) wanted(id,reading)"
-        " JOIN contexts c ON c.id=wanted.id GROUP BY wanted.id"
-        " HAVING bool_or(c.reading<>wanted.reading)",&args);
-    lp_idmap *invalid=lp_idmap_new();
-    for(int row=0;row<PQntuples(result);row++){lp_id id;bool fresh;memcpy(id.b,PQgetvalue(result,row,0),16);lp_idmap_put(invalid,&id,&fresh);}
-    for(int i=0;i<nfiles;i++)if(files[i].known && lp_idmap_find(invalid,&files[i].file.id)>=0){
-        files[i].known=files[i].has_file=0;
+    lp_id *roots=malloc(count*sizeof *roots);if(!roots){perror("recorded reading contexts");exit(1);}
+    size_t at=0;for(int i=0;i<nfiles;i++)if(files[i].known)roots[at++]=files[i].recorded_metadata;
+    PGconn *pg=db_connect(conninfo);MetadataTree tree=metadata_read(pg,roots,count,2);
+    for(int i=0;i<nfiles;i++)if(files[i].known){
+        MetadataContext reading={.tag=tree.markers,.expected=file_context_value(files+i).id};
+        metadata_visit(&tree,&files[i].recorded_metadata,metadata_context,&reading);
+        if(reading.invalid)files[i].known=files[i].has_file=0;
     }
-    lp_idmap_free(invalid);PQclear(result);PQfinish(pg);args_free(&args);free(ids);
+    metadata_free(&tree);PQfinish(pg);free(roots);
 }
 /* Restore only the compiled index beneath a recorded file's metadata. Entry
  * vertices terminate the walk: their product targets are not exported into RAM.
  * One set read restores a provider; none of its source bytes are reopened. */
+typedef struct {const lp_id *tag;lp_vec(MetadataEntry) entries;} MetadataBindings;
+static void metadata_bindings(const MetadataEntry *entry,void *context){
+    MetadataBindings *bindings=context;
+    if(lp_id_eq(entry->parts,bindings->tag))lp_push(&bindings->entries,*entry);
+}
 int load_file_keys(PGconn *pg, const File *file){
     if (!file->known || !file->has_file) return 0;
-    Ref marker = text_ref(CTX[0], (const uint8_t *)KEY_BINDING_TAG, sizeof KEY_BINDING_TAG - 1);
-    Args args = {0}; arg_raw(&args, file->recorded_metadata.b, sizeof file->recorded_metadata.b); arg_raw(&args, marker.id.b, sizeof marker.id.b);
-    PGresult *result = ask_once(pg,
-        "WITH RECURSIVE metadata(id) AS ("
-        " SELECT $1::blake3"
-        " UNION SELECT child FROM metadata m JOIN public.physicality p ON p.entity=m.id"
-        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) child"
-        " WHERE NOT laplace_path_starts(p.path,$2::blake3))"
-        " SELECT st_asewkb(p.path) FROM metadata m JOIN public.physicality p ON p.entity=m.id"
-        " WHERE laplace_path_starts(p.path,$2::blake3) AND laplace_path_length(p.path)=5", &args);
-    /* vertex_ids is the GIN key SET. Decode ordered carriers in Native C;
-     * treating the sorted/distinct index keys as an AST loses field order. */
-    size_t count=(size_t)PQntuples(result); lp_id *ids=malloc((count?count:1)*4*sizeof *ids);
-    if (!ids) { perror("recorded reference bindings"); exit(1); }
-    int invalid=0;
-    for (size_t row=0;row<count;row++) {
-        lp_vertex vertex[5]; size_t n=lp_path_vertices((const uint8_t *)PQgetvalue(result,(int)row,0),(size_t)PQgetlength(result,(int)row,0),vertex,5);
-        if (!n || n>5 || !lp_id_eq(&vertex[0].id,&marker.id)) { invalid=1; break; }
-        size_t expanded=0;
-        for (size_t v=0;v<n && !invalid;v++) {
-            uint64_t run=vertex[v].run;
-            if (!run || run>5-expanded) { invalid=1; break; }
-            for (uint64_t r=0;r<run;r++,expanded++) if (expanded) ids[(expanded-1)*count+row]=vertex[v].id;
-        }
-        if (expanded!=5) { invalid=1; break; }
-    }
-    PQclear(result); args_free(&args); args=(Args){0};
-    if (invalid || !count) {
-        free(ids);
-        if (invalid) fprintf(stderr,"%s: invalid compiled reference entry path\n",file->path);
-        else fprintf(stderr,"  restored 0 compiled reference bindings from recorded metadata: %s\n",file->path);
-        return invalid;
-    }
+    MetadataTree tree=metadata_read(pg,&file->recorded_metadata,1,5);
+    MetadataBindings bindings={.tag=tree.markers+1};
+    metadata_visit(&tree,&file->recorded_metadata,metadata_bindings,&bindings);
+    size_t count=bindings.entries.n;
+    lp_id *ids=malloc((count?count:1)*4*sizeof *ids);if(!ids){perror("recorded reference bindings");exit(1);}
+    for(size_t row=0;row<count;row++)for(size_t col=0;col<4;col++)ids[col*count+row]=bindings.entries.v[row].parts[col+1];
+    metadata_free(&tree);lp_vec_free(&bindings.entries);
+    Args args={0};PGresult *result;int invalid=0;
+    if(!count){free(ids);fprintf(stderr,"  restored 0 compiled reference bindings from recorded metadata: %s\n",file->path);return 0;}
     for (unsigned col=0;col<4;col++) arg_ids(&args,ids+col*count,count);
     result=ask_once(pg,
         "SELECT laplace_text(b.hash),laplace_text(b.header),b.value,st_asewkb(e.coord),e.tier,laplace_text(b.text)"
