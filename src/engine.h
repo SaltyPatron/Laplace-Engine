@@ -211,6 +211,7 @@ typedef struct {
     char unset[64];                                   /* a variable its root or files name that the environment does not set: it is nowhere until it is */
 } Source;
 int     recipes_load(const char *dir, Recipe **out);
+const char *recipes_directory(void);                /* selected estate, including an explicit -r */
 int     recipes_catalog(const char *dir, FILE *out, int json);
 int     source_named(const Source *source, const char *name);
 void    json_str(FILE *out, const char *s);

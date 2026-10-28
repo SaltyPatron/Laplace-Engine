@@ -162,6 +162,7 @@ void comment_off(char *line){
 }
 static void rest_of(char *into, size_t cap){ char *rest = strtok(NULL, "\r\n"); if (!rest) return; while (*rest == ' ' || *rest == '\t') rest++; snprintf(into, cap, "%s", rest); }
 static const char *metadata_root;
+const char *recipes_directory(void){ return metadata_root ? metadata_root : laplace_recipes(); }
 static int recipe_parse(const char *path, Recipe *r, int metadata){
     FILE *f = fopen(path, "r"); if (!f) return 0;
     memset(r, 0, sizeof *r); char line[4096];

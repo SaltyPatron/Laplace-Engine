@@ -517,7 +517,7 @@ void say_mentions(Recipe *r, const char *line){
 static int format_says(Recipe *r, const char *name, unsigned depth){
     char path[4400], line[2048];
     if (depth == 32) { fprintf(stderr, "format %s: includes exceed 32 levels\n", name); return -1; }
-    snprintf(path, sizeof path, "%s/formats/%s.format", laplace_recipes(), name);
+    snprintf(path, sizeof path, "%s/formats/%s.format", recipes_directory(), name);
     FILE *file = fopen(path, "r"); if (!file) { perror(path); return -1; }
     int valid = 1;
     while (valid && fgets(line, sizeof line, file)) {

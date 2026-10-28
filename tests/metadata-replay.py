@@ -62,7 +62,9 @@ def main():
                                  encoding="utf-8", newline="\n")
             links.write_text("1\t2\n2\t1\n", encoding="utf-8", newline="\n")
             base = os.environ.copy()
-            base.update(LAPLACE_DATA=str(root / "data"), LAPLACE_RECIPES=str(recipes),
+            # A relocated package selects its estate with -r. The caller may
+            # still carry a build-machine/default path; includes must follow -r.
+            base.update(LAPLACE_DATA=str(root / "data"), LAPLACE_RECIPES=str(root / 'missing-build-checkout'),
                         LAPLACE_INGEST_ONE="1", LAPLACE_WORKING_SET_BYTES=str(1 << 28))
 
             def ingest(db, name):
@@ -72,7 +74,7 @@ def main():
                 env["LAPLACE_WORK"] = str(work)
                 conn = " ".join(f"{key}='{value.replace(chr(39), chr(92)+chr(39))}'" for key, value in
                                 [("host", host), ("port", port), ("user", user), ("dbname", db)])
-                result = subprocess.run([str(engine), "ingest", "-d", conn, "-j", "2", "tatoeba"],
+                result = subprocess.run([str(engine), "ingest", "-r", str(recipes), "-d", conn, "-j", "2", "tatoeba"],
                                         env=env, capture_output=True, text=True, timeout=180)
                 text = result.stdout + result.stderr
                 (root / (name + ".log")).write_text(text, encoding="utf-8")
