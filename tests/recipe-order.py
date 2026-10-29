@@ -17,7 +17,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="recipe-order-", dir=os.environ.get("LAPLACE_WORK")) as scratch:
         root = Path(scratch)
         recipes = root / "recipes"
-        shutil.copytree(Path(__file__).resolve().parents[1] / "recipes", recipes)
+        shutil.copytree(Path(__file__).resolve().parents[1] / "recipes", recipes,
+                        ignore=shutil.ignore_patterns('grammars'))
         (recipes / "order").write_text("schedule\n", encoding="utf-8", newline="\n")
         definitions = recipes / "schedule"
         definitions.mkdir()
@@ -51,6 +52,14 @@ def main():
         env = os.environ.copy()
         env.update(LAPLACE_DATA=str(root / "data"), LAPLACE_RECIPES=str(recipes), LAPLACE_WORK=str(root),
                    LAPLACE_INGEST_PROGRESS_PATH=str(progress))
+        for options in ([], ['--no-load'], ['--plan'], ['--claims']):
+            for inputs in (['misspelled-source'], ['schedule', str(root / 'missing file.tsv')]):
+                invalid = subprocess.run([str(engine), 'ingest', '-r', str(recipes), '-d',
+                                          'host=127.0.0.1 port=1 connect_timeout=1', *options, *inputs],
+                                         env=env, capture_output=True, text=True, encoding='utf-8', timeout=10)
+                assert invalid.returncode == 2, invalid.stdout + invalid.stderr
+                assert 'neither a declared source nor an accessible file or directory' in invalid.stderr, invalid.stderr
+                assert not progress.exists(), 'Invalid input began ingestion before the whole selection was checked'
         result = subprocess.run([str(engine), "ingest", "-r", str(recipes), "-j", "2", "--no-load", "--claims",
                                  "-s", "schedule", str(data)], env=env, capture_output=True,
                                 text=True, encoding="utf-8", timeout=60)

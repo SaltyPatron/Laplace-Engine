@@ -745,6 +745,21 @@ int cmd_ingest(int argc, char **argv){
     if (show_claims && a >= argc) { fprintf(stderr, "--claims and --entities show what files would record: name the files\n"); return 2; }
     Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec), nsrc; Source *src = sources_loaded(&nsrc);
     if (entities) for (int i = a; i < argc; i++) { struct stat st_; if (stat(argv[i], &st_)) { fprintf(stderr, "--entities shows what files would record: %s is no file (a sample of a source: -s SOURCE FILE)\n", argv[i]); return 2; } }
+    /* Validate the complete selection before a named source can open a load.
+     * A misspelled source is not an empty, successfully ingested file. */
+    for (int i=a; i<argc; i++) {
+        int k=0; while(k<nsrc && !source_named(&src[k],argv[i])) k++;
+        if(k<nsrc) continue;
+        struct stat input;
+        if(stat(argv[i],&input)) {
+            fprintf(stderr,"ingest: %s is neither a declared source nor an accessible file or directory: %s\n",argv[i],strerror(errno));
+            return 2;
+        }
+        if(!S_ISREG(input.st_mode) && !S_ISDIR(input.st_mode)) {
+            fprintf(stderr,"ingest: %s is not a regular file or directory\n",argv[i]);
+            return 2;
+        }
+    }
     for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, "file")) file_record_stock(&rec[k]);   /* what the OS keeps of every file: the stock recipe file */
     if (of) {
         int k = 0; while (k < nsrc && !source_named(&src[k], of)) k++;
