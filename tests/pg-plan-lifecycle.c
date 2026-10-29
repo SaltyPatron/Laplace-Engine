@@ -59,8 +59,8 @@ static void snapshot_scope(PGconn *master,const char *connection){
 static void stored_reads(PGconn *pg){
     command(pg,"BEGIN");
     command(pg,"INSERT INTO @extschema@.entity(id,tier,coord,hilbert) SELECT "
-        "@extschema@.laplace_id('exact reader'),@extschema@.laplace_tier('exact reader'),"
-        "@extschema@.laplace_coord('exact reader'),@extschema@.laplace_hilbert('exact reader')");
+        "@extschema@.laplace_id('ab'),@extschema@.laplace_tier('ab'),"
+        "@extschema@.laplace_coord('ab'),@extschema@.laplace_hilbert('ab')");
     command(pg,"INSERT INTO @extschema@.physicality(entity,tier,hilbert,path) SELECT id,tier,hilbert,"
         "@extschema@.laplace_path(ARRAY[@extschema@.laplace_cp_id(97),@extschema@.laplace_cp_id(98)])"
         " FROM @extschema@.entity");
