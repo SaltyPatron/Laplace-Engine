@@ -37,6 +37,9 @@ class OwnBinary(unittest.TestCase):
         self.assertIn("actions/upload-artifact", j)
         self.assertIn("name: laplace-engine", j)
 
+    def test_test_only_changes_do_not_dispatch_runtime_deployment(self):
+        self.assertIn("needs.engine.outputs.parity == 'true'", self.jobs['deploy'])
+
     def test_no_other_job_reads_the_shared_build_directory(self):
         for name, j in self.jobs.items():
             if builds(j):

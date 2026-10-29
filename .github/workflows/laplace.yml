@@ -15,7 +15,8 @@ permissions:
   contents: read
   pull-requests: read
 # A pull request's newer push supersedes its older run, which then holds the one runner for nothing. A push to main is
-# its own group, so every merge still builds and dispatches its deployment.
+# its own group, so every merge is qualified. Only runtime-relevant changes
+# dispatch deployment; tests and documentation do not replace installed code.
 concurrency:
   group: laplace-engine-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -267,7 +268,7 @@ jobs:
   # main (its laplace.yml, on a repository_dispatch main-merged; the token is the secret LAPLACE_CHECKOUT, agents.sh's).
   deploy:
     needs: engine
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.engine.outputs.parity == 'true'
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
       - name: hart-server deploys main (Laplace-Operations)

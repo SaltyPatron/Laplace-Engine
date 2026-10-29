@@ -15,13 +15,17 @@ def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument('engine', type=Path)
     parser.add_argument('--database', action='store_true')
+    parser.add_argument('--recipes', type=Path,
+                        help='Verify the selected installed recipe resources instead of checkout resources')
     args = parser.parse_args()
     engine = args.engine.resolve()
-    installed_recipes = Path(__file__).resolve().parents[1] / 'recipes'
+    installed_recipes = args.recipes.resolve() if args.recipes else Path(__file__).resolve().parents[1] / 'recipes'
     with tempfile.TemporaryDirectory(prefix='semantic-interpretation-', dir=os.environ.get('TMPDIR')) as scratch:
         root = Path(scratch)
         recipes = root / 'recipes'
-        shutil.copytree(installed_recipes, recipes)
+        # Runtime recipes refer to already compiled grammars. Grammar source
+        # trees belong to preparation/build and are not per-check payloads.
+        shutil.copytree(installed_recipes, recipes, ignore=shutil.ignore_patterns('grammars'))
         shutil.copytree(installed_recipes.parent / 'firmware', root / 'firmware')
         source = recipes / 'semantic-alignment'
         source.mkdir()
@@ -111,7 +115,7 @@ def main():
         absent_resolution = resolutions(absent)
         assert absent_resolution == resolutions(present), 'Reference and declaration used different identifier interpretations'
         assert absent_resolution[0][-1] in ('eng', 'language:eng'), absent_resolution
-        manifest = Path(os.environ.get('LAPLACE_MANIFEST', installed_recipes.parent.parent / 'Laplace-Native/manifest'))
+        manifest = Path(os.environ.get('LAPLACE_MANIFEST', Path(__file__).resolve().parents[2] / 'Laplace-Native/manifest'))
         with (manifest / 'banks.tsv').open(encoding='utf-8') as file:
             closed = {row['list'] for row in csv.DictReader((line for line in file if not line.startswith('#')), delimiter='\t')}
         with (manifest / 'slots/lists.tsv').open(encoding='utf-8') as file:
