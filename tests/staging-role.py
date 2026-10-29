@@ -80,9 +80,8 @@ GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO "{identifier}";''')
         assert sql(identifier, "SELECT oid::text || '|' || relowner FROM pg_class WHERE oid='stage.staging_test_guard'::regclass;") == guard
         assert sql(identifier, "SELECT count(*) FROM pg_tables WHERE schemaname='stage' AND tablename LIKE 'lp_%';") == '0', 'Loader left private staging tables behind'
         output = run('hop', '-d', scoped, 'scoped_ingestion_probe')
-        assert 'times: 2 connections opened' in output, 'Read pool ignored the two-thread allocation'
-        assert 'observed: held by nothing recorded' not in output, 'Recorded code did not survive a database read'
-    print('Candidate Engine passed scoped non-superuser ingestion, replay deduplication, administrator-owned staging preservation, cleanup and two-thread database readback.')
+        assert 'observed: held by 1 path' in output, 'Scoped Native read did not recover the recorded code holder'
+    print('Candidate Engine passed scoped non-superuser ingestion, replay deduplication, administrator-owned staging preservation, cleanup and connection-owned Native database readback.')
 finally:
     if created:
         sql('postgres', f'DROP DATABASE IF EXISTS "{identifier}" WITH (FORCE); DROP ROLE IF EXISTS "{identifier}";')

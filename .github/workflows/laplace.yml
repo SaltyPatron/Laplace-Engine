@@ -14,12 +14,11 @@ on:
 permissions:
   contents: read
   pull-requests: read
-# A pull request's newer push supersedes its older run, which then holds the one runner for nothing. A push to main is
-# its own group, so every merge is qualified. Only runtime-relevant changes
-# dispatch deployment; tests and documentation do not replace installed code.
+# Qualify the latest branch/PR head; superseded pushes must not queue obsolete
+# native builds. Explicit operator qualification owns an independent run.
 concurrency:
-  group: laplace-engine-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: laplace-engine-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 jobs:
   engine:
     runs-on: [self-hosted, laplace, Laplace-Engine]
