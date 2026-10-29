@@ -10,7 +10,8 @@ module.exports = grammar({
     paragraph: $ => prec.right(repeat1($.sentence)),
     sentence: $ => prec.right(seq(repeat1($.token), optional($._newline))),
     token: $ => seq(field('word', $.word), '/', field('tag', $.segment)),
-    word: $ => seq($.segment, repeat(seq('/', $.segment))),
+    // The corpus writes a literal slash as //in (word '/', tag 'in').
+    word: $ => choice('/', seq($.segment, repeat(seq('/', $.segment)))),
     segment: $ => /[^\s/]+/,
     _newline: $ => /\r?\n/
   }

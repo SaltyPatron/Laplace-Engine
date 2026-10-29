@@ -140,17 +140,18 @@ static Ref tree_ordinal(uint32_t value){
 
 static uint32_t record_rows(RecordWorker *k, const SemanticRecord *t, int32_t root, Ref *part, uint32_t cap){
     const Say *s = k->s; uint32_t np = record_surface_parts(k,t,root,part,cap), nrow = 0;
-    int lay = s->nlayer && record_field_matches(&t->n[root], s->lay_tier), tree = s->tree_row[0] && record_field_matches(&t->n[root], s->tree_tier);
-    if (!lay && !tree) return np;
+    int lay=-1,tree=s->tree_row[0] && record_field_matches(&t->n[root],s->tree_tier);
+    for(int i=0;i<s->nlayers;i++)if(record_field_matches(&t->n[root],s->layers[i].tier)){lay=i;break;}
+    if(lay<0 && !tree)return np;
     size_t mark = scratch_mark();
     uint32_t rcap = t->n[root].arity ? t->n[root].arity : 1;
     int32_t *rows = scratch_alloc(sizeof(int32_t) * rcap);
     for (int32_t c = record_field_first(&t->n[root]); c >= 0; c = record_field_next(&t->n[c])) {
-        if (t->n[c].kind != S_GROUP || !record_field_matches(&t->n[c], lay ? s->lay_row : s->tree_row)) continue;
+        if (t->n[c].kind != S_GROUP || !record_field_matches(&t->n[c], lay>=0 ? s->layers[lay].row : s->tree_row)) continue;
         if (nrow < rcap) rows[nrow++] = c; }
     Ref empty = empty_ref(s), *v = scratch_alloc(sizeof(Ref) * (nrow ? nrow : 1));
-    for (int L = 0; lay && L < s->nlayer && nrow && np < cap; L++) {           /* each layer down the rows */
-        for (uint32_t r = 0; r < nrow; r++) if (!field_of(k, t, rows[r], s->layer[L], &v[r])) v[r] = empty;
+    for (int L = 0; lay>=0 && L < s->layers[lay].count && nrow && np < cap; L++) {           /* each layer down the rows */
+        for (uint32_t r = 0; r < nrow; r++) if (!field_of(k, t, rows[r], s->layers[lay].field[L], &v[r])) v[r] = empty;
         Ref x = nrow == 1 ? v[0] : compose(v, nrow, ref_above(v, nrow)); x.said = 0; part[np++] = x; }
     if (tree && nrow && np < cap) {                                           /* the tree by head: pointers resolved, written nowhere */
         const char *key = s->tree_key_index ? s->key[s->tree_key_index - 1].name : NULL;
@@ -172,9 +173,10 @@ static uint32_t record_rows(RecordWorker *k, const SemanticRecord *t, int32_t ro
 
 void record_emit_layers(RecordWorker *worker, const SemanticRecord *record, int32_t root){
     const Say *program=worker->s;
-    if (!(program->surface.thing && record_field_matches(&record->n[root],program->surface.tier)) &&
-        !(program->nlayer && record_field_matches(&record->n[root],program->lay_tier)) &&
-        !(program->tree_row[0] && record_field_matches(&record->n[root],program->tree_tier))) return;
+    int selected=(program->surface.thing && record_field_matches(&record->n[root],program->surface.tier)) ||
+        (program->tree_row[0] && record_field_matches(&record->n[root],program->tree_tier));
+    for(int i=0;i<program->nlayers && !selected;i++) selected=record_field_matches(&record->n[root],program->layers[i].tier);
+    if(!selected)return;
     Ref subject;
     if (!record_thing(worker,record,root,&subject,0)) return;
     Ref layers[20]; uint32_t count=record_rows(worker,record,root,layers,20);

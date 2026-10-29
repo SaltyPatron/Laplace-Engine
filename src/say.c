@@ -247,6 +247,16 @@ void record_execute(RecordWorker *sink, const SemanticRecord *t, int32_t root, u
             /* a predicate the recipe writes, and a line's first part taken as the relation, are a heading's or a field's name:
              * an obligation, never a relation (Laplace-Engine#32) */
             if (s->line[i].mode == 3 && np == 2) record_obligation_note(k, 'o', &record_diagnostic_labels[DIAG_LINE_PREDICATE], (const uint8_t *)s->line[i].pred, s->line[i].pred_length, NULL, 0);
+            else if(s->line[i].mode>=4) {
+                if(!k->has_fabout || np!=(s->line[i].mode==5?2:1)) {
+                    record_obligation_note(k,'o',&record_diagnostic_labels[DIAG_LINE],(const uint8_t *)ln,x->vlen,NULL,0);
+                } else {
+                    Ref subject=k->fabout;
+                    if(s->line[i].mode==5){Ref scoped[]={subject,part[0]};subject=said_tuple(compose(scoped,2,ref_above(scoped,2)));}
+                    Ref claim[]={subject,record_text((const uint8_t *)s->line[i].pred,s->line[i].pred_length),part[np-1]};
+                    record_emit_claim(k,claim,3);
+                }
+            }
             else if (s->line[i].mode == 2 && np == 2) record_emit_claim(k, part, 2);
             else if (s->line[i].mode == 1 && np >= 2) record_emit_claim(k, part, np);
             else if (s->line[i].mode == 0 && np == 2 && k->has_fabout) record_obligation_note(k, 'o', &record_diagnostic_labels[DIAG_LINE], (const uint8_t *)ln + m[1].rm_so, (size_t)(m[1].rm_eo - m[1].rm_so), NULL, 0); }

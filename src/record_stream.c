@@ -286,6 +286,7 @@ static void page_about(RecordPipeline *pipeline, const SRecords *records){
     }
     if (view.failed) pipeline->failed = 1;
     s_records_close(&view);
+    if(!pipeline->has_about && pipeline->say->about_file){pipeline->about=pipeline->stem;pipeline->has_about=1;}
 }
 static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint64_t byte_at){
     SRecord batch[RECORD_WINDOW];

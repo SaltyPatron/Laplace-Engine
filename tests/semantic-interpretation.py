@@ -72,6 +72,72 @@ def main():
             assert result.returncode == expected, (arguments, result.returncode, output)
             return output
 
+        pages = root / 'ud-pages'
+        pages.mkdir()
+        for feature,definition,value in [('Poss','possessive','it is possessive'),('Abbr','abbreviation','it is abbreviated')]:
+            (pages / (feature+'.md')).write_text(
+                f"---\ntitle: '{feature}'\nshortdef: '{definition}'\n---\n"
+                f'### <a name="Yes">`Yes`</a>: {value}\n', encoding='utf-8')
+        expected_pages=[('Poss','short definition','possessive'),('[Poss, Yes]','called','it is possessive'),
+                        ('Abbr','short definition','abbreviation'),('[Abbr, Yes]','called','it is abbreviated')]
+        for workers in (1,4):
+            text=run('ingest','--claims-tsv','-j',workers,'-s','universal-dependencies-documentation',pages)
+            claims=[tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            assert sorted(claims)==sorted(expected_pages),(workers,claims,text)
+        missing=pages/'Red.md'
+        missing.write_text('### <a name="Mo">`Mo`</a>: Monosylabic\n',encoding='utf-8')
+        text=run('ingest','--claims-tsv','-s','universal-dependencies-documentation',missing)
+        assert [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]==[
+            ('[Red, Mo]','called','Monosylabic')],text
+        print('PASS documented page relations retain feature-local values and the declared headerless filename subject')
+
+        frame=root/'framenet-pattern.xml'
+        meanings={'Target':'Target','WSL':'word status','Other':'special syntactic phenomena','Sent':'sentence annotation',
+                  **dict.fromkeys(['Noun','Verb','Adj','Adv','Prep','Scon','Art'],'part-of-speech-specific annotation'),
+                  **dict.fromkeys(['CEE','CE','CstrPT','GovX'],'construction annotation layer'),
+                  'BNC':'part of speech','PENN':'part of speech','FE':'frame element','GF':'grammatical function',
+                  'PT':'phrase type','NER':'Named Entity Recognition'}
+        layers=''.join(f'<layer name="{name}" rank="1"><label start="{5 if name=="Target" else 0}" '
+                       f'end="{7 if name=="Target" else 3}" name="{name if name=="Target" else "Marker"}"/></layer>'
+                       for name in meanings)
+        frame.write_text('<lexUnit frame="Practice" frameID="962" name="run-through.n" ID="99999999" POS="N">'
+            '<lexeme name="run-through" POS="N"/><valences><FEGroupRealization>'
+            '<pattern><valenceUnit FE="Agent" PT="NP" GF="Ext"/><valenceUnit FE="Action" PT="DNI" GF=""/></pattern>'
+            '<pattern><valenceUnit FE="Agent" PT="NP" GF="Obj"/><valenceUnit FE="Action" PT="DNI" GF=""/></pattern>'
+            '</FEGroupRealization></valences><subCorpus><sentence><text>They ran.</text>'
+            '<annotationSet luID="99999999">'+layers+'</annotationSet></sentence></subCorpus></lexUnit>', encoding='utf-8')
+        lu='[Practice, run-through.n]'
+        expected_frame=[
+            (lu,'run-through','N','_','_'),(lu,'N'),(lu,'consist of','run-through'),
+            ('['+lu+', valence pattern]','AgentAction','NPDNI','Ext_'),
+            ('['+lu+', valence pattern]','AgentAction','NPDNI','Obj_'),
+            (lu,'example sentence','They ran.'),(lu,'identifier vocabulary','fnlu'),
+            ('[fnlu, 99999999]','identifies',lu),('99999999','[fnlu, cross-resource mapping, fnframe]','962'),
+            ('Practice','identifier vocabulary','fnframe'),('99999999','identifier vocabulary','fnlu')]
+        expected_frame += [('They ran.',meaning,
+            '[[99999999, 5, 7], ['+name+', 1, ['+('5, 7, Target' if name=='Target' else '0, 3, Marker')+']]]')
+            for name,meaning in meanings.items()]
+        for workers in (1,4):
+            text=run('ingest','--claims-tsv','-j',workers,'-s','framenet',frame)
+            claims=[tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            assert sorted(claims)==sorted(expected_frame),(workers,claims,text)
+            assert 'mismatched 0' in text,text
+        print('PASS both FrameNet alignments, complete valence patterns, absent GF slots and all release annotation layers')
+
+        brown=root/'ca01'
+        brown.write_text('\n\nCount/nn //in minute/nn ./.\nUse/vb and/or/cc !/!\n\n',encoding='utf-8')
+        readings=[]
+        for workers in (1,4):
+            text=run('ingest','--claims-tsv','-j',workers,'-s','brown',brown)
+            claims=[tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            assert len(claims)==9,(claims,text)
+            assert ('/','part of speech annotation','in') in claims,claims
+            assert ('and/or','part of speech annotation','cc') in claims,claims
+            assert 'mismatched 0' in text,text
+            readings.append(sorted(claims))
+        assert readings[0]==readings[1],readings
+        print('PASS Brown literal slash words and embedded slashes retain the final word/tag separator')
+
         # Real CLDR excerpts cover every field class which rejected the ISO639
         # foundation rung. Check the claims as well as the omission counter:
         # declaring a source key must not suppress other subjects' type fields.

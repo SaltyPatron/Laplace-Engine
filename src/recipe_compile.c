@@ -490,9 +490,12 @@ static void compile_semantic_paths(Say *say, const char *recipe){
     for (int i = 0; i < say->ndis; i++) { compile_key_forms(&say->dis[i].k); path_register(say,say->dis[i].under);
         if (say->dis[i].what==D_INDEX) path_register(say,say->dis[i].arg); }
     for (int i = 0; i < say->nval; i++) compile_key_forms(&say->val[i].k);
-    path_register(say, say->lay_tier); path_register(say, say->lay_row); path_register(say, say->tree_tier); path_register(say, say->tree_row);
+    path_register(say, say->tree_tier); path_register(say, say->tree_row);
     path_register(say, say->tree_head); path_register(say, say->tree_rel);
-    for (int i = 0; i < say->nlayer; i++) path_register(say, say->layer[i]);
+    for (int i = 0; i < say->nlayers; i++) {
+        path_register(say,say->layers[i].tier); path_register(say,say->layers[i].row);
+        for (int j=0; j<say->layers[i].count; j++) path_register(say,say->layers[i].field[j]);
+    }
     path_register(say, say->surface.tier); path_register(say, say->surface.row);
     path_register(say, say->surface.key); path_register(say, say->surface.form);
     path_register(say, say->surface.adjoining); path_register(say, say->surface.verify);
@@ -720,9 +723,15 @@ int say_says(Recipe *r, const char *path, char *tok){
         program->thing=(uint8_t)s->nthing; return 1;
     }
     if (!strcmp(tok, "layers") && LAID) { at = strtok(NULL, "\r\n");
-        if (!name_next(&at, s->lay_tier, sizeof s->lay_tier) || !name_next(&at, s->lay_row, sizeof s->lay_row)) { fprintf(stderr, "%s: layers TIER ROW NAME...\n", path); return -1; }
-        while (s->nlayer < 16 && name_next(&at, s->layer[s->nlayer], sizeof s->layer[0])) s->nlayer++;
-        if (!s->nlayer) { fprintf(stderr, "%s: layers TIER ROW NAME...\n", path); return -1; } return 1; }
+        if (s->nlayers==8) { fprintf(stderr,"%s: at most 8 aligned layer declarations\n",path); return -1; }
+        int i=s->nlayers++;
+        if (!name_next(&at,s->layers[i].tier,sizeof s->layers[i].tier) || !name_next(&at,s->layers[i].row,sizeof s->layers[i].row)) { fprintf(stderr,"%s: layers TIER ROW NAME...\n",path); return -1; }
+        for(int j=0;j<i;j++) if(!strcmp(s->layers[j].tier,s->layers[i].tier)){fprintf(stderr,"%s: duplicate aligned layer tier %s\n",path,s->layers[i].tier);return -1;}
+        while (name_next(&at,nm,sizeof nm)) {
+            if(s->layers[i].count==16){fprintf(stderr,"%s: at most 16 axes in an aligned layer declaration\n",path);return -1;}
+            snprintf(s->layers[i].field[s->layers[i].count++],64,"%s",nm);
+        }
+        if (!s->layers[i].count) { fprintf(stderr,"%s: layers TIER ROW NAME...\n",path); return -1; } return 1; }
     if (!strcmp(tok, "tree") && LAID) { at = strtok(NULL, "\r\n");
         if (!name_next(&at, s->tree_tier, sizeof s->tree_tier) || !name_next(&at, s->tree_row, sizeof s->tree_row) || !name_next(&at, s->tree_head, sizeof s->tree_head) || !name_next(&at, s->tree_rel, sizeof s->tree_rel)) { fprintf(stderr, "%s: tree TIER ROW HEAD REL\n", path); return -1; }
         return 1; }
@@ -830,8 +839,21 @@ int say_says(Recipe *r, const char *path, char *tok){
     if ((!strcmp(tok, "about") || !strcmp(tok, "line")) && LAID) {           /* PATTERN: the rest of the line; its parentheses are the parts it says */
         char *rest = strtok(NULL, "\r\n"); if (!rest) { fprintf(stderr, "%s: %s PATTERN\n", path, tok); return -1; } while (*rest == ' ' || *rest == '\t') rest++;
         char pat[1024]; snprintf(pat, sizeof pat, "%s", rest); int mode = 0; char pred[64] = "";
+        if(tok[0]=='a') {
+            char *fallback=strstr(pat," else {file}");
+            if(fallback && !fallback[12]){*fallback=0;s->about_file=1;}
+        }
         if (tok[0] == 'l') { char *m = strstr(pat, " :: "); if (m) { *m = 0; char *w = m + 4; while (*w == ' ') w++;     /* PATTERN :: pair | claim | predicate NAME (an obligation) */
                 if (!strncmp(w, "pair", 4)) mode = 2; else if (!strncmp(w, "claim", 5)) mode = 1; else if (!strncmp(w, "predicate ", 10)) { mode = 3; snprintf(pred, sizeof pred, "%s", w + 10); size_t pl = strlen(pred); while (pl && (pred[pl - 1] == ' ' || pred[pl - 1] == '\r')) pred[--pl] = 0; }
+                else if (!strncmp(w,"relation ",9)) {
+                    char *tail=w+9,extra[64];
+                    if(!name_next(&tail,pred,sizeof pred)){fprintf(stderr,"%s: a line relation needs its documented meaning\n",path);return -1;}
+                    mode=4;
+                    if(name_next(&tail,extra,sizeof extra)) {
+                        if(strcmp(extra,"within") || name_next(&tail,extra,sizeof extra)){fprintf(stderr,"%s: line PATTERN :: relation \"TEXT\" [within]\n",path);return -1;}
+                        mode=5;
+                    }
+                }
                 else { fprintf(stderr, "%s: line PATTERN :: pair | claim | relation \"TEXT\" [within]\n", path); return -1; } } }
         regex_t *re = tok[0] == 'a' ? &s->about_re : (s->nline < 8 ? &s->line[s->nline].re : NULL);
         if (!re || regcomp(re, pat, REG_EXTENDED)) { fprintf(stderr, "%s: the pattern does not compile (or there are more than 8): %s\n", path, pat); return -1; }

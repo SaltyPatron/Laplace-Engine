@@ -7,13 +7,11 @@ match *.md
 
 tier line by \n
 
-about ^title *: *'(.*)'$
-# Both lines below are unresolved obligations (Laplace-Engine#32). A line's first part, or a word the recipe writes
-# after "::", is a field's or a heading's name and is never a relation; and a line can say only the parts its own
-# text holds (:: pair, :: claim), not what the page is about together with a relation in the documentation's words.
-# The short definition is [NOUN, a short definition, noun] and a heading [[Number, Sing], singular number]; writing
-# either needs a line that says [what the page is about, TEXT, part] ("line PATTERN :: relation TEXT"), which the
-# engine does not have. A pair of the line's own parts would lose what the page is about: [Yes, it is possessive] is
-# Poss=Yes on one page and Abbr=Yes, Foreign=Yes, Typo=Yes ... on others.
-line ^(shortdef) *: *'(.*)'$
-line ^### <a name="[^"]*">`([^`]+)`</a>: (.*)$
+# UD's source tree also contains headerless feature pages (e.g. _mpu/feat/Red.md).
+# Their basename names the feature; prefer an explicit title where supplied.
+about ^title *: *'(.*)'$ else {file}
+# UD's front matter gives a short definition of the page's named subject.
+# A value heading names a value WITHIN that feature: Poss=Yes must remain
+# distinct from Abbr=Yes, Foreign=Yes and the other Boolean features.
+line ^shortdef *: *'(.*)'$ :: relation "short definition"
+line ^### <a name="[^"]*">`([^`]+)`</a>: (.*)$ :: relation "called" within

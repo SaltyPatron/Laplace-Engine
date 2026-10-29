@@ -49,6 +49,7 @@ thing sentence text
 # content, never a relation applied independently to every word it annotates.
 thing annotationSet luID layer[name=Target]/label/start layer[name=Target]/label/end
 thing annotationSet ^lexUnit/ID layer[name=Target]/label/start layer[name=Target]/label/end
+thing annotationSet cxnName layer[name=Target]/label/start layer[name=Target]/label/end
 thing layer of name rank label within
 thing label start end name feID
 thing label start end name
@@ -134,8 +135,11 @@ attest semType superType
 relate frameRelation ^/name to supID
 relate FERelation ^/^/name to supID
 relate frameRelation type to relatedFrame
-attest valenceUnit GF PT FE
-together valenceUnit
+# FrameNet's valence patterns align the FE, PT and GF of every constituent.
+# One pattern is one claim, including absent GF slots, rather than independent
+# properties of the LU. A second layers declaration preserves the lexeme axes.
+thing pattern literal "valence pattern" within
+layers pattern valenceUnit FE PT GF
 # FrameNet II calls these "part of speech", "frame element", "grammatical
 # function", "phrase type", "Named Entity Recognition" and "Target" layers.
 # The relation is the source's documented meaning; its BNC/PENN/FE/... label
@@ -153,6 +157,18 @@ when name is NER
 relation "Named Entity Recognition" layer.name
 when name is Target
 relation "Target" layer.name
+when name is WSL
+relation "word status" layer.name
+when name is Other
+relation "special syntactic phenomena" layer.name
+when name is Sent
+relation "sentence annotation" layer.name
+when name matches ^(Noun|Verb|Adj|Adv|Prep|Scon|Art)$
+relation "part-of-speech-specific annotation" layer.name
+# Construction annotation tagsets stay opaque bundles with their own names,
+# labels and offsets. Their identifiers are not asserted as relation meanings.
+when name matches ^(CEE|CE|CstrPT|GovX)$
+relation "construction annotation layer" layer.name
 always
 relate layer name to . of ^sentence/text
 
