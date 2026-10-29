@@ -471,13 +471,25 @@ void ctx_open(int threads){
     CTX = malloc(sizeof(Ctx *) * (size_t)threads);
     for (int i = 0; i < threads; i++) { CTX[i] = lp_text_new(T0); if (!CTX[i]) { fprintf(stderr, "cannot open ICU's break iterators\n"); exit(1); } }
 }
-Ref text_ref(Ctx *c, const uint8_t *s, size_t n){
+typedef struct { lp_id *out; size_t cap, count; } TextOccurrences;
+static void text_occurrence(void *sink, size_t offset, size_t length, const lp_ref *value){
+    TextOccurrences *parts = sink; (void)offset; (void)length;
+    if (parts->count < parts->cap) parts->out[parts->count] = value->id;
+    parts->count++;
+}
+Ref text_occurrences(Ctx *c, const uint8_t *s, size_t n, lp_id *out, size_t cap, size_t *count){
     /* Native owns the canonical UAX #29 tree. A worker or byte-window boundary
      * must never introduce a second text decomposition or change its ID. */
-    Ref r = lp_text_decompose(c, s, n, compose_sink, NULL); r.said = 0;
+    TextOccurrences parts = { out, cap, 0 };
+    Ref r = lp_text_decompose_segments(c, s, n, compose_sink, NULL,
+        count ? text_occurrence : NULL, &parts); r.said = 0;
+    if (count) *count = parts.count;
     static const lp_id absent = {{0}};
     if (n && lp_id_eq(&r.id,&absent)) { input_error_prefix(); fputs("invalid scalar content has no canonical text entity\n",stderr); exit(1); }
     return r;
+}
+Ref text_ref(Ctx *c, const uint8_t *s, size_t n){
+    return text_occurrences(c, s, n, NULL, 0, NULL);
 }
 
 static uint64_t nodes_before, hits_before;

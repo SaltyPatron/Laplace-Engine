@@ -54,6 +54,7 @@ static const Param
     AS       = { "as", "--as", ARG_TEXT, "USER", "USER" },
     SESSION  = { "session", "--session", ARG_TEXT, NULL, "NAME" },
     READ     = { "read", "--read", ARG_FLAG, NULL, "a read: nothing is witnessed" },
+    SEGMENTS = { "segments", "--segments", ARG_FLAG, NULL, "canonical word-segment occurrence IDs as JSON, including separators; no database" },
     LAYERS   = { "layers", "--layers", ARG_INT, "every layer", "N" },
     ZMIN     = { "z", "--z", ARG_REAL, "3", "zmin" },
     CAP      = { "cap", "--cap", ARG_INT, "64", "K" },
@@ -93,7 +94,7 @@ static const Arg A_REPLAY[] = { O(CONNINFO), O(WRITE), O(TSV), O(FILES), END };
 static const Arg A_JOINS[] = { O(CONNINFO), O(JOINS), END };
 static const Arg A_STRUCTURE[] = { { &NODES, 0, NULL, "60" }, { &LAYOUT, ARG_REQUIRED, NULL, NULL }, { &FILE_, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_TREE[] = { O(RECIPES), O(GRAMMAR), { &NODES, 0, NULL, "400" }, { &FILE_, ARG_REQUIRED, NULL, NULL }, END };
-static const Arg A_TEXT[] = { { &TEXT, ARG_REQUIRED, NULL, NULL }, END };
+static const Arg A_TEXT[] = { O(SEGMENTS), { &TEXT, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_PULL[] = { O(CONNINFO), O(FIRMWARE), O(SEED), { &PROMPT, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_TURN[] = { O(CONNINFO), O(FIRMWARE), O(AS), O(SESSION), O(SEED), O(READ), { &PROMPT, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_HOP[] = { O(CONNINFO), { &LIMIT, 0, NULL, "24" }, O(FIRMWARE), O(FAN), O(K),

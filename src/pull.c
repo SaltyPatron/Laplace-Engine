@@ -34,9 +34,19 @@ static void show_ref(const char *label, const lp_ref *r){
 }
 
 int cmd_text(int argc, char **argv){
-    if (argc < 2) { fprintf(stderr, "usage: laplace text text\n"); return 2; }
+    int segments = 0;
+    int a = opts(argc, argv, (const Opt[]){ { .flag="--segments", .kind='b', .at=&segments }, {0} });
+    if (a >= argc) { fprintf(stderr, "usage: laplace text [--segments] text\n"); return 2; }
     double t = now(); tier0_open(NULL); Ctx *c = lp_text_new(T0);
-    lp_ref parts[64]; size_t np; lp_ref r = entity_named(c, argv[1], parts, 64, &np);
+    if (segments) {
+        const uint8_t *bytes = (const uint8_t *)argv[a]; size_t length = strlen(argv[a]), count;
+        lp_id *ids = malloc(sizeof(lp_id) * (length ? length : 1)); table_init();
+        Ref root = text_occurrences(c, bytes, length, ids, length, &count); char id[33]; id_text(&root.id,id);
+        printf("{\"entity\":\"%s\",\"segments\":[",id);
+        for (size_t i=0; i<count; i++) { id_text(ids+i,id); printf("%s\"%s\"",i ? "," : "",id); }
+        puts("]}"); free(ids); lp_text_free(c); return 0;
+    }
+    lp_ref parts[64]; size_t np; lp_ref r = entity_named(c, argv[a], parts, 64, &np);
     double ms = (now() - t) * 1000;
     uint8_t fp[32]; lp_tier0_fingerprint(T0, fp);
     show_ref("entity", &r);

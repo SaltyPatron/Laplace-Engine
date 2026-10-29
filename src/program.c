@@ -76,12 +76,6 @@ static Cell *cell(Field *f, const lp_id *id){
 static Cell *cell_find(const Field *f, const lp_id *id){ int64_t i = lp_idmap_find(f->m, id); return i < 0 ? NULL : &f->c[i]; }
 static void field_free(Field *f){ free(f->c); lp_idmap_free(f->m); memset(f, 0, sizeof *f); }
 
-/* The constituents of a composition, in order, its runs written out; an atom or an unknown ID is itself. */
-static int constituents(const lp_id *id, lp_id *out, int cap){
-    int n = (int)table_parts(id, out, (size_t)cap); if (!n) { out[0] = *id; return 1; }
-    return n;
-}
-
 /* ---- the state a turn carries from one emitted constituent to the next */
 typedef struct {
     const Firmware *fw; PGconn *pg; Reader *rd; lp_text *c;
@@ -733,15 +727,16 @@ int cmd_turn(int argc, char **argv){
     Firmware fw = firmware_for(fwp, FW_PULL); ELECT = &fw;
     tier0_open(NULL); table_init(); ctx_open(1); lp_text *c = lp_text_new(T0);
     State *st = calloc(1, sizeof(State)); st->fw = &fw; st->c = c;
-    st->pg = db_read(conninfo); st->rd = reader_new(st->pg);
     firmware_ids(&fw);
     firmware_say(&fw, FW_PULL);
 
     /* ---- RESOLVE: the prompt as content; the session from the record */
     const char *prompt = argv[a];
-    Ref pr = text_ref(CTX[0], (const uint8_t *)prompt, strlen(prompt)); st->prompt = pr.id;
-    st->nocc = pr.tier <= 2 ? 1 : constituents(&pr.id, st->occ, MAXOCC); if (pr.tier <= 2) st->occ[0] = pr.id;
-    if (st->nocc > MAXOCC) { fprintf(stderr, "turn: prompt has %d occurrences; this execution window supports %d\n", st->nocc, MAXOCC); return 2; }
+    size_t occurrences;
+    Ref pr = text_occurrences(CTX[0], (const uint8_t *)prompt, strlen(prompt), st->occ, MAXOCC, &occurrences); st->prompt = pr.id;
+    if (occurrences > MAXOCC) { fprintf(stderr, "turn: prompt has %zu occurrences; this execution window supports %d\n", occurrences, MAXOCC); return 2; }
+    st->nocc = (int)occurrences;
+    st->pg = db_read(conninfo); st->rd = reader_new(st->pg);
     Ref who = text_ref(CTX[0], (const uint8_t *)user, strlen(user)), sname = text_ref(CTX[0], (const uint8_t *)session, strlen(session));
     Ref hp[2] = { who, sname }; hp[0].said = hp[1].said = 0; Ref handle = said_tuple(compose(hp, 2, (uint8_t)((who.tier > sname.tier ? who.tier : sname.tier) + 1)));    /* the session: its name within its user's */
     int nturn = 0, ordinal = 1;

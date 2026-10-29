@@ -34,10 +34,10 @@ int cmd_pull(int argc, char **argv){
     const char *prompt = argv[a];
 
     /* ---- the prompt: broken down, and its trunk */
-    Ref pr = text_ref(CTX[0], (const uint8_t *)prompt, strlen(prompt));
-    Node *pn = table_find(&pr.id); lp_id *ph; int np = 0;
-    if (!pn || pr.tier <= 2) { ph = malloc(sizeof(lp_id)); ph[0] = pr.id; np = 1; }      /* a word is one constituent of what holds it: itself */
-    else { ph = malloc(sizeof(lp_id) * pn->len); np = (int)table_parts(&pr.id, ph, pn->len); }
+    size_t bytes = strlen(prompt), occurrences;
+    lp_id *ph = malloc(sizeof(lp_id) * (bytes ? bytes : 1));
+    Ref pr = text_occurrences(CTX[0], (const uint8_t *)prompt, bytes, ph, bytes, &occurrences);
+    int np = (int)occurrences;
     char idt[33]; id_text(&pr.id, idt);
     firmware_say(&fw, FW_PULL);
     printf("prompt     %s   tier %d   %d constituent%s", idt, pr.tier, np, np == 1 ? "" : "s");

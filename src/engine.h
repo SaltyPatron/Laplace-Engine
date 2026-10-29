@@ -159,6 +159,7 @@ typedef lp_text Ctx;
 extern Ctx **CTX;                                                     /* one per thread */
 void   ctx_open(int threads);
 Ref    text_ref(Ctx *, const uint8_t *s, size_t n);                  /* UAX #29, recorded in the node table */
+Ref    text_occurrences(Ctx *, const uint8_t *s, size_t n, lp_id *out, size_t cap, size_t *count);
 
 /* ---- recipes */
 typedef struct TSLanguage TSLanguage;
