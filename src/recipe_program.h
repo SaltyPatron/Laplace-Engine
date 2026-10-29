@@ -10,7 +10,7 @@
 #include <stdint.h>
 #include <string.h>
 
-enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, D_RANGE };
+enum { D_CONTENT = 1, D_KEY, D_REFER, D_TYPE, D_METADATA, D_OMIT, D_CODEPOINTS, D_RANGE, D_INDEX };
 enum { DEFAULT_LITERAL = 1, DEFAULT_FIELD };
 /* A key as a resource writes it, matched by a pattern and written as a template (\1: the pattern's first part) where it
  * writes it otherwise than those it points at write it (vn:51.2 for 51.2): the highway's lines, and a type's key. */
@@ -21,7 +21,7 @@ typedef struct { char list[32], path[160], as[4][64]; int nas; regex_t re; int h
                  lp_strmap *vocabulary; char vocabulary_name[64]; } KSpec; /* immutable, field-scoped vocabulary */
 typedef struct Dis Dis;
 typedef struct { char name[64]; uint16_t length, tier_id, scope_key; uint8_t within, local, constructor; lp_id domain; const Dis *constructor_value; } TargetCode;
-struct Dis { char name[64]; int what; char arg[64], under[64]; uint8_t key_radix; KSpec k; uint32_t when;
+struct Dis { char name[64]; int what; char arg[64], under[64]; uint8_t key_radix, index_base; KSpec k; uint32_t when;
                  struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; const char *text;
                  TargetCode *targets; uint8_t ntargets; uint16_t name_length, arg_length, text_length;
                  DiagnosticLabel *road_label, *statement_label; uint32_t name_slot, part_slot, parent_slot; };   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse); text: what a relation line words it as */

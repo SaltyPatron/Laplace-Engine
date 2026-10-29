@@ -195,6 +195,28 @@ def main():
             assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
         print('PASS JSON-in-CSV lists decode once, retaining commas, quotes, Unicode and every array member')
 
+        chemistry = Path(__file__).resolve().parent / 'fixtures/social-chemistry'
+        expected_selections = [
+            ('First rule.', 'Who is the RoT most likely targeting', 'friend'),
+            ('First rule.', 'who is most likely to do the action or its opposite', 'narrator'),
+            ('Second rule.', 'Who is the RoT most likely targeting', 'colleague'),
+            ('Second rule.', 'who is most likely to do the action or its opposite', 'no one listed'),
+            ('Third rule.', 'Who is the RoT most likely targeting', 'no one listed'),
+        ]
+        for workers in (1, 4):
+            text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'social-chemistry-101', chemistry)
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            selections = [claim for claim in claims if len(claim) == 3 and claim[1] in {x[1] for x in expected_selections}]
+            assert sorted(selections) == sorted(expected_selections), (workers, claims, text)
+            assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
+        invalid_selections = root / 'social-chem-101.v1.0.tsv'
+        invalid_selections.write_text('rot\tcharacters\trot-char-targeting\n' +
+            ''.join(f'Invalid {i}\tnarrator|friend\t{value}\n' for i, value in
+                    enumerate(('char-2', 'char--1', 'char-4294967296'))), encoding='utf-8')
+        rejected = run('ingest', '--claims-tsv', '-s', 'social-chemistry-101', invalid_selections, expected=1)
+        assert 'semantic_omissions=3' in rejected, rejected
+        print('PASS row-local character pointers, explicit no-one answers, absent answers and invalid-index rejection')
+
         readings = {}
         for workers in (1, 4):
             text = run('ingest', '--claims', '-j', workers, 'semantic-alignment')

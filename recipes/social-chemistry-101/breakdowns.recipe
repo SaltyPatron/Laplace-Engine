@@ -26,7 +26,17 @@ content rot-worker-id breakdown-worker-id
 # exactly." A count of workers: the set's bookkeeping, read by nothing.
 omit split n-characters rot-bad
 omit m
-content rot situation area rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical characters
+content rot situation area rot-agree rot-categorization rot-moral-foundations rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-hypothetical characters
+# char-N is a zero-based pointer into this row's character list. char-none is
+# the documented negative answer, not an unresolved character or a list index.
+when rot-char-targeting is char-none
+type rot-char-targeting social-chemistry-character-selection node as "no one listed"
+always
+index rot-char-targeting in characters matching ^char-([0-9]+)$
+when action-char-involved is char-none
+type action-char-involved social-chemistry-character-selection node as "no one listed"
+always
+index action-char-involved in characters matching ^char-([0-9]+)$
 together row
 # The README, "Dataset Columns" and "Dataset Collection":
 #   situation "Text of the situation"; "A worker writes 1 -- 5 RoTs per situation."
@@ -55,9 +65,9 @@ relation "How much cultural pressure do you (or those you know) feel" action-pre
 # loyalty-betrayal, authority-subversion, sanctity-degradation}; action-agency {agency, experience}; action-legal
 # {legal, illegal, tolerated}; action-hypothetical {explicit-no, probable-no, hypothetical, probable, explicit}.
 value - rot-categorization rot-moral-foundations action-agency action-legal action-hypothetical
-# rot-char-targeting and action-char-involved: obligations. Their answer char-N "means that the worker picked
-# character N, a 0-index into the `characters` column": a pointer into the row's own list, to be resolved to the
-# character it names, never recorded as written (Laplace-Engine#20).
+# These answers name the actual row-local character, under the README's question.
+relation "Who is the RoT most likely targeting" rot-char-targeting
+relation "who is most likely to do the action or its opposite" action-char-involved
 attest row situation with rot-worker-id
 attest row rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical with breakdown-worker-id
 attest row area characters

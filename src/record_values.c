@@ -293,6 +293,31 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
         if (d->what==D_RANGE && non_scalar_address(p,n,out)) return 1;
         uint8_t buf[512]; size_t l; if (!codepoints_text(p, n, buf, sizeof buf, &l)) { if (!n) return 0; *out = record_text(p, n); return 1; }
         *out = string_ref(buf, l); return 1; }
+    if (d->what==D_INDEX && depth<16) {
+        const uint8_t *digits=x->val; size_t length=x->vlen; Keys forms={0};
+        if (d->k.has_re) {
+            record_key_forms(&d->k,digits,length,&forms,t,c);
+            if (forms.n!=1) goto invalid_index;
+            digits=(const uint8_t *)forms.k[0]; length=strlen(forms.k[0]);
+        }
+        uint32_t position=0;
+        if (!length) goto invalid_index;
+        for (size_t i=0;i<length;i++) {
+            if (digits[i]<'0' || digits[i]>'9' || position>(UINT32_MAX-(digits[i]-'0'))/10) goto invalid_index;
+            position=position*10+(uint32_t)(digits[i]-'0');
+        }
+        if (position<d->index_base) goto invalid_index;
+        position-=d->index_base;
+        int32_t list=record_select_first(t,t->n[c].parent>=0?t->n[c].parent:0,d->arg);
+        if (list<0 || t->n[list].kind!=S_GROUP || t->n[list].join!=S_PIECES) goto invalid_index;
+        int32_t item=record_field_first(&t->n[list]);
+        while (item>=0 && position) { item=record_field_next(&t->n[item]); position--; }
+        if (item>=0 && item!=c && record_value(k,t,item,out,depth+1)) return 1;
+invalid_index:
+        if (k->binding_phase || k->defer_missing) k->blocked++;
+        else record_unknown_key(k,t,c,x);
+        return 0;
+    }
     if (d->what == D_REFER && depth < 16) {                                  /* the first of its targets that holds the key */
         size_t key_length=x->vlen;
         const uint8_t *raw=x->val; Keys forms={0};

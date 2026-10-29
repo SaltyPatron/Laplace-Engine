@@ -28,6 +28,9 @@
  *   unless_equal FIELD OTHER   suppress a scalar field equal to its sibling; multi-value sets stay distinct
  *   key TIER NAME              the part is the file's key for a TIER: it resolves to the TIER's thing; written nowhere
  *   refer NAME TIER            the part's text is a key of a TIER: it is read as that TIER's thing
+ *   index FIELD in LIST [matching PATTERN] [base 0|1]
+ *                              a record-local numeric pointer selects a parsed list member; invalid, negative and
+ *                              out-of-range pointers reject admission instead of naming a fabricated value
  *   type NAME LIST             the part's text is the source's key of a type in the highway's LIST: read as that type
  *                              ([matching PATTERN] [as TEMPLATE...]: the key as the lists write it; {NAME} in a template
  *                              is the part NAME beside it, and each template is tried in turn: key_form)
@@ -484,7 +487,8 @@ static void compile_semantic_paths(Say *say, const char *recipe){
     for (int i = 0; i < say->nwhere; i++) path_register(say, say->where[i].name);
     for (int i = 0; i < say->nscore; i++) { path_register(say, say->score[i].tier); path_register(say, say->score[i].name); }
     for (int i = 0; i < say->nhw; i++) { path_register(say, say->hw[i].tier); path_register(say, say->hw[i].a.path); path_register(say, say->hw[i].b.path); compile_key_forms(&say->hw[i].a); compile_key_forms(&say->hw[i].b); }
-    for (int i = 0; i < say->ndis; i++) { compile_key_forms(&say->dis[i].k); path_register(say,say->dis[i].under); }
+    for (int i = 0; i < say->ndis; i++) { compile_key_forms(&say->dis[i].k); path_register(say,say->dis[i].under);
+        if (say->dis[i].what==D_INDEX) path_register(say,say->dis[i].arg); }
     for (int i = 0; i < say->nval; i++) compile_key_forms(&say->val[i].k);
     path_register(say, say->lay_tier); path_register(say, say->lay_row); path_register(say, say->tree_tier); path_register(say, say->tree_row);
     path_register(say, say->tree_head); path_register(say, say->tree_rel);
@@ -749,6 +753,24 @@ int say_says(Recipe *r, const char *path, char *tok){
     if ((!strcmp(tok, "codepoints") || !strcmp(tok, "range")) && LAID) { int what = tok[0] == 'c' ? D_CODEPOINTS : D_RANGE; at = strtok(NULL, "\r\n"); int any = 0;
         while (name_next(&at, nm, sizeof nm)) { if (dis_add(s, path, nm, what, NULL) < 0) return -1; any = 1; }
         if (!any) { fprintf(stderr, "%s: %s NAME...\n", path, tok); return -1; } return 1; }
+    if (!strcmp(tok,"index") && LAID) {
+        char word[64], list[64]; KSpec form={0}; uint8_t base=0;
+        at=strtok(NULL,"\r\n");
+        if (!name_next(&at,nm,sizeof nm) || !name_next(&at,word,sizeof word) || strcmp(word,"in") ||
+            !name_next(&at,list,sizeof list)) { fprintf(stderr,"%s: index FIELD in LIST [matching PATTERN] [base 0|1]\n",path); return -1; }
+        while (name_next(&at,word,sizeof word)) {
+            if (!strcmp(word,"matching")) {
+                if (form.has_re || !name_next(&at,word,sizeof word) || regcomp(&form.re,word,REG_EXTENDED)) return -1;
+                form.has_re=1;
+            } else if (!strcmp(word,"base")) {
+                if (!name_next(&at,word,sizeof word) || (strcmp(word,"0") && strcmp(word,"1"))) return -1;
+                base=(uint8_t)(word[0]-'0');
+            } else return -1;
+        }
+        int result=dis_add(s,path,nm,D_INDEX,list);
+        if (result>0) { Dis *rule=&s->dis[s->ndis-1]; rule->k=form; rule->index_base=base; }
+        return result;
+    }
     if ((!strcmp(tok, "refer") || !strcmp(tok, "type")) && LAID) { at = strtok(NULL, "\r\n");
         if (!name_next(&at, nm, sizeof nm) || !name_next(&at, a2, sizeof a2)) { fprintf(stderr, "%s: %s NAME %s\n", path, tok, tok[0] == 'r' ? "TIER" : "LIST..."); return -1; }
         KSpec ks; memset(&ks, 0, sizeof ks);
