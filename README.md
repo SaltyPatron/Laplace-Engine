@@ -150,6 +150,8 @@ against raw UTF-8 bytes and verifies byte-exact parsing through a Unicode path.
 Windows runtime publication compares dependency SHA-256 values before copying,
 including Intel's symlinked import names. Repeated builds reuse identical DLL
 bytes without rewriting a runtime peer.
+Dispatch DLLs are discovered beside the resolved MKL runtime, so nested builds
+also package them when their parent owns SDK discovery and `MKLROOT` is unset.
 
 ## Commands
 
