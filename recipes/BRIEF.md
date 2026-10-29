@@ -98,6 +98,10 @@ So:
     without removing its content disposition. PropBank uses these to keep argument slots scoped to their roleset:
     `ARG0` under two different predicate senses does not identify one universal semantic role. Transformed scoped
     references retain `[[scope, original notation], refers to, resolved target]` in source provenance.
+    If the declared identity is exactly its key, or `[content scope, key]`, the compiler retains that constructor.
+    A reference can then construct the identifier without a target definition, using the key field's same literal
+    or identifier interpretation. It never invents a definition, guesses a lexicalization from an arbitrary record
+    key, or bypasses a reserved declaration which is still waiting for its dependencies.
     Open identifier lists retain unfamiliar IDs as written, without choosing a nearby known ID or regenerating the
     highway. Closed bank vocabularies still require a valid class. `omit` resolves nothing and is appropriate for
     explicit absence markers such as VerbNet's `fn_mapping="None"`, not unfamiliar real identifiers.

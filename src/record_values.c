@@ -202,34 +202,28 @@ static size_t hex_upper(unsigned long cp, char *out){
     return (size_t)k;
 }
 
-int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, int depth){
-    const SemanticValue *x = &t->n[c]; const Say *s = k->s; const Dis *d = record_field_disposition(s, x);
-    int typed_payload=x->kind==S_GROUP && x->scalar && d &&
-        (d->what==D_CONTENT || d->what==D_TYPE || d->what==D_REFER || d->what==D_CODEPOINTS || d->what==D_RANGE);
-    SemanticValue payload;
-    if (!typed_payload && x->kind == S_GROUP && x->join == S_PIECES && record_field_first(x) >= 0 && record_field_next(&t->n[record_field_first(x)]) >= 0) {      /* a list of values: the tuple of what each is ([display text, target]) */
-        Ref pc[64]; uint32_t np = 0; for (int32_t q = record_field_first(x); q >= 0 && np < 64; q = record_field_next(&t->n[q])) { if (t->n[q].kind == S_GROUP) return 0; if (record_value(k, t, q, &pc[np], depth)) { pc[np].said = 0; np++; } }
-        if (!np) return 0; *out = np == 1 ? pc[0] : said_tuple(compose(pc, np, ref_above(pc, np))); return 1; }
-    if (x->kind == S_GROUP && depth < 16) {                                    /* a part that is a thing: that thing */
-        if (k->tc_tree == t && (uint32_t)c < k->tc_n && !composing(c)) { Ref v; if (record_thing(k, t, c, &v, depth + 1)) { *out = v; return 1; } }
-        int32_t only = record_field_first(x); if (!typed_payload && only >= 0 && record_field_next(&t->n[only]) < 0 && t->n[only].kind == S_GROUP) return record_value(k, t, only, out, depth + 1); }     /* holding one part: what that part is */
-    if (typed_payload) { payload=*x; payload.kind=S_TEXT; x=&payload; }
-    if (x->kind == S_GROUP) {                                                 /* a part that holds only its text: that text, as the part is disposed of */
-        int32_t only = record_field_first(x); if (only < 0 || record_field_next(&t->n[only]) >= 0 || t->n[only].kind != S_TEXT) return 0;
-        x = &t->n[only];
-        if (!d) { if (record_value_empty(s, x)) return 0; *out = record_text(x->val, x->vlen); return 1; }
-        c = only; }
-    if (record_value_empty(s, x)) return 0;
-    if (!d) { if (x->kind == S_TEXT) { *out = record_text(x->val, x->vlen); return 1; } if (x->nlen) record_note_unhandled(k, x); return 0; }
-    if (d->what == D_CONTENT) {
-        if (s->selfmark && k->selfcp >= 0 && memchr(x->val, s->selfmark, x->vlen)) {    /* the code point itself, written out where the source writes its mark */
-            char hex[16]; size_t hl = hex_upper((unsigned long)k->selfcp, hex);
-            size_t mark = scratch_mark();
-            uint8_t *o = scratch_alloc((size_t)x->vlen * 8 + 8); size_t j = 0;
-            for (uint32_t i = 0; i < x->vlen; i++) { if (x->val[i] == (uint8_t)s->selfmark) { memcpy(o + j, hex, hl); j += hl; } else o[j++] = x->val[i]; }
-            *out = record_text(o, j); scratch_restore(mark); return 1; }
-        *out = semantic_text_ref(k, typed_payload ? &t->n[c] : x); return 1; }
-    if (d->what == D_TYPE) {                                                 /* by the source's key of it; or the type whose content this text is; a text that is neither is left open */
+enum { VALUE_PARTS_FLAT=1, VALUE_PARTS_TUPLE=2 };
+/* Both field values and compound identities compose the complete child set.
+ * The packaging event owner records its arity; scratch storage lives only
+ * until Native composition has copied those operands into the node table. */
+static int compose_values(RecordWorker *k,const SemanticRecord *t,int32_t c,int depth,int flags,Ref *out){
+    const SemanticValue *x=&t->n[c];size_t capacity=x->arity;
+    if(capacity>SIZE_MAX/sizeof(Ref)){fputs("record values exceed addressable memory\n",stderr);abort();}
+    size_t mark=scratch_mark();Ref *parts=scratch_alloc((capacity?capacity:1)*sizeof *parts);uint32_t count=0;
+    for(int32_t child=record_field_first(x);child>=0;child=record_field_next(&t->n[child])){
+        if((flags&VALUE_PARTS_FLAT) && t->n[child].kind==S_GROUP){scratch_restore(mark);return 0;}
+        Ref value;if(!record_value(k,t,child,&value,depth))continue;
+        if(count>=capacity){fputs("record child count exceeds its declared arity\n",stderr);abort();}
+        value.said=0;parts[count++]=value;
+    }
+    if(count){
+        *out=count==1?parts[0]:compose(parts,count,ref_above(parts,count));
+        if(count>1 && (flags&VALUE_PARTS_TUPLE))*out=said_tuple(*out);
+    }
+    scratch_restore(mark);return count!=0;
+}
+
+static int type_value(RecordWorker *k, const SemanticRecord *t, int32_t c, const SemanticValue *x, const Dis *d, Ref *out){
         const uint8_t *kp = x->val; size_t kn = x->vlen;
         for (int more = 1; more; ) { more = 0;                                /* white space around it, a no-break space (U+00A0) among it */
             if (kn && (*kp == ' ' || *kp == '\t')) { kp++; kn--; more = 1; } else if (kn >= 2 && kp[0] == 0xC2 && kp[1] == 0xA0) { kp += 2; kn -= 2; more = 1; }
@@ -259,7 +253,36 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
             if (HW && lp_highway_list(HW,d->targets[i].name) && !lp_highway_bank(HW,d->targets[i].name)) open=1;
         if (open) { if (record_value_once(k, t, c)) record_obligation_note(k, 'm', d->road_label, x->name, x->nlen, NULL, 0); *out = record_text(open_key, open_length); return 1; }
         record_unknown_key(k, t, c, x);     /* a key no list of the highway holds: said, never taken for text */
-        return 0; }
+        return 0;
+}
+
+int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, int depth){
+    const SemanticValue *x = &t->n[c]; const Say *s = k->s; const Dis *d = record_field_disposition(s, x);
+    int typed_payload=x->kind==S_GROUP && x->scalar && d &&
+        (d->what==D_CONTENT || d->what==D_TYPE || d->what==D_REFER || d->what==D_CODEPOINTS || d->what==D_RANGE);
+    SemanticValue payload;
+    if (!typed_payload && x->kind == S_GROUP && x->join == S_PIECES && record_field_first(x) >= 0 && record_field_next(&t->n[record_field_first(x)]) >= 0) {      /* a list of values: the tuple of what each is ([display text, target]) */
+        return compose_values(k,t,c,depth,VALUE_PARTS_FLAT|VALUE_PARTS_TUPLE,out); }
+    if (x->kind == S_GROUP && depth < 16) {                                    /* a part that is a thing: that thing */
+        if (k->tc_tree == t && (uint32_t)c < k->tc_n && !composing(c)) { Ref v; if (record_thing(k, t, c, &v, depth + 1)) { *out = v; return 1; } }
+        int32_t only = record_field_first(x); if (!typed_payload && only >= 0 && record_field_next(&t->n[only]) < 0 && t->n[only].kind == S_GROUP) return record_value(k, t, only, out, depth + 1); }     /* holding one part: what that part is */
+    if (typed_payload) { payload=*x; payload.kind=S_TEXT; x=&payload; }
+    if (x->kind == S_GROUP) {                                                 /* a part that holds only its text: that text, as the part is disposed of */
+        int32_t only = record_field_first(x); if (only < 0 || record_field_next(&t->n[only]) >= 0 || t->n[only].kind != S_TEXT) return 0;
+        x = &t->n[only];
+        if (!d) { if (record_value_empty(s, x)) return 0; *out = record_text(x->val, x->vlen); return 1; }
+        c = only; }
+    if (record_value_empty(s, x)) return 0;
+    if (!d) { if (x->kind == S_TEXT) { *out = record_text(x->val, x->vlen); return 1; } if (x->nlen) record_note_unhandled(k, x); return 0; }
+    if (d->what == D_CONTENT) {
+        if (s->selfmark && k->selfcp >= 0 && memchr(x->val, s->selfmark, x->vlen)) {    /* the code point itself, written out where the source writes its mark */
+            char hex[16]; size_t hl = hex_upper((unsigned long)k->selfcp, hex);
+            size_t mark = scratch_mark();
+            uint8_t *o = scratch_alloc((size_t)x->vlen * 8 + 8); size_t j = 0;
+            for (uint32_t i = 0; i < x->vlen; i++) { if (x->val[i] == (uint8_t)s->selfmark) { memcpy(o + j, hex, hl); j += hl; } else o[j++] = x->val[i]; }
+            *out = record_text(o, j); scratch_restore(mark); return 1; }
+        *out = semantic_text_ref(k, typed_payload ? &t->n[c] : x); return 1; }
+    if (d->what == D_TYPE) return type_value(k,t,c,x,d,out);
     if (d->what == D_CODEPOINTS || d->what == D_RANGE) {
         self_cp = k->selfcp; self_mark = s->selfmark;
         const uint8_t *p = x->val; size_t n = x->vlen; while (n && *p == ' ') { p++; n--; } while (n && p[n - 1] == ' ') n--;
@@ -278,6 +301,7 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
             if (forms.n!=1) { if (k->binding_phase) k->blocked++; else record_unknown_key(k,t,c,x); return 0; }
             raw=(const uint8_t *)forms.k[0]; key_length=strlen(forms.k[0]);
         }
+        size_t raw_length=key_length;
         const uint8_t *key=scoped_key(k,t,c,d->under,d->key_radix,raw,&key_length,depth);
         if (!key) { if (k->binding_phase) k->blocked++; else record_unknown_key(k,t,c,x); return 0; }
         for (uint8_t i = 0; i < d->ntargets; i++) {
@@ -296,6 +320,22 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
                     if (target->within) { for (int32_t up = t->n[g].parent; up >= 0; up = t->n[up].parent) if (record_thing(k, t, up, out, depth + 1)) return 1; }
                     else if (record_thing(k, t, g, out, depth + 1)) return 1;
                 }
+            }
+        }
+        if (!k->binding_phase && d->ntargets==1) for (uint8_t i=0; i<d->ntargets; i++) {
+            const TargetCode *target=&d->targets[i];
+            Ref value;
+            if (!target->constructor) continue;
+            if (target->constructor_value->what==D_TYPE) {
+                SemanticValue observed=*x; observed.val=raw; observed.vlen=(uint32_t)raw_length;
+                if (!type_value(k,t,c,&observed,target->constructor_value,&value)) return 0;
+            } else value=record_text(raw,raw_length);
+            if (target->constructor==1) { *out=value; return 1; }
+            if (target->constructor==2) {
+                int32_t at=record_select_first(t,c,d->under); Ref scope;
+                if (at<0 || !record_value(k,t,at,&scope,depth+1)) continue;
+                Ref parts[2]={scope,value}; parts[0].said=parts[1].said=0;
+                *out=said_tuple(compose(parts,2,ref_above(parts,2))); return 1;
             }
         }
         if (k->binding_phase) { k->blocked++; return 0; }
@@ -461,8 +501,7 @@ static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const 
                 /* A declared child composition is one operand. In particular,
                  * nested aligned layers must retain their own boundaries. */
             } else if (t->n[c].kind == S_GROUP && record_field_first(&t->n[c]) >= 0 && record_field_next(&t->n[record_field_first(&t->n[c])]) >= 0) {      /* a part that is several pieces: the path of what each is, in order */
-                Ref pc[256]; uint32_t np = 0; for (int32_t q = record_field_first(&t->n[c]); q >= 0 && np < 256; q = record_field_next(&t->n[q])) if (record_value(k, t, q, &pc[np], depth)) { pc[np].said = 0; np++; }
-                if (!np) return 0; p[z] = np == 1 ? pc[0] : compose(pc, np, ref_above(pc, np)); }
+                if(!compose_values(k,t,c,depth,0,&p[z]))return 0; }
             else if (!record_value(k, t, c, &p[z], depth)) {
             const Dis *cd = record_field_disposition(k->s, &t->n[c]);
             if (cd && cd->what == D_KEY && !record_value_empty(k->s, &t->n[c])) {
@@ -675,6 +714,15 @@ void record_vocabulary_evidence(RecordWorker *k, const SemanticRecord *t){
         if (!d) continue;
         if (d->what==D_OMIT || d->what==D_METADATA) { i=(uint32_t)record_scope_end(t,(int32_t)i); continue; }
         if (!x->vlen) continue;
+        if (d->what==D_REFER && d->ntargets==1 && d->targets[0].constructor_value &&
+            d->targets[0].constructor_value->what==D_TYPE && d->targets[0].constructor_value->ntargets==1) {
+            const TargetCode *family=&d->targets[0].constructor_value->targets[0]; Ref identifier;
+            if (record_value(k,t,(int32_t)i,&identifier,0)) {
+                Ref parts[3]={identifier,string_ref((const uint8_t *)"identifier vocabulary",21),
+                    string_ref((const uint8_t *)family->name,family->length)};
+                record_emit_claim_once(k,parts,3);
+            }
+        }
         if (d->what==D_REFER && (d->k.has_re || d->k.nas) && d->under[0]) {
             Ref scope, target;
             int32_t at=record_select_first(t,(int32_t)i,d->under);

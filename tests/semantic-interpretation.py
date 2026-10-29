@@ -22,6 +22,7 @@ def main():
         root = Path(scratch)
         recipes = root / 'recipes'
         shutil.copytree(installed_recipes, recipes)
+        shutil.copytree(installed_recipes.parent / 'firmware', root / 'firmware')
         source = recipes / 'semantic-alignment'
         source.mkdir()
         (source / 'source').write_text(
@@ -54,7 +55,7 @@ def main():
 <example name="first"><text>PersonX ducks.</text><propbank><arg type="ARG0">PersonX</arg></propbank></example></roleset>
 <roleset id="duck.02" name="bird"><aliases><alias pos="n">duck</alias></aliases>
 <roles><role n="0" f="PPT" descr="bird"/></roles>
-<example name="second"><text>PersonX ducks.</text><propbank><arg type="ARG0">PersonX</arg></propbank></example></roleset>
+<example name="second"><text>PersonX ducks.</text><propbank><arg type="ARG0">PersonX</arg><arg type="ARG1">PersonY</arg></propbank></example></roleset>
 </predicate></frameset>''', encoding='utf-8')
         env = dict(os.environ, LAPLACE_RECIPES=str(recipes), LAPLACE_DATA=str(root / 'data'),
                    LAPLACE_WORK=str(root / 'work'), LAPLACE_INGEST_ONE='1')
@@ -82,6 +83,8 @@ def main():
             assert f'[[{sense}, ARG0], refers to, [{sense}, 0]]' in text, text
         assert '[duck.01, [pbroleset, cross-resource mapping, fnframe], leave-51.2]' in text, text
         assert '[duck.01, [pbroleset, cross-resource mapping, vnclass], leave-51.2]' not in text, text
+        assert '[PersonX ducks., [duck.02, 1], PersonY]' in text, text
+        assert '[[duck.02, 1], mneumonic,' not in text, 'A reference invented a role definition'
         # WN-LMF's proposed-ILI marker is absent only in that field: the
         # ordinary English word "in" remains a lexical entry and a sense.
         wordnet = root / 'english-wordnet-proposed.xml'
@@ -91,6 +94,23 @@ def main():
 </Lexicon></LexicalResource>''', encoding='utf-8')
         proposed = run('ingest', '--claims', '-s', 'open-english-wordnet', wordnet)
         assert '[in, eng, wnlmf-new]' in proposed and '[wnlmf-new, in]' not in proposed, proposed
+        constructors = recipes / 'key-constructors'
+        constructors.mkdir()
+        (constructors / 'source').write_text('name key-constructors\nwitness Declared key constructors\n'
+            'class AcademicCurated\nroot $LAPLACE_DATA/constructors\n', encoding='utf-8')
+        (constructors / 'constructor.recipe').write_text('name key-constructors\nmatch *.xml\nformat xml\n'
+            'thing Entry id\nkey Entry id\ntype Entry.id language node\nthing Pointer name\ncontent name\n'
+            'refer target Entry\nrelation "resolves to" target\nattest Pointer target\n', encoding='utf-8')
+        absent = root / 'absent.xml'
+        present = root / 'present.xml'
+        absent.write_text('<Root><Pointer name="reference" target="en"/></Root>', encoding='utf-8')
+        present.write_text('<Root><Entry id="en"/><Pointer name="reference" target="en"/></Root>', encoding='utf-8')
+        def resolutions(path):
+            return [line.split('\t')[3:] for line in run('ingest', '--claims-tsv', '-s', 'key-constructors', path).splitlines()
+                    if line.startswith('claim\t') and '\tresolves to\t' in line]
+        absent_resolution = resolutions(absent)
+        assert absent_resolution == resolutions(present), 'Reference and declaration used different identifier interpretations'
+        assert absent_resolution[0][-1] in ('eng', 'language:eng'), absent_resolution
         manifest = Path(os.environ.get('LAPLACE_MANIFEST', installed_recipes.parent.parent / 'Laplace-Native/manifest'))
         with (manifest / 'banks.tsv').open(encoding='utf-8') as file:
             closed = {row['list'] for row in csv.DictReader((line for line in file if not line.startswith('#')), delimiter='\t')}
@@ -173,6 +193,7 @@ def main():
             assert 'identifier vocabulary' in reference and 'pbroleset' in reference, reference
             usage = run('hop', '-d', connection, 'PersonX ducks.')
             assert 'duck.01' in usage and 'duck.02' in usage and 'PersonX' in usage, usage
+            assert 'PersonY' in usage, usage
             # Vocabulary edits invalidate the OS/file precheck even when all
             # corpus bytes, timestamps and the .recipe itself are unchanged.
             vocabulary = recipes / 'vocabularies/wordnet-pos.tsv'

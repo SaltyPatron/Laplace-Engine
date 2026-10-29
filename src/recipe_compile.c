@@ -307,6 +307,32 @@ static void compile_targets(Say *say, Dis *rules, int count, const char *recipe)
             for (int j = 0; j < say->nkey; j++) if (!strcmp(say->key[j].tier, target->name)) {
                 target->local = 1; target->tier_id = say->key[j].tier_id;
                 if (say->key[j].scope[0]) target->scope_key=(uint16_t)(j+1);
+                const Pair *key=&say->key[j];
+                /* An identifier which IS its declared key can be constructed
+                 * from an observed reference. No invented definition or corpus
+                 * lookup is needed. Compound lexical identities cannot. */
+                if (!target->within && !key->scope[0] && !key->key_radix && !rule->key_radix && !strcmp(key->under,rule->under)) {
+                    char qualified[100]; snprintf(qualified,sizeof qualified,"%s.%s",key->tier,key->name);
+                    const Dis *value=NULL; int conditional=0;
+                    for (int z=0; z<say->ndis; z++) if (!strcmp(say->dis[z].name,qualified) || !strcmp(say->dis[z].name,key->name)) {
+                        if (say->dis[z].when) conditional=1;
+                        if (!value || !strcmp(say->dis[z].name,qualified)) value=&say->dis[z];
+                    }
+                    int literal=value && !conditional && (value->what==D_KEY || value->what==D_CONTENT ||
+                        (value->what==D_TYPE && value->k.node && !value->k.vocabulary && !value->k.has_re && !value->k.nas));
+                    for (int z=0; literal && z<say->nthing; z++) {
+                        const Thing *thing=&say->thing[z];
+                        if (strcmp(thing->tier,key->tier)) continue;
+                        if (thing->within || thing->infile || thing->span || thing->of || thing->preserve || say->surface.thing==z+1) break;
+                        int scoped=!!key->under[0], n=scoped?2:1, eligible=thing->n==n && (!scoped || thing->resolved);
+                        for (int p=0; eligible && p<n; p++) eligible=!thing->lit[p] && !thing->space[p] && !thing->form[p].has_re && !thing->form[p].nas;
+                        if (eligible && !strcmp(thing->name[scoped],key->name) && (!scoped || !strcmp(thing->name[0],key->under))) {
+                            target->constructor=(uint8_t)(scoped?2:1);
+                            target->constructor_value=value;
+                        }
+                        break; /* the tier's first identity rule owns its constructor */
+                    }
+                }
                 break;
             }
             int space=(target->local && target->within ? KEY_PARENT : 0) | (rule->under[0] ? KEY_CONTENT_SCOPE : 0) | (rule->key_radix ? KEY_NUMERIC : 0);
@@ -891,7 +917,7 @@ void say_program_hash(const Recipe *recipe, uint8_t out[32]){
     /* Record interpretation changed even where the recipe text did not:
      * cached file metadata must not hide newly retained mapping evidence. */
     blake3_hasher hash; blake3_hasher_init(&hash);
-    static const char version[]="laplace-source-interpretation-v3";
+    static const char version[]="laplace-source-interpretation-v4";
     blake3_hasher_update(&hash,version,sizeof version-1); blake3_hasher_update(&hash,out,32);
     blake3_hasher_finalize(&hash,out,32);
 }
