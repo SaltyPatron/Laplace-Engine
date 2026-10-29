@@ -89,6 +89,8 @@ standing summary and reads fallback subjects as a set. Positional provenance
 selectors also retain every supplied operand. First, last and any-part lookups
 share that reader, including translation. `tests/claim-width.py` reads a real
 80-operand PostgreSQL claim and follows the true endpoint of a 5,003-operand relation.
+Observation counts retain PostgreSQL's signed 64-bit representation through
+held rows, claim results, traversal summaries and CLI formatting.
 
 `src/ingest.c` finds recorded file trunks from the OS metadata before opening
 source bytes. Each level reads distinct metadata IDs as a set through the path

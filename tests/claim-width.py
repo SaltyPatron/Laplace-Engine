@@ -48,19 +48,19 @@ try:
       INSERT INTO physicality(entity,tier,hilbert,path,mask)
         SELECT id,1,laplace_hilbert4(coord) # '-9223372036854775808'::bigint,path,
           laplace_mask_slot('kind','claim') FROM expected;
-      INSERT INTO consensus SELECT id,1500,350,0.06,1 FROM expected;''')
+      INSERT INTO consensus SELECT id,1500,350,0.06,4294967313 FROM expected;''')
     parts=[chr(1024+i) for i in range(80)]
     expected='['+', '.join(parts)+']'
     for selectors in [(parts[0],'?',parts[-1]),(parts[0],parts[65],parts[-1]),(parts[0],parts[65],'?')]:
         report=hop(*selectors)
-        assert 'attested: 1 claim' in report and expected in report,report
+        assert 'attested: 1 claim' in report and expected in report and '4294967313' in report,report
     assert 'attested: 0 claims' in hop(parts[0],'?',parts[11])
     # Positional provenance selection follows the complete tuple too.
     result=subprocess.run([str(engine),'held','-d',connection,*parts],capture_output=True,
                           text=True,encoding='utf-8',timeout=120,env=dict(os.environ,OMP_NUM_THREADS='2'))
     if result.returncode:raise RuntimeError(result.stdout+result.stderr)
     assert '1 claims' in result.stdout,result.stdout
-    print('claim-width: all 80 operands, late middle match, true last operand and complete positional selection passed')
+    print('claim-width: all 80 operands, 64-bit observation count, late middle match, true last operand and complete positional selection passed')
     # Follow a lexical relation whose actual endpoint lies beyond the former
     # 4096-operand buffer. Every node uses Native composition and coordinates.
     sql(database,'''CREATE TEMP TABLE navigation AS

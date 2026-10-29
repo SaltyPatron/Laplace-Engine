@@ -306,7 +306,7 @@ Run run_of(const uint8_t *ewkb, size_t len);                            /* ... f
  * floor < 0 reads every tier. The caller frees the paths. */
 typedef struct {
     lp_id entity; int src; int16_t tier; uint8_t claim, stood;
-    uint8_t *path; int path_len; lp_rating r; int matches;
+    uint8_t *path; int path_len; lp_rating r; int64_t matches;
 } Hold;
 Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standing, int *nout);
 Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout);

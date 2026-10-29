@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <inttypes.h>
 #include <string.h>
 
 /* ---- naming an entity: the text's trunk, computed on the client */
@@ -279,7 +280,7 @@ int cmd_hop(int argc, char **argv){
     if (n) printf("%10s %8s %6s %8s %6s   %s\n", "confidence", "rating", "dev", "matches", "given", "claim");
     for (int i = 0; i < n && i < limit; i++) {
         char pos[16] = ""; if (cl[i].position) snprintf(pos, sizeof pos, "%d", cl[i].position);
-        printf("%10.3f %8.0f %6.0f %8d %6s   [", cl[i].conf, cl[i].r.rating, cl[i].r.deviation, cl[i].matches, pos);
+        printf("%10.3f %8.0f %6.0f %8" PRId64 " %6s   [", cl[i].conf, cl[i].r.rating, cl[i].r.deviation, cl[i].matches, pos);
         for (int p = 0; p < cl[i].np; p++) { char *tx = reader_text(rd, &cl[i].part[p], p == cl[i].np - 1 ? 72 : 48); printf("%s%s", p ? ", " : "", tx); free(tx); }
         printf("]\n");
     }

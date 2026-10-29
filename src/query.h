@@ -41,8 +41,8 @@ typedef struct {
     struct { int ready; lp_id prevalence; lp_id only[FW_NAMES], refuse[FW_NAMES], refuse_witness[FW_NAMES], weigh[FW_WEIGHS], role_by, role[FW_WEIGHS], chain[FW_ALTS][FW_CHAIN], up[FW_CHAIN], language[2]; } id;
 } Firmware;                                           /* id: every name above as the entity it is, computed once a pass (firmware_ids) */
 /* ---- the lookups the forward pass is made of (pull.c) */
-typedef struct { lp_id id; const lp_id *part; int np; lp_rating r; int matches; double conf; int position; } Claim;   /* a claim is a tuple: a pair, three parts, or a longer path */
-typedef struct { lp_rating r; int matches; } ClaimStanding;
+typedef struct { lp_id id; const lp_id *part; int np; lp_rating r; int64_t matches; double conf; int position; } Claim;   /* a claim is a tuple: a pair, three parts, or a longer path */
+typedef struct { lp_rating r; int64_t matches; } ClaimStanding;
 const char *firmware_path(void);                     /* LAPLACE_FIRMWARE, or firmware/program.firmware beside the recipes */
 Firmware firmware_for(const char *path, int op);
 const Firmware *firmware_ids(Firmware *);            /* the firmware's names as entities: computed the first time they are asked, once a pass */

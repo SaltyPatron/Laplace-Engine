@@ -219,7 +219,7 @@ static Hold *holds_core_(const lp_id *keys, int nkeys, int floor, int each, int 
                 for (int i = head[at_]; i >= 0; i = link[i]) {
                     Hold *x = &h[ix[k][i]];
                     x->r.rating = lp_be_f64(PQgetvalue(r, row, 1)); x->r.deviation = lp_be_f64(PQgetvalue(r, row, 2)); x->r.volatility = lp_be_f64(PQgetvalue(r, row, 3));
-                    uint32_t mb; memcpy(&mb, PQgetvalue(r, row, 4), 4); x->matches = (int)ntohl(mb); x->stood = 1;
+                    x->matches=(int64_t)lp_be(PQgetvalue(r,row,4),8);x->stood=1;
                 }
             }
             PQclear(r); free(bb); free(ids); free(head); free(link); lp_idmap_free(u);

@@ -8,6 +8,7 @@
  * The lookups are the ones hop and fills make: the container index finds what holds an entity, O(log N), and the set
  * is read, O(K). Nothing here changes a standing, and nothing here is a record: the choice is the firmware's. */
 #include "query.h"
+#include <inttypes.h>
 #include <arpa/inet.h>
 #include <math.h>
 #include <stdio.h>
@@ -16,7 +17,7 @@
 
 
 static void show_claim(Reader *rd, const Claim *c, const char *lead){
-    printf("%s%10.3f %8.0f %6.0f %8d   [", lead, c->conf, c->r.rating, c->r.deviation, c->matches);
+    printf("%s%10.3f %8.0f %6.0f %8" PRId64 "   [", lead, c->conf, c->r.rating, c->r.deviation, c->matches);
     for (int p = 0; p < c->np; p++) { char *tx = reader_text(rd, &c->part[p], p == c->np - 1 ? 96 : 48); printf("%s%s", p ? ", " : "", tx); free(tx); }
     printf("]\n");
 }
@@ -220,7 +221,7 @@ int cmd_pull(int argc, char **argv){
                 if (complete) { char *tx = reader_text(rd, &cur, 600);
                     printf("\nanswer     %s: %s\n", who, tx); free(tx);
                     printf("           through"); for (int z = 0; z < nk; z++) printf(" %s", fw.chain[alt][z]); printf(", %s pulling at %.2f", who, pl[u].w);
-                    printf("; standing of the last strand %.0f +/- %.0f, %d matches   (%.1f ms)\n", last.r.rating, last.r.deviation, last.matches, (now() - t) * 1000); took++; }
+                    printf("; standing of the last strand %.0f +/- %.0f, %" PRId64 " matches   (%.1f ms)\n", last.r.rating, last.r.deviation, last.matches, (now() - t) * 1000); took++; }
                 else printf("\nanswer     %s: the chain stops after %d of %d relations: nothing is attested there   (%.1f ms)\n", who, nk, fw.nchain[alt], (now() - t) * 1000);
                 free(who);
             }
