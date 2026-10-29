@@ -16,7 +16,7 @@ typedef struct { lp_id id; double trust; int witness, rank; } Root;
 void    dag_free(Dag *);
 double *down_from(const Dag *, size_t top);                                 /* how many times each node stands under top; the caller frees it */
 void    tally_under(const Dag *, const double *cnt, lp_idmap *per_claim, lp_idmap *per_voice);   /* per_claim holds a Tally, per_voice (or NULL) a VTally */
-int     walk_up(Dag *, const lp_id *claims, size_t n, uint64_t *rows);      /* the levels walked; the claims are the Dag's first n nodes */
+int     walk_up(PGconn *,Dag *, const lp_id *claims, size_t n, uint64_t *rows);      /* the levels walked; the claims are the Dag's first n nodes */
 int     walk_down(PGconn *, const lp_id *top, Dag *, uint64_t *rows);
 void    witnesses_known(PGconn *, Root *, size_t n);                        /* witness and trust, of each that is in the witness table */
 #endif

@@ -57,17 +57,11 @@ static PGconn *connect_one(const char *conninfo){
     db_notices(pg);
     return pg;
 }
-/* A read sees one world. Ingestion folds standings as it goes, and a read is many statements on many connections (the
- * pool reads every leaf at once), each of which would otherwise see the database as it was when that statement began:
- * hop 1 and hop 5 of one pass could read different standings. A read command opens one repeatable-read, read-only
- * transaction and exports its snapshot; every pooled connection takes the same snapshot (db_snapshot, read.c), so every
- * statement of the command reads the database as it was at one instant. */
-static char snapshot[64];
-const char *db_snapshot(void){ return snapshot[0] ? snapshot : NULL; }
+/* Every statement in a read command uses its connection-owned, read-only
+ * repeatable-read transaction. No containment pool or global snapshot owner. */
 PGconn *db_read(const char *conninfo){
     PGconn *pg = db_connect(conninfo);
     if(!db_read_begin(pg,NULL)){fprintf(stderr,"read snapshot: %s",PQerrorMessage(pg));exit(1);}
-    snprintf(snapshot,sizeof snapshot,"%s",db_read_snapshot(pg));
     return pg;
 }
 int main(int argc, char **argv){

@@ -192,7 +192,7 @@ else()
 endif()
 
 # The transport plan owner is exercised against a real configured server.
-add_executable(pg_plan_lifecycle EXCLUDE_FROM_ALL tests/pg-plan-lifecycle.c src/read_ids.c src/pg.c src/pg_plan.c)
+add_executable(pg_plan_lifecycle EXCLUDE_FROM_ALL tests/pg-plan-lifecycle.c src/read.c src/read_ids.c src/pg.c src/pg_plan.c)
 target_link_libraries(pg_plan_lifecycle PRIVATE OpenMP::OpenMP_C)
 laplace_utf8_executable(pg_plan_lifecycle)
 target_include_directories(pg_plan_lifecycle PRIVATE src ${LAPLACE_NATIVE}/include ${LAPLACE_PG_DIR}/include)

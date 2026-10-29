@@ -22,8 +22,6 @@ PGconn *db_connect(const char *conninfo);            /* exits with the server's 
 void db_connect_many(const char *conninfo, int n, PGconn **out);   /* n of them, opened together */
 const char *db_noted(void);                          /* the conninfo of the last db_connect */
 PGconn *db_read(const char *conninfo);               /* db_connect for a read: one world, a repeatable-read snapshot every connection of the command shares */
-const char *db_snapshot(void);                       /* that snapshot, for the pool's connections; NULL outside a read */
-int db_read_pool_end(void);                          /* release imported snapshots, retaining connections and plans */
 #include "pg_plan.h"
 
 typedef struct Reader Reader;
@@ -300,26 +298,31 @@ size_t ids_param(PGconn *,uint8_t *out, const lp_id *ids, uint32_t n); /* Native
 void   id_text(const lp_id *id, char out[33]);                        /* 32 hexadecimal digits */
 typedef struct { lp_id *id; int n; } Run;                               /* a trajectory's constituents in order, runs written out */
 Run run_of(const uint8_t *ewkb, size_t len);                            /* ... from a path as the database sends it (lp_path_ids) */
-/* A path that holds the keys, read from the leaf partitions above floor: one statement a leaf, every core at once.
+/* Connection-owned indexed containment through the Native PostgreSQL owner.
  * each = 0: the path holds every key (src is 0). each = 1: the path holds one key, src is that key's place.
- * standing = 1: the consensus on the path's entity, one partition a core, after the paths. claim is mask bit 0.
+ * standing = 1: typed consensus, read by the shared indexed ID frontier. claim is mask bit 0.
  * floor < 0 reads every tier. The caller frees the paths. */
 typedef struct {
     lp_id entity; int src; int16_t tier; uint8_t claim, stood;
     uint8_t *path; int path_len; lp_rating r; int64_t matches;
 } Hold;
-Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standing, int *nout);
-Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout);
-Hold *holds_both(const lp_id *keys, int nkeys, const lp_id *with, int *nout);                  /* per key, what holds it and with too: a two-key probe a key, every leaf at once */   /* every tier, one probe a leaf: each path that holds any key and with as well; src -1, the caller reads which key from the path */
-Hold *holds_any(const lp_id *keys, int nkeys, int *nout);                                     /* every tier, one probe a leaf: each path that holds any key; src -1 */
-void holds_free(Hold *h, int n);
+Hold *holds_above(PGconn *pg,const lp_id *keys, int nkeys, int floor, int each, int standing, int *nout);
+/* Union of keys with an additional required member; src is -1. */
+Hold *holds_pair(PGconn *pg,const lp_id *keys,int nkeys,const lp_id *with,int standing,int *nout);
+/* Per-key holders with an additional required member; src is its input position. */
+Hold *holds_both(PGconn *pg,const lp_id *keys,int nkeys,const lp_id *with,int *nout);
+Hold *holds_any(PGconn *pg,const lp_id *keys,int nkeys,int *nout);
+void holds_free(Hold *h,int n);
 int hold_order(const void *,const void *);
-Hold *holds_capped(const lp_id *keys, int nkeys, int cap, int standing, int kinds, int *hub, int *nout);   /* kinds: 1 claims, 2 observations, 3 both */   /* each key's holders, its claims and observations a hub's when more than cap: hub[2k], hub[2k + 1] */
-void coords_of(PGconn *pg, const lp_id *ids, int n, double *out, uint8_t *has);
-void tiers_of(PGconn *pg, const lp_id *ids, int n, int *tiers);       /* cache/stored tiers by input position; -1 for missing IDs */
-Hold *paths_of(PGconn *pg, const lp_id *ids, int n, int *nout);
-long holds_count(const lp_id *keys, int nkeys, int kind);                                     /* how many paths hold every key (kind 0 observations, 1 claims, -1 both): the index counts, no row is read */                                            /* each one's path, from the partition its ID names */                            /* each one's coordinate, 4 doubles; has[i]: found */
-int  tier_max(PGconn *pg, const lp_id *ids, int n);                   /* highest cache/stored tier; -1 when none are known */
+/* Complete sets or hubs, separately for claims and observations. kinds: 1/2/3.
+ * hub[2*k] is the claim overflow; hub[2*k+1] is the observation overflow. */
+Hold *holds_capped(PGconn *pg,const lp_id *keys,int nkeys,int cap,int standing,int kinds,int *hub,int *nout);
+void coords_of(PGconn *pg,const lp_id *ids,int n,double *out,uint8_t *has);
+void tiers_of(PGconn *pg,const lp_id *ids,int n,int *tiers); /* -1 for absent IDs */
+Hold *paths_of(PGconn *pg,const lp_id *ids,int n,int *nout);
+/* All-member count remains in PostgreSQL. kind: 0 observations, 1 claims, -1 both. */
+long holds_count(PGconn *pg,const lp_id *keys,int nkeys,int kind);
+int tier_max(PGconn *pg,const lp_id *ids,int n);
 #define ARGS_MAX 8
 enum { SQL_ID_ARRAY=2 }; /* binary payload whose element OID binds at execution */
 typedef struct { lp_buf b; int binary; } SqlArg;

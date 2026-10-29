@@ -77,7 +77,7 @@ int cmd_pull(int argc, char **argv){
           while (r < nr && (int)lp_be(PQgetvalue(q, r, 0), 4) == i && (int)lp_be(PQgetvalue(q, r, 1), 4) == j) r++;
           int words = 0; for (int k = i - 1; k < j; k++) words += table_find(&ph[k]) != NULL; if (words < 2 || !runs || nobs >= 2048) continue;
           int floor = 0; for (int k = i - 1; k < j; k++) { Node *nd = table_find(&ph[k]); if (nd && nd->tier > floor) floor = nd->tier; }
-          int nh = 0; Hold *hh = holds_above(ph + i - 1, j - i + 1, floor, 0, 0, &nh);
+          int nh = 0; Hold *hh = holds_above(pg,ph + i - 1, j - i + 1, floor, 0, 0, &nh);
           for (int z = 0; z < nh && nobs < 2048; z++) { if (hh[z].claim) continue; int dup = 0;
               for (int u = 0; u < nobs && !dup; u++) dup = !memcmp(&obs[u].id, &hh[z].entity, 16); if (dup) continue;
               if (nobs == cobs) { cobs = cobs ? cobs * 2 : 256; obs = xrealloc(obs, sizeof(Ob) * (size_t)cobs); } obs[nobs++] = (Ob){ hh[z].entity, hh[z].tier }; }
@@ -91,7 +91,7 @@ int cmd_pull(int argc, char **argv){
           for (int s = 0; s < nobs; s++) { int tr = obs[s].tier; if (tr < 0 || tr > 255 || seen[tr]) continue; seen[tr] = 1;
               lp_id *g = malloc(sizeof(lp_id) * (size_t)nobs); int *map = malloc(sizeof(int) * (size_t)nobs); int ng = 0;
               for (int u = 0; u < nobs; u++) if (obs[u].tier == tr) { g[ng] = obs[u].id; map[ng++] = u; }
-              int nh = 0; Hold *hh = holds_above(g, ng, tr, 1, 1, &nh);
+              int nh = 0; Hold *hh = holds_above(pg,g, ng, tr, 1, 1, &nh);
               for (int z = 0; z < nh; z++) { int oi = hh[z].src; if (oi < 0 || oi >= ng || !hh[z].claim || !hh[z].stood) continue; oi = map[oi];
                   Run rn = run_of(hh[z].path, (size_t)hh[z].path_len); lp_rating rt = hh[z].r;
                   int at = -1; for (int k = 0; k < rn.n && at < 0; k++) if (!memcmp(&rn.id[k], &obs[oi].id, 16)) at = k;
@@ -136,7 +136,7 @@ int cmd_pull(int argc, char **argv){
             lp_id *keys = malloc(sizeof(lp_id) * (size_t)np); int nk = 0, floor = 0;
             for (int i = 0; i < np; i++) { Node *nd = table_find(&ph[i]); if (!nd) continue; keys[nk++] = ph[i]; if (nd->tier > floor) floor = nd->tier; }
             if (!nk) { memcpy(keys, ph, sizeof(lp_id) * (size_t)np); nk = np; }
-            int nh = 0; Hold *hh = holds_above(keys, nk, floor, 0, 0, &nh);
+            int nh = 0; Hold *hh = holds_above(pg,keys, nk, floor, 0, 0, &nh);
             typedef struct { lp_id *id; int n; lp_id in; } Rest; Rest *rest = malloc(sizeof(Rest) * (size_t)(nh + 1)); int nrest = 0, holders = 0;
             for (int j = 0; j < nh; j++) {
                 Run r = run_of(hh[j].path, (size_t)hh[j].path_len); int found = 0;

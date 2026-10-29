@@ -88,6 +88,25 @@ static void stored_reads(PGconn *pg){
     lp_id child=lp_path_id(path,0),a;lp_id_codepoint(97,&a);assert(lp_id_eq(&child,&a));
     assert(paths[0].path_len==paths[1].path_len && !memcmp(paths[0].path,paths[1].path,(size_t)paths[0].path_len));
     holds_free(paths,count);paths=paths_of(pg,NULL,0,&count);assert(!paths && !count);
+    lp_id akey,bkey,absent={0};lp_id_codepoint(97,&akey);lp_id_codepoint(98,&bkey);
+    lp_id keys[3]={akey,absent,akey},both[2]={akey,bkey};int hub[6];
+    paths=holds_above(pg,both,2,-1,0,0,&count);
+    assert(count==1 && paths[0].src==0 && !paths[0].claim && !paths[0].stood);
+    holds_free(paths,count);
+    paths=holds_any(pg,keys,3,&count);assert(count==1 && paths[0].src==-1);holds_free(paths,count);
+    paths=holds_both(pg,keys,3,&bkey,&count);assert(count==2 && paths[0].src==0 && paths[1].src==2);holds_free(paths,count);
+    assert(holds_count(pg,both,2,0)==1 && holds_count(pg,both,2,1)==0);
+    paths=holds_capped(pg,keys,3,0,0,3,hub,&count);
+    assert(!count && !hub[0] && hub[1] && !hub[2] && !hub[3] && !hub[4] && hub[5]);holds_free(paths,count);
+    command(pg,"UPDATE @extschema@.physicality SET mask=@extschema@.laplace_mask_slot('kind','claim')");
+    command(pg,"INSERT INTO @extschema@.consensus SELECT id,1550,60,0.06,5000000001 FROM @extschema@.entity");
+    paths=holds_capped(pg,keys,3,1,1,3,hub,&count);
+    assert(count==2 && paths[0].src==0 && paths[1].src==2 && paths[0].claim && paths[0].stood);
+    assert(paths[0].r.rating==1550 && paths[0].r.deviation==60 && paths[0].r.volatility==0.06 && paths[0].matches==5000000001LL);
+    assert(!hub[0] && !hub[1] && !hub[4] && !hub[5]);holds_free(paths,count);
+    paths=holds_capped(pg,keys,3,0,1,1,hub,&count);
+    assert(!count && hub[0] && !hub[1] && hub[4] && !hub[5]);holds_free(paths,count);
+    paths=holds_above(pg,keys,3,tier,1,1,&count);assert(!count);holds_free(paths,count);
     command(pg,"ROLLBACK");
 }
 int main(int argc,char **argv){

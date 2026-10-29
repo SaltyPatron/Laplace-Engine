@@ -105,7 +105,7 @@ static int middle_refused(const lp_id *part, int np){
 Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, double k, int *n, int *capped){
     lp_id keys[3]; uint32_t nk = 0; for (int i = 0; i < 3; i++) if (have[i]) keys[nk++] = part[i];
     /* the tier is known once the IDs are: every leaf above it, together, then the fan keeps the hardest pulling */
-    int nh = 0; Hold *h = holds_above(keys, (int)nk, tier_max(pg, keys, (int)nk), 0, 1, &nh);
+    int nh = 0; Hold *h = holds_above(pg,keys, (int)nk, tier_max(pg, keys, (int)nk), 0, 1, &nh);
     int count=0;Claim *c=claims_from_holds(h,nh,k,&count);int m=0;
     for(int j=0;j<count;j++){
         Claim *x=&c[j];
@@ -132,7 +132,7 @@ Claim *claims_each(PGconn *pg, const lp_id *keys, int nk, const lp_id *rel, Clai
     lp_idmap *km = lp_idmap_new(); int *head = malloc(sizeof(int) * (size_t)nk), *link = malloc(sizeof(int) * (size_t)nk);
     for (int i = 0; i < nk; i++) head[i] = -1;
     for (int i = nk - 1; i >= 0; i--) { bool fresh; size_t u = lp_idmap_put(km, &keys[i], &fresh); link[i] = head[u]; head[u] = i; }
-    int nh=0,nc=0;Hold *h=holds_pair(keys,nk,rel,1,&nh);Claim *decoded=claims_from_holds(h,nh,k,&nc);
+    int nh=0,nc=0;Hold *h=holds_pair(pg,keys,nk,rel,1,&nh);Claim *decoded=claims_from_holds(h,nh,k,&nc);
     holds_free(h,nh);
     SrcClaim *s=malloc(sizeof(SrcClaim)*(size_t)(nc?nc:1));int m=0,cap=nc?nc:1;
     uint64_t *seen=calloc(lp_idmap_count(km),sizeof *seen);
@@ -187,7 +187,7 @@ void positions_of(PGconn *pg, Claim *c, int n){
     if (need) {                                                              /* the paths that hold any of them, one set (holds_above gives each path to the claims it holds) */
         lp_id *want = malloc(sizeof(lp_id) * (size_t)need); int *of = malloc(sizeof(int) * (size_t)need), nw = 0;
         for (int i = 0; i < n; i++) if (!c[i].position) { want[nw] = c[i].id; of[nw++] = i; }
-        int nh = 0; Hold *h = holds_above(want, nw, -1, 1, 0, &nh);
+        int nh = 0; Hold *h = holds_above(pg,want, nw, -1, 1, 0, &nh);
         for (int j = 0; j < nh; j++) {
             if (h[j].src < 0 || h[j].src >= nw || h[j].claim) continue; int i = of[h[j].src];
             size_t nv = lp_path_vertices(h[j].path, (size_t)h[j].path_len, NULL, 0); if (!nv) continue;
@@ -445,7 +445,7 @@ int cmd_translate(int argc, char **argv){
 
     /* down: what holds each concept, one set: its lexicalizations in the languages asked, and what has it as its value
      * (a synset, whose definition is shown); then each lexicalization back to its word, along the same relation */
-    int nh = 0; Hold *h = nc ? holds_any(cs, nc, &nh) : NULL; steps += nc > 0;
+    int nh = 0; Hold *h = nc ? holds_any(pg,cs, nc, &nh) : NULL; steps += nc > 0;
     lp_idmap *cm = lp_idmap_new(); for (int z = 0; z < nc; z++) { bool fresh; lp_idmap_put(cm, &cs[z], &fresh); }
     Found lex = { 0 }, val = { 0 }; Ids parts={0};
     for (int j = 0; j < nh; j++) { size_t np=path_into(&parts,lp_path_of(h[j].path,(size_t)h[j].path_len));lp_id *p=parts.v;
@@ -655,7 +655,7 @@ double role_of(PGconn *pg, Firmware *fw, const lp_id *word){
     bank_name[b] = 0; const lp_highway *highway = lp_highway_map(NULL);
     const lp_bank *bank = highway ? lp_highway_bank(highway, bank_name) : NULL;
     if (bank && fw->nrole) {
-        int nh = 0; Hold *h = holds_both(fw->id.role, fw->nrole, word, &nh);
+        int nh = 0; Hold *h = holds_both(pg,fw->id.role, fw->nrole, word, &nh);
         double best = -INFINITY, weight = -1;
         for (int q = 0; q < nh; q++) {
             lp_id pair[3]; size_t np = lp_path_ids(h[q].path, (size_t)h[q].path_len, pair, 3);

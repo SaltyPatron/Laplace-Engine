@@ -8,7 +8,7 @@
 #include <string.h>
 
 
-static lp_id *strands_named(int argc, char **argv, int a, int *ns, Hold **hs, int *nhs){
+static lp_id *strands_named(PGconn *pg,int argc, char **argv, int a, int *ns, Hold **hs, int *nhs){
     Ctx *c = lp_text_new(T0); if (!HW) HW = lp_highway_map(NULL);
     int np=argc-a,nk=0;size_t capacity=(size_t)(np?np:1);
     lp_id *part=malloc(capacity*sizeof *part),*key=malloc(capacity*sizeof *key);int *have=calloc(capacity,sizeof *have);
@@ -20,7 +20,7 @@ static lp_id *strands_named(int argc, char **argv, int a, int *ns, Hold **hs, in
         if (!typed) part[i] = lp_text_decompose(c, (const uint8_t *)p, strlen(p), NULL, NULL).id;
         key[nk++] = part[i];
         char hx[33]; id_text(&part[i], hx); printf("  part %d   %-24s %s%s\n", i + 1, p, hx, typed ? "   (a type of the highway)" : ""); }
-    int nh = 0; Hold *h = holds_above(key, nk, -1, 0, 1, &nh); int w = 0; Ids ids = { 0 };
+    int nh = 0; Hold *h = holds_above(pg,key, nk, -1, 0, 1, &nh); int w = 0; Ids ids = { 0 };
     for (int j = 0; j < nh; j++) { if (!h[j].claim) continue; lp_path p = lp_path_of(h[j].path, (size_t)h[j].path_len); size_t n = path_into(&ids, p);
         if ((int)n != np) continue; int fits = 1; for (int i = 0; i < np && fits; i++) if (have[i] && memcmp(&ids.v[i], &part[i], 16)) fits = 0;
         if (fits) { Hold x = h[j]; h[j] = h[w]; h[w++] = x; } }
@@ -55,10 +55,10 @@ int cmd_held(int argc,char **argv){
     int a=opts(argc,argv,(const Opt[]){{.flag="-d",.kind='s',.at=&conninfo},{.flag="--files",.kind='b',.at=&files},
         {.flag="--tsv",.kind='s',.at=&tsv},{.flag="--id",.kind='b',.at=&byid},{0}});
     if(a>=argc){fputs("usage: laplace held [-d conninfo] [--files] [--tsv FILE] [--id] PART...\n",stderr);return 2;}
-    tier0_open(NULL);PGconn *pg=db_connect(conninfo);lp_id *claims=NULL;Hold *holds=NULL;int n=0,nh=0;
+    tier0_open(NULL);PGconn *pg=db_read(conninfo);lp_id *claims=NULL;Hold *holds=NULL;int n=0,nh=0;
     if(byid){n=argc-a;claims=malloc((size_t)n*sizeof *claims);if(!claims){perror("claim IDs");exit(1);}
         for(int i=0;i<n;i++)if(!id_parse(argv[a+i],&claims[i])){fprintf(stderr,"%s: not an ID\n",argv[a+i]);free(claims);PQfinish(pg);return 2;}}
-    else claims=strands_named(argc,argv,a,&n,&holds,&nh);
+    else claims=strands_named(pg,argc,argv,a,&n,&holds,&nh);
     FILE *out=tsv?fopen(tsv,"w"):NULL;if(tsv&&!out){perror(tsv);free(claims);holds_free(holds,nh);PQfinish(pg);return 1;}
     printf("laplace held   %s   %d claims; Native GIN containment\n",PQdb(pg),n);
     print_rows(pg,claims,(size_t)n,files,out);

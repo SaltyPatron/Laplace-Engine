@@ -64,9 +64,9 @@ tables, functions, types and operators through `@extschema@` and `@postgis@`;
 no search-path change is needed. Binary ID parameters bind when sent, so one
 argument set can be reused against separate databases with different OIDs.
 Reset reconnects and rebinds; finish releases bindings and rendered statements.
-Read scopes use the same connection owner to export or import a read-only,
-repeatable-read snapshot. Pool scope completion releases transactions while
-retaining connections, namespace bindings and plans for the next read.
+Read scopes use the same connection owner for a read-only, repeatable-read
+transaction. Every containment, coordinate, path and standing read uses that
+connection; there is no second read pool or global snapshot owner.
 `tests/db-binding.py` installs both extensions in separate named schemas with
 conflicting public objects, then exercises ingestion, replay, reads, indexing
 and source removal through the production Engine.
@@ -80,6 +80,14 @@ Transfer windows bound binary transport without limiting the accepted set.
 The same native primary-key kernel serves presence, DAG realization and the
 monorepo's single/batch physicality adapter. Clients do not route exact IDs to
 named partitions or open another connection pool for these reads.
+
+`src/read.c` is the shared containment projection used by the CLI and MCP.
+Native `laplace_holders` owns overlap, required members and per-input selection;
+`laplace_containers` owns all-member selection, and `laplace_standings` reads
+consensus by exact ID. The client keeps no partition inventory or generated
+per-leaf SQL. Duplicate input positions are preserved. A capped key returns
+its complete claim/observation set or a hub marker for that kind, never a
+heap-order subset. No standing is calculated or synthesized on the client.
 
 `laplace deploy` installs or upgrades the extensions without adopting existing
 tables or changing database planner, memory or cache configuration. Host

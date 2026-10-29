@@ -1,9 +1,6 @@
-/* Reading the database. SQL only fetches: paths come back for a whole set of entities at once, one level of the DAG per
- * round trip, and are decoded and expanded here. A containment is not one backend walking every partition: each leaf
- * is its own statement, and the leaves run on every core (the same shape as a load's writes). */
+/* Connection-owned containment projections over the shared Native indexed reader. */
 #include "engine.h"
 #include <arpa/inet.h>
-#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,250 +22,83 @@ Run run_of(const uint8_t *ewkb, size_t len){
     return r;
 }
 
-/* ---- every leaf at once -------------------------------------------------
- * physicality and entity are partitioned by tier, and the large tiers again by the first hex digit of the entity.
- * A path lookup cannot name one of those leaves from the ID it holds: the ID sits inside the path, so every leaf
- * above the ID's tier can hold it. Naming the parent makes one backend append those leaves and walk them in order.
- * Here each leaf is one statement and the statements run together. Mask and standing are not in that statement:
- * the mask bit is a filter on the rows the path index returned, and the standing is a second set, by the claim's
- * own partition. */
-typedef struct { char name[64]; } Leaf;
-static Leaf *phy; static int nphy;
-static PGconn **pool;
-static int npool;
-static char *pool_connection;
-static char pool_snapshot[64];
-static void pool_close(void);
-int db_read_pool_end(void){
-    if(!pool_snapshot[0])return 1;
-    int ok=1;
-    #pragma omp parallel for num_threads(npool?npool:1) reduction(&:ok)
-    for(int i=0;i<npool;i++)ok&=db_read_end(pool[i]);
-    if(!ok)pool_close();
-    else pool_snapshot[0]=0;
-    return ok;
-}
-static void pool_close(void){
-    for(int i=0;i<npool;i++)PQfinish(pool[i]);
-    free(pool);pool=NULL;npool=0;free(pool_connection);pool_connection=NULL;pool_snapshot[0]=0;
-    free(phy);phy=NULL;nphy=0;
-}
-static int times_on(void){ static int on = -1; if (on < 0) { const char *e = getenv("LAPLACE_TIMES"); on = e && *e; } return on; }
-static void pool_open(void){
-    const char *ci = db_noted(); if (!ci || !*ci) ci = laplace_db();
-    const char *snap=db_snapshot();if(!snap)snap="";
-    if(pool && !strcmp(pool_connection,ci) && !strcmp(pool_snapshot,snap))return;
-    if(pool && !strcmp(pool_connection,ci)){
-        if(!db_read_pool_end()){pool_close();}
-        else{
-            if(*snap)for(int i=0;i<npool;i++)if(!db_read_begin(pool[i],snap)){
-                fprintf(stderr,"read snapshot: %s",PQerrorMessage(pool[i]));exit(1);
-            }
-            snprintf(pool_snapshot,sizeof pool_snapshot,"%s",snap);return;
-        }
-    }
-    if(pool)pool_close();
-    static int registered;if(!registered){atexit(pool_close);registered=1;}
-    pool_connection=strdup(ci);snprintf(pool_snapshot,sizeof pool_snapshot,"%s",snap);
-    double t0 = now();
-    npool = omp_get_max_threads(); if (npool < 1) npool = 1;
-    pool = calloc((size_t)npool, sizeof *pool);
-    /* every connection at once: a backend starts in about 100 ms on Windows (a process each), so 32 opened in turn
-     * cost three seconds before the first read; opened together they cost one */
-    #pragma omp parallel for num_threads(npool) schedule(static, 1)
-    for (int i = 0; i < npool; i++) { PGconn *c = PQconnectdb(ci);
-        if (PQstatus(c) != CONNECTION_OK) { fprintf(stderr, "%s", PQerrorMessage(c)); exit(1); }
-        db_notices(c);
-        if(*snap && !db_read_begin(c,snap)){fprintf(stderr,"snapshot: %s",PQerrorMessage(c));exit(1);}
-        db_binding(c); pool[i] = c; }
-    if (times_on()) fprintf(stderr, "times: %d connections opened in %.1f ms\n", npool, (now() - t0) * 1000);
-}
-static void leaves_of(const char *kind, Leaf **out, int *n){
-    pool_open();
-    if (*out) return;
-    char q[512]; snprintf(q, sizeof q,
-        "SELECT c.relname FROM pg_catalog.pg_class c JOIN pg_catalog.pg_inherits i ON i.inhrelid=c.oid"
-        " WHERE i.inhparent='@extschema@.%s'::regclass AND c.relkind='r' ORDER BY 1",kind);
-    PGresult *r = db_exec(pool[0], q);
-    if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "leaves: %s", PQerrorMessage(pool[0])); exit(1); }
-    int m = PQntuples(r); *out = calloc((size_t)(m ? m : 1), sizeof(Leaf)); *n = m;
-    for (int i = 0; i < m; i++) { snprintf((*out)[i].name, 64, "%s", PQgetvalue(r, i, 0)); }
-    PQclear(r);
-}
-static int mask_claim(const char *m, int len){ if (len < 5) return 0; return ((const uint8_t *)m)[4] & 0x80; }
-static int16_t rd_i16(const char *p){ uint16_t u; memcpy(&u, p, 2); return (int16_t)ntohs(u); }
 
-
-typedef struct { Hold *h; int n, cap; } Bag;
-static void bag_put(Bag *b, Hold x){
-    if (b->n == b->cap) { b->cap = b->cap ? b->cap * 2 : 32; b->h = xrealloc(b->h, (size_t)b->cap * sizeof(Hold)); }
-    b->h[b->n++] = x;
-}
-static Hold *holds_core_(const lp_id *keys, int nkeys, int floor, int each, int standing, const lp_id *with, int kind, int *nout);
-static Hold *holds_core(const lp_id *keys, int nkeys, int floor, int each, int standing, const lp_id *with, int *nout){
-    double t0 = now(); Hold *h = holds_core_(keys, nkeys, floor, each, standing, with, -1, nout);
-    if (times_on()) fprintf(stderr, "times: holds of %d key%s over %d leaves: %d rows in %.1f ms\n", nkeys, nkeys == 1 ? "" : "s", nphy, *nout, (now() - t0) * 1000);
-    return h;
-}
-static Hold *holds_core_(const lp_id *keys, int nkeys, int floor, int each, int standing, const lp_id *with, int kind, int *nout){
-    *nout = 0; if (!nkeys) return NULL;
-    leaves_of("physicality", &phy, &nphy);
-    uint8_t *ab = malloc(20 + 20 * (size_t)nkeys); size_t al = ids_param(pool[0],ab, keys, (uint32_t)nkeys);
-    int *job = malloc(sizeof(int) * (size_t)nphy); int nj = 0;
-    for (int i = 0; i < nphy; i++) job[nj++] = i;                        /* every range holds every tier: the tier is asked of the rows */
-    Bag *bag = calloc((size_t)(nj ? nj : 1), sizeof(Bag));
-    /* each = 1 without a second key is asked as each = 2, one overlap probe a leaf for the whole set, never a probe a
-     * key: every path is given to the keys it holds, read from its own vertices through a map of the keys */
-    int give = each == 1 && !with; if (give) each = 2;
-    lp_idmap *km = NULL; int *khead = NULL, *klink = NULL;
-    if (give) { km = lp_idmap_new(); khead = malloc(sizeof(int) * (size_t)nkeys); klink = malloc(sizeof(int) * (size_t)nkeys);
-        for (int i = 0; i < nkeys; i++) khead[i] = -1;
-        for (int i = nkeys - 1; i >= 0; i--) { bool fresh; size_t u = lp_idmap_put(km, &keys[i], &fresh); klink[i] = khead[u]; khead[u] = i; } }
-    uint8_t wb[40]; size_t wl = with ? ids_param(pool[0],wb, with, 1) : 0;          /* each key with this one too: a claim's key and its relation */
-    #pragma omp parallel for num_threads(npool) schedule(dynamic)
-    for (int j = 0; j < nj; j++) {
-        lp_idmap *seen=give?lp_idmap_new():NULL;
-        char sql[1024];
-        if (each == 2) snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM @extschema@.%s WHERE path OPERATOR(@extschema@.&&) $1::@extschema@.blake3[] AND tier > %d%s%s",     /* any key: one probe a leaf for the set; with is checked on the rows, never probed (a relation is a hub: its posting list is every claim of it) */
-                                phy[job[j]].name, floor, with ? " AND (path OPERATOR(@extschema@.@>) $2::@extschema@.blake3[]) IS TRUE" : "", kind == 1 ? " AND mask OPERATOR(@extschema@.?) 0::smallint" : kind == 0 ? " AND NOT (mask OPERATOR(@extschema@.?) 0::smallint)" : "");
-        else if (each) snprintf(sql, sizeof sql, "SELECT u.i, p.entity, p.path, p.tier, p.mask FROM unnest($1::@extschema@.blake3[]) WITH ORDINALITY AS u(id, i) JOIN @extschema@.%s p ON p.path OPERATOR(@extschema@.@>) %s WHERE p.tier > %d",
-                           phy[job[j]].name, with ? "(ARRAY[u.id] || $2::@extschema@.blake3[])" : "ARRAY[u.id]", floor);
-        else snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM @extschema@.%s WHERE path OPERATOR(@extschema@.@>) $1::@extschema@.blake3[] AND tier > %d", phy[job[j]].name, floor);
-        const char *v[2] = { (const char *)ab, (const char *)wb }; int l[2] = { (int)al, (int)wl }, f[2] = { 1, 1 };
-        PGconn *c = pool[omp_get_thread_num()];
-        PGresult *r = db_exec_params(c, sql, each && with ? 2 : 1, NULL, v, l, f, 1); int one = each == 1;
-        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "hold %s: %s", phy[job[j]].name, PQerrorMessage(c)); exit(1); }
-        for (int row = 0; row < PQntuples(r); row++) {
-            int col = one ? 1 : 0;
-            Hold x; memset(&x, 0, sizeof x);
-            if (one) { uint64_t o; memcpy(&o, PQgetvalue(r, row, 0), 8); x.src = (int)__builtin_bswap64(o) - 1; } else if (each) x.src = -1;     /* any key: the caller reads which from the path */
-            memcpy(x.entity.b, PQgetvalue(r, row, col), 16);
-            x.path_len = PQgetlength(r, row, col + 1); x.path = malloc((size_t)(x.path_len ? x.path_len : 1)); memcpy(x.path, PQgetvalue(r, row, col + 1), (size_t)x.path_len);
-            x.tier = rd_i16(PQgetvalue(r, row, col + 2));
-            if (x.tier <= floor) { free(x.path); continue; }
-            x.claim = (uint8_t)mask_claim(PQgetvalue(r, row, col + 3), PQgetlength(r, row, col + 3));
-            if (!give) { bag_put(&bag[j], x); continue; }
-            size_t nv = lp_path_ids(x.path, (size_t)x.path_len, NULL, 0); lp_id *pv = malloc(sizeof(lp_id) * (nv ? nv : 1)); lp_path_ids(x.path, (size_t)x.path_len, pv, nv);
-            lp_idmap_clear(seen);int first=1;
-            for (size_t v = 0; v < nv; v++) { int64_t u = lp_idmap_find(km, &pv[v]); if (u < 0) continue;
-                bool fresh;lp_idmap_put(seen,&pv[v],&fresh);if(!fresh)continue;
-                for (int i = khead[u]; i >= 0; i = klink[i]) { Hold y = x; y.src = i;
-                    if (!first) { y.path = malloc((size_t)(x.path_len ? x.path_len : 1)); memcpy(y.path, x.path, (size_t)x.path_len); }
-                    first = 0; bag_put(&bag[j], y); } }
-            if (first) free(x.path); free(pv);
-        }
-        PQclear(r);lp_idmap_free(seen);
+/* Duplicate holders share one standing lookup; request occurrences keep their
+ * own path buffers and source positions. No partition names cross this API. */
+static void standings_of(PGconn *pg,Hold *holds,int count){
+    lp_idmap *wanted=lp_idmap_sized(sizeof(int));
+    int *links=malloc(sizeof(int)*(size_t)(count?count:1));
+    for(int i=count-1;i>=0;i--){
+        bool fresh;size_t at=lp_idmap_put(wanted,&holds[i].entity,&fresh);
+        int *head=lp_idmap_at(wanted,at);if(fresh)*head=-1;links[i]=*head;*head=i;
     }
-    free(ab); free(job); if (km) { lp_idmap_free(km); free(khead); free(klink); }
-    int n = 0; for (int j = 0; j < nj; j++) n += bag[j].n;
-    Hold *h = calloc((size_t)(n ? n : 1), sizeof(Hold)); int w = 0;
-    for (int j = 0; j < nj; j++) { memcpy(h + w, bag[j].h, (size_t)bag[j].n * sizeof(Hold)); w += bag[j].n; free(bag[j].h); }
-    free(bag);
-    /* In content order: rows come out of each leaf as its heap lies, which differs between two installs of the same
-     * content and after a vacuum. Every caller that caps, sums or takes the first of a set would otherwise depend on it. */
-    if (n > 1) qsort(h, (size_t)n, sizeof(Hold), hold_order);
-    if (standing && n) {
-        int *ix[16], nx[16]; memset(nx, 0, sizeof nx);
-        for (int i = 0; i < n; i++) nx[h[i].entity.b[0] >> 4]++;
-        int acc[16]; int run = 0; for (int k = 0; k < 16; k++) { acc[k] = run; run += nx[k]; nx[k] = 0; }
-        int *at = malloc(sizeof(int) * (size_t)n);
-        for (int i = 0; i < n; i++) { int k = h[i].entity.b[0] >> 4; at[acc[k] + nx[k]++] = i; }
-        for (int k = 0; k < 16; k++) ix[k] = at + acc[k];
-        #pragma omp parallel for num_threads(npool) schedule(dynamic)
-        for (int k = 0; k < 16; k++) {
-            if (!nx[k]) continue;
-            /* each claim once, and the holds that are it chained under it: a standing finds its holds by its ID, not by a scan */
-            lp_idmap *u = lp_idmap_new(); lp_id *ids = malloc(sizeof(lp_id) * (size_t)nx[k]); int *head = malloc(sizeof(int) * (size_t)nx[k]), *link = malloc(sizeof(int) * (size_t)nx[k]); int nu = 0;
-            for (int i = 0; i < nx[k]; i++) { bool fresh; size_t at_ = lp_idmap_put(u, &h[ix[k][i]].entity, &fresh); if (fresh) { ids[nu] = h[ix[k][i]].entity; head[nu++] = -1; } link[i] = head[at_]; head[at_] = i; }
-            uint8_t *bb = malloc(20 + 20 * (size_t)nu); size_t bl = ids_param(pool[0],bb, ids, (uint32_t)nu);
-            char sql[1024]; snprintf(sql, sizeof sql, "SELECT claim, rating, deviation, volatility, matches FROM @extschema@.consensus_%x WHERE claim OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[])", k);
-            const char *v[1] = { (const char *)bb }; int l[1] = { (int)bl }, f[1] = { 1 };
-            PGconn *c = pool[omp_get_thread_num()];
-            PGresult *r = db_exec_params(c, sql, 1, NULL, v, l, f, 1);
-            if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "standing: %s", PQerrorMessage(c)); exit(1); }
-            for (int row = 0; row < PQntuples(r); row++) {
-                lp_id id; memcpy(id.b, PQgetvalue(r, row, 0), 16);
-                int64_t at_ = lp_idmap_find(u, &id); if (at_ < 0) continue;
-                for (int i = head[at_]; i >= 0; i = link[i]) {
-                    Hold *x = &h[ix[k][i]];
-                    x->r.rating = lp_be_f64(PQgetvalue(r, row, 1)); x->r.deviation = lp_be_f64(PQgetvalue(r, row, 2)); x->r.volatility = lp_be_f64(PQgetvalue(r, row, 3));
-                    x->matches=(int64_t)lp_be(PQgetvalue(r,row,4),8);x->stood=1;
-                }
+    Args args={0};size_t n=lp_idmap_count(wanted);
+    for(size_t begin=0;begin<n;){
+        size_t amount=n-begin;if(amount>DB_ID_WINDOW)amount=DB_ID_WINDOW;
+        args_reset(&args);arg_ids(&args,lp_idmap_keys(wanted)+begin,amount);
+        PGresult *rows=ask(pg,"SELECT ordinal,rating,deviation,volatility,matches FROM @extschema@.laplace_standings($1::@extschema@.blake3[])",&args);
+        for(int row=0;row<PQntuples(rows);row++){
+            size_t at=begin+(size_t)col_int(rows,row,0)-1;
+            for(int i=*(int *)lp_idmap_at(wanted,at);i>=0;i=links[i]){
+                holds[i].r=col_rating(rows,row,1);holds[i].matches=col_int(rows,row,4);holds[i].stood=1;
             }
-            PQclear(r); free(bb); free(ids); free(head); free(link); lp_idmap_free(u);
         }
-        free(at);
+        PQclear(rows);begin+=amount;
     }
-    *nout = n; return h;
+    args_free(&args);free(links);lp_idmap_free(wanted);
 }
-Hold *holds_above(const lp_id *keys, int nkeys, int floor, int each, int standing, int *nout){ return holds_core(keys, nkeys, floor, each, standing, NULL, nout); }
-/* What holds each key, a hub's holders never read: first, every leaf at once, how many claims and how many
- * observations hold each key, counted at most cap a leaf (a count, never which rows, so the same on every install);
- * then the rows of the keys no more than cap hold, claims and observations apart, one overlap probe a leaf for each
- * set. hub[2k]: more than cap claims hold key k; hub[2k + 1]: more than cap observations. src is the key's place. */
-Hold *holds_capped(const lp_id *keys, int nkeys, int cap, int standing, int kinds, int *hub, int *nout){
-    *nout = 0; memset(hub, 0, sizeof(int) * 2 * (size_t)nkeys); if (!nkeys) return NULL; double t0 = now();
-    leaves_of("physicality", &phy, &nphy);
-    uint8_t *ab = malloc(20 + 20 * (size_t)nkeys); size_t al = ids_param(pool[0],ab, keys, (uint32_t)nkeys);
-    /* An ID is a hash, so what holds a key spreads evenly over the leaves: a first count stops at q + 1 a leaf. A key whose
-     * capped counts already pass cap is a hub; one that saturated no leaf is counted exactly; only a leaf a key saturated
-     * without the sum deciding is counted again, to cap + 1. Exact, and a hub costs at most q + 1 rows a leaf. */
-    long *cnt = calloc((size_t)nphy * (size_t)nkeys * 2, sizeof(long)); int q = cap / nphy * 4 + 16; if (q > cap) q = cap;
-    for (int pass = 0; pass < 2; pass++) {
-    int *redo = NULL; if (pass) { redo = calloc((size_t)nkeys * 2, sizeof(int)); int any = 0;
-        for (int k = 0; k < nkeys; k++) for (int t = 0; t < 2; t++) { long sum = 0; int sat = 0;
-            for (int j = 0; j < nphy; j++) { long c = cnt[((size_t)j * (size_t)nkeys + (size_t)k) * 2 + (size_t)t]; sum += c; sat |= c > q; }
-            if (sat && sum <= cap) { redo[2 * k + t] = 1; any = 1; } }
-        if (!any) { free(redo); break; } }
-    int lim = pass ? cap + 1 : q + 1;
-    #pragma omp parallel for num_threads(npool) schedule(dynamic)
-    for (int j = 0; j < nphy; j++) {
-        if (pass) { int any = 0; for (int k = 0; k < nkeys && !any; k++) for (int t = 0; t < 2; t++) any |= redo[2 * k + t] && cnt[((size_t)j * (size_t)nkeys + (size_t)k) * 2 + (size_t)t] > q; if (!any) continue; }
-        char sql[1024]; snprintf(sql, sizeof sql, "SELECT u.i, (SELECT count(*) FROM (SELECT 1 FROM @extschema@.%s p WHERE p.path OPERATOR(@extschema@.@>) ARRAY[u.id] AND p.mask OPERATOR(@extschema@.?) 0::smallint LIMIT %d) x), "
-                                "(SELECT count(*) FROM (SELECT 1 FROM @extschema@.%s p WHERE p.path OPERATOR(@extschema@.@>) ARRAY[u.id] AND NOT (p.mask OPERATOR(@extschema@.?) 0::smallint) LIMIT %d) y) FROM unnest($1::@extschema@.blake3[]) WITH ORDINALITY u(id, i)",
-                                phy[j].name, lim, phy[j].name, lim);
-        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-        PGconn *c = pool[omp_get_thread_num()]; PGresult *r = db_exec_params(c, sql, 1, NULL, v, l, f, 1);
-        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "count %s: %s", phy[j].name, PQerrorMessage(c)); exit(1); }
-        for (int row = 0; row < PQntuples(r); row++) { uint64_t o, a, b; memcpy(&o, PQgetvalue(r, row, 0), 8); memcpy(&a, PQgetvalue(r, row, 1), 8); memcpy(&b, PQgetvalue(r, row, 2), 8);
-            int k = (int)__builtin_bswap64(o) - 1; if (k < 0 || k >= nkeys) continue; size_t at = ((size_t)j * (size_t)nkeys + (size_t)k) * 2;
-            if (!pass || redo[2 * k]) cnt[at] = (long)__builtin_bswap64(a); if (!pass || redo[2 * k + 1]) cnt[at + 1] = (long)__builtin_bswap64(b); }
-        PQclear(r);
+static Hold *holders(PGconn *pg,const lp_id *keys,int nkeys,int floor,int each,int standing,
+                     const lp_id *required,int cap,int kinds,int *hub,int *nout){
+    *nout=0;if(!nkeys)return NULL;
+    Args args={0};arg_ids(&args,keys,(size_t)nkeys);
+    arg_ids(&args,required,required?1:0);
+    PGresult *rows;
+    if(!each){
+        arg_int(&args,floor);arg_int(&args,kinds);
+        rows=ask(pg,"SELECT 0::bigint,entity,path,tier,mask,CASE WHEN mask OPERATOR(@extschema@.?) 0::smallint THEN 1 ELSE 0 END::smallint,false"
+            " FROM @extschema@.laplace_containers($1::@extschema@.blake3[]||$2::@extschema@.blake3[],'{}'::smallint[])"
+            " WHERE tier>$3::smallint AND (($4::smallint & CASE WHEN mask OPERATOR(@extschema@.?) 0::smallint THEN 1 ELSE 2 END)<>0)",&args);
+    }else{
+        arg_int(&args,each==1);arg_int(&args,floor);arg_int(&args,cap);arg_int(&args,kinds);
+        rows=ask(pg,"SELECT ordinal,entity,path,tier,mask,kind,hub FROM @extschema@.laplace_holders("
+            "$1::@extschema@.blake3[],$2::@extschema@.blake3[],$3::integer<>0,$4::smallint,$5::bigint,$6::smallint)",&args);
     }
-    free(redo); }
-    for (int k = 0; k < nkeys; k++) { long c = 0, o = 0; for (int j = 0; j < nphy; j++) { c += cnt[((size_t)j * (size_t)nkeys + (size_t)k) * 2]; o += cnt[((size_t)j * (size_t)nkeys + (size_t)k) * 2 + 1]; }
-        hub[2 * k] = c > cap; hub[2 * k + 1] = o > cap; }
-    free(cnt); free(ab);
-    double t1 = now();
-    lp_id *kk = malloc(sizeof(lp_id) * (size_t)nkeys); int *back = malloc(sizeof(int) * (size_t)nkeys); Hold *all = NULL; int na = 0;
-    for (int kind = 1; kind >= 0; kind--) { int m = 0; if (!(kinds & (kind ? 1 : 2))) continue;
-        for (int k = 0; k < nkeys; k++) if (!hub[2 * k + (kind ? 0 : 1)]) { kk[m] = keys[k]; back[m++] = k; }
-        if (!m) continue; int nh = 0; Hold *h = holds_core_(kk, m, -1, 1, kind ? standing : 0, NULL, kind, &nh);
-        for (int i = 0; i < nh; i++) if (h[i].src >= 0 && h[i].src < m) h[i].src = back[h[i].src];
-        all = xrealloc(all, sizeof(Hold) * (size_t)(na + nh + 1)); memcpy(all + na, h, sizeof(Hold) * (size_t)nh); na += nh; free(h); }
-    free(kk); free(back);
-    if (na > 1) qsort(all, (size_t)na, sizeof(Hold), hold_order);
-    if (times_on()) fprintf(stderr, "times: capped holds of %d key%s: counted in %.1f ms, %d rows read in %.1f ms\n", nkeys, nkeys == 1 ? "" : "s", (t1 - t0) * 1000, na, (now() - t1) * 1000);
-    *nout = na; return all;
-}
-/* How many paths hold every one of the keys (kind: 0 observations, 1 claims, -1 both): counted every leaf at once by
- * the container index, no row read. A hub's rows are never crossed; its count is a number the index gives. */
-long holds_count(const lp_id *keys, int nkeys, int kind){
-    if (!nkeys) return 0; leaves_of("physicality", &phy, &nphy);
-    uint8_t *ab = malloc(20 + 20 * (size_t)nkeys); size_t al = ids_param(pool[0],ab, keys, (uint32_t)nkeys); long total = 0;
-    #pragma omp parallel for num_threads(npool) schedule(dynamic) reduction(+:total)
-    for (int j = 0; j < nphy; j++) {
-        char sql[1024]; snprintf(sql, sizeof sql, "SELECT count(*) FROM @extschema@.%s WHERE path OPERATOR(@extschema@.@>) $1::@extschema@.blake3[]%s", phy[j].name, kind == 1 ? " AND mask OPERATOR(@extschema@.?) 0::smallint" : kind == 0 ? " AND NOT (mask OPERATOR(@extschema@.?) 0::smallint)" : "");
-        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-        PGconn *c = pool[omp_get_thread_num()]; PGresult *r = db_exec_params(c, sql, 1, NULL, v, l, f, 1);
-        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "count %s: %s", phy[j].name, PQerrorMessage(c)); exit(1); }
-        uint64_t x; memcpy(&x, PQgetvalue(r, 0, 0), 8); total += (long)__builtin_bswap64(x); PQclear(r);
+    lp_vec(Hold) out={0};
+    for(int row=0;row<PQntuples(rows);row++){
+        int ordinal=(int)col_int(rows,row,0),claim=(int)col_int(rows,row,5);
+        if(PQgetvalue(rows,row,6)[0]){
+            if(hub && ordinal>0 && ordinal<=nkeys)hub[2*(ordinal-1)+(claim?0:1)]=1;
+            continue;
+        }
+        Hold hold={.src=each==1?ordinal-1:each==2?-1:0,.entity=*col_id(rows,row,1),
+            .tier=(int16_t)col_int(rows,row,3),.claim=(uint8_t)claim,.path_len=PQgetlength(rows,row,2)};
+        hold.path=malloc((size_t)(hold.path_len?hold.path_len:1));
+        memcpy(hold.path,PQgetvalue(rows,row,2),(size_t)hold.path_len);lp_push(&out,hold);
     }
-    free(ab); return total;
+    PQclear(rows);args_free(&args);
+    if(out.n>1)qsort(out.v,out.n,sizeof(Hold),hold_order);
+    if(standing && out.n)standings_of(pg,out.v,(int)out.n);
+    *nout=(int)out.n;return out.v;
 }
-/* What holds each key together with one more ID: per key, the paths that hold both, one statement a leaf for the
- * whole set (each key's own two-key probe of the container index), every leaf at once. src is the key's place. A key
- * with many holders is never read through: only what holds both. */
-Hold *holds_both(const lp_id *keys, int nkeys, const lp_id *with, int *nout){ return holds_core(keys, nkeys, -1, 1, 1, with, nout); }     /* standings read with the rows */
-Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout){ return holds_core(keys, nkeys, -1, 2, standing, with, nout); }
-Hold *holds_any(const lp_id *keys, int nkeys, int *nout){ return holds_core(keys, nkeys, -1, 2, 0, NULL, nout); }
+Hold *holds_above(PGconn *pg,const lp_id *keys,int n,int floor,int each,int standing,int *nout){
+    return holders(pg,keys,n,floor,each,standing,NULL,-1,3,NULL,nout);
+}
+Hold *holds_pair(PGconn *pg,const lp_id *keys,int n,const lp_id *required,int standing,int *nout){
+    return holders(pg,keys,n,-1,2,standing,required,-1,3,NULL,nout);
+}
+Hold *holds_both(PGconn *pg,const lp_id *keys,int n,const lp_id *required,int *nout){
+    return holders(pg,keys,n,-1,1,1,required,-1,3,NULL,nout);
+}
+Hold *holds_any(PGconn *pg,const lp_id *keys,int n,int *nout){
+    return holders(pg,keys,n,-1,2,0,NULL,-1,3,NULL,nout);
+}
+Hold *holds_capped(PGconn *pg,const lp_id *keys,int n,int cap,int standing,int kinds,int *hub,int *nout){
+    memset(hub,0,sizeof(int)*2*(size_t)n);
+    return holders(pg,keys,n,-1,1,standing,NULL,cap,kinds,hub,nout);
+}
+long holds_count(PGconn *pg,const lp_id *keys,int n,int kind){
+    if(!n)return 0;Args args={0};arg_ids(&args,keys,(size_t)n);arg_int(&args,kind);
+    PGresult *rows=ask(pg,"SELECT count(*) FROM @extschema@.laplace_containers($1::@extschema@.blake3[],'{}'::smallint[])"
+        " WHERE $2::smallint<0 OR (mask OPERATOR(@extschema@.?) 0::smallint)=($2::smallint=1)",&args);
+    long count=(long)col_int(rows,0,0);PQclear(rows);args_free(&args);return count;
+}

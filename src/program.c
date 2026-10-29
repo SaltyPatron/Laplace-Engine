@@ -199,7 +199,7 @@ static void head_note(Cell *x, const lp_id *rel, double conf, int occ){
 }
 /* ---- a layer (Forward 20.2 and the correspondence: "one routed processing and fold round over the enabled planes"):
  * the entities that responded hardest in the round before, not the prompt's own words, not a hub, are coupled in turn,
- * their strands every leaf at once; what each reaches inherits the words it was reached from (its support) and is
+ * their strands one Native frontier; what each reaches inherits the words it was reached from (its support) and is
  * pulled as hard as the strand's confidence times the force that reached its source, shared out. So a deeper entity
  * grounds an obligation through composition, as a later layer's attention reads an earlier layer's output. */
 static int by_force_layer(const void *a, const void *b){ const Cell *x = *(const Cell *const *)a, *y = *(const Cell *const *)b; if (x->force != y->force) return x->force > y->force ? -1 : 1; return memcmp(&x->id, &y->id, 16); }
@@ -212,7 +212,7 @@ static int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
     lp_id *keys = malloc(sizeof(lp_id) * (size_t)m); Bits *sup = malloc(sizeof(Bits) * (size_t)m); double *fo = malloc(sizeof(double) * (size_t)m);
     for (int i = 0; i < m; i++) { keys[i] = c[i]->id; sup[i] = c[i]->support; fo[i] = c[i]->force; }
     free(c);
-    int *hub = malloc(sizeof(int) * 2 * (size_t)m), nh = 0; Hold *h = holds_capped(keys, m, fw->fan, 1, 1, hub, &nh); st->trips++;
+    int *hub = malloc(sizeof(int) * 2 * (size_t)m), nh = 0; Hold *h = holds_capped(st->pg,keys, m, fw->fan, 1, 1, hub, &nh); st->trips++;
     int *outdeg = calloc((size_t)m, sizeof(int)); Ids rn = { 0 };
     for (int r = 0; r < nh; r++) { int s = h[r].src; if (s >= 0 && s < m && h[r].claim && h[r].stood) outdeg[s]++; }
     int fresh_n = 0;
@@ -238,7 +238,7 @@ static void heads_say(State *st, lp_idmap *hm, const char *label){
         printf(" %s(%ld strands, %d words, %.2f)", tn, a->strands, bit_count_and(&a->support, &a->support), a->force); free(tn); }
     printf("\n"); free(ord);
 }
-/* COUPLE through the Engine's leaf reads (holds_capped, every leaf at once on every core): for each entity, the claims
+/* COUPLE through the shared Native containment reader (holds_capped, one Native frontier): for each entity, the claims
  * that hold it (its strands, the other end answering with the strand's standing) and the observations that hold it
  * (containment), a hub's never read; and the shape, measured here. */
 static int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_of, int kind, Curve *near, int keep){
@@ -246,7 +246,7 @@ static int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_
     if (!getenv("LAPLACE_COUPLE_SQL")) {
         lp_id *keys = malloc(sizeof(lp_id) * (size_t)n); int *of = malloc(sizeof(int) * (size_t)n), nk = 0;
         for (int o = 0; o < n; o++) { keys[nk] = ids[o]; of[nk++] = o; }
-        int *hub = malloc(sizeof(int) * 2 * (size_t)(nk ? nk : 1)), nh = 0; Hold *h = holds_capped(keys, nk, fw->fan, 1, 3, hub, &nh); st->trips++;
+        int *hub = malloc(sizeof(int) * 2 * (size_t)(nk ? nk : 1)), nh = 0; Hold *h = holds_capped(st->pg,keys, nk, fw->fan, 1, 3, hub, &nh); st->trips++;
         Ids rn = { 0 };
         for (int i = 0; i < nh; i++) { int s = h[i].src; if (s < 0 || s >= nk) continue; int o = of[s];
             int occ = occ_of ? occ_of[o] : -1; double pull = occ >= 0 && occ < st->nocc ? st->role[occ] : kind == R_CLAIM ? 1.0 : 0.5;
@@ -262,7 +262,7 @@ static int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_
         /* a word whose strands are more than the fan is reached, not crossed: its on-ramp is read instead, the word and
          * each relation the firmware bubbles up by, together (Semantics: a word bubbles up to its highway node) */
         if (fw->nup) { lp_id hk[MAXOCC]; int hof[MAXOCC], nhk = 0; for (int k = 0; k < nk && nhk < MAXOCC; k++) if (hub[2 * k] && lp_tier0_codepoint(T0, &keys[k]) < 0) { hk[nhk] = keys[k]; hof[nhk++] = of[k]; }
-            for (int u = 0; u < fw->nup && nhk; u++) { int n2 = 0; Hold *h2 = holds_both(hk, nhk, &fw->id.up[u], &n2); st->trips++; int read_ = 0;
+            for (int u = 0; u < fw->nup && nhk; u++) { int n2 = 0; Hold *h2 = holds_both(st->pg,hk, nhk, &fw->id.up[u], &n2); st->trips++; int read_ = 0;
                 for (int i = 0; i < n2; i++) { int s = h2[i].src; if (s < 0 || s >= nhk || !h2[i].claim) continue; int o = hof[s]; int occ = occ_of ? occ_of[o] : -1; double pull = occ >= 0 && occ < st->nocc ? st->role[occ] : 1.0;
                     path_into(&rn, lp_path_of(h2[i].path, (size_t)h2[i].path_len)); if (rn.n < 2 || !head_read(fw, rn.v, rn.n)) continue;
                     int other = lp_tuple_other(rn.v, rn.n, &hk[s]); if (other < 0) continue;
@@ -325,7 +325,7 @@ static int curve_order(const void *a, const void *b){ const Curve *x = a, *y = b
  * realized and measured natively); only the shape is read here. In content order: distance, then ID. */
 static int shape_near(State *st, const lp_id *ids, int n, Curve *near, int keep){
     if (n < 2 || keep <= 0) return 0; const Firmware *fw = st->fw;
-    if (!getenv("LAPLACE_COUPLE_SQL")) { int *hub = malloc(sizeof(int) * 2 * (size_t)n), nh = 0; Hold *h = holds_capped(ids, n, fw->fan, 0, 2, hub, &nh); st->trips++;
+    if (!getenv("LAPLACE_COUPLE_SQL")) { int *hub = malloc(sizeof(int) * 2 * (size_t)n), nh = 0; Hold *h = holds_capped(st->pg,ids, n, fw->fan, 0, 2, hub, &nh); st->trips++;
         int k = shape_measured(st, ids, n, h, nh, near, keep); holds_free(h, nh); free(hub); return k; }
     Args a = { 0 }; arg_ids(&a, ids, (size_t)n); arg_int(&a, fw->fan); arg_refused(&a); arg_int(&a, fw->shape); arg_f64(&a, fw->shape_n); arg_int(&a, keep + 4);
     PGresult *q = ask_st(st, "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices FROM @extschema@.laplace_couple($1::@extschema@.blake3[], $2::bigint, $3::@extschema@.blake3[], $4::smallint, $5::float8, $6::integer) WHERE route = 2", &a);
@@ -359,8 +359,8 @@ static void walk(State *st, int from, int to){                                 /
         int nn = 0;
         for (int i = 0; i < nw; i++) { bool fresh; lp_idmap_put(am, &pos[i], &fresh);
             if (fresh) { lp_reserve((void **)&adj, &acap, (size_t)nadj + 1, sizeof(Adj)); memset(&adj[nadj++], 0, sizeof(Adj)); need[nn++] = pos[i]; } }
-        if (nn) {                                                             /* the strands of every place not stood on before: one set, every leaf at once, a hub's never read */
-            int *hub = malloc(sizeof(int) * 2 * (size_t)nn), nh = 0; Hold *hh = holds_capped(need, nn, fw->walk_fan, 1, 1, hub, &nh); st->trips++;
+        if (nn) {                                                             /* the strands of every place not stood on before: one set, one Native frontier, a hub's never read */
+            int *hub = malloc(sizeof(int) * 2 * (size_t)nn), nh = 0; Hold *hh = holds_capped(st->pg,need, nn, fw->walk_fan, 1, 1, hub, &nh); st->trips++;
             int *held = calloc((size_t)nn, sizeof(int)); for (int e = 0; e < nn; e++) held[e] = hub[2 * e] ? fw->walk_fan + 1 : 0;
             for (int r = 0; r < nh; r++) { int e = hh[r].src; if (e < 0 || e >= nn || held[e] > fw->walk_fan || !hh[r].claim || !hh[r].stood) continue;
                 path_into(&rn, lp_path_of(hh[r].path, (size_t)hh[r].path_len));
@@ -371,7 +371,7 @@ static void walk(State *st, int from, int to){                                 /
             for (int e = 0; e < nn; e++) { Adj *x = &adj[lp_idmap_find(am, &need[e])]; x->hub = held[e] > fw->walk_fan; }
             /* a hub is walked through its on-ramp: the place and each relation the firmware bubbles up by, together */
             if (fw->nup) { lp_id *hk = malloc(sizeof(lp_id) * (size_t)nn); int nhk = 0; for (int e = 0; e < nn; e++) if (held[e] > fw->walk_fan) hk[nhk++] = need[e];
-                for (int u = 0; u < fw->nup && nhk; u++) { int n2 = 0; Hold *h2 = holds_both(hk, nhk, &fw->id.up[u], &n2); st->trips++;
+                for (int u = 0; u < fw->nup && nhk; u++) { int n2 = 0; Hold *h2 = holds_both(st->pg,hk, nhk, &fw->id.up[u], &n2); st->trips++;
                     for (int r2 = 0; r2 < n2; r2++) { int s_ = h2[r2].src; if (s_ < 0 || s_ >= nhk || !h2[r2].claim || !h2[r2].stood) continue; path_into(&rn, lp_path_of(h2[r2].path, (size_t)h2[r2].path_len));
                         if (rn.n < 2 || !head_read(fw, rn.v, rn.n)) continue; int other = lp_tuple_other(rn.v, rn.n, &hk[s_]); if (other < 0 || lp_id_eq(&rn.v[other], &hk[s_])) continue;
                         double w = lp_confidence(&h2[r2].r, fw->k); if (!(w > 0)) continue;
@@ -399,7 +399,7 @@ static void walk(State *st, int from, int to){                                 /
 static lp_idmap *CTX_OBS;                                                     /* every observation counted into ctx_all, once */
 static void context(State *st, int from, int to){                              /* the context of positions [from, to) */
     if (!CTX_OBS) CTX_OBS = lp_idmap_new(); if (!st->ctx_all) st->ctx_all = lp_idmap_new(); lp_idmap *obs = CTX_OBS; Ids ids = { 0 };
-    /* every position's observations in one set, every leaf at once; a position more than the fan holds is a hub, its
+    /* every position's observations in one set, one Native frontier; a position more than the fan holds is a hub, its
      * observations never read. The same word again shares its context. */
     lp_id keys[MAXOCC]; int at[MAXOCC], nk = 0;
     for (int i = from; i < to; i++) { st->ctx[i] = NULL; st->ctx_n[i] = 0; st->ctx_hub[i] = 0; at[i - from] = -1;
@@ -409,7 +409,7 @@ static void context(State *st, int from, int to){                              /
         int k = -1; for (int z = 0; z < nk; z++) if (lp_id_eq(&keys[z], &st->occ[i])) k = z;
         if (k < 0) { keys[nk] = st->occ[i]; k = nk++; } at[i - from] = k; }
     if (!nk) { lp_vec_free(&ids); return; }
-    int *hub = malloc(sizeof(int) * 2 * (size_t)nk), nh = 0; Hold *h = holds_capped(keys, nk, st->fw->fan, 0, 2, hub, &nh); st->trips++;
+    int *hub = malloc(sizeof(int) * 2 * (size_t)nk), nh = 0; Hold *h = holds_capped(st->pg,keys, nk, st->fw->fan, 0, 2, hub, &nh); st->trips++;
     lp_idmap **km = calloc((size_t)nk, sizeof *km); int *kn = calloc((size_t)nk, sizeof(int));
     for (int k = 0; k < nk; k++) if (!hub[2 * k + 1]) km[k] = lp_idmap_new();
     for (int z = 0; z < nh; z++) { int k = h[z].src; if (k < 0 || k >= nk || !km[k] || h[z].claim) continue; kn[k]++;
@@ -461,7 +461,7 @@ static int fork_choice(void *vc, const Claim *cl, int n){
     ForkCtx *fc = vc; State *st = fc->st; const Firmware *fw = st->fw;
     lp_id *ends = malloc(sizeof(lp_id) * (size_t)n); for (int k = 0; k < n; k++) ends[k] = cl[k].part[cl[k].np - 1];
     lp_idmap **rec = calloc((size_t)n, sizeof *rec); for (int k = 0; k < n; k++) { bool f; rec[k] = lp_idmap_new(); lp_idmap_put(rec[k], &ends[k], &f); }
-    /* one hop out, every leaf at once; a hub (a relation, a part of speech, a language: more strands than the fan) is reached and its strands never read */
+    /* one hop out, one Native frontier; a hub (a relation, a part of speech, a language: more strands than the fan) is reached and its strands never read */
     /* a branch is read from itself and its own parts: a sense is the word with its synset, so its synset (and the
      * synset's definitions and examples) is one step down from it before it is one step out; bubble down, then out */
     lp_id *k1 = malloc(sizeof(lp_id) * (size_t)n * 17); int *b1 = malloc(sizeof(int) * (size_t)n * 17), nk1 = 0;
@@ -469,7 +469,7 @@ static int fork_choice(void *vc, const Claim *cl, int n){
     for (int k = 0; k < n; k++) { lp_id pp[16]; size_t np = reader_parts(st->rd, &ends[k], pp, 16); if (np > 16) np = 16;
         for (size_t v = 0; v < np; v++) { if (lp_tier0_codepoint(T0, &pp[v]) >= 0 || lp_id_eq(&pp[v], fc->word) || table_find(&pp[v])) continue;
             bool f; lp_idmap_put(rec[k], &pp[v], &f); if (f) { k1[nk1] = pp[v]; b1[nk1++] = k; } } }
-    int *hb = malloc(sizeof(int) * 2 * (size_t)nk1), m1 = 0; Hold *c1 = holds_capped(k1, nk1, fw->fan, 0, 1, hb, &m1); st->trips++; Ids rv = { 0 };
+    int *hb = malloc(sizeof(int) * 2 * (size_t)nk1), m1 = 0; Hold *c1 = holds_capped(st->pg,k1, nk1, fw->fan, 0, 1, hb, &m1); st->trips++; Ids rv = { 0 };
     for (int r = 0; r < m1; r++) { int s1_ = c1[r].src; if (s1_ < 0 || s1_ >= nk1 || !c1[r].claim) continue; int b = b1[s1_]; path_into(&rv, lp_path_of(c1[r].path, (size_t)c1[r].path_len));
         int o = lp_tuple_other(rv.v, rv.n, &k1[s1_]); if (o < 0) continue;     /* the strand's other end; its middle (a relation) is not the branch's record */
         const lp_id *x = &rv.v[o]; bool f; lp_idmap_put(rec[b], x, &f); }
@@ -502,7 +502,7 @@ static int fork_choice(void *vc, const Claim *cl, int n){
     /* how much each context word informs: how many observations hold it, counted by the index (a hub is counted, never
      * read), against the commonest of the prompt's words */
     if (!st->df_ready) { st->df_max = 0; for (int j = 0; j < st->npos; j++) { st->df[j] = 0; if (!st->composed[j]) continue; int seen = -1; for (int i = 0; i < j && seen < 0; i++) if (lp_id_eq(&st->occ[i], &st->occ[j])) seen = i;
-            st->df[j] = seen >= 0 ? st->df[seen] : holds_count(&st->occ[j], 1, 0); if (seen < 0) st->trips++; if (st->df[j] > st->df_max) st->df_max = st->df[j]; }
+            st->df[j] = seen >= 0 ? st->df[seen] : holds_count(st->pg,&st->occ[j], 1, 0); if (seen < 0) st->trips++; if (st->df[j] > st->df_max) st->df_max = st->df[j]; }
         st->df_ready = st->npos; }
     double *hold = calloc((size_t)n, sizeof(double)), *walks = calloc((size_t)n, sizeof(double)), *score = calloc((size_t)n, sizeof(double));
     for (int k = 0; k < n; k++) { size_t cnt = lp_idmap_count(rec[k]); double norm = sqrt((double)(cnt ? cnt : 1));
@@ -522,7 +522,7 @@ static int fork_choice(void *vc, const Claim *cl, int n){
     } else if (fw->prevalence[0]) { lp_id *cc = malloc(sizeof(lp_id) * (size_t)n * 4); int *cof = malloc(sizeof(int) * (size_t)n * 4), ncc = 0;
         for (int k = 0; k < n; k++) { lp_id pp[8]; size_t np = reader_parts(st->rd, &ends[k], pp, 8); if (np > 8) np = 8;
             for (size_t v = 0; v < np && ncc < n * 4; v++) if (!lp_id_eq(&pp[v], fc->word) && lp_tier0_codepoint(T0, &pp[v]) < 0) { cc[ncc] = pp[v]; cof[ncc++] = k; } }
-        int n2 = 0; Hold *h2 = ncc ? holds_both(cc, ncc, fc->word, &n2) : NULL; if (ncc) st->trips++; Ids pv = { 0 };
+        int n2 = 0; Hold *h2 = ncc ? holds_both(st->pg,cc, ncc, fc->word, &n2) : NULL; if (ncc) st->trips++; Ids pv = { 0 };
         for (int r = 0; r < n2; r++) { int s_ = h2[r].src; if (s_ < 0 || s_ >= ncc || !h2[r].claim || !h2[r].stood) continue; path_into(&pv, lp_path_of(h2[r].path, (size_t)h2[r].path_len));
             int as_pair = fw->prevalence_pair && pv.n == 2 && lp_id_eq(&pv.v[0], fc->word) && lp_id_eq(&pv.v[1], &cc[s_]);       /* [word, concept]: the statement a tagged corpus makes */
             int as_rel = !fw->prevalence_pair && pv.n == 3 && lp_id_eq(&pv.v[0], fc->word) && lp_id_eq(&pv.v[1], &fw->id.prevalence) && lp_id_eq(&pv.v[2], &cc[s_]);
@@ -567,7 +567,7 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
         lp_reached batch[16]; int n = 0; while (n < 16 && (x = lp_frontier_next(fr))) batch[n++] = *x; if (!n) break;      /* the nearest sixteen a round */
         lp_id ids[64]; int m = 0, who[64]; for (int i = 0; i < n; i++) if ((int)batch[i].hops < fw->hops) { ids[m] = batch[i].id; who[m++] = i; }
         if (!m) break;
-        int hub[128], nh = 0; Hold *hh = holds_capped(ids, m, fw->fan, 1, 1, hub, &nh); st->trips++;      /* every leaf at once, in content order, a hub's never read */
+        int hub[128], nh = 0; Hold *hh = holds_capped(st->pg,ids, m, fw->fan, 1, 1, hub, &nh); st->trips++;      /* one Native frontier, in content order, a hub's never read */
         for (int r = 0; r < nh; r++) { int e = hh[r].src; if (e < 0 || e >= m || hub[2 * e] || !hh[r].claim || !hh[r].stood) continue;
             const lp_reached *at = &batch[who[e]]; path_into(&rn, lp_path_of(hh[r].path, (size_t)hh[r].path_len));
             if (!head_read(fw, rn.v, rn.n)) continue;
@@ -821,7 +821,7 @@ int cmd_turn(int argc, char **argv){
               /* a longer run before it that more than the fan hold is a hub: its rows are not crossed, but the index
                * counts it: how many observations hold the run, and how many hold the run and this one too */
               int hubseg = -1; for (int r = 0; r < PQntuples(fq); r++) { int i_ = (int)col_int(fq, r, 0), j_ = (int)col_int(fq, r, 1); if (j_ == p && col_int(fq, r, 2) > fw.fan && (hubseg < 0 || i_ < hubseg)) hubseg = i_; }
-              if (hubseg > 0 && (seg < 0 || hubseg < seg)) { int len = p - hubseg + 1; long c_run = holds_count(st->occ + hubseg - 1, len, 0), c_with = holds_count(st->occ + hubseg - 1, len + 1, 0); st->trips += 2;
+              if (hubseg > 0 && (seg < 0 || hubseg < seg)) { int len = p - hubseg + 1; long c_run = holds_count(st->pg,st->occ + hubseg - 1, len, 0), c_with = holds_count(st->pg,st->occ + hubseg - 1, len + 1, 0); st->trips += 2;
                   if (c_with > 0) { expected++; printf(" held with the %d before it in %ld of the %ld observations that hold those", len, c_with, c_run); }
                   else { surprised++; printf(" held with the %d before it in none of the %ld observations that hold those", len, c_run); } }
               else if (seg < 0) printf(" nothing observed before it predicts what follows");

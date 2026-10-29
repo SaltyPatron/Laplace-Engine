@@ -45,11 +45,11 @@ void tally_under(const Dag *d, const double *cnt, lp_idmap *per_claim, lp_idmap 
 /* ---- up: from claims to the trunks that hold them. At the first level only a vertex said to be a claim, or a claim
  * standing as its own record, counts: the claim said, not the same content standing elsewhere. Above it, whatever
  * holds what was reached, but a file's metadata. */
-int walk_up(Dag *d, const lp_id *claims, size_t n, uint64_t *rows){
+int walk_up(PGconn *pg,Dag *d, const lp_id *claims, size_t n, uint64_t *rows){
     lp_idmap *front = lp_idmap_new(); for (size_t i = 0; i < n; i++) { lp_idmap_put(front, &claims[i], NULL); dag_node(d, &claims[i], NULL); }
     int level = 0; lp_vec(lp_vertex) vx = { 0 };
     while (lp_idmap_count(front) && level < 64) {
-        int nh = 0; Hold *h = holds_any(lp_idmap_keys(front), (int)lp_idmap_count(front), &nh); *rows += (uint64_t)nh;
+        int nh = 0; Hold *h = holds_any(pg,lp_idmap_keys(front), (int)lp_idmap_count(front), &nh); *rows += (uint64_t)nh;
         lp_idmap *next = lp_idmap_new();
         for (int j = 0; j < nh; j++) {
             size_t nv = lp_path_vertices(h[j].path, (size_t)h[j].path_len, NULL, 0); lp_vec_reserve(&vx, nv ? nv : 1); lp_path_vertices(h[j].path, (size_t)h[j].path_len, vx.v, nv);
@@ -105,7 +105,7 @@ Attested *attested(PGconn *pg, const lp_id *claims, int n, int *nout, uint64_t *
         *nout = nr;
         return out;
     }
-    Dag d = { 0 }; uint64_t rd_rows = 0; walk_up(&d, claims, (size_t)n, &rd_rows); if (rows) *rows += rd_rows;
+    Dag d = { 0 }; uint64_t rd_rows = 0; walk_up(pg,&d, claims, (size_t)n, &rd_rows); if (rows) *rows += rd_rows;
     lp_vec(Root) roots = { 0 }; lp_vec(size_t) at = { 0 };
     for (size_t i = (size_t)n; i < d.nn; i++) if (!d.n[i].nparents) { lp_push(&roots, (Root){ d.n[i].id, 0, 0, 0 }); lp_push(&at, i); }
     witnesses_known(pg, roots.v, roots.n);
