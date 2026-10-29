@@ -101,6 +101,9 @@ So:
     Open identifier lists retain unfamiliar IDs as written, without choosing a nearby known ID or regenerating the
     highway. Closed bank vocabularies still require a valid class. `omit` resolves nothing and is appropriate for
     explicit absence markers such as VerbNet's `fn_mapping="None"`, not unfamiliar real identifiers.
+    The identifier's vocabulary is also a source-attested claim, including an explicitly declared `type ... node`
+    vocabulary which is not in the cache. Multiple declarations of that classification are one observation per
+    record; compiler redundancy must not inflate the series replayed from containment.
     `types`, `keyed`, `alias` and `maps` also emit source-attested vocabulary, key and mapping claims during ordinary
     ingestion. Crosswalk predicates retain both resource vocabularies; a mapping does not assert unrestricted identity.
     Semantic omissions, unread fields, lost provenance and conflicting record metadata return failure and prevent

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Source notation, open identifiers, scoped argument slots and real readback."""
 import argparse
+import csv
 import json
 import os
 from pathlib import Path
@@ -90,6 +91,34 @@ def main():
 </Lexicon></LexicalResource>''', encoding='utf-8')
         proposed = run('ingest', '--claims', '-s', 'open-english-wordnet', wordnet)
         assert '[in, eng, wnlmf-new]' in proposed and '[wnlmf-new, in]' not in proposed, proposed
+        manifest = Path(os.environ.get('LAPLACE_MANIFEST', installed_recipes.parent.parent / 'Laplace-Native/manifest'))
+        with (manifest / 'banks.tsv').open(encoding='utf-8') as file:
+            closed = {row['list'] for row in csv.DictReader((line for line in file if not line.startswith('#')), delimiter='\t')}
+        with (manifest / 'slots/lists.tsv').open(encoding='utf-8') as file:
+            open_lists = [row['list'] for row in csv.DictReader(file, delimiter='\t') if row['list'] not in closed]
+        all_open = recipes / 'open-identifiers'
+        all_open.mkdir()
+        (all_open / 'source').write_text('name open-identifiers\nwitness Open vocabulary references\n'
+                                          'class AcademicCurated\nroot $LAPLACE_DATA/open-identifiers\n', encoding='utf-8')
+        reference_lists = [*open_lists, 'source-defined-vocabulary']
+        fields = ['ref_' + name for name in reference_lists]
+        (all_open / 'references.recipe').write_text('name open-references\nmatch references.tsv\n'
+            'tier row by \\n\nnames word ' + ' '.join(fields) + '\ntier field by \\t\nthing row word\ncontent word\n' +
+            ''.join(f'type {field} {name}' + (' node' if name == 'source-defined-vocabulary' else '') +
+                    f'\nvalue {name} {field}\nattest row {field}\n'
+                    for name, field in zip(reference_lists, fields)), encoding='utf-8')
+        references = root / 'data/open-identifiers'
+        references.mkdir()
+        (references / 'references.tsv').write_text('references\t' + '\t'.join('unlisted-' + name + '.987654321'
+                                                                             for name in reference_lists) + '\n', encoding='utf-8')
+        (all_open / 'redundant.recipe').write_text('name redundant-declarations\nmatch redundant.tsv\n'
+            'tier row by \\n\nnames identifier\ntier field by \\t\nthing row identifier\n'
+            'type identifier pbroleset node\ntypes pbroleset "PropBank roleset" row\n', encoding='utf-8')
+        (references / 'redundant.tsv').write_text('single-unlisted.01\n', encoding='utf-8')
+        text = run('ingest', '--claims', 'open-identifiers')
+        for name in reference_lists:
+            assert f'[unlisted-{name}.987654321, identifier vocabulary, {name}]' in text, (name, text)
+        print(f'PASS all {len(open_lists)} declared open identifier vocabularies and a source-defined vocabulary retain uncached references and their families')
         print('PASS shared categories, original notation, open IDs, crosswalks, scoped argument definitions and usages')
 
         # An unfamiliar closed category is an omission; a source pointer which
@@ -126,12 +155,22 @@ def main():
             run('ingest', '-d', connection, '-j', 4, 'propbank')
             before = sql('SELECT count(*) FROM public.witness')
             assert before == '2', before
+            run('ingest', '-d', connection, 'open-identifiers')
+            # Two declarations describe one reference in one source record.
+            # Replaying actual containment must still recover one observation.
+            games = sql("""SELECT sum(games) FROM public.laplace_contained_series(
+                (SELECT array_agg(id) FROM public.witness))
+                WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('single-unlisted.01'),
+                    public.laplace_text_id('identifier vocabulary'),public.laplace_text_id('pbroleset')])""")
+            assert games == '1', ('Duplicate declarations manufactured observations', games)
             # Use the product consumer: these are committed, ranked claims read
             # from PostgreSQL, not the preview or a test's reconstruction.
             duck = run('hop', '-d', connection, 'duck')
             assert 'NOUN' in duck and 'VERB' in duck and 'laplace-unlisted.987654321' in duck, duck
             mapping = run('hop', '-d', connection, 'duck.03')
             assert 'cross-resource mapping' in mapping and 'novel-987654321.2' in mapping, mapping
+            reference = run('hop', '-d', connection, 'laplace-unlisted.987654321')
+            assert 'identifier vocabulary' in reference and 'pbroleset' in reference, reference
             usage = run('hop', '-d', connection, 'PersonX ducks.')
             assert 'duck.01' in usage and 'duck.02' in usage and 'PersonX' in usage, usage
             # Vocabulary edits invalidate the OS/file precheck even when all

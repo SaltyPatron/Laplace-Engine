@@ -651,7 +651,7 @@ static void resource_entry(RecordWorker *k, const HwLine *h, int line, const Ref
         parts[1]=said_tuple(compose(relation,3,ref_above(relation,3)));
         parts[2]=record_text((const uint8_t *)b,strlen(b));
     }
-    record_emit_claim(k,parts,3);
+    record_emit_claim_once(k,parts,3);
 }
 void record_highway_values(RecordWorker *k, const SemanticRecord *t, int32_t root){
     const Say *s = k->s; if (!record_conditions_match(s, t, root, s->whole)) return;
@@ -670,23 +670,35 @@ void record_highway_values(RecordWorker *k, const SemanticRecord *t, int32_t roo
 void record_vocabulary_evidence(RecordWorker *k, const SemanticRecord *t){
     for (uint32_t i=0; i<t->count; i++) {
         const SemanticValue *x=&t->n[i];
-        if (x->context || !x->nlen || !x->vlen) continue;
+        if (x->context || !x->nlen) continue;
         const Dis *d=record_field_disposition(k->s,x);
         if (!d) continue;
+        if (d->what==D_OMIT || d->what==D_METADATA) { i=(uint32_t)record_scope_end(t,(int32_t)i); continue; }
+        if (!x->vlen) continue;
         if (d->what==D_REFER && (d->k.has_re || d->k.nas) && d->under[0]) {
             Ref scope, target;
             int32_t at=record_select_first(t,(int32_t)i,d->under);
             if (at<0 || !record_value(k,t,at,&scope,0) || !record_value(k,t,(int32_t)i,&target,0)) continue;
             Ref notation[2]={scope,record_text(x->val,x->vlen)};
             Ref parts[3]={said_tuple(compose(notation,2,ref_above(notation,2))),string_ref((const uint8_t *)"refers to",9),target};
-            record_emit_claim(k,parts,3); continue;
+            record_emit_claim_once(k,parts,3); continue;
+        }
+        if (d->what==D_TYPE && !d->k.vocabulary && d->ntargets==1 &&
+            (d->k.node || (HW && lp_highway_list(HW,d->targets[0].name) && !lp_highway_bank(HW,d->targets[0].name)))) {
+            Ref identifier; if (!record_value(k,t,(int32_t)i,&identifier,0)) continue;
+            /* Retain the reference's resource family in the source DAG even
+             * when there is no frozen slot for this identifier. A text can be
+             * used in several families; these are separate witnessed claims. */
+            Ref parts[3]={identifier,string_ref((const uint8_t *)"identifier vocabulary",21),
+                string_ref((const uint8_t *)d->targets[0].name,d->targets[0].length)};
+            record_emit_claim_once(k,parts,3); continue;
         }
         if (d->what!=D_TYPE || !d->k.vocabulary) continue;
         Ref canonical; if (!record_value(k,t,(int32_t)i,&canonical,0)) continue;
         Ref notation[2]={string_ref((const uint8_t *)d->k.vocabulary_name,strlen(d->k.vocabulary_name)),record_text(x->val,x->vlen)};
         Ref parts[3]={said_tuple(compose(notation,2,ref_above(notation,2))),
             string_ref((const uint8_t *)"denotes",7),canonical};
-        record_emit_claim(k,parts,3);
+        record_emit_claim_once(k,parts,3);
     }
 }
 

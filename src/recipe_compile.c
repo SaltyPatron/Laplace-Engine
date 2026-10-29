@@ -891,7 +891,7 @@ void say_program_hash(const Recipe *recipe, uint8_t out[32]){
     /* Record interpretation changed even where the recipe text did not:
      * cached file metadata must not hide newly retained mapping evidence. */
     blake3_hasher hash; blake3_hasher_init(&hash);
-    static const char version[]="laplace-source-interpretation-v2";
+    static const char version[]="laplace-source-interpretation-v3";
     blake3_hasher_update(&hash,version,sizeof version-1); blake3_hasher_update(&hash,out,32);
     blake3_hasher_finalize(&hash,out,32);
 }

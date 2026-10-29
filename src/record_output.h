@@ -8,6 +8,8 @@ void record_emit_event(RecordWorker *, const lp_id *, float score);
 int record_claim_vertex(const Event *,Ref *);
 
 void record_emit_claim(RecordWorker *k, Ref *part, int n);
+/* Repeated compiler declarations do not constitute another source observation. */
+void record_emit_claim_once(RecordWorker *k, Ref *part, int n);
 void record_group_claims(RecordWorker *k, uint64_t e0, const Ref *about);
 void record_build_provenance(RecordWorker *k, const SemanticRecord *t, int32_t root, uint64_t ev0, const Ref *T);
 void record_emit_layers(RecordWorker *, const SemanticRecord *, int32_t);

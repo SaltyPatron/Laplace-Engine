@@ -77,7 +77,10 @@ attest row wn30 wn31 odwn ordinary
 RECIPE
 printf 'cili-probe\n' >> "$scratch/recipes/order"
 printf 'process\t00029677-n\t00029677-n\t06341431-n\ti35587\navailable\t00186320-s\t00186320-s\tNULL\tNULL\nambiguous\tNULL\t00493366-s\tNULL\tNULL\naliased\tNULL\tambiguous-alias\tNULL\tNULL\n' > "$LAPLACE_DATA/CiliProbe/probe.tab"
-output=$(LAPLACE_HIGHWAY=$cache "$engine" ingest --claims-tsv -s cili-probe "$LAPLACE_DATA/CiliProbe/probe.tab" 2>&1) || fail "probe: $output"
+if output=$(LAPLACE_HIGHWAY=$cache "$engine" ingest --claims-tsv -s cili-probe "$LAPLACE_DATA/CiliProbe/probe.tab" 2>&1); then
+  fail "missing and ambiguous release pointers reported success: $output"
+fi
+grep -q 'semantic_omissions=3 ' <<< "$output" || fail "the missing and two ambiguous references were not counted: $output"
 # The ordinary column supplies the literal i35587 content too, so the printer
 # can spell that shared canonical entity directly instead of as LIST:KEY.
 grep -q $'\tprocess\tin WordNet 3.0\ti35587$' <<< "$output" || fail "3.0's offset lost its concept: $output"

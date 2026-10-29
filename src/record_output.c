@@ -62,7 +62,7 @@ void record_highway_entry(RecordWorker *k, int what, int line, const Ref *thing,
     HwRec *x = &k->hr[k->nhr++]; x->what = what; x->line = line; if (thing) x->thing = *thing; else memset(&x->thing, 0, sizeof x->thing);
     x->a = output_text(k, a, al); x->b = output_text(k, b, bl);
 }
-static int said_already(RecordWorker *k, const lp_id *c){
+static int said_already(RecordWorker *k, const lp_id *c, int repeated_observation){
     if (!k->cs_epoch) k->cs_epoch = 1;                                      /* a slot never used is of epoch 0: no part's */
     lp_id qualifier; memset(&qualifier, 0, sizeof qualifier); if (k->qualified) qualifier = k->qualifier.id;     /* an unqualified source assertion: no qualifier ID */
     if ((k->cs_n + 1) * 2 > k->cs_cap) {                                     /* half full: twice the room, this part's keys moved */
@@ -74,7 +74,7 @@ static int said_already(RecordWorker *k, const lp_id *c){
     }
     uint64_t h, w, d; memcpy(&h, c->b, 8); memcpy(&w, qualifier.b + 8, 8); memcpy(&d,k->dependence.id.b,8); uint64_t s = (h ^ w ^ d) & (k->cs_cap - 1);
     while (k->cs[s].epoch == k->cs_epoch) { if (!memcmp(&k->cs[s].claim, c, 16) && !memcmp(&k->cs[s].qualifier, &qualifier, 16) && lp_id_eq(&k->cs[s].dependence,&k->dependence.id)) {
-            uint64_t e = k->cs[s].ev; if (e < k->ev.n && k->ev.e[e].run < (1u << LP_M_RUN_BITS) - 1) k->ev.e[e].run++; return 1; }
+            uint64_t e = k->cs[s].ev; if (repeated_observation && e < k->ev.n && k->ev.e[e].run < (1u << LP_M_RUN_BITS) - 1) k->ev.e[e].run++; return 1; }
         s = (s + 1) & (k->cs_cap - 1); }
     k->cs[s].claim = *c; k->cs[s].qualifier = qualifier; k->cs[s].dependence=k->dependence.id; k->cs[s].epoch = k->cs_epoch; k->cs[s].ev = k->ev.n; k->cs_n++; return 0;
 }
@@ -85,13 +85,15 @@ void record_emit_event(RecordWorker *k, const lp_id *c, float score){
     if (k->qualified) { x.has_qualifier = 1; x.qualifier = k->qualifier.id; } record_event_push(k, &x);
 }
 
-void record_emit_claim(RecordWorker *k, Ref *part, int n){
+static void emit_claim(RecordWorker *k, Ref *part, int n, int repeated_observation){
     for (int i = 0; i < n; i++) if (part[i].said != LP_SAID_TUPLE) part[i].said = 0;      /* a tuple held by a claim stays a tuple: M says so, the ID is the same */
     Ref c = said_claim(compose(part, (uint32_t)n, ref_above(part, (size_t)n)));
-    if (said_already(k, &c.id)) return;
+    if (said_already(k, &c.id, repeated_observation)) return;
     record_emit_event(k, &c.id, k->score);
     record_refs_push(&k->grp, &c);
 }
+void record_emit_claim(RecordWorker *k, Ref *part, int n){ emit_claim(k,part,n,1); }
+void record_emit_claim_once(RecordWorker *k, Ref *part, int n){ emit_claim(k,part,n,0); }
 
 void record_group_claims(RecordWorker *k, uint64_t e0, const Ref *about){
     (void)about; uint32_t at = 0;
