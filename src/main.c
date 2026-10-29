@@ -32,7 +32,6 @@ const char *laplace_recipes(void){ return env_or("LAPLACE_RECIPES", LAPLACE_RECI
 const char *laplace_grammars(void){ return env_or("LAPLACE_GRAMMARS", LAPLACE_GRAMMARS_DEFAULT); }
 const char *laplace_ucd(void){ return env_or("LAPLACE_UCD", LAPLACE_UCD_DEFAULT); }
 
-uint32_t id_oid;
 static char noted_conn[8192];
 const char *db_noted(void){ return noted_conn; }
 static PGconn *connect_one(const char *conninfo);
@@ -55,9 +54,7 @@ void db_connect_many(const char *conninfo, int n, PGconn **out){
 static PGconn *connect_one(const char *conninfo){
     PGconn *pg = PQconnectdb(conninfo);
     if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "Database connection failed: %s", PQerrorMessage(pg)); exit(1); }
-    PQclear(PQexec(pg, "SET client_min_messages = warning"));
-    if (!id_oid && !omp_in_parallel()) { PGresult *r = PQexec(pg, "SELECT 'blake3'::regtype::oid");          /* a database not deployed yet has no such type */
-                   if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) id_oid = (uint32_t)strtoul(PQgetvalue(r, 0, 0), NULL, 10); PQclear(r); }
+    db_notices(pg);
     return pg;
 }
 /* A read sees one world. Ingestion folds standings as it goes, and a read is many statements on many connections (the
@@ -69,9 +66,9 @@ static char snapshot[64];
 const char *db_snapshot(void){ return snapshot[0] ? snapshot : NULL; }
 PGconn *db_read(const char *conninfo){
     PGconn *pg = db_connect(conninfo);
-    PGresult *r = PQexec(pg, "BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY");
+    PGresult *r = db_exec(pg, "BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY");
     if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "read: %s", PQerrorMessage(pg)); exit(1); } PQclear(r);
-    r = PQexec(pg, "SELECT pg_export_snapshot()");
+    r = db_exec(pg, "SELECT pg_export_snapshot()");
     if (PQresultStatus(r) != PGRES_TUPLES_OK || !PQntuples(r)) { fprintf(stderr, "snapshot: %s", PQerrorMessage(pg)); exit(1); }
     snprintf(snapshot, sizeof snapshot, "%s", PQgetvalue(r, 0, 0)); PQclear(r);
     return pg;

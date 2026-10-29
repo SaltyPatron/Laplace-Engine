@@ -31,7 +31,7 @@ Attested *lp_provenance_of(PGconn *pg,const lp_id *claims,size_t n,int files,int
     *nout=0;if(!n)return NULL;
     Args args={0};arg_ids(&args,claims,n);uint8_t flag=files!=0;arg_raw(&args,&flag,1);
     PGresult *q=ask_once(pg,"SELECT claim,trunk,games,tokens,score,\"position\",trust,witness"
-        " FROM laplace_attested($1::blake3[],$2::boolean) WHERE witness OR $2 ORDER BY claim,trunk",&args);
+        " FROM @extschema@.laplace_attested($1::@extschema@.blake3[],$2::boolean) WHERE witness OR $2 ORDER BY claim,trunk",&args);
     int count=PQntuples(q);Attested *rows=calloc((size_t)(count?count:1),sizeof *rows);
     if(!rows){perror("provenance rows");exit(1);}
     for(int i=0;i<count;i++)rows[i]=(Attested){*col_id(q,i,0),*col_id(q,i,1),col_f64(q,i,2),col_f64(q,i,3),
@@ -63,22 +63,22 @@ int cmd_held(int argc,char **argv){
     if(out)fclose(out);free(claims);holds_free(holds,nh);PQfinish(pg);return 0;
 }
 static void replay_open(PGconn *pg,char table[96]){
-    exec(pg,"SELECT laplace_ensure_stage()");
-    exec(pg,"SELECT * FROM public.laplace_stage_retire()");
+    exec(pg,"SELECT @extschema@.laplace_ensure_stage()");
+    exec(pg,"SELECT * FROM @extschema@.laplace_stage_retire()");
     PGresult *q=ask_once(pg,"SELECT pg_current_xact_id()::text",NULL);const char *id=PQgetvalue(q,0,0);
     if(!*id||strspn(id,"0123456789")!=strlen(id)){fputs("invalid replay transaction identity\n",stderr);exit(1);}
     snprintf(table,96,"stage.lp_replay_%s",id);
     char sql[256];snprintf(sql,sizeof sql,"CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS)",table);exec(pg,sql);
-    snprintf(sql,sizeof sql,"SELECT public.laplace_stage_own(%s,ARRAY['%s'::regclass])",id,table);exec(pg,sql);PQclear(q);
+    snprintf(sql,sizeof sql,"SELECT @extschema@.laplace_stage_own(%s,ARRAY['%s'::regclass])",id,table);exec(pg,sql);PQclear(q);
 }
 static void replay_close(PGconn *pg,const char *table){char sql[160];snprintf(sql,sizeof sql,"DROP TABLE %s",table);exec(pg,sql);}
 static int replay_export(PGconn *pg,int files,FILE *out){
     char sql[1024];
     snprintf(sql,sizeof sql,
         "COPY (SELECT claim::text,trunk::text,games::numeric::text,tokens::numeric::text,score::text,\"position\"::text"
-        " FROM public.laplace_attested(ARRAY(SELECT claim FROM replay_claims ORDER BY claim),%s)"
+        " FROM @extschema@.laplace_attested(ARRAY(SELECT claim FROM replay_claims ORDER BY claim),%s)"
         " WHERE witness OR %s ORDER BY claim,trunk) TO STDOUT (FORMAT text)",files?"true":"false",files?"true":"false");
-    PGresult *result=PQexec(pg,sql);
+    PGresult *result=db_exec(pg,sql);
     if(PQresultStatus(result)!=PGRES_COPY_OUT){fprintf(stderr,"replay export: %s",PQerrorMessage(pg));PQclear(result);return 1;}
     PQclear(result);char *data=NULL;int bytes;
     while((bytes=PQgetCopyData(pg,&data,0))>0){
@@ -98,11 +98,11 @@ int standings_replay(PGconn *pg,const lp_id *claims,size_t n,uint64_t *played,ui
     int owns=PQtransactionStatus(pg)==PQTRANS_IDLE;if(owns)exec(pg,"BEGIN");
     char table[96];replay_open(pg,table);
     Args selected={0};arg_text(&selected,table);arg_ids(&selected,claims,n);
-    PQclear(ask_once(pg,"SELECT laplace_attest_series($1::regclass,$2::blake3[])",&selected));args_free(&selected);
+    PQclear(ask_once(pg,"SELECT @extschema@.laplace_attest_series($1::regclass,$2::@extschema@.blake3[])",&selected));args_free(&selected);
     Args args={0};arg_ids(&args,claims,n);
     PGresult *q=ask_once(pg,"SELECT count(*),"
-        " (SELECT count(DISTINCT id) FROM unnest($1::blake3[]) id)-count(*)"
-        " FROM public.consensus WHERE claim=ANY($1::blake3[])",&args);
+        " (SELECT count(DISTINCT id) FROM unnest($1::@extschema@.blake3[]) id)-count(*)"
+        " FROM @extschema@.consensus WHERE claim OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[])",&args);
     *played=lp_be(PQgetvalue(q,0,0),8);*orphaned=lp_be(PQgetvalue(q,0,1),8);
     PQclear(q);args_free(&args);replay_close(pg,table);if(owns)exec(pg,"COMMIT");return 0;
 }
@@ -114,20 +114,20 @@ int cmd_replay(int argc,char **argv){
     PGconn *pg=db_connect(conninfo);FILE *out=tsv?fopen(tsv,"w"):NULL;
     if(tsv&&!out){perror(tsv);PQfinish(pg);return 1;}
     exec(pg,"BEGIN ISOLATION LEVEL REPEATABLE READ");
-    exec(pg,"CREATE TEMP TABLE replay_claims(claim blake3 PRIMARY KEY) ON COMMIT DROP;"
-        " INSERT INTO replay_claims SELECT entity FROM public.physicality"
-        " WHERE laplace_mask_has_value(mask,'kind','claim') AND laplace_path_length(path)>=2"
-        " UNION SELECT claim FROM public.consensus;"
-        " CREATE TEMP TABLE replay_before ON COMMIT DROP AS SELECT * FROM public.consensus");
+    exec(pg,"CREATE TEMP TABLE replay_claims(claim @extschema@.blake3 PRIMARY KEY) ON COMMIT DROP;"
+        " INSERT INTO replay_claims SELECT entity FROM @extschema@.physicality"
+        " WHERE @extschema@.laplace_mask_has_value(mask,'kind','claim') AND @extschema@.laplace_path_length(path)>=2"
+        " UNION SELECT claim FROM @extschema@.consensus;"
+        " CREATE TEMP TABLE replay_before ON COMMIT DROP AS SELECT * FROM @extschema@.consensus");
     if(out){
         if(replay_export(pg,files,out)){fclose(out);PQfinish(pg);return 1;}fclose(out);
     }
-    exec(pg,"DELETE FROM public.consensus c WHERE NOT EXISTS(SELECT FROM public.physicality p"
-        " WHERE p.entity=c.claim AND laplace_mask_has_value(p.mask,'kind','claim') AND laplace_path_length(p.path)>=2);"
-        " DELETE FROM replay_claims c WHERE NOT EXISTS(SELECT FROM public.physicality p"
-        " WHERE p.entity=c.claim AND laplace_mask_has_value(p.mask,'kind','claim') AND laplace_path_length(p.path)>=2)");
+    exec(pg,"DELETE FROM @extschema@.consensus c WHERE NOT EXISTS(SELECT FROM @extschema@.physicality p"
+        " WHERE p.entity OPERATOR(@extschema@.=) c.claim AND @extschema@.laplace_mask_has_value(p.mask,'kind','claim') AND @extschema@.laplace_path_length(p.path)>=2);"
+        " DELETE FROM replay_claims c WHERE NOT EXISTS(SELECT FROM @extschema@.physicality p"
+        " WHERE p.entity OPERATOR(@extschema@.=) c.claim AND @extschema@.laplace_mask_has_value(p.mask,'kind','claim') AND @extschema@.laplace_path_length(p.path)>=2)");
     char table[96],sql[1800];replay_open(pg,table);
-    snprintf(sql,sizeof sql,"SELECT laplace_attest_stage('%s'::regclass,'replay_claims'::regclass)",table);
+    snprintf(sql,sizeof sql,"SELECT @extschema@.laplace_attest_stage('%s'::regclass,'replay_claims'::regclass)",table);
     exec(pg,sql);replay_close(pg,table);
     PGresult *q=ask_once(pg,
         "SELECT count(*) FILTER(WHERE b.claim IS NOT NULL AND a.claim IS NOT NULL AND"
@@ -136,7 +136,7 @@ int cmd_replay(int argc,char **argv){
         " count(*) FILTER(WHERE b.claim IS NULL OR a.claim IS NULL OR"
         " ROW(float8send(b.rating),float8send(b.deviation),float8send(b.volatility),b.matches)"
         " IS DISTINCT FROM ROW(float8send(a.rating),float8send(a.deviation),float8send(a.volatility),a.matches))"
-        " FROM replay_before b FULL JOIN public.consensus a USING(claim)",NULL);
+        " FROM replay_before b FULL JOIN @extschema@.consensus a ON a.claim OPERATOR(@extschema@.=) b.claim",NULL);
     uint64_t same=lp_be(PQgetvalue(q,0,0),8),different=lp_be(PQgetvalue(q,0,1),8);PQclear(q);
     exec(pg,write?"COMMIT":"ROLLBACK");
     printf("laplace replay   %s   %llu identical bit for bit, %llu different%s\n",PQdb(pg),

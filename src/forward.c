@@ -48,10 +48,10 @@ int cmd_pull(int argc, char **argv){
     /* every segment of the prompt at once (laplace_forward): "The", "The dog", "The dog barked" and every other run of it,
      * the observations that hold each, how many as a run, and what follows the run in them, counted. The whole pass is one
      * set; a segment that is only tier-0 atoms (a space, a letter) is a hub and is not shown. */
-    { double t = now(); uint8_t *ab = malloc(20 + 20 * (size_t)np); size_t al = ids_param(ab, ph, (uint32_t)np); char fan[24]; snprintf(fan, sizeof fan, "%d", fw.fan);
+    { double t = now(); uint8_t *ab = malloc(20 + 20 * (size_t)np); size_t al = ids_param(pg,ab, ph, (uint32_t)np); char fan[24]; snprintf(fan, sizeof fan, "%d", fw.fan);
       const char *v[2] = { (const char *)ab, fan }; int l[2] = { (int)al, (int)strlen(fan) }, f[2] = { 1, 0 };
       /* the prefixes first, as the pass walks them ("The", "The dog", ...), then every other segment by how many hold it */
-      PGresult *q = db_ask(pg, "SELECT i, j, paths, runs, next, times FROM laplace_forward($1::blake3[], $2::bigint) ORDER BY (i > 1), CASE WHEN i = 1 THEN j END, paths DESC, (j - i) DESC, i, times DESC NULLS LAST", 2, v, l, f);
+      PGresult *q = db_ask(pg, "SELECT i, j, paths, runs, next, times FROM @extschema@.laplace_forward($1::@extschema@.blake3[], $2::bigint) ORDER BY (i > 1), CASE WHEN i = 1 THEN j END, paths DESC, (j - i) DESC, i, times DESC NULLS LAST", 2, v, l, f);
       if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "forward: %s", PQerrorMessage(pg)); return 1; }
       int nr = PQntuples(q), shown = 0, segments = 0;
       for (int r = 0; r < nr; r++) if (!PQgetisnull(q, r, 4)) { lp_id x; memcpy(x.b, PQgetvalue(q, r, 4), 16); reader_want(rd, &x); }

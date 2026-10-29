@@ -26,7 +26,7 @@ static size_t fetch(Reader *r){
         ids.n=0;
         for(size_t i=at;i<at+amount;i++){lp_push(&ids,r->e[i].id);r->e[i].state=2;}
         args_reset(&args);arg_ids(&args,ids.v,ids.n);
-        PGresult *rows=ask(r->pg,"SELECT entity,path FROM public.laplace_paths($1::public.blake3[])",&args);r->trips++;
+        PGresult *rows=ask(r->pg,"SELECT entity,path FROM @extschema@.laplace_paths($1::@extschema@.blake3[])",&args);r->trips++;
         for(int row=0;row<PQntuples(rows);row++){
             Ent *node=ent(r,col_id(rows,row,0),0);if(!node || node->state==1)continue;
             lp_path path=col_path(rows,row,1);node->first=r->children.n;node->nv=path.n;node->state=1;

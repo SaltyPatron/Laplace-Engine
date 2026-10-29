@@ -403,7 +403,7 @@ int source_files(const Source *sc, Recipe *rec, int nrec, char ***out, Recipe **
 /* The room left where the database keeps its data, or -1 when that cannot be seen from here (another machine). */
 static double room_left(const char *conninfo){
     PGconn *pg = PQconnectdb(conninfo); double gb = -1;
-    if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SHOW data_directory");
+    if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = db_exec(pg, "SHOW data_directory");
         if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) { struct statvfs v; if (!statvfs(PQgetvalue(r, 0, 0), &v)) gb = (double)v.f_bavail * (double)v.f_frsize / 1e9; }
         PQclear(r); }
     PQfinish(pg); return gb;
@@ -413,7 +413,7 @@ static double room_left(const char *conninfo){
  * what is recorded once is not recorded again, so no later source is held to it. */
 static double db_bytes(const char *conninfo){
     PGconn *pg = PQconnectdb(conninfo); double b = -1;
-    if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SELECT pg_database_size(current_database())"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) b = atof(PQgetvalue(r, 0, 0)); PQclear(r); }
+    if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = db_exec(pg, "SELECT pg_database_size(current_database())"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) b = atof(PQgetvalue(r, 0, 0)); PQclear(r); }
     PQfinish(pg); return b;
 }
 static void room_keep(const char *path, const char *source, double times){
@@ -452,7 +452,7 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
         double bytes_in = (double)source_bytes(&src[i], rec, nrec), before = loads ? db_bytes(conninfo) : -1;
         if (bytes_in <= 0) { printf("%-4d %-38s %-10s %10s   its root holds no files%s%s\n", i + 1, src[i].name, src[i].held[0] ? "held" : "absent", "", src[i].held[0] ? ": " : "", src[i].held); if (src[i].held[0]) held++; else absent++; continue; }
         if (loads) { double have = room_left(conninfo); struct statvfs v; double whole = 0;
-            { PGconn *pg = PQconnectdb(conninfo); if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = PQexec(pg, "SHOW data_directory"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !statvfs(PQgetvalue(r, 0, 0), &v)) whole = (double)v.f_blocks * (double)v.f_frsize / 1e9; PQclear(r); } PQfinish(pg); }
+            { PGconn *pg = PQconnectdb(conninfo); if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = db_exec(pg, "SHOW data_directory"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !statvfs(PQgetvalue(r, 0, 0), &v)) whole = (double)v.f_blocks * (double)v.f_frsize / 1e9; PQclear(r); } PQfinish(pg); }
             if (have >= 0 && have < whole / 10) { char why[128]; snprintf(why, sizeof why, "no room: %.0f GB is left of %.0f GB", have, whole);
                 printf("%-4d %-38s %-10s %10s   %s\n", i + 1, src[i].name, "not begun", "", why); short_of_room++; continue; } }
         char log[4300]; snprintf(log, sizeof log, "%s/%s.log", dir, src[i].name);
@@ -590,10 +590,10 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
         for(size_t begin=0;begin<count && !failed;){
             size_t take=count-begin;if(take>DB_ID_WINDOW)take=DB_ID_WINDOW;
             Args args={0};arg_ids(&args,ids+begin,take);
-            PGresult *r=ask_try(pg,"SELECT wanted.id,c.entity,public.ST_AsEWKB(c.path),c.tier"
-                " FROM unnest($1::public.blake3[]) wanted(id) JOIN public.physicality c"
-                " ON c.path @> ARRAY[wanted.id]::public.blake3[]"
-                " WHERE public.laplace_path_starts(c.path,wanted.id)",&args);
+            PGresult *r=ask_try(pg,"SELECT wanted.id,c.entity,@postgis@.ST_AsEWKB(c.path),c.tier"
+                " FROM unnest($1::@extschema@.blake3[]) wanted(id) JOIN @extschema@.physicality c"
+                " ON c.path OPERATOR(@extschema@.@>) ARRAY[wanted.id]::@extschema@.blake3[]"
+                " WHERE @extschema@.laplace_path_starts(c.path,wanted.id)",&args);
             args_free(&args);begin+=take;
             if(!r){fprintf(stderr,"which files are recorded: %s",PQerrorMessage(pg));failed=1;break;}
             for (int j = 0; j < PQntuples(r); j++) {
@@ -638,11 +638,11 @@ static int files_recorded(const char *conninfo, File *files, int nfiles){
     const int parameter_ids=(INT_MAX-20)/20;
     for(int begin=0;begin<nmissing&&!failed;){
         int count=nmissing-begin;if(count>parameter_ids)count=parameter_ids;
-        uint8_t *ab=malloc(20+20*(size_t)count);size_t al=ids_param(ab,missing+begin,(uint32_t)count);
+        uint8_t *ab=malloc(20+20*(size_t)count);size_t al=ids_param(pg,ab,missing+begin,(uint32_t)count);
         const char *v[]={ (const char *)ab };int lengths[]={ (int)al },formats[]={1};
-        PGresult *r=PQexecParams(pg,"SELECT wanted.id,"
-            "(SELECT st_asewkb(e.coord) FROM public.entity e WHERE e.id=wanted.id) "
-            "FROM unnest($1::blake3[]) wanted(id)",1,NULL,v,lengths,formats,1);
+        PGresult *r=db_exec_params(pg,"SELECT wanted.id,"
+            "(SELECT @postgis@.st_asewkb(e.coord) FROM @extschema@.entity e WHERE e.id OPERATOR(@extschema@.=) wanted.id) "
+            "FROM unnest($1::@extschema@.blake3[]) wanted(id)",1,NULL,v,lengths,formats,1);
         if(PQresultStatus(r)!=PGRES_TUPLES_OK){fprintf(stderr,"file reference IDs: %s",PQerrorMessage(pg));failed=1;}
         else for(int j=0;j<PQntuples(r);j++){
             lp_id id;memcpy(id.b,PQgetvalue(r,j,0),sizeof id.b);int64_t at=lp_idmap_find(references,&id);

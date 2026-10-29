@@ -14,11 +14,11 @@ DbTraffic db_traffic(void){
 }
 PGresult *db_command(PGconn *pg,const char *sql){
     atomic_fetch_add_explicit(&commands,1,memory_order_relaxed);
-    return PQexec(pg,sql);
+    return db_exec(pg,sql);
 }
 
 static SqlArg *arg_next(Args *a){ if (a->n >= ARGS_MAX) { fprintf(stderr, "a statement of more than %d parameters\n", ARGS_MAX); exit(1); } SqlArg *x = &a->a[a->n++]; x->b.n = 0; return x; }
-void arg_ids(Args *a, const lp_id *ids, size_t n){ SqlArg *x = arg_next(a); lp_pg_ids(&x->b, id_oid, ids, n); x->binary = 1; }
+void arg_ids(Args *a, const lp_id *ids, size_t n){ SqlArg *x = arg_next(a); lp_pg_ids(&x->b, 0, ids, n); x->binary = SQL_ID_ARRAY; }
 void arg_text(Args *a, const char *s){ SqlArg *x = arg_next(a); lp_buf_put(&x->b, s, strlen(s) + 1); x->b.n--; x->binary = 0; }
 void arg_int(Args *a, long long v){ char t[32]; snprintf(t, sizeof t, "%lld", v); arg_text(a, t); }
 void arg_f64(Args *a, double v){ char t[40]; snprintf(t, sizeof t, "%.17g", v); arg_text(a, t); }
@@ -27,11 +27,15 @@ void args_reset(Args *a){ a->n = 0; }
 void args_free(Args *a){ for (int i = 0; i < ARGS_MAX; i++) lp_buf_free(&a->a[i].b); a->n = 0; }
 
 /* A text parameter is sent NUL-terminated, which its buffer is once it is complete. */
-static void args_out(Args *a, const char **v, int *l, int *f){
+static void args_out(PGconn *pg,Args *a, const char **v, int *l, int *f){
     for (int i = 0; a && i < a->n; i++) {
         SqlArg *x = &a->a[i];
+        if(x->binary==SQL_ID_ARRAY){
+            lp_buf header={.b=x->b.b+8,.cap=4};
+            lp_buf_be(&header,db_binding(pg)->id_type,4);
+        }
         if (!x->binary) { *lp_buf_room(&x->b, 1) = 0; x->b.n--; }
-        v[i] = (const char *)x->b.b; l[i] = (int)x->b.n; f[i] = x->binary;
+        v[i] = (const char *)x->b.b; l[i] = (int)x->b.n; f[i] = x->binary!=0;
     }
 }
 static PGresult *checked(PGconn *pg, PGresult *r, const char *sql){
@@ -40,16 +44,16 @@ static PGresult *checked(PGconn *pg, PGresult *r, const char *sql){
     return r;
 }
 PGresult *ask(PGconn *pg, const char *sql, Args *a){
-    const char *v[ARGS_MAX]; int l[ARGS_MAX], f[ARGS_MAX]; args_out(a, v, l, f);
+    const char *v[ARGS_MAX]; int l[ARGS_MAX], f[ARGS_MAX]; args_out(pg,a, v, l, f);
     return checked(pg, db_ask(pg, sql, a ? a->n : 0, v, l, f), sql);
 }
 PGresult *ask_once(PGconn *pg, const char *sql, Args *a){
-    const char *v[ARGS_MAX]; int l[ARGS_MAX], f[ARGS_MAX]; args_out(a, v, l, f);
+    const char *v[ARGS_MAX]; int l[ARGS_MAX], f[ARGS_MAX]; args_out(pg,a, v, l, f);
     atomic_fetch_add_explicit(&commands,1,memory_order_relaxed);
-    return checked(pg, PQexecParams(pg, sql, a ? a->n : 0, NULL, v, l, f, 1), sql);
+    return checked(pg, db_exec_params(pg, sql, a ? a->n : 0, NULL, v, l, f, 1), sql);
 }
 PGresult *ask_try(PGconn *pg, const char *sql, Args *a){
-    const char *v[ARGS_MAX]; int l[ARGS_MAX], f[ARGS_MAX]; args_out(a, v, l, f);
+    const char *v[ARGS_MAX]; int l[ARGS_MAX], f[ARGS_MAX]; args_out(pg,a, v, l, f);
     PGresult *r = db_ask(pg, sql, a ? a->n : 0, v, l, f); ExecStatusType s = PQresultStatus(r);
     if (s == PGRES_TUPLES_OK || s == PGRES_COMMAND_OK) return r;
     PQclear(r); return NULL;

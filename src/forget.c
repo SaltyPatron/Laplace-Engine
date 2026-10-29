@@ -8,8 +8,8 @@
 #include <string.h>
 
 static void candidates_open(PGconn *pg){
-    exec(pg,"CREATE TEMP TABLE forget_candidates(id blake3 PRIMARY KEY) ON COMMIT DROP;"
-        " CREATE TEMP TABLE forget_round(id blake3 PRIMARY KEY) ON COMMIT DROP;"
+    exec(pg,"CREATE TEMP TABLE forget_candidates(id @extschema@.blake3 PRIMARY KEY) ON COMMIT DROP;"
+        " CREATE TEMP TABLE forget_round(id @extschema@.blake3 PRIMARY KEY) ON COMMIT DROP;"
         " CREATE TEMP TABLE forget_stats(deleted bigint NOT NULL) ON COMMIT DROP;"
         " INSERT INTO forget_stats VALUES(0)");
 }
@@ -19,17 +19,17 @@ static uint64_t sweep_candidates(PGconn *pg){
         /* Decode every path once per round. A correlated geometry predicate
          * became a materialized nested-loop anti join over every candidate and
          * every physicality; shared source replacement made that quadratic. */
-        " WITH referenced AS MATERIALIZED (SELECT DISTINCT v.id FROM public.physicality p"
-        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) v(id)"
-        " JOIN forget_candidates c ON c.id=v.id WHERE p.entity<>v.id)"
+        " WITH referenced AS MATERIALIZED (SELECT DISTINCT v.id FROM @extschema@.physicality p"
+        " CROSS JOIN LATERAL unnest(@extschema@.laplace_vertex_ids(p.path)) v(id)"
+        " JOIN forget_candidates c ON c.id OPERATOR(@extschema@.=) v.id WHERE p.entity OPERATOR(@extschema@.<>) v.id)"
         " INSERT INTO forget_round SELECT c.id FROM forget_candidates c"
-        " WHERE NOT EXISTS(SELECT FROM public.witness w WHERE w.id=c.id OR w.lineage=c.id)"
-        " AND NOT EXISTS(SELECT FROM referenced r WHERE r.id=c.id);"
+        " WHERE NOT EXISTS(SELECT FROM @extschema@.witness w WHERE w.id OPERATOR(@extschema@.=) c.id OR w.lineage OPERATOR(@extschema@.=) c.id)"
+        " AND NOT EXISTS(SELECT FROM referenced r WHERE r.id OPERATOR(@extschema@.=) c.id);"
         " GET DIAGNOSTICS n=ROW_COUNT; EXIT WHEN n=0;"
-        " DELETE FROM public.consensus c USING forget_round d WHERE c.claim=d.id;"
-        " DELETE FROM public.physicality p USING forget_round d WHERE p.entity=d.id;"
-        " DELETE FROM public.entity e USING forget_round d WHERE e.id=d.id;"
-        " DELETE FROM forget_candidates c USING forget_round d WHERE c.id=d.id;"
+        " DELETE FROM @extschema@.consensus c USING forget_round d WHERE c.claim OPERATOR(@extschema@.=) d.id;"
+        " DELETE FROM @extschema@.physicality p USING forget_round d WHERE p.entity OPERATOR(@extschema@.=) d.id;"
+        " DELETE FROM @extschema@.entity e USING forget_round d WHERE e.id OPERATOR(@extschema@.=) d.id;"
+        " DELETE FROM forget_candidates c USING forget_round d WHERE c.id OPERATOR(@extschema@.=) d.id;"
         " UPDATE forget_stats SET deleted=deleted+n;"
         " END LOOP; END $sweep$");
     PGresult *q=ask_once(pg,"SELECT deleted FROM forget_stats",NULL);uint64_t n=lp_be(PQgetvalue(q,0,0),8);PQclear(q);return n;
@@ -37,17 +37,17 @@ static uint64_t sweep_candidates(PGconn *pg){
 static int forget_ids(PGconn *pg,const lp_id *roots,size_t n){
     if(!n)return 1;
     candidates_open(pg);Args args={0};arg_ids(&args,roots,n);
-    PQclear(ask_once(pg,"WITH RECURSIVE below(id) AS (SELECT unnest($1::blake3[]) UNION"
-        " SELECT child FROM below b JOIN public.physicality p ON p.entity=b.id"
-        " CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) child)"
-        " INSERT INTO forget_candidates SELECT b.id FROM below b JOIN public.entity e ON e.id=b.id",&args));
-    PGresult *q=ask_once(pg,"SELECT p.entity FROM public.physicality p JOIN forget_candidates c ON c.id=p.entity"
-        " WHERE laplace_mask_has_value(p.mask,'kind','claim') AND laplace_path_length(p.path)>=2"
-        " UNION SELECT s.claim FROM public.consensus s JOIN forget_candidates c ON c.id=s.claim",NULL);
+    PQclear(ask_once(pg,"WITH RECURSIVE below(id) AS (SELECT unnest($1::@extschema@.blake3[]) UNION"
+        " SELECT child FROM below b JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) b.id"
+        " CROSS JOIN LATERAL unnest(@extschema@.laplace_vertex_ids(p.path)) child)"
+        " INSERT INTO forget_candidates SELECT b.id FROM below b JOIN @extschema@.entity e ON e.id OPERATOR(@extschema@.=) b.id",&args));
+    PGresult *q=ask_once(pg,"SELECT p.entity FROM @extschema@.physicality p JOIN forget_candidates c ON c.id OPERATOR(@extschema@.=) p.entity"
+        " WHERE @extschema@.laplace_mask_has_value(p.mask,'kind','claim') AND @extschema@.laplace_path_length(p.path)>=2"
+        " UNION SELECT s.claim FROM @extschema@.consensus s JOIN forget_candidates c ON c.id OPERATOR(@extschema@.=) s.claim",NULL);
     size_t nc=(size_t)PQntuples(q);lp_id *claims=malloc((nc?nc:1)*sizeof *claims);
     if(!claims){perror("affected claim IDs");exit(1);}
     for(size_t i=0;i<nc;i++)claims[i]=*col_id(q,(int)i,0);PQclear(q);
-    PQclear(ask_once(pg,"DELETE FROM public.witness WHERE id=ANY($1::blake3[])",&args));args_free(&args);
+    PQclear(ask_once(pg,"DELETE FROM @extschema@.witness WHERE id OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[])",&args));args_free(&args);
     /* The Native solver validates claim paths. Remove witness authority and
      * recompute while that closure is still present, then sweep its orphans. */
     uint64_t standing=0,orphaned=0;
@@ -60,7 +60,7 @@ static int forget_ids(PGconn *pg,const lp_id *roots,size_t n){
 static void begin_maintenance(PGconn *pg){
     exec(pg,"BEGIN ISOLATION LEVEL REPEATABLE READ;"
         " SELECT pg_advisory_xact_lock(1279348803,-2);"
-        " LOCK TABLE public.witness IN SHARE ROW EXCLUSIVE MODE");
+        " LOCK TABLE @extschema@.witness IN SHARE ROW EXCLUSIVE MODE");
 }
 int cmd_sweep(int argc,char **argv){
     const char *conninfo=laplace_db();int limit=0,dry=0;
@@ -68,16 +68,16 @@ int cmd_sweep(int argc,char **argv){
         {.flag="--dry",.kind='b',.at=&dry},{0}});
     if(a<argc||limit<0){fputs("usage: laplace sweep [-d conninfo] [-j connection-cap] [--dry]\n",stderr);return 2;}
     PGconn *pg=db_connect(conninfo);begin_maintenance(pg);candidates_open(pg);
-    exec(pg,"INSERT INTO forget_candidates SELECT id FROM public.entity");
+    exec(pg,"INSERT INTO forget_candidates SELECT id FROM @extschema@.entity");
     uint64_t n=sweep_candidates(pg);exec(pg,dry?"ROLLBACK":"COMMIT");
     printf("laplace sweep   %s   %llu unreferenced entities %s\n",PQdb(pg),(unsigned long long)n,dry?"would be removed":"removed");
     PQfinish(pg);return 0;
 }
 static lp_id *selected_roots(PGconn *pg,const lp_id *ids,const lp_id *records,size_t n,int except,size_t *count){
     Args args={0};arg_ids(&args,ids,n);arg_ids(&args,records,n);uint8_t invert=except!=0;arg_raw(&args,&invert,1);
-    PGresult *q=ask_once(pg,"SELECT w.id FROM public.witness w JOIN public.physicality p ON p.entity=w.id"
-        " WHERE (w.id=ANY($1::blake3[]) OR EXISTS(SELECT FROM unnest($2::blake3[]) r(id)"
-        " WHERE laplace_path_starts(p.path,r.id)))<>$3::boolean ORDER BY w.id",&args);
+    PGresult *q=ask_once(pg,"SELECT w.id FROM @extschema@.witness w JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) w.id"
+        " WHERE (w.id OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[]) OR EXISTS(SELECT FROM unnest($2::@extschema@.blake3[]) r(id)"
+        " WHERE @extschema@.laplace_path_starts(p.path,r.id)))<>$3::boolean ORDER BY w.id",&args);
     size_t nr=(size_t)PQntuples(q);lp_id *roots=malloc((nr?nr:1)*sizeof *roots);if(!roots){perror("witness IDs");exit(1);}
     for(size_t i=0;i<nr;i++)roots[i]=*col_id(q,(int)i,0);*count=nr;PQclear(q);args_free(&args);return roots;
 }

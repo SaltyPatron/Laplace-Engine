@@ -32,13 +32,13 @@ static void start_loader(const char *conninfo, int requested){
     if (writer.series) return;
     writer.from_ingest = active_fold != NULL;
     PGconn *control = db_connect(conninfo);
-    PGresult *q = PQexec(control, "SELECT greatest(1, current_setting('max_connections')::int"
+    PGresult *q = db_exec(control, "SELECT greatest(1, current_setting('max_connections')::int"
         " - current_setting('superuser_reserved_connections')::int"
         " - current_setting('reserved_connections')::int - (SELECT count(*) FROM pg_stat_activity) - 4),"
-        " to_regprocedure('public.laplace_stage_own(bigint,regclass[])') IS NOT NULL"
-        " AND to_regprocedure('public.laplace_accumulate_series(regclass,regclass)') IS NOT NULL"
-        " AND to_regprocedure('public.laplace_attest_stage(regclass,regclass)') IS NOT NULL"
-        " AND to_regprocedure('public.laplace_present_stage(regclass,regclass,name,name)') IS NOT NULL");
+        " to_regprocedure('@extschema@.laplace_stage_own(bigint,regclass[])') IS NOT NULL"
+        " AND to_regprocedure('@extschema@.laplace_accumulate_series(regclass,regclass)') IS NOT NULL"
+        " AND to_regprocedure('@extschema@.laplace_attest_stage(regclass,regclass)') IS NOT NULL"
+        " AND to_regprocedure('@extschema@.laplace_present_stage(regclass,regclass,name,name)') IS NOT NULL");
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "ingest connections: %s", PQerrorMessage(control)); exit(1); }
     if(strcmp(PQgetvalue(q,0,1),"t")){fputs("ingest requires the installed Native observation-window API (laplace 1.44)\n",stderr);PQclear(q);PQfinish(control);exit(1);}
     int available = atoi(PQgetvalue(q, 0, 0)); PQclear(q);
@@ -56,9 +56,9 @@ static void start_loader(const char *conninfo, int requested){
     }
     writer.copy[0] = control;
     for (int i = 1; i < writer.ncopy; i++) writer.copy[i] = db_connect(conninfo);
-    statement(control, "SELECT laplace_ensure_stage()");
-    statement(control, "SELECT * FROM public.laplace_stage_retire()");
-    q = PQexec(control, "SELECT pg_current_xact_id()::text");
+    statement(control, "SELECT @extschema@.laplace_ensure_stage()");
+    statement(control, "SELECT * FROM @extschema@.laplace_stage_retire()");
+    q = db_exec(control, "SELECT pg_current_xact_id()::text");
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "ingest identity: %s", PQerrorMessage(control)); exit(1); }
     char suffix[40]; snprintf(suffix, sizeof suffix, "%s", PQgetvalue(q, 0, 0)); PQclear(q);
     for (int lane=0; lane<writer.ncopy; lane++) {
@@ -85,8 +85,8 @@ static void start_loader(const char *conninfo, int requested){
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, wins double precision NOT NULL,"
         " CHECK(games>0 AND games<=9007199254740992 AND wins>=0 AND wins<=games));"
         "CREATE UNIQUE INDEX ON %s (claim,witness,lineage) NULLS NOT DISTINCT;"
-        "CREATE UNLOGGED TABLE %s (LIKE public.witness INCLUDING DEFAULTS);"
-        "CREATE UNLOGGED TABLE %s (claim blake3 PRIMARY KEY)",
+        "CREATE UNLOGGED TABLE %s (LIKE @extschema@.witness INCLUDING DEFAULTS);"
+        "CREATE UNLOGGED TABLE %s (claim @extschema@.blake3 PRIMARY KEY)",
         writer.delta,writer.pending,writer.pending,writer.witnesses,writer.affected);
     statement(control, sql);
     /* Creation and the durable ownership marker become visible together.
@@ -102,7 +102,7 @@ static void start_loader(const char *conninfo, int requested){
     for(size_t i=0;i<sizeof extra/sizeof *extra;i++){lp_buf_put(&owned,",",1);lp_buf_put(&owned,extra[i],strlen(extra[i]));}
     lp_buf_put(&owned,"}",2);
     Args ownership={0};arg_text(&ownership,suffix);arg_text(&ownership,(const char *)owned.b);
-    PQclear(ask_once(control,"SELECT public.laplace_stage_own($1::bigint,$2::regclass[])",&ownership));
+    PQclear(ask_once(control,"SELECT @extschema@.laplace_stage_own($1::bigint,$2::regclass[])",&ownership));
     args_free(&ownership);lp_buf_free(&owned);statement(control,"COMMIT");
     writer.known = lp_idmap_sized(sizeof(Published));
     writer.series = db_connect(conninfo);
@@ -113,7 +113,7 @@ void load_begin(const char *conninfo,int npg){start_loader(conninfo,npg);writer.
 static uint8_t *recorded(PGconn **pg,int npg,const lp_id *ids,uint64_t n){
     (void)npg;uint8_t *hit=calloc(n?(size_t)n:1,1);if(!n)return hit;
     Args input={0};arg_ids(&input,ids,(size_t)n);
-    PGresult *result=ask_once(pg[0],"SELECT ordinal FROM public.laplace_present_ids($1::blake3[])",&input);
+    PGresult *result=ask_once(pg[0],"SELECT ordinal FROM @extschema@.laplace_present_ids($1::@extschema@.blake3[])",&input);
     for(int row=0;row<PQntuples(result);row++){
         int64_t ordinal=(int64_t)lp_be(PQgetvalue(result,row,0),8);
         if(ordinal>0 && (uint64_t)ordinal<=n)hit[(size_t)ordinal-1]=1;
@@ -142,9 +142,9 @@ int files_known(PGconn **pg, int npg, File *files, int nfiles, LoadStats *st){
     if (count) {
         Args a = {0}; arg_ids(&a, ids, (size_t)count);
         PGresult *q = ask_once(pg[0],
-            "SELECT wanted.id FROM unnest($1::blake3[]) wanted(id)"
-            " WHERE (SELECT true FROM public.entity e WHERE e.id=wanted.id)"
-            " AND (SELECT true FROM public.physicality p WHERE p.entity=wanted.id)", &a);
+            "SELECT wanted.id FROM unnest($1::@extschema@.blake3[]) wanted(id)"
+            " WHERE (SELECT true FROM @extschema@.entity e WHERE e.id OPERATOR(@extschema@.=) wanted.id)"
+            " AND (SELECT true FROM @extschema@.physicality p WHERE p.entity OPERATOR(@extschema@.=) wanted.id)", &a);
         lp_idmap *recorded = lp_idmap_new();
         for (int row = 0; row < PQntuples(q); row++) { lp_id id; bool fresh; memcpy(id.b, PQgetvalue(q,row,0),16); lp_idmap_put(recorded,&id,&fresh); }
         for (int i = 0; i < count; i++) if (lp_idmap_find(recorded, &ids[i]) >= 0) { files[of[i]].known = 1; found++; }
@@ -188,7 +188,7 @@ static MetadataTree metadata_read(PGconn *pg,const lp_id *roots,size_t count,siz
             }
             if(!wanted.n){lp_vec_free(&wanted);continue;}
             Args args={0};arg_ids(&args,wanted.v,wanted.n);
-            PGresult *result=ask(pg,"SELECT entity,path FROM public.laplace_paths($1::public.blake3[])",&args);
+            PGresult *result=ask(pg,"SELECT entity,path FROM @extschema@.laplace_paths($1::@extschema@.blake3[])",&args);
             for(int row=0;row<PQntuples(result);row++){
                 lp_id id=*col_id(result,row,0);int64_t index=lp_idmap_find(tree.nodes,&id);if(index<0)continue;
                 lp_path path=col_path(result,row,1);MetadataNode node={.first=tree.children.n,.entry=SIZE_MAX};
@@ -278,9 +278,9 @@ int load_file_keys(PGconn *pg, const File *file){
     if(!count){free(ids);fprintf(stderr,"  restored 0 compiled reference bindings from recorded metadata: %s\n",file->path);return 0;}
     for (unsigned col=0;col<4;col++) arg_ids(&args,ids+col*count,count);
     result=ask_once(pg,
-        "SELECT laplace_text(b.hash),laplace_text(b.header),b.value,st_asewkb(e.coord),e.tier,laplace_text(b.text)"
-        " FROM unnest($1::blake3[],$2::blake3[],$3::blake3[],$4::blake3[]) b(hash,header,value,text)"
-        " LEFT JOIN public.entity e ON e.id=b.value",&args);
+        "SELECT @extschema@.laplace_text(b.hash),@extschema@.laplace_text(b.header),b.value,@postgis@.st_asewkb(e.coord),e.tier,@extschema@.laplace_text(b.text)"
+        " FROM unnest($1::@extschema@.blake3[],$2::@extschema@.blake3[],$3::@extschema@.blake3[],$4::@extschema@.blake3[]) b(hash,header,value,text)"
+        " LEFT JOIN @extschema@.entity e ON e.id OPERATOR(@extschema@.=) b.value",&args);
     free(ids);
     for (int row = 0; row < PQntuples(result); row++) {
         KeyRank rank = {.file=file->order}; KeyField field = {0}; lp_id hash;
@@ -372,7 +372,7 @@ static void flush_series(Fold *f){
     }
     copy_close(&copy); lp_buf_free(&copy.buf);
     Args a={0}; arg_text(&a,writer.pending); arg_text(&a,writer.delta);
-    PGresult *q=ask(writer.series,"SELECT public.laplace_accumulate_series($1::regclass,$2::regclass)",&a);
+    PGresult *q=ask(writer.series,"SELECT @extschema@.laplace_accumulate_series($1::regclass,$2::regclass)",&a);
     writer.series_changed |= lp_be(PQgetvalue(q,0,0),8)!=0; PQclear(q); args_free(&a);
     snprintf(sql,sizeof sql,"INSERT INTO %s SELECT DISTINCT claim FROM %s ON CONFLICT DO NOTHING;TRUNCATE %s;COMMIT",
         writer.affected,writer.delta,writer.delta);
@@ -524,34 +524,34 @@ static void merge_failure(PGconn *pg, const char *entities, const char *paths, c
         " SELECT 'duplicate entity',id,'rows='||count(*) FROM %s GROUP BY id HAVING count(*)<>1"
         " UNION ALL SELECT 'duplicate path',entity,'rows='||count(*) FROM %s GROUP BY entity HAVING count(*)<>1"
         " UNION ALL SELECT 'invalid entity carrier/tier',id,'tier='||tier||' mask='||mask FROM %s"
-        " WHERE tier NOT BETWEEN 1 AND 255 OR NOT laplace_mask_valid(mask)"
+        " WHERE tier NOT BETWEEN 1 AND 255 OR NOT @extschema@.laplace_mask_valid(mask)"
         " UNION ALL SELECT 'invalid path carrier/tier',entity,'tier='||tier||' mask='||mask FROM %s"
-        " WHERE tier NOT BETWEEN 1 AND 255 OR NOT laplace_mask_valid(mask)"
+        " WHERE tier NOT BETWEEN 1 AND 255 OR NOT @extschema@.laplace_mask_valid(mask)"
         " UNION ALL SELECT 'entity identity conflict',s.id,"
-        " 'coord_equal='||(ST_AsEWKB(s.coord)=ST_AsEWKB(d.coord))||' hilbert_equal='||(s.hilbert=d.hilbert)"
-        " ||' staged='||ST_AsEWKT(s.coord)||' recorded='||ST_AsEWKT(d.coord)"
-        " FROM %s s JOIN public.entity d USING(id)"
-        " WHERE ST_AsEWKB(s.coord)<>ST_AsEWKB(d.coord) OR s.hilbert<>d.hilbert"
+        " 'coord_equal='||(@postgis@.ST_AsEWKB(s.coord)=@postgis@.ST_AsEWKB(d.coord))||' hilbert_equal='||(s.hilbert=d.hilbert)"
+        " ||' staged='||@postgis@.ST_AsEWKT(s.coord)||' recorded='||@postgis@.ST_AsEWKT(d.coord)"
+        " FROM %s s JOIN @extschema@.entity d ON d.id OPERATOR(@extschema@.=) s.id"
+        " WHERE @postgis@.ST_AsEWKB(s.coord)<>@postgis@.ST_AsEWKB(d.coord) OR s.hilbert<>d.hilbert"
         " UNION ALL SELECT 'path identity conflict',s.entity,"
-        " 'ids_equal='||(laplace_vertex_ids(s.path)=laplace_vertex_ids(d.path))"
+        " 'ids_equal='||(@extschema@.laplace_vertex_ids(s.path)=@extschema@.laplace_vertex_ids(d.path))"
         " ||' hilbert_equal='||(s.hilbert=d.hilbert)"
-        " ||' staged_vertices='||laplace_path_length(s.path)||' recorded_vertices='||laplace_path_length(d.path)"
-        " ||' staged_prefix='||encode(substring(ST_AsEWKB(s.path) from 1 for 160),'hex')"
-        " ||' recorded_prefix='||encode(substring(ST_AsEWKB(d.path) from 1 for 160),'hex')"
-        " FROM %s s JOIN public.physicality d ON d.entity=s.entity"
-        " WHERE (ST_AsEWKB(s.path)<>ST_AsEWKB(d.path) AND laplace_path_enrich(d.path,s.path) IS NULL) OR s.hilbert<>d.hilbert"
+        " ||' staged_vertices='||@extschema@.laplace_path_length(s.path)||' recorded_vertices='||@extschema@.laplace_path_length(d.path)"
+        " ||' staged_prefix='||encode(substring(@postgis@.ST_AsEWKB(s.path) from 1 for 160),'hex')"
+        " ||' recorded_prefix='||encode(substring(@postgis@.ST_AsEWKB(d.path) from 1 for 160),'hex')"
+        " FROM %s s JOIN @extschema@.physicality d ON d.entity OPERATOR(@extschema@.=) s.entity"
+        " WHERE (@postgis@.ST_AsEWKB(s.path)<>@postgis@.ST_AsEWKB(d.path) AND @extschema@.laplace_path_enrich(d.path,s.path) IS NULL) OR s.hilbert<>d.hilbert"
         " UNION ALL SELECT 'entity without path',s.id,'' FROM %s s"
-        " LEFT JOIN %s batch ON batch.entity=s.id LEFT JOIN public.physicality d ON d.entity=s.id"
+        " LEFT JOIN %s batch ON batch.entity OPERATOR(@extschema@.=) s.id LEFT JOIN @extschema@.physicality d ON d.entity OPERATOR(@extschema@.=) s.id"
         " WHERE batch.entity IS NULL AND d.entity IS NULL"
         " UNION ALL SELECT 'path without entity',s.entity,'' FROM %s s"
-        " LEFT JOIN %s batch ON batch.id=s.entity LEFT JOIN public.entity d ON d.id=s.entity"
+        " LEFT JOIN %s batch ON batch.id OPERATOR(@extschema@.=) s.entity LEFT JOIN @extschema@.entity d ON d.id OPERATOR(@extschema@.=) s.entity"
         " WHERE batch.id IS NULL AND d.id IS NULL)"
         ",sample AS MATERIALIZED (SELECT reason,id,detail FROM rejected ORDER BY reason,id LIMIT 8)"
-        " SELECT s.reason,s.id::text,s.detail,ST_AsEWKB(p.path) FROM sample s"
-        " LEFT JOIN public.physicality p ON p.entity=s.id ORDER BY s.reason,s.id",
+        " SELECT s.reason,s.id::text,s.detail,@postgis@.ST_AsEWKB(p.path) FROM sample s"
+        " LEFT JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) s.id ORDER BY s.reason,s.id",
         entities,paths,entities,paths,entities,paths,entities,paths,paths,entities);
     if(length<0 || (size_t)length>=sizeof sql){fputs("stage rejection diagnostic exceeded its bound\n",stderr);return;}
-    PGresult *detail=PQexec(pg,sql);
+    PGresult *detail=db_exec(pg,sql);
     if(PQresultStatus(detail)==PGRES_TUPLES_OK){
         for(int row=0;row<PQntuples(detail);row++){
             fprintf(stderr,"  stage rejection: %s id=%s %s\n",PQgetvalue(detail,row,0),PQgetvalue(detail,row,1),PQgetvalue(detail,row,2));
@@ -694,7 +694,7 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         #pragma omp parallel for num_threads(lanes) schedule(static,1) reduction(+:entities,paths)
         for(unsigned lane=0;lane<lanes;lane++)if(bounds[lane]<bounds[lane+1]){
             char sql[512];snprintf(sql,sizeof sql,
-                "SELECT * FROM laplace_merge_stage('%s'::regclass,'%s'::regclass)",
+                "SELECT * FROM @extschema@.laplace_merge_stage('%s'::regclass,'%s'::regclass)",
                 writer.entity[lane],writer.path[lane]);
             PGresult *q=db_command(writer.copy[lane],sql);
             if(PQresultStatus(q)!=PGRES_TUPLES_OK){
@@ -740,12 +740,13 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
     }
     copy_close(&copy);lp_buf_free(&copy.buf);
     snprintf(sql,sizeof sql,
-        "WITH updated AS (UPDATE public.witness w SET lineage=s.lineage,trust=s.trust FROM %s s WHERE w.id=s.id"
-        " AND (w.lineage IS DISTINCT FROM s.lineage OR w.trust IS DISTINCT FROM s.trust) RETURNING w.id),"
-        " inserted AS (INSERT INTO public.witness SELECT DISTINCT s.* FROM %s s"
-        " WHERE NOT EXISTS(SELECT FROM public.witness w WHERE w.id=s.id) RETURNING id)"
+        "WITH updated AS (UPDATE @extschema@.witness w SET lineage=s.lineage,trust=s.trust FROM %s s WHERE w.id OPERATOR(@extschema@.=) s.id"
+        " AND (NOT coalesce(w.lineage OPERATOR(@extschema@.=) s.lineage,w.lineage IS NULL AND s.lineage IS NULL)"
+        " OR w.trust IS DISTINCT FROM s.trust) RETURNING w.id),"
+        " inserted AS (INSERT INTO @extschema@.witness SELECT DISTINCT s.* FROM %s s"
+        " WHERE NOT EXISTS(SELECT FROM @extschema@.witness w WHERE w.id OPERATOR(@extschema@.=) s.id) RETURNING id)"
         " SELECT (SELECT count(*) FROM updated)+(SELECT count(*) FROM inserted)",writer.witnesses,writer.witnesses);
-    PGresult *result=PQexec(writer.series,sql);
+    PGresult *result=db_exec(writer.series,sql);
     if(PQresultStatus(result)!=PGRES_TUPLES_OK){fprintf(stderr,"witness registration: %s",PQerrorMessage(writer.series));exit(1);}
     writer.witness_changed |= strtoull(PQgetvalue(result,0,0),NULL,10) != 0;
     PQclear(result);
@@ -757,7 +758,7 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
         for(int i=0;i<nfiles;i++)if(files[i].known && !files[i].skipped && files[i].has_file)
             lp_idmap_put(reused,&files[i].file.id,NULL);
         if(lp_idmap_count(reused)){
-            snprintf(sql,sizeof sql,"INSERT INTO %s SELECT DISTINCT claim FROM public.laplace_contained_series($1::public.blake3[]) ON CONFLICT DO NOTHING",writer.affected);
+            snprintf(sql,sizeof sql,"INSERT INTO %s SELECT DISTINCT claim FROM @extschema@.laplace_contained_series($1::@extschema@.blake3[]) ON CONFLICT DO NOTHING",writer.affected);
             Args args={0};arg_ids(&args,lp_idmap_keys(reused),lp_idmap_count(reused));
             PQclear(ask_once(writer.series,sql,&args));args_free(&args);
         }
@@ -774,7 +775,7 @@ int merge(const char *conninfo,int npg){
      * and event estimates never become independent public witnesses. */
     snprintf(sql,sizeof sql,
         "DELETE FROM %s;"
-        "SELECT public.laplace_attest_stage('%s'::regclass,'%s'::regclass)",
+        "SELECT @extschema@.laplace_attest_stage('%s'::regclass,'%s'::regclass)",
         writer.pending,writer.pending,writer.affected);
     /* An unchanged registered source contributes no new evidence on replay.
      * Recompute only for new series or changed witness trust/containment. */
@@ -792,8 +793,8 @@ int cmd_merge(int argc,char **argv){
     const char *conninfo=laplace_db();
     int at=opts(argc,argv,(const Opt[]){ {.flag="-d",.kind='s',.at=&conninfo}, {0} });
     if(at<argc){fputs("usage: laplace merge [-d conninfo]\n",stderr);return 2;}
-    PGconn *pg=db_connect(conninfo);statement(pg,"SELECT laplace_ensure_stage()");
-    PGresult *q=PQexec(pg,"SELECT * FROM laplace_merge_stage('stage.entity','stage.physicality')");
+    PGconn *pg=db_connect(conninfo);statement(pg,"SELECT @extschema@.laplace_ensure_stage()");
+    PGresult *q=db_exec(pg,"SELECT * FROM @extschema@.laplace_merge_stage('stage.entity','stage.physicality')");
     if(PQresultStatus(q)!=PGRES_TUPLES_OK){merge_failure(pg,"stage.entity","stage.physicality",PQresultErrorMessage(q));PQclear(q);PQfinish(pg);return 1;}
     printf("merged %s entities, %s paths, %s existing rows updated\n",PQgetvalue(q,0,0),PQgetvalue(q,0,1),PQgetvalue(q,0,2));
     PQclear(q);PQfinish(pg);return 0;
@@ -805,7 +806,7 @@ int cmd_projection(int argc,char **argv){
     if(at<argc){fputs("usage: laplace projection [-d conninfo] [--apply]\n",stderr);return 2;}
     PGconn *pg=db_connect(conninfo);
     const char *arguments[]={apply?"true":"false"};
-    PGresult *result=PQexecParams(pg,"SELECT * FROM laplace_recoordinate($1::boolean)",1,NULL,arguments,NULL,NULL,0);
+    PGresult *result=db_exec_params(pg,"SELECT * FROM @extschema@.laplace_recoordinate($1::boolean)",1,NULL,arguments,NULL,NULL,0);
     if(PQresultStatus(result)!=PGRES_TUPLES_OK || PQntuples(result)!=1 || PQnfields(result)!=2){
         fprintf(stderr,"projection %s: %s",apply?"repair":"audit",PQerrorMessage(pg));
         PQclear(result);PQfinish(pg);return 1;

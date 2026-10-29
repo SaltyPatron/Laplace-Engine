@@ -554,7 +554,7 @@ static void db_fetch(PGconn *pg, Db *d, const lp_id *roots, size_t nr){
     while (want.n) {
         lp_vec(lp_id) next = { 0 };
         for (size_t o = 0; o < want.n; o += 20000) { size_t k = want.n - o < 20000 ? want.n - o : 20000; Args a = { 0 }; arg_ids(&a, want.v + o, k);
-            PGresult *q = ask(pg, "SELECT entity, path, mask FROM physicality WHERE entity = ANY($1::blake3[])", &a);
+            PGresult *q = ask(pg, "SELECT entity, path, mask FROM @extschema@.physicality WHERE entity OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[])", &a);
             for (size_t j = 0; j < k; j++) d->v[db_find(d, &want.v[o + j])].got = 2;
             for (int r = 0; r < PQntuples(q); r++) { int64_t at = db_find(d, col_id(q, r, 0)); if (at < 0) continue;
                 lp_path p = col_path(q, r, 1); size_t nv = p.n; lp_vertex *vx = malloc(sizeof(lp_vertex) * (nv ? nv : 1)); lp_path_decode(p, vx, nv);

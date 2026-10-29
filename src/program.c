@@ -164,7 +164,7 @@ static int shape_measured(State *st, const lp_id *ids, int n, const Hold *h0, in
       for (int k = 0; k < n; k++) if (hc[k]) { for (int d = 0; d < 4; d++) cen[d] += pc[4 * k + d]; m++; }
       if (m >= 2) { for (int d = 0; d < 4; d++) cen[d] /= m; uint8_t pt[64]; size_t pl = lp_ewkb_point4(cen, pt, sizeof pt);
           Args a = { 0 }; arg_raw(&a, pt, pl); arg_int(&a, fw->nearest);
-          double tk = now(); PGresult *q = ask_st(st, "SELECT e.id FROM entity e WHERE e.tier >= 3 ORDER BY e.coord <~> ST_GeomFromEWKB($1::bytea), e.id LIMIT $2", &a);
+          double tk = now(); PGresult *q = ask_st(st, "SELECT e.id FROM @extschema@.entity e WHERE e.tier >= 3 ORDER BY e.coord OPERATOR(@extschema@.<~>) @postgis@.ST_GeomFromEWKB($1::bytea), e.id LIMIT $2", &a);
           int nq = PQntuples(q); lp_id *gid = malloc(sizeof(lp_id) * (size_t)(nq ? nq : 1)); for (int r = 0; r < nq; r++) memcpy(gid[r].b, PQgetvalue(q, r, 0), 16); PQclear(q); args_free(&a);
           double tp = now(); int ng = 0; Hold *g = paths_of(gid, nq, &ng); for (int i = 0; i < ng && nh < nh0 + fw->fan + 1; i++) { h[nh++] = g[i]; extra++; } free(g); free(gid);
           if (getenv("LAPLACE_TIMES")) fprintf(stderr, "times: the GiST's %d nearest in %.1f ms, their paths in %.1f ms\n", nq, (tp - tk) * 1000, (now() - tp) * 1000); }
@@ -276,7 +276,7 @@ static int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_
         holds_free(h, nh); free(hub); free(keys); free(of); return nn;
     }
     Args a = { 0 }; arg_ids(&a, ids, (size_t)n); arg_int(&a, fw->fan); arg_refused(&a); arg_int(&a, keep > 0 ? fw->shape : -1); arg_f64(&a, fw->shape_n); arg_int(&a, keep > 0 ? keep + 1 : keep);
-    PGresult *q = ask_st(st, "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices FROM laplace_couple($1::blake3[], $2::bigint, $3::blake3[], $4::smallint, $5::float8, $6::integer)", &a);
+    PGresult *q = ask_st(st, "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices FROM @extschema@.laplace_couple($1::@extschema@.blake3[], $2::bigint, $3::@extschema@.blake3[], $4::smallint, $5::float8, $6::integer)", &a);
     int *held = calloc((size_t)n + 1, sizeof(int)), nn = 0;
     for (int r = 0; r < PQntuples(q); r++) if (col_int(q, r, 2) == 0) { int o = (int)col_int(q, r, 1); if (o >= 1 && o <= n) held[o - 1]++; }
     static const int OC[] = { 2, 1, 9, 0, 6, 7 }; int *ord = rows_in_order(q, OC, 6);      /* route, occurrence, distance, entity, via, relation */
@@ -305,7 +305,7 @@ static int follows(State *st, Next *out, int cap){
     Args a = { 0 }; arg_ids(&a, st->traj + from, (size_t)n); arg_int(&a, st->fw->fan);
     /* every run that ends the trajectory, not only the longest: as attention reads every position, a word that follows
      * only the last two is still a proposal, at the run it follows (its continuity) */
-    PGresult *q = ask_st(st, "SELECT i, j, next, times FROM laplace_forward($1::blake3[], $2::bigint) WHERE j = array_length($1::blake3[], 1) AND next IS NOT NULL ORDER BY (j - i) DESC, times DESC, next", &a);
+    PGresult *q = ask_st(st, "SELECT i, j, next, times FROM @extschema@.laplace_forward($1::@extschema@.blake3[], $2::bigint) WHERE j = array_length($1::@extschema@.blake3[], 1) AND next IS NOT NULL ORDER BY (j - i) DESC, times DESC, next", &a);
     int m = 0; lp_idmap *seen = lp_idmap_new();
     for (int r = 0; r < PQntuples(q) && m < cap; r++) { int len = (int)(col_int(q, r, 1) - col_int(q, r, 0) + 1); bool fresh; lp_idmap_put(seen, col_id(q, r, 2), &fresh); if (!fresh) continue;
         out[m].id = *col_id(q, r, 2); out[m].times = (long)col_int(q, r, 3); out[m].len = len; m++; }
@@ -328,7 +328,7 @@ static int shape_near(State *st, const lp_id *ids, int n, Curve *near, int keep)
     if (!getenv("LAPLACE_COUPLE_SQL")) { int *hub = malloc(sizeof(int) * 2 * (size_t)n), nh = 0; Hold *h = holds_capped(ids, n, fw->fan, 0, 2, hub, &nh); st->trips++;
         int k = shape_measured(st, ids, n, h, nh, near, keep); holds_free(h, nh); free(hub); return k; }
     Args a = { 0 }; arg_ids(&a, ids, (size_t)n); arg_int(&a, fw->fan); arg_refused(&a); arg_int(&a, fw->shape); arg_f64(&a, fw->shape_n); arg_int(&a, keep + 4);
-    PGresult *q = ask_st(st, "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices FROM laplace_couple($1::blake3[], $2::bigint, $3::blake3[], $4::smallint, $5::float8, $6::integer) WHERE route = 2", &a);
+    PGresult *q = ask_st(st, "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices FROM @extschema@.laplace_couple($1::@extschema@.blake3[], $2::bigint, $3::@extschema@.blake3[], $4::smallint, $5::float8, $6::integer) WHERE route = 2", &a);
     int m = PQntuples(q), nn = 0; Curve *all = malloc(sizeof(Curve) * (size_t)(m ? m : 1));
     for (int r = 0; r < m; r++) { const lp_id *id = col_id(q, r, 0); if (lp_id_eq(id, &st->prompt)) continue; Curve *c = &all[nn++]; c->id = *id; c->d = col_f64(q, r, 9);
         const uint8_t *v = (const uint8_t *)PQgetvalue(q, r, 10); size_t vl = (size_t)PQgetlength(q, r, 10), na = lp_pg_ids_read(v, vl, NULL, 0);
@@ -809,7 +809,7 @@ int cmd_turn(int argc, char **argv){
      * chosen before it, and the earlier positions it makes read otherwise (reanalysis). */
     Bind *bind = calloc((size_t)st->nocc + 1, sizeof(Bind)); Readings R; readings_build(st, &fd, bind, &R);
     { double t = now(); Args ra = { 0 }; arg_ids(&ra, st->occ, (size_t)st->nocc); arg_int(&ra, fw.fan);
-      PGresult *fq = ask_st(st, "SELECT i, j, paths, next, times FROM laplace_forward($1::blake3[], $2::bigint) ORDER BY j, i, times DESC, next", &ra);
+      PGresult *fq = ask_st(st, "SELECT i, j, paths, next, times FROM @extschema@.laplace_forward($1::@extschema@.blake3[], $2::bigint) ORDER BY j, i, times DESC, next", &ra);
       int expected = 0, surprised = 0, revised = 0;
       for (int p = 0; p < st->nocc; p++) {
           char *w = reader_text(st->rd, &st->occ[p], 24); printf("READ %-3d   %-12s", p + 1, w); free(w);

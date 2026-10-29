@@ -65,12 +65,17 @@ def main():
     with (data / 'postgresql.conf').open('a') as stream:
         for name, value in {'listen_addresses': '', 'unix_socket_directories': str(socket),
                             'extension_control_path': str(share) + ':$system',
+                            'laplace.tier0': os.environ['LAPLACE_TIER0'],
+                            'laplace.flags': os.environ.get('LAPLACE_FLAGS') or str(Path(os.environ['LAPLACE_TIER0']).with_suffix('.flags')),
+                            'laplace.highway': os.environ.get('LAPLACE_HIGHWAY') or str(Path(os.environ['LAPLACE_TIER0']).with_suffix('.highway')),
                             'shared_preload_libraries': 'pg_stat_statements'}.items():
             stream.write(name + ' = ' + quote(value) + '\n')
         stream.write('port = 5432\nmax_connections = 128\n')
     state_path.write_text(json.dumps(dict(data=str(data), pgbin=str(pgbin))) + '\n')
     run(pgbin / 'pg_ctl', '-D', data, '-l', root / 'postgres.log', '-w', 'start')
     environment = dict(os.environ, PGHOST=str(socket), PGPORT='5432', PGUSER='laplace', PGDATABASE='postgres')
+    run(pgbin / 'psql','-Xw','-d','template1','-v','ON_ERROR_STOP=1','-c',
+        'CREATE EXTENSION pg_stat_statements',env=environment)
     run(pgbin / 'createdb', 'laplace', env=environment)
     environment['LAPLACE_CONNINFO'] = 'host=' + quote(socket) + ' port=5432 user=laplace dbname=laplace'
     with open(os.environ['GITHUB_ENV'], 'a') as stream:

@@ -36,7 +36,7 @@ static int highway_joins(const char *conninfo){
     uint8_t digest[32];char fingerprint[65];static const char hex[]="0123456789abcdef";
     lp_highway_fingerprint(highway,digest);
     for(size_t i=0;i<32;i++){fingerprint[2*i]=hex[digest[i]>>4];fingerprint[2*i+1]=hex[digest[i]&15];}fingerprint[64]=0;
-    PGconn *pg=db_read(conninfo);PGresult *result=PQexec(pg,"SELECT laplace_highway_fingerprint()");
+    PGconn *pg=db_read(conninfo);PGresult *result=db_exec(pg,"SELECT @extschema@.laplace_highway_fingerprint()");
     if(PQresultStatus(result)!=PGRES_TUPLES_OK || PQntuples(result)!=1 || PQgetisnull(result,0,0) || strcmp(PQgetvalue(result,0,0),fingerprint)){
         fprintf(stderr,"highway fingerprint differs between client and database: %s",PQerrorMessage(pg));PQclear(result);PQfinish(pg);return 2;
     }
@@ -47,30 +47,30 @@ static int highway_joins(const char *conninfo){
       "WITH RECURSIVE namespaces(ord,name,slots) AS (VALUES "
       "(1,'ili',$1::int),(2,'Synset',$2::int),(3,'fnframe',$3::int),(4,'fnfe',$4::int),"
       "(5,'fnlu',$5::int),(6,'vnclass',$6::int),(7,'pbroleset',$7::int),(8,'vaframe',$8::int)),"
-      "members AS MATERIALIZED (SELECT n.name,i slot,laplace_type_id(n.name,i) id FROM namespaces n "
+      "members AS MATERIALIZED (SELECT n.name,i slot,@extschema@.laplace_type_id(n.name,i) id FROM namespaces n "
       "CROSS JOIN LATERAL generate_series(0,n.slots-1) i),"
-      "joined AS MATERIALIZED (SELECT DISTINCT m.name,m.id,c.claim FROM consensus c "
-      "JOIN physicality p ON p.entity=c.claim CROSS JOIN LATERAL unnest(laplace_vertex_ids(p.path)) v(id) "
-      "JOIN members m ON m.id=v.id),"
+      "joined AS MATERIALIZED (SELECT DISTINCT m.name,m.id,c.claim FROM @extschema@.consensus c "
+      "JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) c.claim CROSS JOIN LATERAL unnest(@extschema@.laplace_vertex_ids(p.path)) v(id) "
+      "JOIN members m ON m.id OPERATOR(@extschema@.=) v.id),"
       "numbered AS (SELECT claim,(row_number() OVER(ORDER BY claim)-1)/4096 batch FROM (SELECT DISTINCT claim FROM joined) q),"
       "batches AS (SELECT array_agg(claim ORDER BY claim) claims FROM numbered GROUP BY batch),"
       "observed AS MATERIALIZED (SELECT DISTINCT a.claim,a.trunk,coalesce(w.lineage,a.trunk) initial FROM batches b "
-      "CROSS JOIN LATERAL laplace_attested_series(b.claims) a JOIN witness w ON w.id=a.trunk WHERE a.witness AND a.games>0),"
+      "CROSS JOIN LATERAL @extschema@.laplace_attested_series(b.claims) a JOIN @extschema@.witness w ON w.id OPERATOR(@extschema@.=) a.trunk WHERE a.witness AND a.games>0),"
       "ancestry(initial,root) AS (SELECT DISTINCT initial,initial FROM observed UNION "
-      "SELECT a.initial,w.lineage FROM ancestry a JOIN witness w ON w.id=a.root WHERE w.lineage IS NOT NULL AND w.lineage<>a.root),"
-      "terminal AS (SELECT a.initial,a.root FROM ancestry a LEFT JOIN witness w ON w.id=a.root "
-      "WHERE w.id IS NULL OR w.lineage IS NULL OR w.lineage=a.root),"
-      "invalid AS (SELECT count(*) n FROM (SELECT DISTINCT initial FROM observed) o WHERE NOT EXISTS(SELECT FROM terminal t WHERE t.initial=o.initial)),"
-      "support AS MATERIALIZED (SELECT DISTINCT j.name,j.id,t.root FROM joined j JOIN observed o ON o.claim=j.claim "
-      "JOIN terminal t ON t.initial=o.initial),"
+      "SELECT a.initial,w.lineage FROM ancestry a JOIN @extschema@.witness w ON w.id OPERATOR(@extschema@.=) a.root WHERE w.lineage IS NOT NULL AND w.lineage OPERATOR(@extschema@.<>) a.root),"
+      "terminal AS (SELECT a.initial,a.root FROM ancestry a LEFT JOIN @extschema@.witness w ON w.id OPERATOR(@extschema@.=) a.root "
+      "WHERE w.id IS NULL OR w.lineage IS NULL OR w.lineage OPERATOR(@extschema@.=) a.root),"
+      "invalid AS (SELECT count(*) n FROM (SELECT DISTINCT initial FROM observed) o WHERE NOT EXISTS(SELECT FROM terminal t WHERE t.initial OPERATOR(@extschema@.=) o.initial)),"
+      "support AS MATERIALIZED (SELECT DISTINCT j.name,j.id,t.root FROM joined j JOIN observed o ON o.claim OPERATOR(@extschema@.=) j.claim "
+      "JOIN terminal t ON t.initial OPERATOR(@extschema@.=) o.initial),"
       "supported AS (SELECT name,id,count(*) roots FROM support GROUP BY name,id),"
       /* Cache edges describe correspondences, not additional attestations.
        * One hop is explicit: never flood a connected component with support. */
-      "edges AS MATERIALIZED (SELECT DISTINCT s.name,s.id,n.name target,laplace_type_id(n.name,e.slot) target_id "
-      "FROM supported s JOIN members m ON m.name=s.name AND m.id=s.id CROSS JOIN namespaces n "
-      "CROSS JOIN LATERAL unnest(laplace_type_edges(s.name,m.slot,n.name)) e(slot)),"
+      "edges AS MATERIALIZED (SELECT DISTINCT s.name,s.id,n.name target,@extschema@.laplace_type_id(n.name,e.slot) target_id "
+      "FROM supported s JOIN members m ON m.name=s.name AND m.id OPERATOR(@extschema@.=) s.id CROSS JOIN namespaces n "
+      "CROSS JOIN LATERAL unnest(@extschema@.laplace_type_edges(s.name,m.slot,n.name)) e(slot)),"
       "reachable AS (SELECT name,id,root FROM support UNION "
-      "SELECT e.target,e.target_id,s.root FROM edges e JOIN support s ON s.name=e.name AND s.id=e.id),"
+      "SELECT e.target,e.target_id,s.root FROM edges e JOIN support s ON s.name=e.name AND s.id OPERATOR(@extschema@.=) e.id),"
       "crosswalk AS (SELECT name,id,count(DISTINCT root) roots FROM reachable WHERE id IS NOT NULL GROUP BY name,id),"
       "hops AS (SELECT name,count(*) FILTER(WHERE roots>=2) ge2,count(*) FILTER(WHERE roots>=3) ge3,"
       "count(*) FILTER(WHERE roots>=4) ge4 FROM crosswalk GROUP BY name) "
@@ -78,7 +78,7 @@ static int highway_joins(const char *conninfo){
       "count(s.id) FILTER(WHERE s.roots>=4),invalid.n,coalesce(h.ge2,0),coalesce(h.ge3,0),coalesce(h.ge4,0) "
       "FROM namespaces n LEFT JOIN supported s ON s.name=n.name LEFT JOIN hops h ON h.name=n.name CROSS JOIN invalid "
       "GROUP BY n.ord,n.name,n.slots,invalid.n,h.ge2,h.ge3,h.ge4 ORDER BY n.ord";
-    result=PQexecParams(pg,sql,8,NULL,parameters,NULL,NULL,0);
+    result=db_exec_params(pg,sql,8,NULL,parameters,NULL,NULL,0);
     if(PQresultStatus(result)!=PGRES_TUPLES_OK || PQntuples(result)!=8){
         fprintf(stderr,"highway joins: %s",PQerrorMessage(pg));PQclear(result);PQfinish(pg);return 2;
     }

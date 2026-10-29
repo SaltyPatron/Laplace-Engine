@@ -58,6 +58,23 @@ declared database settings; connection setup does not override them. The live
 `pg_plan_lifecycle` acceptance covers reset, multiple connections, query-buffer
 reuse and retention of the caller's planner policy.
 
+The same connection owner discovers Native and PostGIS namespaces and binary
+type OIDs from `pg_catalog`. SQL templates explicitly name their installed
+tables, functions, types and operators through `@extschema@` and `@postgis@`;
+no search-path change is needed. Binary ID parameters bind when sent, so one
+argument set can be reused against separate databases with different OIDs.
+Reset reconnects and rebinds; finish releases bindings and rendered statements.
+`tests/db-binding.py` installs both extensions in separate named schemas with
+conflicting public objects, then exercises ingestion, replay, reads, indexing
+and source removal through the production Engine.
+
+`laplace deploy` installs or upgrades the extensions without adopting existing
+tables or changing database planner, memory or cache configuration. Host
+installers explicitly use `deploy --configure-server-cache` to persist their
+declared server-local `LAPLACE_TIER0`, `LAPLACE_FLAGS` and `LAPLACE_HIGHWAY`
+paths together. A remote client must leave that flag out. `laplace index`
+uses configured maintenance memory and analyzes only the Native relations.
+
 `src/ingest.c` finds recorded file trunks from the OS metadata before opening
 source bytes. Each level reads distinct metadata IDs as a set through the path
 index, while retaining every selected file occurrence associated with each ID.
@@ -99,7 +116,7 @@ against raw UTF-8 bytes and verifies byte-exact parsing through a Unicode path.
 | --- | --- |
 | `laplace tier0` | generates tier 0 from the Unicode data and prints its fingerprint |
 | `laplace highway` | generates the highway: the types the resources list (parts of speech, relations, concepts, classes, frames, rolesets) and the mappings between them, a perf-cache beside tier 0 |
-| `laplace deploy` | makes a database a Laplace database: the database itself if the server does not have it, extensions, content schema, semantics, its tier 0 |
+| `laplace deploy` | creates the database if absent; installs or upgrades Native/PostGIS objects and indexes in their installed namespaces |
 | `laplace ingest --catalog` | all available sources, short aliases, content paths, recipes, grammars, filename patterns and prerequisites as JSON; no database, cache or corpus required |
 | `laplace ingest --list-sources` | every canonical source name from the same recipe estate |
 | `laplace sources --catalog` | the same complete available catalog |
@@ -159,7 +176,7 @@ CILI's published WordNet 3.0, WordNet 3.1 and Open Dutch WordNet 1.3 maps resolv
 
 A source pointer may name several concepts: CILI's WordNet 3.1 map contains 47 such pointers. Every distinct target is retained and can be enumerated through Native. A recipe's singular `type` lookup reports an ambiguous pointer as an unresolved obligation and makes no selection; provenance commands require an explicit canonical target. Neither row order nor a composed surrogate chooses a concept.
 
-`laplace deploy` creates or updates extensions, schema, indexes and database settings, and ensures the Tier-0 floor and Highway identifier entities exist in PostgreSQL.
+`laplace deploy` creates or updates extensions, schema and indexes. Cache selection belongs to the host installer through `--configure-server-cache`; deployment does not ingest content. Tier-0 and Highway identities remain available through their memory-mapped Native caches.
 
 
 ## Firmware

@@ -7,7 +7,6 @@
 #include <string.h>
 
 const lp_tier0_record *T0;
-uint32_t id_oid;
 void *xrealloc(void *memory,size_t bytes){void *p=realloc(memory,bytes?bytes:1);assert(p);return p;}
 
 int main(int argc,char **argv){
@@ -26,9 +25,7 @@ int main(int argc,char **argv){
     }
     assert(argc==6 || argc==7);T0=lp_tier0_map(argv[2]);assert(T0);
     PGconn *pg=PQconnectdb(argv[1]);assert(PQstatus(pg)==CONNECTION_OK);
-    PGresult *type=PQexec(pg,"SELECT 'public.blake3'::regtype::oid");
-    assert(PQresultStatus(type)==PGRES_TUPLES_OK && PQntuples(type)==1);
-    id_oid=(uint32_t)strtoul(PQgetvalue(type,0,0),NULL,10);PQclear(type);
+    assert(db_binding(pg)->id_type);
     lp_id deep,run,annotated;assert(lp_id_unhex(argv[3],&deep));assert(lp_id_unhex(argv[4],&run));assert(lp_id_unhex(argv[5],&annotated));
     Reader *reader=reader_new(pg);reader_want(reader,&deep);reader_want(reader,&run);reader_want(reader,&annotated);
     fputs("reader acceptance: deep\n",stderr);char *text=reader_text(reader,&deep,0);

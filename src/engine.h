@@ -296,8 +296,7 @@ int cmd_merge(int argc, char **argv);
 int cmd_projection(int argc, char **argv);
 
 /* ---- the database, as the engine speaks to it (pg.c): a statement's parameters, its columns read back, COPY */
-extern uint32_t id_oid;                                               /* the database's own number for the type of an ID, blake3 */
-size_t ids_param(uint8_t *out, const lp_id *ids, uint32_t n);         /* a binary blake3[] parameter; out holds 20 + 20 n bytes */
+size_t ids_param(PGconn *,uint8_t *out, const lp_id *ids, uint32_t n); /* Native binary array bound to this connection's installed ID type */
 void   id_text(const lp_id *id, char out[33]);                        /* 32 hexadecimal digits */
 typedef struct { lp_id *id; int n; } Run;                               /* a trajectory's constituents in order, runs written out */
 Run run_of(const uint8_t *ewkb, size_t len);                            /* ... from a path as the database sends it (lp_path_ids) */
@@ -320,6 +319,7 @@ Hold *paths_of(const lp_id *ids, int n, int *nout);
 long holds_count(const lp_id *keys, int nkeys, int kind);                                     /* how many paths hold every key (kind 0 observations, 1 claims, -1 both): the index counts, no row is read */                                            /* each one's path, from the partition its ID names */                            /* each one's coordinate, 4 doubles; has[i]: found */
 int  tier_max(const lp_id *ids, int n);                                 /* the highest tier these IDs are recorded at; -1 when none are */
 #define ARGS_MAX 8
+enum { SQL_ID_ARRAY=2 }; /* binary payload whose element OID binds at execution */
 typedef struct { lp_buf b; int binary; } SqlArg;
 typedef struct { SqlArg a[ARGS_MAX]; int n; } Args;                    /* zeroed to begin; args_free when done */
 void arg_ids(Args *, const lp_id *ids, size_t n);                     /* a blake3[], in binary */
@@ -370,7 +370,7 @@ int opts(int argc, char **argv, const Opt *o);
 typedef lp_vec(lp_id) Ids;
 /* A path's constituents in order, its runs written out, into ids: one array kept and refilled row after row. */
 static inline size_t path_into(Ids *ids, lp_path p){ size_t n = lp_path_len(p); lp_vec_reserve(ids, n ? n : 1); return ids->n = lp_path_expand(p, ids->v, n); }
-const char *refuse_param(int *len);                                      /* ... as the blake3[] every claim read passes */
+const char *refuse_param(PGconn *,int *len);                              /* ... as this database's binary blake3[] */
 void   arg_refused(Args *);                                              /* ... the same, as a statement's parameter */
 /* 32 hexadecimal digits back to the ID, ending the field: 0 when they are not. */
 static inline int id_parse(const char *s, lp_id *out){ return lp_id_unhex(s, out) && (s[32] == 0 || s[32] == '\t' || s[32] == '\n'); }

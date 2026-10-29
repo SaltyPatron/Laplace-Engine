@@ -17,12 +17,12 @@ static const char *conn_arg(int argc, char **argv){
     return c;
 }
 static int run(PGconn *pg, const char *sql, const char *what){
-    double t = now(); PGresult *r = PQexec(pg, sql); int ok = PQresultStatus(r) == PGRES_COMMAND_OK || PQresultStatus(r) == PGRES_TUPLES_OK;
+    double t = now(); PGresult *r = db_exec(pg, sql); int ok = PQresultStatus(r) == PGRES_COMMAND_OK || PQresultStatus(r) == PGRES_TUPLES_OK;
     if (!ok) fprintf(stderr, "%s: %s", what, PQerrorMessage(pg)); else printf("  %-52s %9.1f ms\n", what, (now() - t) * 1000);
     PQclear(r); fflush(stdout); return ok;
 }
 static char *one(PGconn *pg, const char *sql){
-    PGresult *r = PQexec(pg, sql); char *v = NULL;
+    PGresult *r = db_exec(pg, sql); char *v = NULL;
     if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !PQgetisnull(r, 0, 0)) v = strdup(PQgetvalue(r, 0, 0));
     PQclear(r); return v;
 }
@@ -44,32 +44,37 @@ static void database_made(const char *conninfo){
     PQfreemem(id); PQfinish(pg); PQconninfoFree(o);
 }
 int cmd_deploy(int argc, char **argv){
+    int configure_cache=0;
+    for(int i=1;i<argc;i++){
+        if(!strcmp(argv[i],"-d") && i+1<argc){i++;continue;}
+        if(!strcmp(argv[i],"--configure-server-cache")){configure_cache=1;continue;}
+        fputs("usage: laplace deploy [-d conninfo] [--configure-server-cache]\n",stderr);return 2;
+    }
     database_made(conn_arg(argc, argv));
     PGconn *pg = db_connect(conn_arg(argc, argv)); tier0_open(NULL);
     printf("laplace deploy   %s\n", PQdb(pg));
-    static const char *ext[] = { "postgis", "laplace", "pg_stat_statements", "pg_buffercache" };
-    for (int i = 0; i < 4; i++) { char q[128], w[64]; snprintf(q, sizeof q, "CREATE EXTENSION IF NOT EXISTS %s", ext[i]); snprintf(w, sizeof w, "extension %s", ext[i]); if (!run(pg, q, w)) return 1; }
+    static const char *ext[] = { "postgis", "laplace" };
+    for (int i = 0; i < 2; i++) { char q[128], w[64]; snprintf(q, sizeof q, "CREATE EXTENSION IF NOT EXISTS %s", ext[i]); snprintf(w, sizeof w, "extension %s", ext[i]); if (!run(pg, q, w)) return 1; }
     if (!run(pg, "ALTER EXTENSION laplace UPDATE", "laplace extension at its newest version")) return 1;
-    { char q[4400], *esc = PQescapeLiteral(pg, lp_tier0_path(), strlen(lp_tier0_path())), *db = PQescapeIdentifier(pg, PQdb(pg), strlen(PQdb(pg)));
-      snprintf(q, sizeof q, "ALTER DATABASE %s SET laplace.tier0 = %s", db, esc); if (!run(pg, q, "the database's tier 0")) return 1;
-      snprintf(q, sizeof q, "SET laplace.tier0 = %s", esc); PQclear(PQexec(pg, q)); PQfreemem(esc);
-      esc = PQescapeLiteral(pg, lp_flags_path(), strlen(lp_flags_path()));
-      snprintf(q, sizeof q, "ALTER DATABASE %s SET laplace.flags = %s", db, esc); if (!run(pg, q, "the flags that go with it")) return 1;
-      PQfreemem(esc); esc = PQescapeLiteral(pg, lp_highway_path(), strlen(lp_highway_path()));
-      snprintf(q, sizeof q, "ALTER DATABASE %s SET laplace.highway = %s", db, esc); if (!run(pg, q, "the highway: the types, and the mappings between them")) return 1;
-      PQfreemem(esc); PQfreemem(db); }
-    /* the schema is the extension's: the four tables, their partitions and every index, from CREATE EXTENSION. A
-     * database that had them before the extension owned them keeps them, and they are made the extension's here. */
-    { PGresult *r = PQexec(pg, "SELECT c.oid::regclass::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND (c.relname ~ '^(entity|physicality)(_[0-9a-f]{2})?$' OR c.relname ~ '^consensus(_[0-9a-f])?$' OR c.relname = 'witness') "
-                               "AND NOT EXISTS (SELECT 1 FROM pg_depend d JOIN pg_extension e ON e.oid = d.refobjid WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND e.extname = 'laplace')");
-      int n = PQresultStatus(r) == PGRES_TUPLES_OK ? PQntuples(r) : 0;
-      for (int i = 0; i < n; i++) { char q[256]; snprintf(q, sizeof q, "ALTER EXTENSION laplace ADD TABLE %s", PQgetvalue(r, i, 0)); PGresult *a = PQexec(pg, q); PQclear(a); }
-      if (n) printf("  %-52s %9d\n", "tables from before the extension owned them, adopted", n); PQclear(r); }
-    if (!run(pg, "SELECT laplace_schema_indexes()", "every index, made where one is missing")) return 1;
-    PQfinish(pg);
-    pg = db_connect(conn_arg(argc, argv));
-    /* A named leaf keeps parallel_workers at 0. A statement on the parent is many leaves, and Gather is how it uses the cores. */
-    { char *db = PQescapeIdentifier(pg, PQdb(pg), strlen(PQdb(pg))), q[256]; snprintf(q, sizeof q, "ALTER DATABASE %s SET enable_parallel_append = on", db); PQclear(PQexec(pg, q)); PQfreemem(db); }
+    /* Only a host installer may select server-local cache paths. A remote
+     * extension install/upgrade preserves the server's existing configuration. */
+    if(configure_cache){
+        const char *names[]={"laplace.tier0","laplace.flags","laplace.highway"};
+        const char *paths[]={lp_tier0_path(),lp_flags_path(),lp_highway_path()};
+        char *db=PQescapeIdentifier(pg,PQdb(pg),strlen(PQdb(pg)));
+        if(!run(pg,"BEGIN","server cache configuration")){PQfreemem(db);PQfinish(pg);return 1;}
+        for(size_t i=0;i<3;i++){
+            char *value=PQescapeLiteral(pg,paths[i],strlen(paths[i]));
+            size_t bytes=strlen(db)+strlen(names[i])+strlen(value)+32;char *sql=malloc(bytes);
+            if(!sql){perror("server cache configuration");PQfreemem(value);PQfreemem(db);PQfinish(pg);return 1;}
+            snprintf(sql,bytes,"ALTER DATABASE %s SET %s = %s",db,names[i],value);
+            int ok=run(pg,sql,names[i]);free(sql);PQfreemem(value);
+            if(!ok){PQfreemem(db);PQfinish(pg);return 1;}
+        }
+        if(!run(pg,"COMMIT","server cache configuration")){PQfreemem(db);PQfinish(pg);return 1;}
+        PQfreemem(db);PQfinish(pg);pg=db_connect(conn_arg(argc,argv));
+    }
+    if (!run(pg, "SELECT @extschema@.laplace_schema_indexes()", "every index, made where one is missing")) return 1;
     PQfinish(pg);
     return cmd_status(argc, argv);
 }
@@ -77,47 +82,48 @@ int cmd_deploy(int argc, char **argv){
 int cmd_index(int argc, char **argv){
     PGconn *pg = db_connect(conn_arg(argc, argv));
     printf("laplace index   %s\n", PQdb(pg));
-    int ok = run(pg, "SET maintenance_work_mem = '8GB'", "maintenance memory") && run(pg, "SELECT laplace_schema_indexes()", "every index, made where one is missing") && run(pg, "ANALYZE", "statistics");
+    int ok = run(pg,"SELECT @extschema@.laplace_schema_indexes()","every index, made where one is missing") &&
+        run(pg,"ANALYZE @extschema@.entity; ANALYZE @extschema@.physicality; ANALYZE @extschema@.witness; ANALYZE @extschema@.consensus","Native statistics");
     PQfinish(pg); return !ok;
 }
 
 int cmd_status(int argc, char **argv){
     PGconn *pg = db_connect(conn_arg(argc, argv)); setlocale(LC_NUMERIC, "en_US.UTF-8");
-    char *ver = one(pg, "SELECT extversion FROM pg_extension WHERE extname = 'laplace'"), *isa = one(pg, "SELECT laplace_isa()"),
-         *t0 = one(pg, "SELECT current_setting('laplace.tier0', true)"), *fp = one(pg, "SELECT laplace_fingerprint()"),
+    char *ver = one(pg, "SELECT extversion FROM pg_extension WHERE extname = 'laplace'"), *isa = one(pg, "SELECT @extschema@.laplace_isa()"),
+         *t0 = one(pg, "SELECT current_setting('laplace.tier0', true)"), *fp = one(pg, "SELECT @extschema@.laplace_fingerprint()"),
          *size = one(pg, "SELECT pg_size_pretty(pg_database_size(current_database()))"), *srv = one(pg, "SELECT split_part(version(), ',', 1)");
     printf("\ndatabase   %s, %s\nserver     %s\nextension  laplace %s; %s\n", PQdb(pg), size ? size : "?", srv ? srv : "?", ver ? ver : "(not installed)", isa ? isa : "");
     printf("tier 0     %s\n           %s\n", t0 && *t0 ? t0 : "(the extension's default)", fp ? fp : "(no fingerprint: extension older than 0.6)");
     const lp_tier0_record *mine = lp_tier0_map(NULL);
     if (mine && fp) { uint8_t h[32]; char hex[65]; lp_tier0_fingerprint(mine, h); lp_hex(h, 32, hex);
                       printf("           %s\n", strcmp(hex, fp) ? "DIFFERS from this engine's tier 0: the two would give the same content different coordinates" : "the same as this engine's"); }
-    { char *hw = one(pg, "SELECT current_setting('laplace.highway', true)"), *hfp = one(pg, "SELECT laplace_highway_fingerprint()"); const lp_highway *h = lp_highway_map(NULL);
+    { char *hw = one(pg, "SELECT current_setting('laplace.highway', true)"), *hfp = one(pg, "SELECT @extschema@.laplace_highway_fingerprint()"); const lp_highway *h = lp_highway_map(NULL);
       printf("highway    %s\n           %s\n", hw && *hw ? hw : "(the extension's default)", hfp ? hfp : "(not generated: laplace highway)");
       if (h && hfp) { uint8_t b[32]; char hex[65]; lp_highway_fingerprint(h, b); lp_hex(b, 32, hex);
                       printf("           %s\n", strcmp(hex, hfp) ? "DIFFERS from this engine's highway: the two would give a type different slots" : "the same as this engine's"); }
       free(hw); free(hfp); }
 
     /* the tier is a column, not a partition: counted from a 1% sample of the rows, the size from the partitions */
-    PGresult *r = PQexec(pg, "SELECT tier, (count(*) * 100)::bigint FROM entity TABLESAMPLE SYSTEM (1) GROUP BY 1 ORDER BY 1");
+    PGresult *r = db_exec(pg, "SELECT tier, (count(*) * 100)::bigint FROM @extschema@.entity TABLESAMPLE SYSTEM (1) GROUP BY 1 ORDER BY 1");
     printf("\nentities, by tier (from a 1%% sample)\n");
     for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) printf("  tier %-3s %'16lld\n", PQgetvalue(r, i, 0), atoll(PQgetvalue(r, i, 1)));
     PQclear(r);
-    r = PQexec(pg, "SELECT sum(c.reltuples)::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
-                   "WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname ~ '^(entity|physicality)_[0-9a-f]{2}$'");
+    r = db_exec(pg, "SELECT sum(c.reltuples)::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                   "WHERE n.oid=(SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname='laplace') AND c.relkind = 'r' AND c.relname ~ '^(entity|physicality)_[0-9a-f]{2}$'");
     if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) printf("  entities and paths %'14lld rows   %s\n", atoll(PQgetvalue(r, 0, 0)), PQgetvalue(r, 0, 1));
     PQclear(r);
     /* the witnesses (each a source's trunk) and the standings, the partitions of a table summed: a partition the planner
      * has not counted yet (reltuples -1) makes the sum not counted */
-    r = PQexec(pg, "SELECT regexp_replace(c.relname, '_[0-9a-f]$', ''), CASE WHEN min(c.reltuples) < 0 THEN -1 ELSE sum(c.reltuples) END::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))::bigint) "
-                   "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND (c.relname = 'witness' OR c.relname ~ '^consensus_[0-9a-f]$') GROUP BY 1 ORDER BY 1");
+    r = db_exec(pg, "SELECT regexp_replace(c.relname, '_[0-9a-f]$', ''), CASE WHEN min(c.reltuples) < 0 THEN -1 ELSE sum(c.reltuples) END::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))::bigint) "
+                   "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.oid=(SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname='laplace') AND c.relkind = 'r' AND (c.relname = 'witness' OR c.relname ~ '^consensus_[0-9a-f]$') GROUP BY 1 ORDER BY 1");
     printf("\nsemantics\n");
     for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) {
         if (atoll(PQgetvalue(r, i, 1)) < 0) printf("  %-24s %16s   %s\n", PQgetvalue(r, i, 0), "not counted yet", PQgetvalue(r, i, 2));
         else printf("  %-24s %'16lld   %s\n", PQgetvalue(r, i, 0), atoll(PQgetvalue(r, i, 1)), PQgetvalue(r, i, 2));
     }
     PQclear(r);
-    r = PQexec(pg, "SELECT count(*) FILTER (WHERE indexdef LIKE '%USING gin%'), count(*) FILTER (WHERE indexdef LIKE '%USING gist%'), count(*) "
-                   "FROM pg_indexes WHERE schemaname = 'public' AND tablename IN ('entity', 'physicality')");
+    r = db_exec(pg, "SELECT count(*) FILTER (WHERE indexdef LIKE '%USING gin%'), count(*) FILTER (WHERE indexdef LIKE '%USING gist%'), count(*) "
+                   "FROM pg_indexes WHERE schemaname=(SELECT n.nspname FROM pg_catalog.pg_namespace n JOIN pg_catalog.pg_extension e ON e.extnamespace=n.oid WHERE e.extname='laplace') AND tablename IN ('entity', 'physicality')");
     if (PQresultStatus(r) == PGRES_TUPLES_OK) printf("\nindexes    container (GIN) %s, 4D (GiST) %s, of %s on entity and physicality\n", PQgetvalue(r, 0, 0), PQgetvalue(r, 0, 1), PQgetvalue(r, 0, 2));
     PQclear(r);
     free(ver); free(isa); free(t0); free(fp); free(size); free(srv); PQfinish(pg);
@@ -132,7 +138,7 @@ int cmd_sources(int argc, char **argv){
     printf("%-4s %-28s %-8s %-9s %s\n", "", "source", "recipes", "in", "kept at");
     /* a source is in when a witness is its trunk: [its record, its files' trunks], its record the source's name */
     lp_idmap *records = lp_idmap_new();
-    { PGresult *r = ask_try(pg, "SELECT id FROM witness", NULL); Reader *rd = reader_new(pg);
+    { PGresult *r = ask_try(pg, "SELECT id FROM @extschema@.witness", NULL); Reader *rd = reader_new(pg);
       for (int j = 0; r && j < PQntuples(r); j++) { lp_id first[2]; if (reader_parts(rd, col_id(r, j, 0), first, 2)) lp_idmap_put(records, &first[0], NULL); }
       PQclear(r); reader_free(rd); }
     for (int i = 0; i < n; i++) {

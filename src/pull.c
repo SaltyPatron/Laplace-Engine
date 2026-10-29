@@ -68,22 +68,33 @@ int claim_by_conf(const void *a, const void *b){ double x = ((const Claim *)a)->
 /* The predicates the pass's firmware refuses, as the blake3[] every claim read passes: a restriction is applied before
  * the sort (Sequence 15.5), so a refused strand never takes a place the fan leaves. The firmware names them when it is
  * loaded; their IDs are computed here, once, on the first read. */
-static char refuse_names[FW_NAMES][96]; static int nrefuse_names, refuse_len = -1; static uint8_t refuse_ab[20 + 20 * FW_NAMES];
-void refuse_named(const Firmware *fw){ nrefuse_names = fw->nrefuse_predicate; memcpy(refuse_names, fw->refuse_predicate, sizeof refuse_names); refuse_len = -1; }
-const char *refuse_param(int *len){
-    if (refuse_len < 0) {
-        if (!nrefuse_names) { uint32_t h[3] = { htonl(0), htonl(0), htonl(id_oid) }; memcpy(refuse_ab, h, 12); refuse_len = 12; }   /* '{}': nothing refused */
-        else { lp_text *c = lp_text_new(T0); lp_id id[FW_NAMES];
-               for (int i = 0; i < nrefuse_names; i++) id[i] = entity_named(c, refuse_names[i], NULL, 0, NULL).id;
-               refuse_len = (int)ids_param(refuse_ab, id, (uint32_t)nrefuse_names); lp_text_free(c); }
-    }
-    *len = refuse_len; return (const char *)refuse_ab;
+static char refuse_names[FW_NAMES][96]; static int nrefuse_names;
+static uint64_t refuse_generation=1;
+typedef struct { uint64_t generation; lp_id ids[FW_NAMES]; uint8_t wire[20+20*FW_NAMES]; } RefusalCache;
+static _Thread_local RefusalCache refusal;
+void refuse_named(const Firmware *fw){
+    nrefuse_names=fw->nrefuse_predicate;memcpy(refuse_names,fw->refuse_predicate,sizeof refuse_names);refuse_generation++;
 }
-void arg_refused(Args *a){ int l; const char *p = refuse_param(&l); arg_raw(a, p, (size_t)l); }
+static RefusalCache *refused_ids(void){
+    if(refusal.generation!=refuse_generation){
+        if(nrefuse_names){
+            lp_text *context=lp_text_new(T0);
+            for(int i=0;i<nrefuse_names;i++)refusal.ids[i]=entity_named(context,refuse_names[i],NULL,0,NULL).id;
+            lp_text_free(context);
+        }
+        refusal.generation=refuse_generation;
+    }
+    return &refusal;
+}
+const char *refuse_param(PGconn *pg,int *len){
+    RefusalCache *cache=refused_ids();
+    *len=(int)ids_param(pg,cache->wire,cache->ids,(uint32_t)nrefuse_names);
+    return (const char *)cache->wire;
+}
+void arg_refused(Args *a){arg_ids(a,refused_ids()->ids,(size_t)nrefuse_names);}
 /* Whether a claim holds a refused predicate between its first part and its last: the check the reads make in SQL. */
 static int middle_refused(const lp_id *part, int np){
-    static lp_id id[FW_NAMES]; static int ready = -1;
-    if (ready != nrefuse_names) { lp_text *c = lp_text_new(T0); for (int i = 0; i < nrefuse_names; i++) id[i] = entity_named(c, refuse_names[i], NULL, 0, NULL).id; lp_text_free(c); ready = nrefuse_names; }
+    const lp_id *id=refused_ids()->ids;
     for (int p = 1; p + 1 < np; p++) for (int i = 0; i < nrefuse_names; i++) if (!memcmp(&part[p], &id[i], 16)) return 1;
     return 0;
 }
@@ -265,9 +276,9 @@ int cmd_hop(int argc, char **argv){
                   free(cl); reader_free(rd); PQfinish(pg); return 0; }
 
     /* observed: the content that holds it, which is not claims */
-    t = now(); uint8_t ab[40]; size_t al = ids_param(ab, &e.id, 1);
+    t = now(); uint8_t ab[40]; size_t al = ids_param(pg,ab, &e.id, 1);
     const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = db_ask(pg, "SELECT tier FROM laplace_containers($1::blake3[], '{}'::smallint[]) WHERE NOT (mask ? 0::smallint)", 1, v, l, f);
+    PGresult *q = db_ask(pg, "SELECT tier FROM @extschema@.laplace_containers($1::@extschema@.blake3[], '{}'::smallint[]) WHERE NOT (mask OPERATOR(@extschema@.?) 0::smallint)", 1, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
     uint64_t by_tier[256] = { 0 }; int any = 0;
     for (int j = 0; j < PQntuples(q); j++) { uint16_t tb; memcpy(&tb, PQgetvalue(q, j, 0), 2); by_tier[ntohs(tb) & 255]++; any = 1; }
@@ -327,8 +338,8 @@ static Step *open_each(const lp_id *keys, int nk, const lp_id *rel, int dir, int
 /* The constituents of each entity, one set: out[i] for keys[i]. */
 static Run *parts_each(PGconn *pg, const lp_id *keys, int nk){
     Run *out = calloc((size_t)(nk ? nk : 1), sizeof(Run)); if (!nk) return out;
-    uint8_t *ab = malloc(20 + 20 * (size_t)nk); size_t al = ids_param(ab, keys, (uint32_t)nk); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = db_ask(pg, "SELECT u.i, p.path FROM unnest($1::blake3[]) WITH ORDINALITY AS u(id, i) JOIN physicality p ON p.entity = u.id", 1, v, l, f);
+    uint8_t *ab = malloc(20 + 20 * (size_t)nk); size_t al = ids_param(pg,ab, keys, (uint32_t)nk); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+    PGresult *q = db_ask(pg, "SELECT u.i, p.path FROM unnest($1::@extschema@.blake3[]) WITH ORDINALITY AS u(id, i) JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) u.id", 1, v, l, f);
     if (PQresultStatus(q) == PGRES_TUPLES_OK) for (int j = 0; j < PQntuples(q); j++) { uint64_t o; memcpy(&o, PQgetvalue(q, j, 0), 8); int i = (int)__builtin_bswap64(o) - 1;
         if (i >= 0 && i < nk && !out[i].id) out[i] = run_of((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1)); }
     PQclear(q); free(ab); return out;
@@ -485,10 +496,10 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
     lp_id *ids = malloc(sizeof(lp_id) * (size_t)(n ? n : 1)); int *who = malloc(sizeof(int) * (size_t)(n ? n : 1)), m = 0;
     for (int i = 0; i < n; i++) if ((int)closed[i].hops < hops) { ids[m] = closed[i].id; who[m++] = i; }
     if (!m) { free(ids); free(who); return n; }
-    uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(ab, ids, (uint32_t)m); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
-    int rl; const char *v[4] = { (const char *)ab, lim, CLAIM_BITS, refuse_param(&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
+    uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(pg,ab, ids, (uint32_t)m); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
+    int rl; const char *v[4] = { (const char *)ab, lim, CLAIM_BITS, refuse_param(pg,&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
     PGresult *q = db_ask(pg,
-        "SELECT i, entity, path, rating, deviation, volatility FROM laplace_claims_each($1::blake3[], $2::bigint, $3::smallint[], $4::blake3[])", 4, v, l, f);
+        "SELECT i, entity, path, rating, deviation, volatility FROM @extschema@.laplace_claims_each($1::@extschema@.blake3[], $2::bigint, $3::smallint[], $4::@extschema@.blake3[])", 4, v, l, f);
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
     w->trips++; w->expanded += (uint64_t)m;
     int rows = PQntuples(q), *held = calloc((size_t)m, sizeof(int));
@@ -529,8 +540,8 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
 
 /* The tie between two neighbours of a chain, as text: the claim's predicate, read from its subject to its object. */
 static void show_tie(PGconn *pg, Reader *rd, const lp_id *claim, const lp_id *left){
-    uint8_t ab[40]; size_t al = ids_param(ab, claim, 1); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, fm[1] = { 1 };
-    PGresult *q = db_ask(pg, "SELECT path FROM laplace_paths($1::blake3[]) LIMIT 1", 1, v, l, fm);
+    uint8_t ab[40]; size_t al = ids_param(pg,ab, claim, 1); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, fm[1] = { 1 };
+    PGresult *q = db_ask(pg, "SELECT path FROM @extschema@.laplace_paths($1::@extschema@.blake3[]) LIMIT 1", 1, v, l, fm);
     lp_id part[3]; int np = PQresultStatus(q) == PGRES_TUPLES_OK && PQntuples(q) ? decode_claim(PQgetvalue(q, 0, 0), PQgetlength(q, 0, 0), part) : 0;
     PQclear(q);
     char *pt = np == 3 ? reader_text(rd, &part[1], 32) : strdup("?");
