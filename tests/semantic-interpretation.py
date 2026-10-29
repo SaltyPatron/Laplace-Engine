@@ -49,7 +49,7 @@ def main():
             'root $LAPLACE_DATA/propbank\n', encoding='utf-8')
         (propbank / 'duck.xml').write_text('''<frameset><predicate lemma="duck">
 <roleset id="duck.01" name="avoid"><aliases><alias pos="v">duck</alias></aliases>
-<roles><role n="0" f="PAG" descr="avoider"/></roles>
+<roles><role n="0" f="PAG" descr="avoider"><rolelinks><rolelink resource="FrameNet" class="leave-51.2">Mover</rolelink></rolelinks></role></roles>
 <example name="first"><text>PersonX ducks.</text><propbank><arg type="ARG0">PersonX</arg></propbank></example></roleset>
 <roleset id="duck.02" name="bird"><aliases><alias pos="n">duck</alias></aliases>
 <roles><role n="0" f="PPT" descr="bird"/></roles>
@@ -79,6 +79,17 @@ def main():
             assert f'[[{sense}, 0], mneumonic, {description}]' in text, text
             assert f'[PersonX ducks., [{sense}, 0], PersonX]' in text, text
             assert f'[[{sense}, ARG0], refers to, [{sense}, 0]]' in text, text
+        assert '[duck.01, [pbroleset, cross-resource mapping, fnframe], leave-51.2]' in text, text
+        assert '[duck.01, [pbroleset, cross-resource mapping, vnclass], leave-51.2]' not in text, text
+        # WN-LMF's proposed-ILI marker is absent only in that field: the
+        # ordinary English word "in" remains a lexical entry and a sense.
+        wordnet = root / 'english-wordnet-proposed.xml'
+        wordnet.write_text('''<LexicalResource><Lexicon id="test" label="Test" language="eng">
+<LexicalEntry id="entry"><Lemma writtenForm="in" partOfSpeech="n"/><Sense id="sense" synset="wnlmf-new"/></LexicalEntry>
+<Synset id="wnlmf-new" ili="in" partOfSpeech="n"><Definition>Unnumbered source concept.</Definition></Synset>
+</Lexicon></LexicalResource>''', encoding='utf-8')
+        proposed = run('ingest', '--claims', '-s', 'open-english-wordnet', wordnet)
+        assert '[in, eng, wnlmf-new]' in proposed and '[wnlmf-new, in]' not in proposed, proposed
         print('PASS shared categories, original notation, open IDs, crosswalks, scoped argument definitions and usages')
 
         # An unfamiliar closed category is an omission; a source pointer which

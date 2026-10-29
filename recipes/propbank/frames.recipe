@@ -17,7 +17,13 @@ refer arg.type role under ^roleset/id matching ^[RC-]*ARG([0-9]+)$
 always
 content arg.type
 thing example text
-type class vnclass fnframe
+when resource is VerbNet
+type class vnclass
+always
+when resource is FrameNet
+type class fnframe
+always
+content class
 type alias.pos upos vocabulary propbank-pos
 content id lemma name descr f n resource rolelink alias type text arg rel slots slot head dep
 # bookkeeping, read by nothing: which releases a roleset is in use in, a link's version, confidence and how it was made
