@@ -20,9 +20,9 @@ thing line lemma
 part lemma by \t space _
 content lemma
 # "pos: Syntactic category: n for noun files, v for verb files, a for adjective files, r for adverb files": a value of
-# WordNet's syntactic categories, as written
-content pos
-value - pos
+# WordNet's syntactic categories, with the source spelling retained beside its UPOS interpretation
+type pos upos vocabulary wordnet-pos
+value upos pos
 attest line pos
 # "synset_offset: Byte offset in data.pos file of a synset containing lemma": WordNet's pointer to the synset, which
 # CILI keys as the offset and the letter of its type; an adjective's satellite is written a here and s in CILI. The

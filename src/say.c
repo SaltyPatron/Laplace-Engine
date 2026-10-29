@@ -254,6 +254,11 @@ void record_execute(RecordWorker *sink, const SemanticRecord *t, int32_t root, u
     int speaks = record_conditions_match(s, t, root, s->whole);
     Pend pend[64]; int np_ = 0;      /* the parts whose claims are said together, still open */
     unit_range(k, t, 0, t->count, speaks, pend, &np_);
+    if (speaks) {
+        k->qualified=0; k->dependence_class=NULL; memset(&k->dependence,0,sizeof k->dependence); k->score=1.0f;
+        record_highway_values(k,t,root);
+        record_vocabulary_evidence(k,t);
+    }
     if (speaks) for (uint32_t i = 0; i < t->count; i++) { const SemanticValue *x = &t->n[i];          /* what no line of the recipe reads is said to be left open */
         if (x->context || x->kind != S_VALUE || !x->nlen || record_field_disposition(s, x) || !record_field_unmentioned(s, x)) continue;
         int32_t u = x->parent; while (u >= 0 && !record_field_disposition(s, &t->n[u])) u = t->n[u].parent;          /* a part of a part the recipe reads is read with it (r1's A0 of A0>Agent) */

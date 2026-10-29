@@ -1,0 +1,13 @@
+# WordNet/ConceptNet single-letter POS. A satellite remains 's' in provenance.
+list upos
+n NOUN
+v VERB
+a ADJ
+s ADJ
+r ADV
+# WN-LMF extensions without an asserted one-to-one UD classification.
+t -
+c -
+p -
+x -
+u -

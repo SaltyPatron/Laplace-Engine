@@ -1014,9 +1014,15 @@ int cmd_ingest(int argc, char **argv){
     printf("\n== decomposition: %d files, %.1f MB, content recomposed byte for byte or curated %d, mismatched %d%s\n", nfiles, bytes / 1e6, exact, mism, batches > 1 ? ", a batch at a time" : "");
     if (do_load) printf("   files whose trunk was already recorded, which say nothing again: %'llu\n", (unsigned long long)st.known);
     printf("   %'llu compositions, %'llu reused; %'llu claims said by records\n",(unsigned long long)table_total(), (unsigned long long)table_hits(), (unsigned long long)nev);
-    { uint64_t inc = 0; for (int i = 0; i < nfiles; i++) inc += files[i].incomplete;
-      if (inc) printf("   %'llu parts were not read whole: what parses is recorded, and what they attest is incomplete (see above); the source still goes in\n", (unsigned long long)inc); }
-    say_obligations(stdout);                                                 /* what the recipes left unresolved: no claim of it was made */
+    uint64_t incomplete=0; for (int i=0; i<nfiles; i++) incomplete+=files[i].incomplete;
+    uint64_t omissions=say_obligations(stdout);
+    extern uint64_t records_differ(void), say_unplaced(void);
+    uint64_t conflicts=records_differ(), unplaced=say_unplaced();
+    if (incomplete || omissions || conflicts || unplaced || mism) {
+        fprintf(stderr,"ingest rejected: incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu byte_mismatches=%d; source and observation windows were not published\n",
+            (unsigned long long)incomplete,(unsigned long long)omissions,(unsigned long long)conflicts,(unsigned long long)unplaced,mism);
+        fold_free(fold); progress_end("failed",NULL); return 1;
+    }
     printf("\n== phases\n");
     printf("  %-44s %8.2f s   %8.1f MB/s\n", "decompose (all threads)", t_dec, bytes / 1e6 / (t_dec > 0 ? t_dec : 1));
     printf("  %-44s %8.2f s\n", "recompose and compare", t_rec);
@@ -1073,6 +1079,6 @@ int cmd_ingest(int argc, char **argv){
         if (has_witness_trunk && witness_supersedes && forget_superseded(conninfo, threads, &witness_trunk)) return 1;
     }
     printf("\n== total %.1f s\n", now() - T);
-    progress_close(has_witness_trunk ? &witness_trunk : NULL);
+    progress_end("complete",has_witness_trunk ? &witness_trunk : NULL);
     return mism ? 1 : 0;
 }

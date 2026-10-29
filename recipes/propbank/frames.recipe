@@ -2,16 +2,24 @@ name propbank-frames
 # A frame file. A predicate is its lemma; a roleset is its canonical id (abandon.01), the node the highway lists from
 # these files and the key PropBank and the resources that point at it write, while the name PropBank writes for it
 # (leave behind) is attested on the roleset. A role's links name a VerbNet class or a FrameNet frame as those resources
-# write them: each is read as that type. An example is its text; what is marked in it speaks of it. A part that is no
-# thing (a role, a link, an alias) speaks of the nearest thing it is inside: the roleset.
+# write them: each is read as that type. A numbered role is scoped to its roleset; its descriptions and function tags
+# describe that slot. Examples retain their text and bind ARG0/ARG1 to those slots, never to a universal Agent/Patient.
+# A link or alias speaks of the nearest thing it is inside.
 match *.xml
 format xml
 
 thing predicate lemma
 thing roleset id
+thing role resolved ^roleset/id required n required
+key role n under ^roleset/id retain
+when type matches ^[RC-]*ARG[0-9]+$
+refer arg.type role under ^roleset/id matching ^[RC-]*ARG([0-9]+)$
+always
+content arg.type
 thing example text
 type class vnclass fnframe
-content id lemma name pos descr f n resource rolelink alias type text arg rel slots slot head dep
+type alias.pos upos vocabulary propbank-pos
+content id lemma name descr f n resource rolelink alias type text arg rel slots slot head dep
 # bookkeeping, read by nothing: which releases a roleset is in use in, a link's version, confidence and how it was made
 omit usagenotes inuse version confidence src start end relloc note
 
@@ -22,8 +30,8 @@ omit usagenotes inuse version confidence src start end relloc note
 relation "sense" predicate.roleset
 relation "sense description" roleset.name
 # frameset.dtd: "pos = Part of Speech / Can take the following values: r = Adverb, p = Preposition, v = Verb, n = Noun,
-# j = Adjective ...": an alias's pos is a value of PropBank's part-of-speech list, said of the roleset: [roleset, v]
-value - alias.pos
+# j = Adjective ...": the source category is retained beside its explicit UPOS interpretation.
+value upos alias.pos
 # frameset.dtd: "roles have a number (or an "M" associated with them, for common adjuncts that don't qualify for
 # number argument status). Both numbered arguments and adjuncts are labeled with the function tags from the list
 # below: EXT extent, LOC location, ... PAG prototypical agent, PPT prototypical patient, ..." (an example's arg: "the n
@@ -52,6 +60,8 @@ value - class
 value - alias rolelink
 
 holds predicate roleset
+relation "argument slot" role
+holds roleset role
 attest roleset name
 attest alias pos .
 attest role descr f n

@@ -44,4 +44,5 @@ v=$(run --claims-tsv verbnet "$scratch/vn/heed-0.0.xml") || fail "verbnet did no
 grep -Pq '^claim\t[0-9]+\t[0-9.e+-]+\theed\tili:i[0-9]+$' <<<"$v" || fail "heed's sense is not ili:KEY: $v"
 grep -Pq '^claim\t[0-9]+\t[0-9.e+-]+\tkeep_to\tkeep\.04$' <<<"$v" || fail "keep_to's roleset is not its canonical identifier keep.04: $v"
 ! grep -P '^(claim|held)\t' <<<"$v" | grep -q '<[a-z]*>' || fail "a type is written as its list alone: $v"
+! grep -P '^(claim|held)\t' <<<"$v" | grep -qw None || fail "VerbNet's absence marker became a FrameNet concept: $v"
 echo "claims-tsv: ok"

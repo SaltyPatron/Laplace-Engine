@@ -22,21 +22,7 @@ type lexicalization.language language
 
 # Universal POS is attached beside the source's own category, so adjective
 # satellites keep their 's' identity while sharing the ADJ highway class.
-when . is n
-type pos.category upos as NOUN
-always
-when . is v
-type pos.category upos as VERB
-always
-when . is a
-type pos.category upos as ADJ
-always
-when . is s
-type pos.category upos as ADJ
-always
-when . is r
-type pos.category upos as ADV
-always
+type pos.category upos vocabulary wordnet-pos
 
 thing concept resolved lexicalization/lemma required lexicalization/language required pos pos/category qualifier
 thing edge preserve start rel/2 end

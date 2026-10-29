@@ -17,7 +17,7 @@ const DiagnosticLabel record_diagnostic_labels[DIAG_COUNT] = {
     {"ambiguous highway pointer:", 26, 0}
 };
 
-static struct { char recipe[64], name[160]; uint64_t n; char what; } *OBL; static size_t NOBL, COBL; static uint64_t OBL_MORE;
+static struct { char recipe[64], name[160]; uint64_t n; char what; } *OBL; static size_t NOBL, COBL; static uint64_t OBL_MORE, UNKNOWN;
 
 typedef struct {
     const DiagnosticLabel *label;
@@ -135,7 +135,7 @@ void record_statement_count(RecordWorker *k, const Dis *m){
 
 void record_collect_diagnostics(const char *recipe, const RecordWorker *k){
     #pragma omp critical(laplace_obligations)
-    { OBL_MORE += k->obl_more;
+    { OBL_MORE += k->obl_more; UNKNOWN += k->unknown;
       for (int i = 0; i < k->nobl; i++) { size_t j = 0; char name[160]; format_obligation(&k->obl[i], name);
           for (; j < NOBL; j++) if (OBL[j].what == k->obl[i].what && !strcmp(OBL[j].recipe, recipe) && !strcmp(OBL[j].name, name)) break;
           if (j == NOBL) { if (NOBL == COBL) { COBL = COBL ? COBL * 2 : 64; OBL = xrealloc(OBL, sizeof *OBL * COBL); }
@@ -145,8 +145,8 @@ void record_collect_diagnostics(const char *recipe, const RecordWorker *k){
 
 static int obl_cmp(const void *x, const void *y){ const char *a = (const char *)x, *b = (const char *)y; int c = strcmp(a, b); return c ? c : strcmp(a + 64, b + 64); }
 
-void say_obligations(FILE *o){
-    uint64_t n = OBL_MORE, m = 0, sd = 0; for (size_t i = 0; i < NOBL; i++) { if (OBL[i].what == 'o') n += OBL[i].n; else if (OBL[i].what == 'm') m += OBL[i].n; else sd += OBL[i].n; }
+uint64_t say_obligations(FILE *o){
+    uint64_t n = OBL_MORE + UNKNOWN, m = 0, sd = 0; for (size_t i = 0; i < NOBL; i++) { if (OBL[i].what == 'o') n += OBL[i].n; else if (OBL[i].what == 'm') m += OBL[i].n; else sd += OBL[i].n; }
     if (NOBL) qsort(OBL, NOBL, sizeof *OBL, obl_cmp);
     if (sd) { fprintf(o, "\n== statements, by the meaning the recipe gives each part (value LIST NAME, relation \"TEXT\" NAME): %'llu\n", (unsigned long long)sd);
         for (size_t i = 0; i < NOBL; i++) if (OBL[i].what == 's') fprintf(o, "   %-22s %-80s %'14llu\n", OBL[i].recipe, OBL[i].name, (unsigned long long)OBL[i].n); }
@@ -155,7 +155,9 @@ void say_obligations(FILE *o){
     if (OBL_MORE) fprintf(o, "   of them %'llu under names past the 256 a part keeps\n", (unsigned long long)OBL_MORE);
     if (m) { fprintf(o, "   values said as a road class's that the highway's list does not hold (claimed as written; no slot): %'llu\n", (unsigned long long)m);
         for (size_t i = 0; i < NOBL; i++) if (OBL[i].what == 'm') fprintf(o, "   %-22s %-80s %'14llu\n", OBL[i].recipe, OBL[i].name, (unsigned long long)OBL[i].n); }
-    free(OBL); OBL = NULL; NOBL = COBL = 0; OBL_MORE = 0;
+    if (UNKNOWN) fprintf(o,"   unresolved identifier references (included above): %'llu; see per-file field/value samples\n",(unsigned long long)UNKNOWN);
+    free(OBL); OBL = NULL; NOBL = COBL = 0; OBL_MORE = UNKNOWN = 0;
+    return n;
 }
 
 void record_merge_diagnostics(RecordWorker *result, const RecordWorker *worker){

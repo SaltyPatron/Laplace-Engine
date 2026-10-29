@@ -46,10 +46,14 @@ refer senses Sense
 # a sense's subcat names the syntactic behaviours it takes, by their keys
 part subcat by space
 refer subcat SyntacticBehaviour
+when ili is in
+omit ili
+always
 type ili ili
 type lexfile lexfile
 type language language
-content label writtenForm partOfSpeech relType subcategorizationFrame Definition ILIDefinition Example Pronunciation variety script Tag category Count ref lexicalized
+type partOfSpeech upos vocabulary wordnet-pos
+content label writtenForm relType subcategorizationFrame Definition ILIDefinition Example Pronunciation variety script Tag category Count ref lexicalized
 # a file's bookkeeping, read by nothing: who made it, under what licence, at what version, how confident
 # n (a sense's place among its entry's senses) and index (an entry's place among its homographs) number what the file
 # already holds in order: the order is the path's, and the numbers are not read
@@ -138,6 +142,7 @@ holds LexicalEntry Sense Form
 together LexicalEntry
 attest Lemma partOfSpeech script
 attest Form script
+relation "variety of language" Pronunciation.variety
 attest Pronunciation variety .
 attest Tag category .
 attest Sense synset subcat lexicalized adjposition

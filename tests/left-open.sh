@@ -27,7 +27,10 @@ attest row pairs
 omit n dropped
 EOF
 printf 'ice\t2\tcold\t1\twet\t2\ta>b c>d\tx\nfire\t1\thot\t3\te>f\tz\n' > "$scratch/data/sample/rows.tsv"
-out=$(LAPLACE_DATA=$scratch/data "$L" ingest --claims -s sample "$scratch/data/sample/rows.tsv" 2>&1 | tr -d '\r') || fail "rows.tsv did not read: $out"
+if out=$(LAPLACE_DATA=$scratch/data "$L" ingest --claims -s sample "$scratch/data/sample/rows.tsv" 2>&1 | tr -d '\r'); then
+  fail "an incomplete semantic reading reported success: $out"
+fi
+grep -q 'ingest rejected: incomplete_parts=3 ' <<<"$out" || fail "the omitted parts did not reject admission: $out"
 grep -q "3 named parts of .*rows.tsv have no disposition in the recipe: they are left open, not read: second$" <<<"$out" \
   || fail "second (a member of a counted group the layout alone names) is not said to be left open, each once: $out"
 grep -q '^\[ice, \[c, d\]\]$' <<<"$out" || fail "the pairs are not read: $out"

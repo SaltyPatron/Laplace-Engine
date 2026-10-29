@@ -12,7 +12,8 @@ export LAPLACE_WORK=$scratch
 fail(){ echo "thing-resolved: $*" >&2; exit 1; }
 out=$(LAPLACE_DATA=$scratch "$L" ingest --claims -s predicate-matrix "$here/thing-resolved/PredicateMatrix.v1.3.txt" 2>&1 | tr -d '\r') || fail "ingest failed: $out"
 count(){ grep -c -- "$1" <<<"$out" || true; }
-[ "$(count '^\[')" = 3 ] || fail "the three source rows did not remain three joint claims: $out"
+[ "$(count '^\[eng,')" = 3 ] || fail "the three source rows did not remain three joint claims: $out"
+grep -qxF '[nosuch.98, [pbroleset, cross-resource mapping, fnframe], No_such_frame]' <<<"$out" || fail "the source crosswalk was not retained: $out"
 grep -qxF '[eng, v, first.1.default, arg0, test, Agent, Agent, nosuch.99, 0, 7]' <<<"$out" || fail "row first lost its joint correspondence or stated relation count: $out"
 grep -qxF '[eng, v, second.1.default, arg0, nosuch-0.0, test, Theme, Agent, 1]' <<<"$out" || fail "row second lost its own class identifier or context: $out"
 grep -qxF '[eng, v, third.1.default, arg0, test, Patient, No_such_frame, [No_such_frame, Agent], nosuch.98, 2, 9]' <<<"$out" || fail "row third lost its frame-qualified role, context or relation count: $out"

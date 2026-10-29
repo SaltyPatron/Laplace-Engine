@@ -514,6 +514,29 @@ void say_mentions(Recipe *r, const char *line){
         s->said = xrealloc(s->said, s->nsaid + l + 3); if (!s->nsaid) s->said[s->nsaid++] = ' ';
         memcpy(s->said + s->nsaid, b, l); s->nsaid += l; s->said[s->nsaid++] = ' '; s->said[s->nsaid] = 0; }
 }
+/* Small, reusable source vocabularies compile once to an immutable Native map.
+ * They translate only fields which explicitly opt into that vocabulary. */
+static int vocabulary_read(Recipe *recipe, KSpec *spec, const char *name, const char *list){
+    if (!*name || strspn(name,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != strlen(name)) return 0;
+    char path[4400], line[512]; snprintf(path,sizeof path,"%s/vocabularies/%s.tsv",recipes_directory(),name);
+    FILE *file=fopen(path,"r"); if (!file) { perror(path); return 0; }
+    lp_strmap *map=lp_strmap_sized(sizeof(VocabularyValue)); int valid=1, header=0;
+    while (valid && fgets(line,sizeof line,file)) {
+        comment_off(line); recipe_program_line(recipe,path,line); char *at=line, raw[64], canonical[64], extra[2];
+        if (!name_next(&at,raw,sizeof raw)) continue;
+        if (!name_next(&at,canonical,sizeof canonical) || name_next(&at,extra,sizeof extra)) { valid=0; break; }
+        if (!header) { valid=!strcmp(raw,"list") && !strcmp(canonical,list); header=1; continue; }
+        bool fresh; VocabularyValue *value=lp_strmap_get(map,raw,strlen(raw),&fresh);
+        if (!fresh) { valid=0; break; }
+        /* '-' explicitly preserves a documented source category for which
+         * this vocabulary makes no assertion of equivalence. */
+        value->length=(uint16_t)(strcmp(canonical,"-") ? strlen(canonical) : 0);
+        memcpy(value->canonical,canonical,value->length); value->canonical[value->length]=0;
+    }
+    valid=valid && header && lp_strmap_count(map) && !ferror(file); fclose(file);
+    if (!valid) { fprintf(stderr,"%s: expected list %s followed by unique SOURCE CANONICAL pairs\n",path,list); lp_strmap_free(map); return 0; }
+    spec->vocabulary=map; snprintf(spec->vocabulary_name,sizeof spec->vocabulary_name,"%s",name); return 1;
+}
 static int format_says(Recipe *r, const char *name, unsigned depth){
     char path[4400], line[2048];
     if (depth == 32) { fprintf(stderr, "format %s: includes exceed 32 levels\n", name); return -1; }
@@ -603,8 +626,9 @@ int say_says(Recipe *r, const char *path, char *tok){
         if (!x->n) { fprintf(stderr, "%s: holds TIER NAME...\n", path); return -1; } return 1; }
     if (!strcmp(tok, "key") && LAID) { at = strtok(NULL, "\r\n");
         if (!name_next(&at, a2, sizeof a2) || !name_next(&at, nm, sizeof nm) || s->nkey == S_TIERS) { fprintf(stderr, "%s: key TIER NAME\n", path); return -1; }
-        Pair *p = &s->key[s->nkey]; char keyword[32];
+        Pair *p = &s->key[s->nkey]; char keyword[32]; int retain=0;
         while (name_next(&at,keyword,sizeof keyword)) {
+            if (!strcmp(keyword,"retain")) { retain=1; continue; }
             if (!strcmp(keyword,"radix")) {
                 char number[16],*end; unsigned long radix;
                 if (!name_next(&at,number,sizeof number) || (radix=strtoul(number,&end,10))<2 || radix>36 || *end || p->key_radix) {
@@ -622,7 +646,7 @@ int say_says(Recipe *r, const char *path, char *tok){
             fprintf(stderr,"%s: keys of tier %s must share one declared scope\n",path,a2); return -1;
         }
         s->nkey++; snprintf(p->tier, sizeof p->tier, "%s", a2); snprintf(p->name, sizeof p->name, "%s", nm);
-        return dis_add(s, path, nm, D_KEY, a2); }
+        return retain ? 1 : dis_add(s, path, nm, D_KEY, a2); }
     if (!strcmp(tok, "pair") && LAID) { at = strtok(NULL, "\r\n"); if (!name_next(&at, a2, sizeof a2) || s->npair == 8) { fprintf(stderr, "%s: pair TIER NAME...\n", path); return -1; }
         Att *x = &s->pair[s->npair++]; memset(x, 0, sizeof *x); snprintf(x->tier, sizeof x->tier, "%s", a2); x->when = s->now;
         while (x->n < 64 && name_next(&at, nm, sizeof nm)) { if (!strcmp(nm, "of")) { if (!name_next(&at, x->of, sizeof x->of)) { fprintf(stderr, "%s: pair TIER NAME... [of PATH]\n", path); return -1; } continue; } snprintf(x->name[x->n++], 64, "%s", nm); }
@@ -706,11 +730,27 @@ int say_says(Recipe *r, const char *path, char *tok){
                 if (!strcmp(more, "matching")) { if (!name_next(&at, more, sizeof more) || regcomp(&ks.re, more, REG_EXTENDED)) { fprintf(stderr, "%s: type NAME LIST... matching PATTERN (it must compile)\n", path); return -1; } ks.has_re = 1; continue; }
                 if (!strcmp(more, "as")) { if (ks.nas == 4 || !name_next(&at, ks.as[ks.nas], sizeof ks.as[0])) { fprintf(stderr, "%s: type NAME LIST... as TEMPLATE... (at most 4)\n", path); return -1; } ks.nas++; continue; }
                 if (!strcmp(more, "node")) { ks.node = 1; continue; }
+                if (!strcmp(more,"vocabulary")) {
+                    char vocabulary[64];
+                    if (ks.vocabulary || strchr(a2,' ') || !name_next(&at,vocabulary,sizeof vocabulary) || !vocabulary_read(r,&ks,vocabulary,a2)) {
+                        fprintf(stderr,"%s: type FIELD LIST vocabulary NAME (one target list)\n",path); return -1;
+                    }
+                    continue;
+                }
                 size_t l = strlen(a2); snprintf(a2 + l, sizeof a2 - l, " %s", more); }
+            if (ks.vocabulary && (ks.has_re || ks.nas || strchr(a2,' '))) {
+                fprintf(stderr,"%s: vocabulary lookup takes one list and the source spelling directly\n",path); return -1;
+            }
             int rv = dis_add(s, path, nm, D_TYPE, a2); if (rv > 0) s->dis[s->ndis - 1].k = ks; return rv; }
         else { char more[64], targets[64], under[64]=""; uint8_t key_radix=0; snprintf(targets, sizeof targets, "%s", a2);       /* under qualifies a transient pointer by canonical parent content */
             while (name_next(&at, more, sizeof more)) { size_t l = strlen(targets);
-                if (!strcmp(more,"under")) {
+                if (!strcmp(more,"matching")) {
+                    if (ks.has_re || !name_next(&at,more,sizeof more) || regcomp(&ks.re,more,REG_EXTENDED)) return -1;
+                    ks.has_re=1;
+                } else if (!strcmp(more,"as")) {
+                    if (ks.nas || !name_next(&at,ks.as[0],sizeof ks.as[0])) return -1;
+                    ks.nas=1;
+                } else if (!strcmp(more,"under")) {
                     if (under[0] || !name_next(&at,under,sizeof under)) { fprintf(stderr,"%s: refer NAME TIER... [under CONTENT_PATH]\n",path); return -1; }
                 } else if (!strcmp(more,"radix")) {
                     char number[16],*end; unsigned long radix;
@@ -720,7 +760,7 @@ int say_says(Recipe *r, const char *path, char *tok){
                     key_radix=(uint8_t)radix;
                 } else if (!strcmp(more, "within")) { char *last = strrchr(targets, ' '); last = last ? last + 1 : targets; memmove(last + 1, last, strlen(last) + 1); *last = '^'; }
                 else snprintf(targets + l, sizeof targets - l, " %s", more); }
-            int rv=dis_add(s,path,nm,D_REFER,targets); if (rv>0) { Dis *rule=&s->dis[s->ndis-1]; snprintf(rule->under,sizeof rule->under,"%s",under); rule->key_radix=key_radix; } return rv; }
+            int rv=dis_add(s,path,nm,D_REFER,targets); if (rv>0) { Dis *rule=&s->dis[s->ndis-1]; snprintf(rule->under,sizeof rule->under,"%s",under); rule->key_radix=key_radix; rule->k=ks; } return rv; }
         return dis_add(s, path, nm, tok[0] == 'r' ? D_REFER : D_TYPE, a2); }
     if (!strcmp(tok, "perfcache") && LAID) {                                    /* nothing read from the flags is attested: without them, nothing is read at all */
         const lp_layout *l = lp_flags_map(NULL);
@@ -848,6 +888,12 @@ static const SNameBindings *compile_name_bindings(const void *context, const uin
 
 void say_program_hash(const Recipe *recipe, uint8_t out[32]){
     const Say *say = recipe ? recipe->say : NULL; layout_program_hash(say ? &say->lay : NULL, out);
+    /* Record interpretation changed even where the recipe text did not:
+     * cached file metadata must not hide newly retained mapping evidence. */
+    blake3_hasher hash; blake3_hasher_init(&hash);
+    static const char version[]="laplace-source-interpretation-v2";
+    blake3_hasher_update(&hash,version,sizeof version-1); blake3_hasher_update(&hash,out,32);
+    blake3_hasher_finalize(&hash,out,32);
 }
 
 int say_only_disposes(const Recipe *r){ const Say *s = r->say; return s && s->ndis && !s->nthing && !s->natt && !s->nrel && !s->nhw && !s->npair && !s->nhold && !s->nkey; }

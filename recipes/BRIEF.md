@@ -11,8 +11,12 @@ A source is a **witness**. Laplace records what the witness wrote, exactly as it
 
 So:
 
-- **Nothing is renamed, normalized, abbreviated, expanded, translated, re-cased or re-spelled.** `Number=Sing` is
-  recorded as `Number` and `Sing`, never as "singular". `Ref_Name` stays `Ref_Name`, never "Reference Name".
+- **Preserve source notation and state its interpretation explicitly.** `Number=Sing` retains `Number` and `Sing`.
+  A field-scoped vocabulary can additionally align a documented category with a shared category; it never rewrites
+  arbitrary content words. `type pos upos vocabulary wordnet-pos` maps `n` to `NOUN` and records
+  `[[wordnet-pos, n], denotes, NOUN]` under the source. Reusable tables live in `vocabularies/*.tsv`: a `list LIST`
+  header followed by unique `SOURCE CANONICAL` pairs. `-` preserves a documented source category without claiming
+  equivalence to a shared category. Unknown closed categories are semantic omissions and reject source publication.
 - **No predicate comes from the markup**: a header row, an attribute or element name, a JSON key, a `KEY=VALUE` key
   or a name in the file's name says where a value is, never what it means (see "A relation is meaning", below). For a
   table with no header row, column names may come **only** from the source's own documentation (its README, its
@@ -82,14 +86,25 @@ So:
     lexicalizations. An identifier is decomposed by its notation (`va:0001f`: namespace `va`, number, kind), and a name
     such as `TOLERATE` is a label attested of the node, used only to realize it: never ask which text "is" the node.
 
-  - **A pointer resolves, and is recorded nowhere.** A WordNet synset offset, a synset or sense id, a FrameNet numeric
+  - **A pointer resolves in its declared scope; an open resource ID does not require a cache slot.** A WordNet synset offset, a synset or sense id, a FrameNet numeric
     `ID`, a UD token number or `sent_id`, a Tatoeba sentence number, a geonameid, a data set's row or case id, a line
     number: how a source addresses its own records (or another release's). It is packaging. A WordNet 3.0 offset is
     the byte position of the synset's line in that release's `data.<pos>` file (byte 1,976,841 of `data.verb` starts
     `01976841 38 v 01 drop`), unique only with its type and only within its release. Name a pointer with `key` (the
     rows that point at it resolve to the thing it defines), `refer` (it is read as the thing another row or element of
     the same source defines) or, for a source's own key of a highway node, `type`: it resolves to the ID of what it
-    points at and nothing of it is recorded. `omit` resolves nothing: it drops the part, and nothing reads it (`say.c`).
+    points at. `refer FIELD TIER under CONTENT_PATH matching PATTERN [as TEMPLATE]` resolves structured notation
+    against the same content scope as its declaration. `key TIER FIELD ... retain` indexes a semantic identifier
+    without removing its content disposition. PropBank uses these to keep argument slots scoped to their roleset:
+    `ARG0` under two different predicate senses does not identify one universal semantic role. Transformed scoped
+    references retain `[[scope, original notation], refers to, resolved target]` in source provenance.
+    Open identifier lists retain unfamiliar IDs as written, without choosing a nearby known ID or regenerating the
+    highway. Closed bank vocabularies still require a valid class. `omit` resolves nothing and is appropriate for
+    explicit absence markers such as VerbNet's `fn_mapping="None"`, not unfamiliar real identifiers.
+    `types`, `keyed`, `alias` and `maps` also emit source-attested vocabulary, key and mapping claims during ordinary
+    ingestion. Crosswalk predicates retain both resource vocabularies; a mapping does not assert unrestricted identity.
+    Semantic omissions, unread fields, lost provenance and conflicting record metadata return failure and prevent
+    source/observation publication. Already stored canonical structure can remain available for reuse.
   - **A pointer's notation still carries facts.** Decompose it by the source's own notation, declared in the recipe,
     never by word breaks, and attest the facts it carries: a WordNet offset's type `v`, a sense key's lexicographer
     file (`drop%2:38:00::` is lemma `drop`, type 2, lexicographer file 38, lex_id 00). The facts are attested; the

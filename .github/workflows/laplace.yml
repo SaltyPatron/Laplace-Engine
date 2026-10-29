@@ -118,6 +118,7 @@ jobs:
           python3 Laplace-Engine/tests/prompt-occurrences.py "$L"
           python3 Laplace-Engine/tests/firmware-relations.py "$L"
           python3 Laplace-Engine/tests/recipe-order.py "$L"
+          python3 Laplace-Engine/tests/semantic-interpretation.py "$L"
           cmake -DWORK="$RUNNER_TEMP/reader-contract" -P Laplace-Engine/tests/reader-contract.cmake
           failed=0
           for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing rich-text; do
@@ -175,6 +176,7 @@ jobs:
           bash Laplace-Engine/tests/stream-working-set.sh "$RUNNER_TEMP/engine/laplace"
           python3 Laplace-Engine/tests/publication-waves.py "$RUNNER_TEMP/engine/laplace"
           python3 Laplace-Engine/tests/observation-windows.py "$RUNNER_TEMP/engine/laplace"
+          python3 Laplace-Engine/tests/semantic-interpretation.py "$RUNNER_TEMP/engine/laplace" --database
           bash Laplace-Engine/tests/rich-text-db.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/presence-frontier.sh "$RUNNER_TEMP/engine/laplace" "$RUNNER_TEMP/engine/presence-frontier"
           bash Laplace-Engine/tests/framenet-differences.sh "$RUNNER_TEMP/engine/laplace"

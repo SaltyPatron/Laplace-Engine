@@ -75,9 +75,9 @@ static void progress_file(const char *event, File *file) {
     }
 }
 
-static void progress_close(const lp_id *source_id) {
+static void progress_end(const char *event, const lp_id *source_id) {
     if (!ingest_progress.out) return;
-    progress_write("complete", NULL, source_id);
+    progress_write(event, NULL, source_id);
     fclose(ingest_progress.out); free(ingest_progress.state);
     memset(&ingest_progress, 0, sizeof ingest_progress);
 }

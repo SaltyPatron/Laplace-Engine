@@ -4,6 +4,7 @@
 #include "record_values.h"
 #include "record_surface.h"
 #include "record_diagnostics.h"
+#include "record_output.h"
 #include "laplace/tier0.h"
 #include <omp.h>
 #include <stdio.h>
@@ -233,7 +234,15 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
         for (int more = 1; more; ) { more = 0;                                /* white space around it, a no-break space (U+00A0) among it */
             if (kn && (*kp == ' ' || *kp == '\t')) { kp++; kn--; more = 1; } else if (kn >= 2 && kp[0] == 0xC2 && kp[1] == 0xA0) { kp += 2; kn -= 2; more = 1; }
             if (kn && (kp[kn - 1] == ' ' || kp[kn - 1] == '\t' || kp[kn - 1] == '\r')) { kn--; more = 1; } else if (kn >= 2 && kp[kn - 2] == 0xC2 && kp[kn - 1] == 0xA0) { kn -= 2; more = 1; } }
-        Keys kf; kf.n = 0; if (d->k.has_re || d->k.nas) { record_key_forms(&d->k, kp, kn, &kf, t, c); if (!kf.n) return 0; }     /* the key as the lists write it; a key the pattern does not match is no key of theirs */
+        Keys kf; kf.n = 0; if (d->k.has_re || d->k.nas) { record_key_forms(&d->k, kp, kn, &kf, t, c); if (!kf.n) { record_unknown_key(k,t,c,x); return 0; } }
+        if (d->k.vocabulary) {
+            const VocabularyValue *value=lp_strmap_lookup(d->k.vocabulary,kp,kn);
+            if (!value) { record_unknown_key(k,t,c,x); return 0; }
+            if (!value->length) { *out=record_text(kp,kn); return 1; }
+            kp=(const uint8_t *)value->canonical; kn=value->length;
+        }
+        const uint8_t *open_key=kf.n ? (const uint8_t *)kf.k[0] : kp;
+        size_t open_length=kf.n ? strlen(kf.k[0]) : kn;
         int nk = kf.n ? kf.n : 1;                                              /* with no template, the key as written, once */
         for (int j = 0; j < nk; j++) { if (kf.n) { kp = (const uint8_t *)kf.k[j]; kn = strlen(kf.k[j]); } Ref v = string_ref(kp, kn);     /* each template's key in turn: the first a list knows */
             for (uint8_t i = 0; i < d->ntargets; i++) {
@@ -245,7 +254,10 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
                 }
                 const lp_list *L = HW ? lp_highway_list(HW, target->name) : NULL; if (L && lp_highway_slot(HW, L, &v.id) >= 0) { *out = v; return 1; }
             } }
-        if (d->k.node) { if (record_value_once(k, t, c)) record_obligation_note(k, 'm', d->road_label, x->name, x->nlen, NULL, 0); *out = string_ref(kp, kn); return 1; }
+        int open=d->k.node;
+        if (!d->k.vocabulary) for (uint8_t i=0; i<d->ntargets; i++)
+            if (HW && lp_highway_list(HW,d->targets[i].name) && !lp_highway_bank(HW,d->targets[i].name)) open=1;
+        if (open) { if (record_value_once(k, t, c)) record_obligation_note(k, 'm', d->road_label, x->name, x->nlen, NULL, 0); *out = record_text(open_key, open_length); return 1; }
         record_unknown_key(k, t, c, x);     /* a key no list of the highway holds: said, never taken for text */
         return 0; }
     if (d->what == D_CODEPOINTS || d->what == D_RANGE) {
@@ -260,7 +272,13 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
         *out = string_ref(buf, l); return 1; }
     if (d->what == D_REFER && depth < 16) {                                  /* the first of its targets that holds the key */
         size_t key_length=x->vlen;
-        const uint8_t *key=scoped_key(k,t,c,d->under,d->key_radix,x->val,&key_length,depth);
+        const uint8_t *raw=x->val; Keys forms={0};
+        if (d->k.has_re || d->k.nas) {
+            record_key_forms(&d->k,raw,key_length,&forms,t,c);
+            if (forms.n!=1) { if (k->binding_phase) k->blocked++; else record_unknown_key(k,t,c,x); return 0; }
+            raw=(const uint8_t *)forms.k[0]; key_length=strlen(forms.k[0]);
+        }
+        const uint8_t *key=scoped_key(k,t,c,d->under,d->key_radix,raw,&key_length,depth);
         if (!key) { if (k->binding_phase) k->blocked++; else record_unknown_key(k,t,c,x); return 0; }
         for (uint8_t i = 0; i < d->ntargets; i++) {
             const TargetCode *target = &d->targets[i];
@@ -327,7 +345,12 @@ static int referred_field(RecordWorker *k, const SemanticRecord *t, int32_t g, c
     if (x->kind == S_GROUP && record_field_first(x) >= 0 && record_field_next(&t->n[record_field_first(x)]) < 0 && t->n[record_field_first(x)].kind == S_TEXT) x = &t->n[record_field_first(x)];     /* a part that holds only its text */
     if (!d || d->what != D_REFER || !x->vlen) return 0;
     size_t key_length=x->vlen;
-    const uint8_t *key=scoped_key(k,t,c,d->under,d->key_radix,x->val,&key_length,depth);
+    const uint8_t *raw=x->val; Keys forms={0};
+    if (d->k.has_re || d->k.nas) {
+        record_key_forms(&d->k,raw,key_length,&forms,t,c); if (forms.n!=1) return 0;
+        raw=(const uint8_t *)forms.k[0]; key_length=strlen(forms.k[0]);
+    }
+    const uint8_t *key=scoped_key(k,t,c,d->under,d->key_radix,raw,&key_length,depth);
     if (!key) return 0;
     for (uint8_t i = 0; i < d->ntargets; i++) {
         const TargetCode *target = &d->targets[i];
@@ -554,6 +577,7 @@ static void record_key_forms(const KSpec *spec, const uint8_t *value, size_t len
 static void keys_at(const Say *s, const SemanticRecord *t, int32_t g, const KSpec *ks, Keys *out){
     out->n = 0; int32_t at[RECORD_REFERENCE_CAPACITY]; int na = record_select_all(t, g, ks->path, at, RECORD_REFERENCE_CAPACITY);
     for (int i = 0; i < na; i++) { const SemanticValue *x = &t->n[at[i]];
+        const Dis *disposition=record_field_disposition(s,x); if (disposition && disposition->what==D_OMIT) continue;
         if (x->kind != S_GROUP) { if (!record_value_empty(s, x)) record_key_forms(ks, x->val, x->vlen, out, t, at[i]); continue; }
         for (int32_t q = record_field_first(x); q >= 0; q = record_field_next(&t->n[q])) if (t->n[q].kind != S_GROUP && !record_value_empty(s, &t->n[q])) record_key_forms(ks, t->n[q].val, t->n[q].vlen, out, t, q); }
 }
@@ -604,17 +628,66 @@ void record_publish_keys(RecordWorker *k, const SemanticRecord *t, int32_t root,
             } } }
 }
 
+static Ref resource_key(const char *list, const char *key){
+    Ref parts[2]={string_ref((const uint8_t *)list,strlen(list)),record_text((const uint8_t *)key,strlen(key))};
+    return said_tuple(compose(parts,2,ref_above(parts,2)));
+}
+static void resource_entry(RecordWorker *k, const HwLine *h, int line, const Ref *thing, const char *a, const char *b){
+    if (k->hw) { record_highway_entry(k,h->what,line,thing,a,a?strlen(a):0,b,b?strlen(b):0); return; }
+    Ref parts[3];
+    if (h->what==1) {
+        parts[0]=*thing; parts[1]=string_ref((const uint8_t *)"identifier vocabulary",21);
+        parts[2]=string_ref((const uint8_t *)h->a.list,strlen(h->a.list));
+    } else if (h->what==2) {
+        parts[0]=resource_key(h->a.list,a); parts[1]=string_ref((const uint8_t *)"identifies",10); parts[2]=*thing;
+    } else if (h->what==3) {
+        parts[0]=resource_key(h->a.list,a); parts[1]=string_ref((const uint8_t *)"identifier alias",16); parts[2]=resource_key(h->b.list,b);
+    } else {
+        /* A crosswalk is an attested mapping, not a claim of unrestricted
+         * equivalence. Its predicate retains both identifier vocabularies. */
+        Ref relation[3]={string_ref((const uint8_t *)h->a.list,strlen(h->a.list)),
+            string_ref((const uint8_t *)"cross-resource mapping",22),string_ref((const uint8_t *)h->b.list,strlen(h->b.list))};
+        parts[0]=record_text((const uint8_t *)a,strlen(a));
+        parts[1]=said_tuple(compose(relation,3,ref_above(relation,3)));
+        parts[2]=record_text((const uint8_t *)b,strlen(b));
+    }
+    record_emit_claim(k,parts,3);
+}
 void record_highway_values(RecordWorker *k, const SemanticRecord *t, int32_t root){
     const Say *s = k->s; if (!record_conditions_match(s, t, root, s->whole)) return;
     for (uint32_t g = 0; g < t->count; g++) { const SemanticValue *x = &t->n[g]; if (x->context || x->kind == S_NOTE || !x->nlen) continue;
+        if (x->kind==S_TEXT) { size_t i=0; while (i<x->vlen && (x->val[i]==' ' || x->val[i]=='\t' || x->val[i]=='\r' || x->val[i]=='\n')) i++; if (i==x->vlen) continue; }
         { const Dis *dg = record_field_disposition(s, x); if (dg && dg->what == D_OMIT) { g = (uint32_t)record_scope_end(t, (int32_t)g); continue; } }
         for (int i = 0; i < s->nhw; i++) { const HwLine *h = &s->hw[i]; if (!record_field_matches(x, h->tier) || !record_conditions_match(s, t, (int32_t)g, h->when)) continue;
             Ref X; Keys A, B;
             if (h->what <= 2) { if (x->kind == S_VALUE || !(x->kind == S_GROUP ? record_thing(k, t, (int32_t)g, &X, 0) : record_value(k, t, (int32_t)g, &X, 0))) continue;     /* a thing; or a text of a list, a type by itself */
-                if (h->what == 1) { record_highway_entry(k, 1, i, &X, NULL, 0, NULL, 0); continue; }
-                keys_at(s, t, (int32_t)g, &h->a, &A); for (int a = 0; a < A.n; a++) record_highway_entry(k, 2, i, &X, A.k[a], strlen(A.k[a]), NULL, 0); continue; }
+                if (h->what == 1) { resource_entry(k,h,i,&X,NULL,NULL); continue; }
+                keys_at(s, t, (int32_t)g, &h->a, &A); for (int a = 0; a < A.n; a++) resource_entry(k,h,i,&X,A.k[a],NULL); continue; }
             keys_at(s, t, (int32_t)g, &h->a, &A); if (!A.n) continue; keys_at(s, t, (int32_t)g, &h->b, &B);
-            for (int a = 0; a < A.n; a++) for (int b = 0; b < B.n; b++) record_highway_entry(k, h->what, i, NULL, A.k[a], strlen(A.k[a]), B.k[b], strlen(B.k[b])); } }
+            for (int a = 0; a < A.n; a++) for (int b = 0; b < B.n; b++) resource_entry(k,h,i,NULL,A.k[a],B.k[b]); } }
+}
+
+void record_vocabulary_evidence(RecordWorker *k, const SemanticRecord *t){
+    for (uint32_t i=0; i<t->count; i++) {
+        const SemanticValue *x=&t->n[i];
+        if (x->context || !x->nlen || !x->vlen) continue;
+        const Dis *d=record_field_disposition(k->s,x);
+        if (!d) continue;
+        if (d->what==D_REFER && (d->k.has_re || d->k.nas) && d->under[0]) {
+            Ref scope, target;
+            int32_t at=record_select_first(t,(int32_t)i,d->under);
+            if (at<0 || !record_value(k,t,at,&scope,0) || !record_value(k,t,(int32_t)i,&target,0)) continue;
+            Ref notation[2]={scope,record_text(x->val,x->vlen)};
+            Ref parts[3]={said_tuple(compose(notation,2,ref_above(notation,2))),string_ref((const uint8_t *)"refers to",9),target};
+            record_emit_claim(k,parts,3); continue;
+        }
+        if (d->what!=D_TYPE || !d->k.vocabulary) continue;
+        Ref canonical; if (!record_value(k,t,(int32_t)i,&canonical,0)) continue;
+        Ref notation[2]={string_ref((const uint8_t *)d->k.vocabulary_name,strlen(d->k.vocabulary_name)),record_text(x->val,x->vlen)};
+        Ref parts[3]={said_tuple(compose(notation,2,ref_above(notation,2))),
+            string_ref((const uint8_t *)"denotes",7),canonical};
+        record_emit_claim(k,parts,3);
+    }
 }
 
 RecordValueFrame record_values_enter(void){

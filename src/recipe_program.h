@@ -16,7 +16,9 @@ enum { DEFAULT_LITERAL = 1, DEFAULT_FIELD };
  * writes it otherwise than those it points at write it (vn:51.2 for 51.2): the highway's lines, and a type's key. */
 typedef struct KeyProgram KeyProgram;
 typedef struct DiagnosticLabel DiagnosticLabel;
-typedef struct { char list[32], path[160], as[4][64]; int nas; regex_t re; int has_re, node; KeyProgram *program; } KSpec;     /* as: the templates, tried in order */
+typedef struct { char canonical[64]; uint16_t length; } VocabularyValue;
+typedef struct { char list[32], path[160], as[4][64]; int nas; regex_t re; int has_re, node; KeyProgram *program;
+                 lp_strmap *vocabulary; char vocabulary_name[64]; } KSpec; /* immutable, field-scoped vocabulary */
 typedef struct { char name[64]; uint16_t length, tier_id, scope_key; uint8_t within, local; lp_id domain; } TargetCode;
 typedef struct { char name[64]; int what; char arg[64], under[64]; uint8_t key_radix; KSpec k; uint32_t when;
                  struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; const char *text;

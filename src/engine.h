@@ -236,7 +236,7 @@ int  say_has_highway(const Recipe *);
 const char *say_relation(const Recipe *, const char *name);                  /* relation "TEXT" NAME: TEXT, or NULL where the recipe declares none of NAME */
 int  say_thing_parts(const Recipe *, const char *tier, const char *a, const char *b, int *ia, int *ib);     /* the first way it names a TIER by parts A and B: its parts, and where A and B stand; -1 none */
 void say_highway_lists(const Recipe *, Hw *);
-void say_obligations(FILE *);                                                /* the parts a claim would name with no meaning the recipe gives (value): said, and forgotten */
+uint64_t say_obligations(FILE *);                                            /* reports and returns semantic omissions before source publication */
 void hw_list(Hw *, const char *list, const char *say);
 void hw_type(Hw *, const char *list, const char *say, Ref thing);                 /* a type of the list: the thing it is */
 void hw_key(Hw *, const char *list, Ref thing, const char *key);                  /* a resource's key of that type */

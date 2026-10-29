@@ -3,7 +3,7 @@ name verbnet-classes
 # from these files; a thematic role is its type (Theme), listed the same way; the content of each is that text. A
 # member is the verb it names; its verbnet_key (abandon#1) is a key, recorded nowhere; its grouping names PropBank
 # rolesets, its wn WordNet senses and its fn_mapping a FrameNet frame, each read as the type those resources' keys
-# point at (fn_mapping "None" is the key of no frame, so it resolves to nothing). A frame is its content: its
+# point at (fn_mapping "None" is an explicit absence marker). Uncached resource identifiers remain content. A frame is its content: its
 # description, examples, syntax and semantics, whole. What is no thing speaks of the nearest thing it is inside.
 match *.xml
 format xml
@@ -17,6 +17,9 @@ part grouping by space
 part wn by space
 type grouping pbroleset
 type wn ili matching ^[?]*(.*)$
+when fn_mapping is None
+omit fn_mapping
+always
 type fn_mapping fnframe
 content ID type name Value value primary secondary features bool logic EXAMPLE
 # bookkeeping, read by nothing

@@ -263,6 +263,9 @@ endif()
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/recipes/"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/laplace/recipes" COMPONENT LaplaceRecipeRuntime
         FILES_MATCHING PATTERN "*.recipe" PATTERN "*.format" PATTERN "*.LICENSE" PATTERN "source" PATTERN "order")
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/recipes/vocabularies/"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/laplace/recipes/vocabularies" COMPONENT LaplaceRecipeRuntime
+        FILES_MATCHING PATTERN "*.tsv")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/grammar-sources.tsv"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/laplace" COMPONENT LaplaceRecipeRuntime)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/firmware/program.firmware"
