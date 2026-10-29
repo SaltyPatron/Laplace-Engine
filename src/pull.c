@@ -103,10 +103,9 @@ static int middle_refused(const lp_id *part, int np){
 /* The claims that hold the given parts in their places (a part not given is open): at most fan of them; *capped says
  * there were more. k: how many deviations below its rating a claim is read at. */
 Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, double k, int *n, int *capped){
-    (void)pg;
     lp_id keys[3]; uint32_t nk = 0; for (int i = 0; i < 3; i++) if (have[i]) keys[nk++] = part[i];
     /* the tier is known once the IDs are: every leaf above it, together, then the fan keeps the hardest pulling */
-    int nh = 0; Hold *h = holds_above(keys, (int)nk, tier_max(keys, (int)nk), 0, 1, &nh);
+    int nh = 0; Hold *h = holds_above(keys, (int)nk, tier_max(pg, keys, (int)nk), 0, 1, &nh);
     int count=0;Claim *c=claims_from_holds(h,nh,k,&count);int m=0;
     for(int j=0;j<count;j++){
         Claim *x=&c[j];

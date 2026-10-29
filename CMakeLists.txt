@@ -59,6 +59,7 @@ set(ENGINE_SOURCES
     src/ingest.c
     src/db.c
     src/read.c
+    src/read_ids.c
     src/file.c
     src/structure.c
     src/say.c
@@ -191,7 +192,7 @@ else()
 endif()
 
 # The transport plan owner is exercised against a real configured server.
-add_executable(pg_plan_lifecycle EXCLUDE_FROM_ALL tests/pg-plan-lifecycle.c src/pg.c src/pg_plan.c)
+add_executable(pg_plan_lifecycle EXCLUDE_FROM_ALL tests/pg-plan-lifecycle.c src/read_ids.c src/pg.c src/pg_plan.c)
 target_link_libraries(pg_plan_lifecycle PRIVATE OpenMP::OpenMP_C)
 laplace_utf8_executable(pg_plan_lifecycle)
 target_include_directories(pg_plan_lifecycle PRIVATE src ${LAPLACE_NATIVE}/include ${LAPLACE_PG_DIR}/include)
@@ -200,10 +201,10 @@ if(WIN32)
   target_include_directories(pg_plan_lifecycle BEFORE PRIVATE src/win)
   target_sources(pg_plan_lifecycle PRIVATE src/os.c)
   target_compile_options(pg_plan_lifecycle PRIVATE /UNDEBUG)
-  target_link_libraries(pg_plan_lifecycle PRIVATE laplace_static ${LAPLACE_PG_DIR}/lib/libpq.lib shlwapi)
+  target_link_libraries(pg_plan_lifecycle PRIVATE laplace_static lp_crmath BLAKE3::blake3 ${LAPLACE_PG_DIR}/lib/libpq.lib shlwapi)
 else()
   target_compile_options(pg_plan_lifecycle PRIVATE -UNDEBUG)
-  target_link_libraries(pg_plan_lifecycle PRIVATE laplace_static pq)
+  target_link_libraries(pg_plan_lifecycle PRIVATE laplace_static lp_crmath BLAKE3::blake3 pq)
 endif()
 
 include(GNUInstallDirs)

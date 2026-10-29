@@ -160,13 +160,13 @@ static int shape_measured(State *st, const lp_id *ids, int n, const Hold *h0, in
     /* the GIN's nominations are the containers read already; the GiST's, the entities nearest the curve's centroid at a
      * tier that composes, the fan of them (as laplace_couple nominates) */
     Hold *h = malloc(sizeof(Hold) * (size_t)(nh0 + fw->fan + 1)); memcpy(h, h0, sizeof(Hold) * (size_t)nh0); int nh = nh0, extra = 0;
-    { double *pc = malloc(sizeof(double) * 4 * (size_t)n); uint8_t *hc = malloc((size_t)n); coords_of(ids, n, pc, hc); double cen[4] = { 0 }; int m = 0;
+    { double *pc = malloc(sizeof(double) * 4 * (size_t)n); uint8_t *hc = malloc((size_t)n); coords_of(st->pg, ids, n, pc, hc); double cen[4] = { 0 }; int m = 0;
       for (int k = 0; k < n; k++) if (hc[k]) { for (int d = 0; d < 4; d++) cen[d] += pc[4 * k + d]; m++; }
       if (m >= 2) { for (int d = 0; d < 4; d++) cen[d] /= m; uint8_t pt[64]; size_t pl = lp_ewkb_point4(cen, pt, sizeof pt);
           Args a = { 0 }; arg_raw(&a, pt, pl); arg_int(&a, fw->nearest);
           double tk = now(); PGresult *q = ask_st(st, "SELECT e.id FROM @extschema@.entity e WHERE e.tier >= 3 ORDER BY e.coord OPERATOR(@extschema@.<~>) @postgis@.ST_GeomFromEWKB($1::bytea), e.id LIMIT $2", &a);
           int nq = PQntuples(q); lp_id *gid = malloc(sizeof(lp_id) * (size_t)(nq ? nq : 1)); for (int r = 0; r < nq; r++) memcpy(gid[r].b, PQgetvalue(q, r, 0), 16); PQclear(q); args_free(&a);
-          double tp = now(); int ng = 0; Hold *g = paths_of(gid, nq, &ng); for (int i = 0; i < ng && nh < nh0 + fw->fan + 1; i++) { h[nh++] = g[i]; extra++; } free(g); free(gid);
+          double tp = now(); int ng = 0; Hold *g = paths_of(st->pg, gid, nq, &ng); for (int i = 0; i < ng && nh < nh0 + fw->fan + 1; i++) { h[nh++] = g[i]; extra++; } free(g); free(gid);
           if (getenv("LAPLACE_TIMES")) fprintf(stderr, "times: the GiST's %d nearest in %.1f ms, their paths in %.1f ms\n", nq, (tp - tk) * 1000, (now() - tp) * 1000); }
       free(pc); free(hc); }
     lp_idmap *seen = lp_idmap_new(); int *pick = malloc(sizeof(int) * (size_t)(nh ? nh : 1)), np_ = 0; lp_idmap *verts = lp_idmap_new();
@@ -176,7 +176,7 @@ static int shape_measured(State *st, const lp_id *ids, int n, const Hold *h0, in
         for (int k = 0; k < cn[c]; k++) { bool f; lp_idmap_put(verts, &cv[c][k], &f); } }
     for (int k = 0; k < n; k++) { bool f; lp_idmap_put(verts, &ids[k], &f); }
     size_t nv = lp_idmap_count(verts); double *xyz = malloc(sizeof(double) * 4 * (nv ? nv : 1)); uint8_t *has = malloc(nv ? nv : 1);
-    coords_of(lp_idmap_keys(verts), (int)nv, xyz, has);
+    coords_of(st->pg, lp_idmap_keys(verts), (int)nv, xyz, has);
     double *pa = malloc(sizeof(double) * 4 * (size_t)n); size_t npa = 0;
     for (int k = 0; k < n; k++) { int64_t q = lp_idmap_find(verts, &ids[k]); if (q >= 0 && has[q]) { memcpy(pa + 4 * npa, xyz + 4 * q, 32); npa++; } }
     Curve *all = malloc(sizeof(Curve) * (size_t)(np_ ? np_ : 1)); int na = 0; double *b = malloc(sizeof(double) * 4 * 4096);
@@ -445,7 +445,7 @@ static int langs_of(State *st, const lp_id *w, int n, lp_id (*out)[LANGS], int *
     int nc = 0, *src = NULL; Claim *cl = claims_each(st->pg, w, n, &lx->sense, CLAIM_FIRST, fw->fan, fw->k, &nc, &src); st->trips++;
     lp_id *sense = malloc(sizeof(lp_id) * (size_t)(nc ? nc : 1));
     for (int entry = 0; entry < nc; entry++) sense[entry] = cl[entry].part[cl[entry].np - 1];
-    int nh = 0; Hold *h = paths_of(sense, nc, &nh); st->trips += nc > 0; Ids parts = { 0 };
+    int nh = 0; Hold *h = paths_of(st->pg, sense, nc, &nh); st->trips += nc > 0; Ids parts = { 0 };
     for (int row = 0; row < nh; row++) { int entry = h[row].src; if (entry < 0 || entry >= nc) continue;
         int word = src[entry]; if (word < 0 || word >= n) continue;
         path_into(&parts, lp_path_of(h[row].path, (size_t)h[row].path_len)); if (parts.n != (size_t)lx->np) continue;

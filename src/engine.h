@@ -313,11 +313,13 @@ Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, 
 Hold *holds_both(const lp_id *keys, int nkeys, const lp_id *with, int *nout);                  /* per key, what holds it and with too: a two-key probe a key, every leaf at once */   /* every tier, one probe a leaf: each path that holds any key and with as well; src -1, the caller reads which key from the path */
 Hold *holds_any(const lp_id *keys, int nkeys, int *nout);                                     /* every tier, one probe a leaf: each path that holds any key; src -1 */
 void holds_free(Hold *h, int n);
+int hold_order(const void *,const void *);
 Hold *holds_capped(const lp_id *keys, int nkeys, int cap, int standing, int kinds, int *hub, int *nout);   /* kinds: 1 claims, 2 observations, 3 both */   /* each key's holders, its claims and observations a hub's when more than cap: hub[2k], hub[2k + 1] */
-void coords_of(const lp_id *ids, int n, double *out, uint8_t *has);
-Hold *paths_of(const lp_id *ids, int n, int *nout);
+void coords_of(PGconn *pg, const lp_id *ids, int n, double *out, uint8_t *has);
+void tiers_of(PGconn *pg, const lp_id *ids, int n, int *tiers);       /* cache/stored tiers by input position; -1 for missing IDs */
+Hold *paths_of(PGconn *pg, const lp_id *ids, int n, int *nout);
 long holds_count(const lp_id *keys, int nkeys, int kind);                                     /* how many paths hold every key (kind 0 observations, 1 claims, -1 both): the index counts, no row is read */                                            /* each one's path, from the partition its ID names */                            /* each one's coordinate, 4 doubles; has[i]: found */
-int  tier_max(const lp_id *ids, int n);                                 /* the highest tier these IDs are recorded at; -1 when none are */
+int  tier_max(PGconn *pg, const lp_id *ids, int n);                   /* highest cache/stored tier; -1 when none are known */
 #define ARGS_MAX 8
 enum { SQL_ID_ARRAY=2 }; /* binary payload whose element OID binds at execution */
 typedef struct { lp_buf b; int binary; } SqlArg;

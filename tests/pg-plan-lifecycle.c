@@ -3,7 +3,10 @@
 #include "laplace/laplace.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+const lp_tier0_record *T0;
 
 static PGconn *connect(const char *connection){
     PGconn *pg=PQconnectdb(connection);
@@ -53,16 +56,52 @@ static void snapshot_scope(PGconn *master,const char *connection){
     assert(db_read_begin(reader,NULL));PQreset(reader);assert(PQstatus(reader)==CONNECTION_OK && !db_read_snapshot(reader));
     command(writer,"DROP TABLE public.snapshot_fixture");PQfinish(reader);PQfinish(writer);
 }
+static void stored_reads(PGconn *pg){
+    command(pg,"BEGIN");
+    command(pg,"INSERT INTO @extschema@.entity(id,tier,coord,hilbert) SELECT "
+        "@extschema@.laplace_id('exact reader'),@extschema@.laplace_tier('exact reader'),"
+        "@extschema@.laplace_coord('exact reader'),@extschema@.laplace_hilbert('exact reader')");
+    command(pg,"INSERT INTO @extschema@.physicality(entity,tier,hilbert,path) SELECT id,tier,hilbert,"
+        "@extschema@.laplace_path(ARRAY[@extschema@.laplace_cp_id(97),@extschema@.laplace_cp_id(98)])"
+        " FROM @extschema@.entity");
+    PGresult *rows=ask_once(pg,"SELECT id,tier,@postgis@.ST_X(coord),@postgis@.ST_Y(coord),"
+        "@postgis@.ST_Z(coord),@postgis@.ST_M(coord) FROM @extschema@.entity",NULL);
+    assert(PQntuples(rows)==1);lp_id known=*col_id(rows,0,0);int tier=(int)col_int(rows,0,1);
+    double expected[4];for(int d=0;d<4;d++)expected[d]=lp_be_f64(PQgetvalue(rows,0,d+2));PQclear(rows);
+    lp_id ids[4]={known,{0},known};lp_id_codepoint(65,ids+3);
+    double coords[16]={0};uint8_t has[4]={0};coords_of(pg,ids,4,coords,has);
+    assert(has[0] && !has[1] && has[2] && has[3]);
+    assert(!memcmp(coords,expected,sizeof expected) && !memcmp(coords+8,expected,sizeof expected));
+    lp_ref atom=lp_ref_atom(T0,65);double atom_coord[4];lp_coord_xyzm(&atom.c,atom_coord);
+    assert(!memcmp(coords+12,atom_coord,sizeof atom_coord));
+    DbTraffic before=db_traffic();coords_of(pg,ids+3,1,coords,has);
+    assert(has[0] && db_traffic().commands==before.commands);
+    int tiers[4];tiers_of(pg,ids,4,tiers);
+    assert(tiers[0]==tier && tiers[1]==-1 && tiers[2]==tier && tiers[3]==0);
+    before=db_traffic();tiers_of(pg,ids+3,1,tiers);
+    assert(tiers[0]==0 && db_traffic().commands==before.commands);
+    assert(tier_max(pg,ids,4)==tier && tier_max(pg,ids+1,1)==-1 && tier_max(pg,NULL,0)==-1);
+    int count;Hold *paths=paths_of(pg,ids,4,&count);assert(count==2);
+    assert(paths[0].src==0 && paths[1].src==2 && paths[0].path!=paths[1].path);
+    assert(paths[0].tier==tier && !paths[0].claim);
+    lp_path path=lp_path_of(paths[0].path,(size_t)paths[0].path_len);assert(path.n==2);
+    lp_id child=lp_path_id(path,0),a;lp_id_codepoint(97,&a);assert(lp_id_eq(&child,&a));
+    assert(paths[0].path_len==paths[1].path_len && !memcmp(paths[0].path,paths[1].path,(size_t)paths[0].path_len));
+    holds_free(paths,count);paths=paths_of(pg,NULL,0,&count);assert(!paths && !count);
+    command(pg,"ROLLBACK");
+}
 int main(int argc,char **argv){
     if(argc==3){
+        T0=lp_tier0_map(getenv("LAPLACE_TIER0"));assert(T0);
         PGconn *a=connect(argv[1]),*b=connect(argv[2]);assert(a && b);
         snapshot_scope(a,argv[1]);
         assert(db_binding(a)->id_type!=db_binding(b)->id_type);
         lp_id ids[2];lp_id_codepoint(65,ids);ids[1]=ids[0];Args arguments={0};arg_ids(&arguments,ids,2);
         binding_answer(a,&arguments);binding_answer(b,&arguments);binding_answer(a,&arguments);
         PQreset(b);assert(PQstatus(b)==CONNECTION_OK);binding_answer(b,&arguments);
+        stored_reads(a);stored_reads(b);stored_reads(a);
         args_free(&arguments);PQfinish(a);PQfinish(b);
-        puts("pg-plan-lifecycle: installed namespaces and OIDs, reusable arrays, shared read-only snapshots, refresh and reset passed");return 0;
+        puts("pg-plan-lifecycle: namespaces, OIDs, snapshots, exact row reads, duplicate/missing/virtual IDs and reset passed");return 0;
     }
     if(argc!=2){fputs("usage: pg-plan-lifecycle conninfo [other-connection]\n",stderr);return 2;}
     PGconn *a=connect(argv[1]),*b=connect(argv[1]);if(!a || !b)return 1;

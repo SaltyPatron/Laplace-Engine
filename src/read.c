@@ -32,8 +32,8 @@ Run run_of(const uint8_t *ewkb, size_t len){
  * Here each leaf is one statement and the statements run together. Mask and standing are not in that statement:
  * the mask bit is a filter on the rows the path index returned, and the standing is a second set, by the claim's
  * own partition. */
-typedef struct { char name[64]; int tier; } Leaf;
-static Leaf *phy, *entleaves; static int nphy, nent;
+typedef struct { char name[64]; } Leaf;
+static Leaf *phy; static int nphy;
 static PGconn **pool;
 static int npool;
 static char *pool_connection;
@@ -51,7 +51,7 @@ int db_read_pool_end(void){
 static void pool_close(void){
     for(int i=0;i<npool;i++)PQfinish(pool[i]);
     free(pool);pool=NULL;npool=0;free(pool_connection);pool_connection=NULL;pool_snapshot[0]=0;
-    free(phy);phy=NULL;nphy=0;free(entleaves);entleaves=NULL;nent=0;
+    free(phy);phy=NULL;nphy=0;
 }
 static int times_on(void){ static int on = -1; if (on < 0) { const char *e = getenv("LAPLACE_TIMES"); on = e && *e; } return on; }
 static void pool_open(void){
@@ -83,11 +83,6 @@ static void pool_open(void){
         db_binding(c); pool[i] = c; }
     if (times_on()) fprintf(stderr, "times: %d connections opened in %.1f ms\n", npool, (now() - t0) * 1000);
 }
-static int tier_in(const char *name){
-    const char *p = strstr(name, "_t"); if (!p) return -1; p += 2;
-    if (*p == 'x') return 16;
-    return atoi(p);
-}
 static void leaves_of(const char *kind, Leaf **out, int *n){
     pool_open();
     if (*out) return;
@@ -97,35 +92,13 @@ static void leaves_of(const char *kind, Leaf **out, int *n){
     PGresult *r = db_exec(pool[0], q);
     if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "leaves: %s", PQerrorMessage(pool[0])); exit(1); }
     int m = PQntuples(r); *out = calloc((size_t)(m ? m : 1), sizeof(Leaf)); *n = m;
-    for (int i = 0; i < m; i++) { snprintf((*out)[i].name, 64, "%s", PQgetvalue(r, i, 0)); (*out)[i].tier = tier_in((*out)[i].name); }
+    for (int i = 0; i < m; i++) { snprintf((*out)[i].name, 64, "%s", PQgetvalue(r, i, 0)); }
     PQclear(r);
 }
 static int mask_claim(const char *m, int len){ if (len < 5) return 0; return ((const uint8_t *)m)[4] & 0x80; }
 static int16_t rd_i16(const char *p){ uint16_t u; memcpy(&u, p, 2); return (int16_t)ntohs(u); }
 
-int tier_max(const lp_id *ids, int n){
-    if (!n) return -1;
-    leaves_of("entity", &entleaves, &nent);
-    uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(pool[0],ab, ids, (uint32_t)n);
-    int *got = calloc((size_t)nent, sizeof(int)); int16_t *tv = calloc((size_t)nent, sizeof(int16_t));
-    #pragma omp parallel for num_threads(npool) schedule(dynamic)
-    for (int i = 0; i < nent; i++) {
-        char sql[1024]; snprintf(sql, sizeof sql, "SELECT tier FROM @extschema@.%s WHERE id OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[])", entleaves[i].name);
-        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-        PGresult *r = db_exec_params(pool[omp_get_thread_num()], sql, 1, NULL, v, l, f, 1);
-        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "tier: %s", PQerrorMessage(pool[omp_get_thread_num()])); exit(1); }
-        for (int row = 0; row < PQntuples(r); row++) { int16_t t = rd_i16(PQgetvalue(r, row, 0)); if (!got[i] || t > tv[i]) tv[i] = t; got[i] = 1; }
-        PQclear(r);
-    }
-    int16_t mx = -1; for (int i = 0; i < nent; i++) if (got[i] && tv[i] > mx) mx = tv[i];
-    free(got); free(tv); free(ab);
-    return mx;
-}
 
-static int hold_order(const void *a, const void *b){
-    const Hold *x = a, *y = b; int c = memcmp(x->entity.b, y->entity.b, 16);
-    return c ? c : x->src != y->src ? (x->src < y->src ? -1 : 1) : 0;
-}
 typedef struct { Hold *h; int n, cap; } Bag;
 static void bag_put(Bag *b, Hold x){
     if (b->n == b->cap) { b->cap = b->cap ? b->cap * 2 : 32; b->h = xrealloc(b->h, (size_t)b->cap * sizeof(Hold)); }
@@ -293,70 +266,9 @@ long holds_count(const lp_id *keys, int nkeys, int kind){
     }
     free(ab); return total;
 }
-/* The paths of a set of entities, each from the one physicality partition its ID names, every partition at once:
- * claims flagged by their mask, the set's order kept (src: the place in ids). */
-Hold *paths_of(const lp_id *ids, int n, int *nout){
-    *nout = 0; if (!n) return NULL; leaves_of("physicality", &phy, &nphy);
-    int *head = malloc(sizeof(int) * 256), *link = malloc(sizeof(int) * (size_t)n); for (int b = 0; b < 256; b++) head[b] = -1;
-    for (int i = n - 1; i >= 0; i--) { int b = ids[i].b[0]; link[i] = head[b]; head[b] = i; }
-    Bag *bag = calloc(256, sizeof(Bag));
-    #pragma omp parallel for num_threads(npool) schedule(dynamic)
-    for (int b = 0; b < 256; b++) {
-        if (head[b] < 0) continue; char want[64]; snprintf(want, sizeof want, "physicality_%02x", b); int leaf = -1;
-        for (int e = 0; e < nphy; e++) if (!strcmp(phy[e].name, want)) leaf = e;
-        if (leaf < 0) continue;
-        int m = 0; for (int i = head[b]; i >= 0; i = link[i]) m++; lp_id *q = malloc(sizeof(lp_id) * (size_t)m); m = 0; for (int i = head[b]; i >= 0; i = link[i]) q[m++] = ids[i];
-        uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(pool[0],ab, q, (uint32_t)m);
-        char sql[1024]; snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM @extschema@.%s WHERE entity OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[])", phy[leaf].name);
-        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-        PGconn *c = pool[omp_get_thread_num()]; PGresult *r = db_exec_params(c, sql, 1, NULL, v, l, f, 1);
-        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "paths: %s", PQerrorMessage(c)); exit(1); }
-        for (int row = 0; row < PQntuples(r); row++) { Hold x; memset(&x, 0, sizeof x); memcpy(x.entity.b, PQgetvalue(r, row, 0), 16);
-            x.path_len = PQgetlength(r, row, 1); x.path = malloc((size_t)(x.path_len ? x.path_len : 1)); memcpy(x.path, PQgetvalue(r, row, 1), (size_t)x.path_len);
-            x.tier = rd_i16(PQgetvalue(r, row, 2)); x.claim = (uint8_t)mask_claim(PQgetvalue(r, row, 3), PQgetlength(r, row, 3)); x.src = -1;
-            int matched = 0;
-            for (int entry = head[b]; entry >= 0; entry = link[entry]) if (!memcmp(ids[entry].b, x.entity.b, 16)) {
-                Hold copy = x; copy.src = entry;
-                if (matched) { copy.path = malloc((size_t)(x.path_len ? x.path_len : 1)); memcpy(copy.path, x.path, (size_t)x.path_len); }
-                bag_put(&bag[b], copy); matched++;
-            }
-            if (!matched) free(x.path); }
-        PQclear(r); free(q); free(ab);
-    }
-    int total = 0; for (int b = 0; b < 256; b++) total += bag[b].n;
-    Hold *h = malloc(sizeof(Hold) * (size_t)(total ? total : 1)); int w = 0; for (int b = 0; b < 256; b++) { memcpy(h + w, bag[b].h, sizeof(Hold) * (size_t)bag[b].n); w += bag[b].n; free(bag[b].h); }
-    free(bag); free(head); free(link); if (w > 1) qsort(h, (size_t)w, sizeof(Hold), hold_order); *nout = w; return h;
-}
-/* The coordinate of each entity: an atom's from tier 0, the rest from its entity partition, every partition at once. */
-void coords_of(const lp_id *ids, int n, double *out, uint8_t *has){
-    memset(has, 0, (size_t)n); if (!n) return;
-    leaves_of("entity", &entleaves, &nent);
-    int *bucket = malloc(sizeof(int) * (size_t)n), *head = malloc(sizeof(int) * 256), *link = malloc(sizeof(int) * (size_t)n); for (int b = 0; b < 256; b++) head[b] = -1;
-    for (int i = n - 1; i >= 0; i--) { int64_t cp = lp_tier0_codepoint(T0, &ids[i]);
-        if (cp >= 0) { lp_ref a = lp_ref_atom(T0, (uint32_t)cp); lp_coord_xyzm(&a.c, out + 4 * (size_t)i); has[i] = 1; continue; }
-        int b = ids[i].b[0]; bucket[i] = b; link[i] = head[b]; head[b] = i; }
-    #pragma omp parallel for num_threads(npool) schedule(dynamic)
-    for (int b = 0; b < 256; b++) {
-        if (head[b] < 0) continue; int leaf = -1; char want[64]; snprintf(want, sizeof want, "entity_%02x", b);
-        for (int e = 0; e < nent; e++) if (!strcmp(entleaves[e].name, want)) leaf = e;
-        if (leaf < 0) continue;
-        int m = 0; for (int i = head[b]; i >= 0; i = link[i]) m++;
-        lp_id *q = malloc(sizeof(lp_id) * (size_t)m); m = 0; for (int i = head[b]; i >= 0; i = link[i]) q[m++] = ids[i];
-        uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(pool[0],ab, q, (uint32_t)m);
-        char sql[1024]; snprintf(sql, sizeof sql, "SELECT id, @postgis@.ST_X(coord), @postgis@.ST_Y(coord), @postgis@.ST_Z(coord), @postgis@.ST_M(coord) FROM @extschema@.%s WHERE id OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[])", entleaves[leaf].name);
-        const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-        PGconn *c = pool[omp_get_thread_num()]; PGresult *r = db_exec_params(c, sql, 1, NULL, v, l, f, 1);
-        if (PQresultStatus(r) != PGRES_TUPLES_OK) { fprintf(stderr, "coords: %s", PQerrorMessage(c)); exit(1); }
-        for (int row = 0; row < PQntuples(r); row++) { const char *id = PQgetvalue(r, row, 0); double x[4]; for (int d = 0; d < 4; d++) x[d] = lp_be_f64(PQgetvalue(r, row, 1 + d));
-            for (int i = head[b]; i >= 0; i = link[i]) if (!memcmp(ids[i].b, id, 16)) { memcpy(out + 4 * (size_t)i, x, 32); has[i] = 1; } }
-        PQclear(r); free(q); free(ab);
-    }
-    free(bucket); free(head); free(link);
-}
 /* What holds each key together with one more ID: per key, the paths that hold both, one statement a leaf for the
  * whole set (each key's own two-key probe of the container index), every leaf at once. src is the key's place. A key
  * with many holders is never read through: only what holds both. */
 Hold *holds_both(const lp_id *keys, int nkeys, const lp_id *with, int *nout){ return holds_core(keys, nkeys, -1, 1, 1, with, nout); }     /* standings read with the rows */
 Hold *holds_pair(const lp_id *keys, int nkeys, const lp_id *with, int standing, int *nout){ return holds_core(keys, nkeys, -1, 2, standing, with, nout); }
 Hold *holds_any(const lp_id *keys, int nkeys, int *nout){ return holds_core(keys, nkeys, -1, 2, 0, NULL, nout); }
-void holds_free(Hold *h, int n){ if (!h) return; for (int i = 0; i < n; i++) free(h[i].path); free(h); }

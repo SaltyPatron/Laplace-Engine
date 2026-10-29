@@ -71,6 +71,16 @@ retaining connections, namespace bindings and plans for the next read.
 conflicting public objects, then exercises ingestion, replay, reads, indexing
 and source removal through the production Engine.
 
+`src/read_ids.c` owns client projection of exact-ID sets for the Engine and
+MCP. Tiers, coordinates and ordered physicalities use the shared PostgreSQL
+`laplace_entities` / `laplace_physicalities` readers, on the caller's connection
+and snapshot. Request ordinals preserve duplicate occurrences; absent IDs stay
+absent. Tier-0 coordinates and tiers come directly from the mapped cache.
+Transfer windows bound binary transport without limiting the accepted set.
+The same native primary-key kernel serves presence, DAG realization and the
+monorepo's single/batch physicality adapter. Clients do not route exact IDs to
+named partitions or open another connection pool for these reads.
+
 `laplace deploy` installs or upgrades the extensions without adopting existing
 tables or changing database planner, memory or cache configuration. Host
 installers explicitly use `deploy --configure-server-cache` to persist their
