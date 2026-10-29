@@ -19,6 +19,7 @@ key Sense id
 key Synset id
 key SyntacticBehaviour id
 thing Lexicon label
+thing Requires ref version
 thing LexicalEntry Lemma/writtenForm
 # a sense is the lexicalization [lemma, language, ILI] (recipes/BRIEF.md: "A word in a language is the lexicalization
 # [lemma, language, ILI], the language (an ISO 639 highway node) a part of it, never a context column or a mask bit;
@@ -63,6 +64,7 @@ omit n index
 content dc:source
 content adjposition
 omit dc:* xmlns:* status note confidenceScore version url email license citation logo lexicographer
+content Requires.version
 
 # What each part a claim is made of means (Laplace-Engine#32): never the attribute's or the element's name. The words
 # are WN-LMF's documentation's: the GWA's format page (globalwordnet.github.io/schemas, "Global WordNet Formats"), the
@@ -128,15 +130,17 @@ relation "example usage" Example
 # this flag into a confidence score. An absent attribute creates no new claim.
 relation "is lexicalized" lexicalized
 # What stays an unresolved obligation, each with its reason:
-#   ref (of a Requires): "the required wordnet should be loaded as well": a dependence between two sources' trunks, the
-#     corpus as the witness (Laplace-Engine#28).
 #   variety (of a Pronunciation): wn-lemon-1.3.ttl, "Indicates the variety of language the pronunciation represents":
 #     said of the pronunciation, which is no thing a claim can be made of here (said of the entry it would say
 #     [virtuoso, US]); a qualifier of the pronunciation claim (Laplace-Engine#32).
 #   category (of a Tag): "a category attribute which indicates the type of grammatical property" (gender, number): said
 #     of the tag, the kind its value is of, not of the entry or form (Laplace-Engine#32).
 
-attest Requires ref
+# WN-LMF's Wordnet Dependencies section identifies the required wordnet by
+# ref AND version. Retain that dependency as one tuple, witnessed by the corpus,
+# without treating an opaque resource identifier as a lexical concept.
+relation "requires wordnet" Requires.ref
+relate Requires ref to . of ^Lexicon/label
 holds LexicalEntry Sense Form
 # an entry's claims are one record, its senses in the order the file gives them
 together LexicalEntry

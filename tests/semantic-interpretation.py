@@ -72,6 +72,22 @@ def main():
             assert result.returncode == expected, (arguments, result.returncode, output)
             return output
 
+        dependencies=root/'omw-dependencies.xml'
+        dependencies.write_text('<LexicalResource>' + ''.join(
+            f'<Lexicon id="wordnet-{version}" label="Wordnet {version}" language="en" email="owner@example.test" '
+            f'license="wordnet" version="1.0"><Requires ref="omw-en" version="{version}"/>'
+            f'<LexicalEntry id="word-{version}"><Lemma writtenForm="example" partOfSpeech="n"/></LexicalEntry></Lexicon>'
+            for version in ('2.0','3.0')) + '</LexicalResource>',encoding='utf8')
+        for workers in (1,4):
+            text=run('ingest','--claims-tsv','-j',workers,'-s','open-multilingual-wordnet',dependencies)
+            claims=[tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            assert sorted(claims)==sorted([
+                ('Wordnet 2.0','requires wordnet','[omw-en, 2.0]'),
+                ('Wordnet 3.0','requires wordnet','[omw-en, 3.0]'),
+                *[('example','NOUN'),('[wordnet-pos, n]','denotes','NOUN'),
+                  ('language:eng','identifier vocabulary','language')]*2]),(workers,claims,text)
+        print('PASS WN-LMF dependencies retain both the required resource and its version')
+
         pages = root / 'ud-pages'
         pages.mkdir()
         for feature,definition,value in [('Poss','possessive','it is possessive'),('Abbr','abbreviation','it is abbreviated')]:
