@@ -13,6 +13,14 @@ skip 1
 names ID name definition "prototypical synset" "definition of the prototypical synset" "small definition"
 tier field by \t
 
+# Seven supporting frames have no prototype or prototype definition. The release
+# writes _ in those two columns; it remains packaging, not a concept or a gloss.
+when "prototypical synset" is _
+omit "prototypical synset"
+always
+when "definition of the prototypical synset" is _
+omit "definition of the prototypical synset"
+always
 thing row ID
 type "prototypical synset" ili
 content ID name definition "definition of the prototypical synset" "small definition"

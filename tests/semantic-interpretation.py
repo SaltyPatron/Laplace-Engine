@@ -111,6 +111,45 @@ def main():
             assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
         print('PASS all four WordNet exception categories, multiple base forms and identity forms across worker counts')
 
+        arguments = Path(__file__).resolve().parent / 'fixtures/verbatlas-arguments'
+        expected_arguments = [
+            ('i46360', 'shadow argument'),
+            ('[i46360, shadow argument]', 'Theme', 'bn:00070772n'),
+            ('[i46360, shadow argument]', 'Instrument', 'bn:00000902n'),
+            ('[i46360, shadow argument]', 'Result', 'bn:00098546a'),
+            ('[i46360, shadow argument]', 'Source', 'bn:00021015n'),
+            ('i46360', 'implicit argument'),
+            ('[i46360, implicit argument]', 'Theme', 'bn:00035378n'),
+            ('[i46360, implicit argument]', 'Theme', 'bn:00035596n'),
+            ('va:1001f', 'name of a VerbAtlas frame', 'AUXILIARY'),
+            ('va:1001f', 'frame definition', 'Supporting frame'),
+            ('va:1001f', 'small definition of the frame', 'Auxiliary.'),
+            ('va:1001f', 'identifier vocabulary', 'vaframe'),
+            ('[vaframe, va:1001f]', 'identifies', 'va:1001f'),
+            ('va:0001f', 'name of a VerbAtlas frame', 'TOLERATE'),
+            ('va:0001f', 'frame definition', 'An agent tolerates a theme'),
+            ('va:0001f', 'the synset that roughly represents the frame', 'i46360'),
+            ('va:0001f', 'small definition of the frame', 'Tolerate.'),
+            ('i46360', 'Put up with something'),
+            ('va:0001f', 'identifier vocabulary', 'vaframe'),
+            ('[vaframe, va:0001f]', 'identifies', 'va:0001f'),
+            *[('i46360', 'identifier vocabulary', 'ili')] * 3,
+        ]
+        for workers in (1, 4):
+            text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'verbatlas',
+                       *(arguments / name for name in ('VA_bn2shadow.tsv', 'VA_bn2implicit.tsv', 'VA_frame_info.tsv')))
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            assert sorted(claims) == sorted(expected_arguments), (workers, claims, text)
+            assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
+        # An extended layout must be rejected rather than silently dropping the
+        # fifth argument, which the old three-column recipe did for pairs 2..4.
+        overflow = root / 'VA_bn2shadow.tsv'
+        overflow.write_text((arguments / overflow.name).read_text(encoding='utf-8').rstrip() +
+                            '\tAgent\tbn:00011769n\n', encoding='utf-8')
+        rejected = run('ingest', '--claims-tsv', '-s', 'verbatlas', overflow, expected=1)
+        assert 'semantic_omissions=2' in rejected, rejected
+        print('PASS distinct VerbAtlas argument categories, all role/filler pairs, absent prototypes and overflow rejection')
+
         readings = {}
         for workers in (1, 4):
             text = run('ingest', '--claims', '-j', workers, 'semantic-alignment')

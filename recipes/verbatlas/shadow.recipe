@@ -1,0 +1,26 @@
+name va-shadow
+# README.txt section 6: a synset's shadow arguments, with one or more role/filler
+# pairs. This documented category scopes the roles; the filename is packaging.
+match VA_bn2shadow.tsv
+
+tier row by \n
+skip 1
+# The release has at most four pairs. Additional columns must fail admission,
+# rather than silently losing arguments if a later release extends the layout.
+names synset role1 filler1 role2 filler2 role3 filler3 role4 filler4 overflow...
+tier field by \t
+part filler* by |
+
+thing row synset literal "shadow argument"
+type synset ili
+# BabelNet's noun/adjective fillers have no entry in the verb-only bn2wn map.
+# Retain their original identifiers instead of manufacturing an ILI mapping.
+content role* filler* overflow
+itself row
+together row
+value - role*
+relate row role1 to filler1
+relate row role2 to filler2
+relate row role3 to filler3
+relate row role4 to filler4
+attest row overflow
