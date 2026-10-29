@@ -22,6 +22,9 @@ thing era type within
 thing scriptVariant id
 thing parentLocale parent
 thing reference type
+key reference type retain
+refer languagePopulation.references reference
+refer territory.references reference
 omit xmlns xmlns:*
 omit uri version
 content *
@@ -38,8 +41,9 @@ together language
 # literate."
 relation "GDP figures" territory.gdp
 relation "literacy percent for the territory" territory.literacyPercent
-# The specification gives the territory's population attribute no wording (the DTD only: "<!ATTLIST territory
-# population NMTOKEN #REQUIRED >"): an obligation until a documented wording is found (Laplace-Engine#32).
+# UTS #35 Part 6, Supplemental Territory Information: the territory population
+# is the denominator of its literacy percentage (the country's population).
+relation "country’s population" territory.population
 # Of the language within the territory:
 #   "language population percent — an estimate of the number of people who are functional in that language in that
 #   country, including both first and second language speakers."
@@ -55,9 +59,9 @@ relation "language population percent" languagePopulation.populationPercent
 relation "literacy percent for language population" languagePopulation.literacyPercent
 relation "writing percent" languagePopulation.writingPercent
 value - languagePopulation.officialStatus
-# A languagePopulation's references attribute (references="R1010") is CLDR's pointer to a reference element of this
-# file, and the reference is named by that number: resolving the pointer to what it points at is Laplace-Engine#20;
-# until then it is an obligation.
+# These source-local keys resolve to the reference elements below, including
+# forward declarations, through the ordinary compiled key/refer pipeline.
+relation "references and standards" languagePopulation.references territory.references
 
 # Part 6, "Territory Containment": "The territory containment forms a tree"; "There are groupings that don't follow
 # this regular structure ... These are marked with the attribute grouping="true"."; status "(deprecated, grouping)", a
@@ -109,8 +113,9 @@ value - calendarSystem.type
 relation "invariant strings for identifying the eras" era.code
 relation "space-separated identifiers, each also unique within the calendar" era.aliases
 relation "The start date" era.start
-# The specification gives an era's end attribute no wording (the DTD only: "<!ATTLIST era end CDATA #IMPLIED>"): an
-# obligation until a documented wording is found (Laplace-Engine#32).
+# UTS #35 Part 4, Calendar Data, explicitly declares end unused. Retain its
+# packaging bytes without asserting an era boundary the specification disowns.
+omit era.end
 
 # Part 1, "Parent Locales": "The parentLocale element is used to override the normal inheritance when accessing CLDR
 # data." and "For case 2, the children and parent share the same primary language", the parent naming its children
@@ -122,8 +127,13 @@ value - parentLocale.localeRules
 # standards." A reference's text is the reference or standard it names.
 relation "references and standards" reference
 
-# scriptVariant (type="compound", base="Hani Bopo") is in no part of the specification: its type and base have no
-# wording, and stay obligations until one is found (Laplace-Engine#32).
+# UTS #35 Part 1, Special Script Codes, lists Compound, Visual and Subset
+# variants with their Equivalent scripts. The supplemental DTD declares these
+# three type values and base as a set of script codes.
+# https://www.unicode.org/reports/tr35/#special-script-codes
+value - scriptVariant.type
+relation "Equivalent" scriptVariant.base
+together scriptVariant
 
 attest language *
 attest territory *

@@ -71,6 +71,30 @@ def main():
             assert result.returncode == expected, (arguments, result.returncode, output)
             return output
 
+        # Real CLDR excerpts cover every field class which rejected the ISO639
+        # foundation rung. Check the claims as well as the omission counter:
+        # declaring a source key must not suppress other subjects' type fields.
+        cldr = Path(__file__).resolve().parent / 'fixtures/cldr/supplementalData.xml'
+        expected_cldr = [
+            ('Hanb', 'compound'), ('Hanb', 'Equivalent', 'Hani Bopo'),
+            ('Aran', 'visual'), ('Aran', 'Equivalent', 'Arab'),
+            ('Hans', 'subset'), ('Hans', 'Equivalent', 'Hani'),
+            ('AC', 'GDP figures', '50800000'),
+            ('AC', 'literacy percent for the territory', '99'),
+            ('AC', 'country’s population', '940'),
+            ('[AC, en]', 'language population percent', '99'),
+            ('[AC, en]', 'references and standards', 'R1020'),
+            ('[gregorian, 0]', 'invariant strings for identifying the eras', 'bce'),
+            ('[gregorian, 0]', 'space-separated identifiers, each also unique within the calendar', 'bc'),
+            ('R1020', 'references and standards', '[missing]'),
+        ]
+        for workers in (1, 4):
+            text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'iso-639', cldr)
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            assert sorted(claims) == sorted(expected_cldr), (workers, claims, text)
+            assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
+        print('PASS CLDR populations, forward reference keys, script variants and unused era ends across worker counts')
+
         readings = {}
         for workers in (1, 4):
             text = run('ingest', '--claims', '-j', workers, 'semantic-alignment')
