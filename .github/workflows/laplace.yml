@@ -59,7 +59,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: "${{ github.repository_owner }}/Laplace-postgres"
-          ref: 93590436ed11fffb5a7e93732a7433c5e4e6ddb3
+          ref: 5f8601330349c9ed1fe53b0b89c277cca8ed0a6d
           path: Laplace-postgres
           token: "${{ secrets.LAPLACE_CHECKOUT }}"
       # Every job runs the binary its own run built (tests/ci-own-binary.py): the build directory is the runner's, shared
