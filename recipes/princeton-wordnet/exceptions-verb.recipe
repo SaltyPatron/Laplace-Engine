@@ -1,0 +1,15 @@
+name wordnet-verb-exceptions
+# wndb.5: verb.exc lists inflected verbs and their base forms. The
+# documented syntactic category scopes the lexical form, not the filename.
+match verb.exc
+format wndb
+tier row by \n
+names inflected lemma...
+tier field by space
+thing row inflected literal VERB
+itself row
+part inflected by \t space _
+part lemma by \t space _
+content inflected lemma
+relation "base form" lemma
+attest row lemma

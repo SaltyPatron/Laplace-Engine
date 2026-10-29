@@ -95,6 +95,22 @@ def main():
             assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
         print('PASS CLDR populations, forward reference keys, script variants and unused era ends across worker counts')
 
+        exceptions = Path(__file__).resolve().parent / 'fixtures/wordnet-exceptions'
+        expected_exceptions = [
+            ('aardwolves', 'NOUN'), ('[aardwolves, NOUN]', 'base form', 'aardwolf'),
+            ('axes', 'NOUN'), ('[axes, NOUN]', 'base form', 'ax'), ('[axes, NOUN]', 'base form', 'axis'),
+            ('abetted', 'VERB'), ('[abetted, VERB]', 'base form', 'abet'),
+            ('acer', 'ADJ'), ('[acer, ADJ]', 'base form', 'acer'),
+            ('best', 'ADV'), ('[best, ADV]', 'base form', 'well'),
+        ]
+        for workers in (1, 4):
+            text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'princeton-wordnet',
+                       *(exceptions / name for name in ('noun.exc', 'verb.exc', 'adj.exc', 'adv.exc')))
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            assert sorted(claims) == sorted(expected_exceptions), (workers, claims, text)
+            assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
+        print('PASS all four WordNet exception categories, multiple base forms and identity forms across worker counts')
+
         readings = {}
         for workers in (1, 4):
             text = run('ingest', '--claims', '-j', workers, 'semantic-alignment')

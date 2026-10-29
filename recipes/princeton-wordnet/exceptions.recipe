@@ -3,19 +3,21 @@ name wordnet-exceptions
 # forms. The first field of each line is an inflected form, followed by a space separated list of one or more base
 # forms of the word. There is one exception list file for each syntactic category."
 # The names given the fields here are wndb.5's words for them, this recipe's handles; they are in no claim.
-match noun.exc verb.exc adj.exc adv.exc
+match noun.exc
+format wndb
 
 tier row by \n
-names inflected "base forms..."
+names inflected lemma...
 tier field by space
 
-thing row inflected
-content inflected "base forms"
+# wndb.5 assigns noun.exc to nouns. The category scopes the inflection;
+# the filename remains packaging, and is never used as a relation.
+thing row inflected literal NOUN
+itself row
+part inflected by \t space _
+part lemma by \t space _
+content inflected lemma
 # each base form the line lists: wndb.5, "inflected forms of words and their base forms": [diastemata, base form,
 # diastema]
-relation "base form" "base forms"
-attest row "base forms"
-# The syntactic category the file is the exception list of (noun.exc: noun) is said by the file's name only, and a
-# file's name is never a part of a claim: an unresolved obligation. The category as a part of the claim, a value of
-# WordNet's syntactic categories (n, v, a, r), wants a part the recipe can take from the file (Laplace-Engine#32).
-relate row {file} to ...
+relation "base form" lemma
+attest row lemma

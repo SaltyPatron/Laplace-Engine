@@ -1,0 +1,14 @@
+name wordnet-adjective-exceptions
+# wndb.5: adj.exc lists inflected adjectives and their base forms.
+match adj.exc
+format wndb
+tier row by \n
+names inflected lemma...
+tier field by space
+thing row inflected literal ADJ
+itself row
+part inflected by \t space _
+part lemma by \t space _
+content inflected lemma
+relation "base form" lemma
+attest row lemma
