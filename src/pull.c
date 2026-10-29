@@ -123,11 +123,11 @@ Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, doub
     return c;
 }
 /* The claims of each of a set of entities, one set (holds_pair: one probe a leaf for all of them): with rel, the claims
- * whose middle holds rel; subject, only those that begin with the entity. Each comes back with its entity's place in
+ * whose middle holds rel; position selects any part, the first, or the last. Each comes back with its entity's place in
  * keys (src), ordered by place, then by how hard it tugs; at most fan a place. */
 typedef struct { Claim c; int src; } SrcClaim;
 static int by_src_conf(const void *a, const void *b){ const SrcClaim *x = a, *y = b; return x->src != y->src ? (x->src < y->src ? -1 : 1) : claim_by_conf(&x->c, &y->c); }
-Claim *claims_each(PGconn *pg, const lp_id *keys, int nk, const lp_id *rel, int subject, int fan, double k, int *n, int **src){
+Claim *claims_each(PGconn *pg, const lp_id *keys, int nk, const lp_id *rel, ClaimPosition position, int fan, double k, int *n, int **src){
     (void)pg; *n = 0; *src = NULL; if (!nk) return NULL;
     lp_idmap *km = lp_idmap_new(); int *head = malloc(sizeof(int) * (size_t)nk), *link = malloc(sizeof(int) * (size_t)nk);
     for (int i = 0; i < nk; i++) head[i] = -1;
@@ -139,7 +139,8 @@ Claim *claims_each(PGconn *pg, const lp_id *keys, int nk, const lp_id *rel, int 
     for(int j=0;j<nc;j++){
         Claim x=decoded[j];int last=x.np-1;
         if(rel){int in=0;for(int i=1;i<last || (i==1 && x.np==2 && i<=last);i++)in|=lp_id_eq(&x.part[i],rel);if(!in)continue;}
-        for(int p=0;p<(subject?1:x.np);p++){
+        int begin=position==CLAIM_LAST?last:0,end=position==CLAIM_ANY?x.np:begin+1;
+        for(int p=begin;p<end;p++){
             int64_t u=lp_idmap_find(km,&x.part[p]);if(u<0 || seen[u]==(uint64_t)j+1)continue;
             seen[u]=(uint64_t)j+1;
             for(int i=head[u];i>=0;i=link[i]){
@@ -319,31 +320,19 @@ int cmd_hop(int argc, char **argv){
  * constituent, recorded once and never said again as a claim): up, the constituents of x; down, what holds x. */
 typedef struct { int from; lp_id to; lp_rating r; } Step;          /* from: the frontier entry it leaves; to: where it goes */
 static double read_k = 2.0;                                                  /* the firmware's k, for the lookups below */
-/* dir 0: [key, R, x], x the far end; dir 1: [x, R, key]. claim 0: the paths that hold the key and are no claim. */
-static Step *open_each(const lp_id *keys, int nk, const lp_id *rel, int dir, int claim, int fan, int *ns){
-    *ns = 0; if (!nk) return malloc(sizeof(Step));
-    lp_idmap *km = lp_idmap_new(); int *at = malloc(sizeof(int) * (size_t)nk);      /* which key a path holds: by its ID, the keys deduplicated */
-    for (int i = 0; i < nk; i++) { bool fresh; at[i] = (int)lp_idmap_put(km, &keys[i], &fresh); }
-    int nu = (int)lp_idmap_count(km); int *head = malloc(sizeof(int) * (size_t)(nu ? nu : 1)), *link = malloc(sizeof(int) * (size_t)nk);   /* the frontier entries of each key */
-    for (int u = 0; u < nu; u++) head[u] = -1; for (int i = nk - 1; i >= 0; i--) { link[i] = head[at[i]]; head[at[i]] = i; }
-    int nh = 0; Hold *h = claim ? holds_pair(keys, nk, rel, 1, &nh) : holds_any(keys, nk, &nh);
-    int cap = nh + 1, m = 0; Step *s = malloc(sizeof(Step) * (size_t)cap); int *per = calloc((size_t)nk, sizeof(int));
-    lp_id *p = malloc(sizeof(lp_id) * 4096);
-    for (int j = 0; j < nh; j++) {
-        if (claim && (!h[j].claim || !h[j].stood)) continue;
-        if (!claim && h[j].claim) continue;
-        size_t np = lp_path_ids(h[j].path, (size_t)h[j].path_len, p, 4096); if (np > 4096) np = 4096;
-        if (claim) {
-            if (np < 3) continue; size_t last = np - 1; int64_t u = lp_idmap_find(km, &p[dir ? last : 0]); if (u < 0) continue;
-            int in = 0; for (size_t i = 1; i < last; i++) in |= !memcmp(&p[i], rel, 16); if (!in) continue;
-            for (int i = head[u]; i >= 0; i = link[i]) if (per[i] < fan) { if (m == cap) { cap *= 2; s = xrealloc(s, sizeof(Step) * (size_t)cap); } s[m++] = (Step){ i, p[dir ? 0 : last], h[j].r }; per[i]++; }
-        } else {
-            int64_t got[64]; int ng = 0;
-            for (size_t v = 0; v < np; v++) { int64_t u = lp_idmap_find(km, &p[v]); if (u < 0) continue;
-                int dup = 0; for (int w = 0; w < ng; w++) dup |= got[w] == u; if (dup) continue; if (ng < 64) got[ng++] = u;     /* a path that holds the key twice holds it once */
-                for (int i = head[u]; i >= 0; i = link[i]) if (per[i] < fan) { if (m == cap) { cap *= 2; s = xrealloc(s, sizeof(Step) * (size_t)cap); } s[m++] = (Step){ i, h[j].entity, { 0, 0, 0 } }; per[i]++; } } }
+/* Read the complete tuple through the shared claim reader, then follow its
+ * declared endpoint. dir 0: [key, ..., R, ..., x]; dir 1: [x, ..., R, ..., key]. */
+static Step *open_each(PGconn *pg,const lp_id *keys,int nk,const lp_id *rel,int dir,int fan,int *ns){
+    int n=0,*src=NULL;
+    Claim *claims=claims_each(pg,keys,nk,rel,dir?CLAIM_LAST:CLAIM_FIRST,-1,read_k,&n,&src);
+    Step *out=malloc(sizeof *out*(size_t)(n?n:1));int used=0;
+    int *per=calloc((size_t)(nk?nk:1),sizeof *per);
+    for(int j=0;j<n;j++){
+        Claim *claim=claims+j;int key=src[j];
+        if(claim->np<3 || (fan>=0 && per[key]>=fan))continue;
+        out[used++]=(Step){key,claim->part[dir?0:claim->np-1],claim->r};per[key]++;
     }
-    free(p); holds_free(h, nh); free(per); free(at); free(head); free(link); lp_idmap_free(km); *ns = m; return s;
+    free(per);free(src);free(claims);*ns=used;return out;
 }
 /* The constituents of each entity, one set: out[i] for keys[i]. */
 static Run *parts_each(PGconn *pg, const lp_id *keys, int nk){
@@ -405,7 +394,7 @@ static void codes_of(PGconn *pg, const Lexicalization *lx, const lp_id *code, Co
 typedef struct { lp_id *id; int *of, n, cap; } Found;                      /* entities found, each with what it is found for */
 int lexicalization_counts(PGconn *pg, Reader *rd, const Lexicalization *lx, const lp_id *ids, int n, int fan, double k, long long *uses){
     if (!lx->has_usage || !n) return 0;
-    int count = 0, *src = NULL; Claim *claims = claims_each(pg, ids, n, &lx->usage, 1, fan, k, &count, &src);
+    int count = 0, *src = NULL; Claim *claims = claims_each(pg, ids, n, &lx->usage, CLAIM_FIRST, fan, k, &count, &src);
     for (int row = 0; row < count; row++) reader_want(rd, &claims[row].part[claims[row].np - 1]);
     for (int row = 0; row < count; row++) { int entry = src[row]; if (entry < 0 || entry >= n) continue;
         char *text = reader_text(rd, &claims[row].part[claims[row].np - 1], 32), *end;
@@ -458,14 +447,14 @@ int cmd_translate(int argc, char **argv){
      * (a synset, whose definition is shown); then each lexicalization back to its word, along the same relation */
     int nh = 0; Hold *h = nc ? holds_any(cs, nc, &nh) : NULL; steps += nc > 0;
     lp_idmap *cm = lp_idmap_new(); for (int z = 0; z < nc; z++) { bool fresh; lp_idmap_put(cm, &cs[z], &fresh); }
-    Found lex = { 0 }, val = { 0 }; lp_id *p = malloc(sizeof(lp_id) * 4096);
-    for (int j = 0; j < nh; j++) { size_t np = lp_path_ids(h[j].path, (size_t)h[j].path_len, p, 4096); if (np > 4096) continue;
+    Found lex = { 0 }, val = { 0 }; Ids parts={0};
+    for (int j = 0; j < nh; j++) { size_t np=path_into(&parts,lp_path_of(h[j].path,(size_t)h[j].path_len));lp_id *p=parts.v;
         if ((int)np == lx.np) { int64_t z = lp_idmap_find(cm, &p[lx.concept]); if (z < 0) continue;
             for (int g = 0; g < nto; g++) if (codes_has(&toc[g], &p[lx.lang])) { found_put(&lex, &h[j].entity, (int)z * 64 + g); break; } }
         else if (np == 2 && lx.has_gloss) { int64_t z = lp_idmap_find(cm, &p[1]); if (z >= 0) found_put(&val, &p[0], (int)z); } }
-    free(p); holds_free(h, nh); lp_idmap_free(cm);
-    int nd = 0; Step *dn = open_each(lex.id, lex.n, &lx.sense, 1, 1, fan, &nd); steps += lex.n > 0;
-    int ng = 0; Step *gl = val.n ? open_each(val.id, val.n, &lx.gloss, 0, 1, 1, &ng) : NULL; steps += val.n > 0;
+    lp_vec_free(&parts); holds_free(h, nh); lp_idmap_free(cm);
+    int nd = 0; Step *dn = open_each(pg,lex.id,lex.n,&lx.sense,1,fan,&nd); steps += lex.n > 0;
+    int ng = 0; Step *gl = val.n ? open_each(pg,val.id,val.n,&lx.gloss,0,1,&ng) : NULL; steps += val.n > 0;
     for (int j = 0; j < nd; j++) reader_want(rd, &dn[j].to); for (int z = 0; z < nc; z++) reader_want(rd, &cs[z]); for (int j = 0; j < ng; j++) reader_want(rd, &gl[j].to);
     for (int z = 0; z < nc; z++) {
         char *it = reader_text(rd, &cs[z], 60), *dt = NULL;
@@ -712,7 +701,7 @@ int chain_follow(PGconn *pg, Reader *rd, Firmware *fw, const lp_id *word, const 
             }
             if(candidates.n>INT_MAX){fputs("chain candidates exceed the reader's addressable range\n",stderr);exit(1);}
             int n=0,*source=NULL;
-            Claim *cl=claims_each(pg,candidates.v,(int)candidates.n,&fw->id.chain[*alt][z],1,fw->fan,fw->k,&n,&source);
+            Claim *cl=claims_each(pg,candidates.v,(int)candidates.n,&fw->id.chain[*alt][z],CLAIM_FIRST,fw->fan,fw->k,&n,&source);
             lp_vec_free(&candidates);
             /* The source order remains the firmware's priority. Read all
              * candidates together, then retain the first supported subject. */

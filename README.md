@@ -86,8 +86,9 @@ Claim readers keep complete Native-decoded tuples in one allocation, with no
 fixed operand count. Sorting and filtering move descriptors while their operand
 arena stays owned by the returned result. Chain traversal returns an explicit
 standing summary and reads fallback subjects as a set. Positional provenance
-selectors also retain every supplied operand. `tests/claim-width.py` reads a real
-80-operand PostgreSQL claim, including a late predicate and its true last operand.
+selectors also retain every supplied operand. First, last and any-part lookups
+share that reader, including translation. `tests/claim-width.py` reads a real
+80-operand PostgreSQL claim and follows the true endpoint of a 5,003-operand relation.
 
 `src/ingest.c` finds recorded file trunks from the OS metadata before opening
 source bytes. Each level reads distinct metadata IDs as a set through the path
@@ -141,7 +142,7 @@ against raw UTF-8 bytes and verifies byte-exact parsing through a Unicode path.
 | `laplace pull prompt` | the forward pass: the prompt broken down, and the segments and strands its firmware takes |
 | `laplace firmware` | inspect the compiled query relation IDs without opening a database |
 | `laplace hop text` | everything attested about an entity, by how hard each strand tugs back, and the content that holds it |
-| `laplace hop subject predicate object` | the claims that hold the given parts in their places, with `?` for a part left open; a claim is a tuple or longer path of any arity, and this asks for those with three parts |
+| `laplace hop subject predicate object` | claims whose first, middle and last parts match, across tuple arities; `?` leaves a selector open |
 | `laplace translate word from to...` | a word up to its concepts and down into other languages, two lookups |
 | `laplace degrees from [to]` | how far one entity is from another over rated claims, or what is nearest one |
 | `laplace forget witness` | what one witness attested, taken back out, and whatever nothing holds any more with it |

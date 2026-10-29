@@ -442,7 +442,7 @@ static int langs_of(State *st, const lp_id *w, int n, lp_id (*out)[LANGS], int *
     const Firmware *fw = st->fw; memset(nout, 0, sizeof(int) * (size_t)n); if (!n || !fw->lexical[0][0]) return 0;
     if (!st->lexical.np && !lexicalization_of(st->c, fw, &st->lexical)) exit(2);
     const Lexicalization *lx = &st->lexical;
-    int nc = 0, *src = NULL; Claim *cl = claims_each(st->pg, w, n, &lx->sense, 1, fw->fan, fw->k, &nc, &src); st->trips++;
+    int nc = 0, *src = NULL; Claim *cl = claims_each(st->pg, w, n, &lx->sense, CLAIM_FIRST, fw->fan, fw->k, &nc, &src); st->trips++;
     lp_id *sense = malloc(sizeof(lp_id) * (size_t)(nc ? nc : 1));
     for (int entry = 0; entry < nc; entry++) sense[entry] = cl[entry].part[cl[entry].np - 1];
     int nh = 0; Hold *h = paths_of(sense, nc, &nh); st->trips += nc > 0; Ids parts = { 0 };

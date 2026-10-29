@@ -180,7 +180,7 @@ int cmd_pull(int argc, char **argv){
               for (int i = 0; i < np; i++) { if (!table_find(&ph[i]) || !memcmp(&ph[i], &pr.id, 16)) continue;    /* a composition, and not the prompt over again */
                   bool fresh; lp_idmap_put(sm, &ph[i], &fresh); if (fresh) seen[nseen++] = ph[i]; }
               lp_idmap_free(sm); }
-            int nall, *src; Claim *all = claims_each(pg, seen, nseen, NULL, 0, -1, fw.k, &nall, &src);      /* every constituent's claims, one set */
+            int nall, *src; Claim *all = claims_each(pg, seen, nseen, NULL, CLAIM_ANY, -1, fw.k, &nall, &src);      /* every constituent's claims, one set */
             for (int i = 0, at = 0; i < nseen; i++) {
                 int n = 0; while (at + n < nall && src[at + n] == i) n++;
                 Claim *cl = malloc(sizeof(Claim) * (size_t)(n ? n : 1)); memcpy(cl, all + at, sizeof(Claim) * (size_t)n); at += n;
