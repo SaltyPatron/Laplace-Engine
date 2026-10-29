@@ -50,7 +50,7 @@ PGresult *ask_once(PGconn *pg, const char *sql, Args *a){
 }
 PGresult *ask_try(PGconn *pg, const char *sql, Args *a){
     const char *v[ARGS_MAX]; int l[ARGS_MAX], f[ARGS_MAX]; args_out(a, v, l, f);
-    PGresult *r = PQexecParams(pg, sql, a ? a->n : 0, NULL, v, l, f, 1); ExecStatusType s = PQresultStatus(r);
+    PGresult *r = db_ask(pg, sql, a ? a->n : 0, v, l, f); ExecStatusType s = PQresultStatus(r);
     if (s == PGRES_TUPLES_OK || s == PGRES_COMMAND_OK) return r;
     PQclear(r); return NULL;
 }

@@ -38,6 +38,17 @@ declared database settings; connection setup does not override them. The live
 `pg_plan_lifecycle` acceptance covers reset, multiple connections, query-buffer
 reuse and retention of the caller's planner policy.
 
+`src/ingest.c` finds recorded file trunks from the OS metadata before opening
+source bytes. Each level reads distinct metadata IDs as a set through the path
+index, while retaining every selected file occurrence associated with each ID.
+The frontier read reuses its connection-owned prepared statement.
+Traversal tracks `(metadata ID, file occurrence)` pairs, so converging ancestry
+and repeated paths are read once without losing ownership or imposing a depth
+cap. The transport window bounds request bytes, not the admitted ancestry.
+`tests/file-precheck.py` exercises three real files, two of them hard links,
+unchanged replay, and 32 levels of canonical recorded metadata. It checks exact
+selected trunks and complete stored subtrees in a private database.
+
 `src/db.c` owns one metadata DAG reader for recorded-file context checks and
 compiled-key restoration. It fetches complete ID frontiers through Native's
 indexed path API, reads shared metadata nodes once, and stops at context/key

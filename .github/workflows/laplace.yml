@@ -164,6 +164,7 @@ jobs:
           bash Laplace-Engine/tests/ingest-progress.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/cached-key-reader.sh "$RUNNER_TEMP/engine/laplace"
           python3 Laplace-Engine/tests/metadata-replay.py "$RUNNER_TEMP/engine/laplace"
+          python3 Laplace-Engine/tests/file-precheck.py "$RUNNER_TEMP/engine/laplace"
           python3 Laplace-Engine/tests/reader-depth.py "$RUNNER_TEMP/engine/reader-depth"
           bash Laplace-Engine/tests/cili-versions.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/record-thing.sh "$RUNNER_TEMP/engine/laplace"
