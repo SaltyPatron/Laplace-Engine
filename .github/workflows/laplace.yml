@@ -95,6 +95,7 @@ jobs:
           export LAPLACE_OPERATIONS="$GITHUB_WORKSPACE/Laplace-Operations"
           bash Laplace-Engine/tools/build_grammars.sh Laplace-Engine/recipes/formats/grammars "$LAPLACE_GRAMMARS"
           python3 Laplace-Engine/tests/grammar-build-cache.py
+          python3 Laplace-Engine/tests/runtime-resources.py
       - name: Prepare canonical caches for this run from local Unicode and frozen manifests
         run: |
           set -euo pipefail

@@ -285,6 +285,13 @@ if(WIN32)
   string(CONFIGURE "${_recipe_runtime_install}" _recipe_runtime_install @ONLY)
   install(CODE "${_recipe_runtime_install}" COMPONENT LaplaceRecipeRuntime)
 endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PruneRecipeResources.cmake")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/PruneRecipeResources.cmake" _recipe_resource_prune)
+install(CODE "
+  set(RECIPE_SOURCE \"${CMAKE_CURRENT_SOURCE_DIR}/recipes\")
+  set(RECIPE_TARGET \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/laplace/recipes\")
+  ${_recipe_resource_prune}
+" COMPONENT LaplaceRecipeRuntime)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/recipes/"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/laplace/recipes" COMPONENT LaplaceRecipeRuntime
         FILES_MATCHING PATTERN "*.recipe" PATTERN "*.format" PATTERN "*.LICENSE" PATTERN "source" PATTERN "order")
