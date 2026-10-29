@@ -54,6 +54,12 @@ class OwnBinary(unittest.TestCase):
             self.assertIn("name: laplace-engine", j, name)
             self.assertIn("sha256sum -c", j, f"job {name} does not check the binary it was handed")
 
+    def test_parsers_travel_with_the_selected_artifact_inputs(self):
+        for name, job in self.jobs.items():
+            if builds(job) or runs_laplace(job):
+                self.assertIn('LAPLACE_GRAMMARS=$RUNNER_TEMP/engine/inputs/grammars', job,
+                              f"job {name} can select parsers overwritten by another revision")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

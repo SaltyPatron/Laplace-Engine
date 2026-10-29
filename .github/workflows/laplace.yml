@@ -30,6 +30,7 @@ jobs:
           echo "LAPLACE_TIER0=$RUNNER_TEMP/engine/inputs/tier0.bin" >> "$GITHUB_ENV"
           echo "LAPLACE_FLAGS=$RUNNER_TEMP/engine/inputs/tier0.flags" >> "$GITHUB_ENV"
           echo "LAPLACE_HIGHWAY=$RUNNER_TEMP/engine/inputs/highway.bin" >> "$GITHUB_ENV"
+          echo "LAPLACE_GRAMMARS=$RUNNER_TEMP/engine/inputs/grammars" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with: { path: Laplace-Engine }
       # Whether this change can move what an ingest records (tools/ci/parity-needed.sh says which paths can); the parity
@@ -213,6 +214,7 @@ jobs:
           echo "LAPLACE_TIER0=$RUNNER_TEMP/engine/inputs/tier0.bin" >> "$GITHUB_ENV"
           echo "LAPLACE_FLAGS=$RUNNER_TEMP/engine/inputs/tier0.flags" >> "$GITHUB_ENV"
           echo "LAPLACE_HIGHWAY=$RUNNER_TEMP/engine/inputs/highway.bin" >> "$GITHUB_ENV"
+          echo "LAPLACE_GRAMMARS=$RUNNER_TEMP/engine/inputs/grammars" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with: { path: Laplace-Engine }
       - uses: actions/checkout@v4
@@ -242,6 +244,7 @@ jobs:
           echo "LAPLACE_TIER0=$RUNNER_TEMP/engine/inputs/tier0.bin" >> "$GITHUB_ENV"
           echo "LAPLACE_FLAGS=$RUNNER_TEMP/engine/inputs/tier0.flags" >> "$GITHUB_ENV"
           echo "LAPLACE_HIGHWAY=$RUNNER_TEMP/engine/inputs/highway.bin" >> "$GITHUB_ENV"
+          echo "LAPLACE_GRAMMARS=$RUNNER_TEMP/engine/inputs/grammars" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with: { path: Laplace-Engine }
       - uses: actions/checkout@v4
