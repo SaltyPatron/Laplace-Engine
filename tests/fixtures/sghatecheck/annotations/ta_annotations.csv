@@ -1,0 +1,2 @@
+c_id,c_testcase,c_group,t_gold,annotator_1,annotation_common,annotation_selected
+1,A sample test case.,2,hateful,non-hateful,non-hateful,non-hateful

@@ -150,6 +150,17 @@ def main():
         assert 'semantic_omissions=2' in rejected, rejected
         print('PASS distinct VerbAtlas argument categories, all role/filler pairs, absent prototypes and overflow rejection')
 
+        annotations = Path(__file__).resolve().parent / 'fixtures/sghatecheck'
+        for workers in (1, 4):
+            text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'sghatecheck', annotations)
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            # Equal judgments from the individual and both supplied aggregates
+            # remain three distinct qualified observations, beside the gold.
+            assert sorted(claims) == sorted([('A sample test case.', 'hateful')] +
+                                            [('A sample test case.', 'non-hateful')] * 3), (workers, claims, text)
+            assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
+        print('PASS individual and aggregate SGHateCheck judgments retain distinct source qualifiers and group metadata')
+
         readings = {}
         for workers in (1, 4):
             text = run('ingest', '--claims', '-j', workers, 'semantic-alignment')
