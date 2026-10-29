@@ -21,8 +21,16 @@ static int run(PGconn *pg, const char *sql, const char *what){
     if (!ok) fprintf(stderr, "%s: %s", what, PQerrorMessage(pg)); else printf("  %-52s %9.1f ms\n", what, (now() - t) * 1000);
     PQclear(r); fflush(stdout); return ok;
 }
+static PGresult *status_query(PGconn *pg, const char *sql){
+    PGresult *r=db_exec(pg,sql);
+    if(PQresultStatus(r)!=PGRES_TUPLES_OK){
+        fprintf(stderr,"laplace status: %s",PQresultErrorMessage(r));
+        PQclear(r);PQfinish(pg);exit(1);
+    }
+    return r;
+}
 static char *one(PGconn *pg, const char *sql){
-    PGresult *r = db_exec(pg, sql); char *v = NULL;
+    PGresult *r = status_query(pg, sql); char *v = NULL;
     if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !PQgetisnull(r, 0, 0)) v = strdup(PQgetvalue(r, 0, 0));
     PQclear(r); return v;
 }
@@ -109,33 +117,40 @@ int cmd_index(int argc, char **argv){
 }
 
 int cmd_status(int argc, char **argv){
+    int compatible=1;
     PGconn *pg = db_connect(conn_arg(argc, argv)); setlocale(LC_NUMERIC, "en_US.UTF-8");
     char *ver = one(pg, "SELECT extversion FROM pg_extension WHERE extname = 'laplace'"), *isa = one(pg, "SELECT @extschema@.laplace_isa()"),
          *t0 = one(pg, "SELECT current_setting('laplace.tier0', true)"), *fp = one(pg, "SELECT @extschema@.laplace_fingerprint()"),
          *size = one(pg, "SELECT pg_size_pretty(pg_database_size(current_database()))"), *srv = one(pg, "SELECT split_part(version(), ',', 1)");
     printf("\ndatabase   %s, %s\nserver     %s\nextension  laplace %s; %s\n", PQdb(pg), size ? size : "?", srv ? srv : "?", ver ? ver : "(not installed)", isa ? isa : "");
-    printf("tier 0     %s\n           %s\n", t0 && *t0 ? t0 : "(the extension's default)", fp ? fp : "(no fingerprint: extension older than 0.6)");
+    printf("tier 0     %s\n           %s\n", t0 && *t0 ? t0 : "(the extension's default)", fp ? fp : "(fingerprint unavailable)");
     const lp_tier0_record *mine = lp_tier0_map(NULL);
     if (mine && fp) { uint8_t h[32]; char hex[65]; lp_tier0_fingerprint(mine, h); lp_hex(h, 32, hex);
-                      printf("           %s\n", strcmp(hex, fp) ? "DIFFERS from this engine's tier 0: the two would give the same content different coordinates" : "the same as this engine's"); }
+                      int differs=strcmp(hex,fp);compatible&=!differs;
+                      printf("           %s\n", differs ? "DIFFERS from this engine's tier 0: the two would give the same content different coordinates" : "the same as this engine's"); }
+    else {fputs("laplace status: client or database Tier-0 cache is unavailable\n",stderr);compatible=0;}
     { char *hw = one(pg, "SELECT current_setting('laplace.highway', true)"), *hfp = one(pg, "SELECT @extschema@.laplace_highway_fingerprint()"); const lp_highway *h = lp_highway_map(NULL);
       printf("highway    %s\n           %s\n", hw && *hw ? hw : "(the extension's default)", hfp ? hfp : "(not generated: laplace highway)");
       if (h && hfp) { uint8_t b[32]; char hex[65]; lp_highway_fingerprint(h, b); lp_hex(b, 32, hex);
-                      printf("           %s\n", strcmp(hex, hfp) ? "DIFFERS from this engine's highway: the two would give a type different slots" : "the same as this engine's"); }
+                      int differs=strcmp(hex,hfp);compatible&=!differs;
+                      printf("           %s\n", differs ? "DIFFERS from this engine's highway: the two would give a type different slots" : "the same as this engine's"); }
       free(hw); free(hfp); }
 
     /* the tier is a column, not a partition: counted from a 1% sample of the rows, the size from the partitions */
-    PGresult *r = db_exec(pg, "SELECT tier, (count(*) * 100)::bigint FROM @extschema@.entity TABLESAMPLE SYSTEM (1) GROUP BY 1 ORDER BY 1");
+    PGresult *r = status_query(pg, "SELECT tier, (count(*) * 100)::bigint FROM @extschema@.entity TABLESAMPLE SYSTEM (1) GROUP BY 1 ORDER BY 1");
     printf("\nentities, by tier (from a 1%% sample)\n");
     for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) printf("  tier %-3s %'16lld\n", PQgetvalue(r, i, 0), atoll(PQgetvalue(r, i, 1)));
     PQclear(r);
-    r = db_exec(pg, "SELECT sum(c.reltuples)::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+    r = status_query(pg, "SELECT CASE WHEN min(c.reltuples)<0 THEN -1 ELSE sum(c.reltuples) END::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
                    "WHERE n.oid=(SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname='laplace') AND c.relkind = 'r' AND c.relname ~ '^(entity|physicality)_[0-9a-f]{2}$'");
-    if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) printf("  entities and paths %'14lld rows   %s\n", atoll(PQgetvalue(r, 0, 0)), PQgetvalue(r, 0, 1));
+    if (PQntuples(r)) {
+        if(PQgetisnull(r,0,0) || atoll(PQgetvalue(r,0,0))<0) printf("  entities and paths %14s   %s\n","not counted yet",PQgetvalue(r,0,1));
+        else printf("  entities and paths %'14lld rows   %s\n",atoll(PQgetvalue(r,0,0)),PQgetvalue(r,0,1));
+    }
     PQclear(r);
     /* the witnesses (each a source's trunk) and the standings, the partitions of a table summed: a partition the planner
      * has not counted yet (reltuples -1) makes the sum not counted */
-    r = db_exec(pg, "SELECT regexp_replace(c.relname, '_[0-9a-f]$', ''), CASE WHEN min(c.reltuples) < 0 THEN -1 ELSE sum(c.reltuples) END::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))::bigint) "
+    r = status_query(pg, "SELECT regexp_replace(c.relname, '_[0-9a-f]$', ''), CASE WHEN min(c.reltuples) < 0 THEN -1 ELSE sum(c.reltuples) END::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))::bigint) "
                    "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.oid=(SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname='laplace') AND c.relkind = 'r' AND (c.relname = 'witness' OR c.relname ~ '^consensus_[0-9a-f]$') GROUP BY 1 ORDER BY 1");
     printf("\nsemantics\n");
     for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) {
@@ -143,12 +158,12 @@ int cmd_status(int argc, char **argv){
         else printf("  %-24s %'16lld   %s\n", PQgetvalue(r, i, 0), atoll(PQgetvalue(r, i, 1)), PQgetvalue(r, i, 2));
     }
     PQclear(r);
-    r = db_exec(pg, "SELECT count(*) FILTER (WHERE indexdef LIKE '%USING gin%'), count(*) FILTER (WHERE indexdef LIKE '%USING gist%'), count(*) "
+    r = status_query(pg, "SELECT count(*) FILTER (WHERE indexdef LIKE '%USING gin%'), count(*) FILTER (WHERE indexdef LIKE '%USING gist%'), count(*) "
                    "FROM pg_indexes WHERE schemaname=(SELECT n.nspname FROM pg_catalog.pg_namespace n JOIN pg_catalog.pg_extension e ON e.extnamespace=n.oid WHERE e.extname='laplace') AND tablename IN ('entity', 'physicality')");
     if (PQresultStatus(r) == PGRES_TUPLES_OK) printf("\nindexes    container (GIN) %s, 4D (GiST) %s, of %s on entity and physicality\n", PQgetvalue(r, 0, 0), PQgetvalue(r, 0, 1), PQgetvalue(r, 0, 2));
     PQclear(r);
     free(ver); free(isa); free(t0); free(fp); free(size); free(srv); PQfinish(pg);
-    return 0;
+    return !compatible;
 }
 
 /* laplace sources: the sources there are recipes for, in the order they go in, where each is, and whether it is in. */

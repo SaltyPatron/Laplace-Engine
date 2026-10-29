@@ -1,6 +1,7 @@
 """Ingest, replay and read through the candidate CLI under a scoped PostgreSQL role."""
 import argparse
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -28,11 +29,12 @@ created = False
 try:
     sql('postgres', f'CREATE DATABASE "{identifier}" TEMPLATE template0; CREATE ROLE "{identifier}";')
     created = True
-    deployment = subprocess.run([str(engine), 'deploy', '-d', 'dbname=' + identifier],
+    deployment = subprocess.run([str(engine), 'deploy', '-d', 'dbname=' + identifier, '--configure-server-cache'],
                                 env=environment, text=True, capture_output=True, timeout=180)
     print(deployment.stdout, end='')
     print(deployment.stderr, end='')
     deployment.check_returncode()
+    assert not re.search(r'entities and paths\s+-\d+', deployment.stdout), 'Unknown planner statistics became a negative row count'
     sql(identifier, f'''SELECT laplace_ensure_stage();
 CREATE INDEX staging_test_guard ON stage.attestation(claim);
 GRANT USAGE,CREATE ON SCHEMA stage TO "{identifier}";
@@ -47,7 +49,7 @@ GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO "{identifier}";''')
     with tempfile.TemporaryDirectory() as temporary:
         scratch = Path(temporary)
         recipes = scratch / 'recipes'
-        shutil.copytree(ROOT / 'recipes', recipes)
+        shutil.copytree(ROOT / 'recipes', recipes, ignore=shutil.ignore_patterns('grammars'))
         source = recipes / 'scoped-loader'
         source.mkdir()
         data = scratch / 'data'
@@ -81,7 +83,19 @@ GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO "{identifier}";''')
         assert sql(identifier, "SELECT count(*) FROM pg_tables WHERE schemaname='stage' AND tablename LIKE 'lp_%';") == '0', 'Loader left private staging tables behind'
         output = run('hop', '-d', scoped, 'scoped_ingestion_probe')
         assert 'observed: held by 1 path' in output, 'Scoped Native read did not recover the recorded code holder'
-    print('Candidate Engine passed scoped non-superuser ingestion, replay deduplication, administrator-owned staging preservation, cleanup and connection-owned Native database readback.')
+    original=sql(identifier, "SELECT current_setting('laplace.tier0',true)")
+    missing=(Path(temporary) / 'missing-tier0.bin').as_posix().replace("'", "''")
+    sql('postgres', f'''ALTER DATABASE "{identifier}" SET laplace.tier0='{missing}';''')
+    try:
+        failed=subprocess.run([str(engine),'status','-d',scoped],env=environment,text=True,capture_output=True,timeout=30)
+        assert failed.returncode != 0, 'status accepted an unreadable server cache'
+        assert 'cannot map tier 0' in failed.stderr and 'older than' not in failed.stdout, failed.stdout+failed.stderr
+    finally:
+        setting="SET laplace.tier0='"+original.replace("'","''")+"'" if original else 'RESET laplace.tier0'
+        sql('postgres', f'ALTER DATABASE "{identifier}" {setting};')
+    checked=subprocess.run([str(engine),'status','-d',scoped],env=environment,text=True,capture_output=True,timeout=30)
+    assert checked.returncode == 0 and checked.stdout.count("the same as this engine's") == 2, checked.stdout+checked.stderr
+    print('Candidate Engine passed scoped ingestion, replay, staging ownership, Native readback and loud server-cache failure/recovery.')
 finally:
     if created:
         sql('postgres', f'DROP DATABASE IF EXISTS "{identifier}" WITH (FORCE); DROP ROLE IF EXISTS "{identifier}";')
