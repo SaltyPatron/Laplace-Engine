@@ -212,7 +212,7 @@ int cmd_pull(int argc, char **argv){
             for (int a_ = 1; a_ < npl; a_++) { Puller x = pl[a_]; int b_ = a_; while (b_ > 0 && pl[b_ - 1].w < x.w) { pl[b_] = pl[b_ - 1]; b_--; } pl[b_] = x; }
             for (int u = 0; u < npl && u < fw.take[s].n; u++) {
                 if (pl[u].w <= 0) break;
-                lp_id cur = pl[u].id; Claim last = { 0 }; int alt;
+                lp_id cur = pl[u].id; ClaimStanding last = { 0 }; int alt;
                 int nk = chain_follow(pg, rd, &fw, &pl[u].id, NULL, &seed, NULL, NULL, &cur, &last, &alt);
                 int complete = alt >= 0;
                 if (!complete) alt = fw.nalt - 1;

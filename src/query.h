@@ -41,7 +41,8 @@ typedef struct {
     struct { int ready; lp_id prevalence; lp_id only[FW_NAMES], refuse[FW_NAMES], refuse_witness[FW_NAMES], weigh[FW_WEIGHS], role_by, role[FW_WEIGHS], chain[FW_ALTS][FW_CHAIN], up[FW_CHAIN], language[2]; } id;
 } Firmware;                                           /* id: every name above as the entity it is, computed once a pass (firmware_ids) */
 /* ---- the lookups the forward pass is made of (pull.c) */
-typedef struct { lp_id id, part[MAXPARTS]; int np; lp_rating r; int matches; double conf; int position; } Claim;   /* a claim is a tuple: a pair, three parts, or a longer path */
+typedef struct { lp_id id; const lp_id *part; int np; lp_rating r; int matches; double conf; int position; } Claim;   /* a claim is a tuple: a pair, three parts, or a longer path */
+typedef struct { lp_rating r; int matches; } ClaimStanding;
 const char *firmware_path(void);                     /* LAPLACE_FIRMWARE, or firmware/program.firmware beside the recipes */
 Firmware firmware_for(const char *path, int op);
 const Firmware *firmware_ids(Firmware *);            /* the firmware's names as entities: computed the first time they are asked, once a pass */
@@ -49,6 +50,7 @@ typedef struct { lp_id sense, gloss, eq[4], usage; int np, lang, concept, has_gl
 int lexicalization_of(lp_text *, const Firmware *, Lexicalization *);
 void firmware_say(const Firmware *, int op);
 lp_ref entity_named(lp_text *, const char *text, lp_ref *parts, size_t cap, size_t *np);      /* a text's trunk, computed here */
+/* Returned claims and all operands share one allocation; release with free(). */
 Claim *claims_like(PGconn *, const lp_id *part, const int *have, int fan, double k, int *n, int *capped);
 Claim *claims_of(PGconn *, const lp_id *e, int fan, double k, int *n, int *capped);    /* every claim that holds an entity */
 Claim *claims_each(PGconn *, const lp_id *keys, int nk, const lp_id *rel, int subject, int fan, double k, int *n, int **src);   /* the claims of each of a set, one set: src[i] is the place in keys of claim i */
@@ -63,7 +65,7 @@ int lexicalization_counts(PGconn *, Reader *, const Lexicalization *, const lp_i
 double role_of(PGconn *, Firmware *, const lp_id *word);                                  /* how hard a word pulls, by its role; -1 when nothing says */
 void   take_top(Claim *, int n, int want, const Firmware *, unsigned *seed);              /* the top, or as near a tie as the firmware allows (seed NULL: the top) */
 typedef int (*ChainFork)(void *ctx, const Claim *cl, int n);           /* at a fork of a chain: the branch to take, or -1 for the chain's own order */
-int    chain_follow(PGconn *, Reader *, Firmware *, const lp_id *word, const lp_id *reading, unsigned *seed, ChainFork fork, void *fork_ctx, lp_id *answer, Claim *last, int *alt);                             /* each claim's confidence by its weight, and the set in that order */                  /* what the firmware refuses, taken out */
+int    chain_follow(PGconn *, Reader *, Firmware *, const lp_id *word, const lp_id *reading, unsigned *seed, ChainFork fork, void *fork_ctx, lp_id *answer, ClaimStanding *last, int *alt);                             /* each claim's confidence by its weight, and the set in that order */                  /* what the firmware refuses, taken out */
 
 int cmd_hop(int argc, char **argv);
 int cmd_translate(int argc, char **argv);

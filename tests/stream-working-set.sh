@@ -62,7 +62,7 @@ for lane in small shared; do
   "$psql" -XwAt -v ON_ERROR_STOP=1 -d "$conn" -c \
     "SELECT coalesce(sum(calls),0) FROM pg_stat_statements
        WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
-         AND query LIKE 'SELECT * FROM laplace_merge_stage(%';" > "$scratch/$lane.merges"
+         AND query LIKE 'SELECT * FROM %.laplace_merge_stage(%';" > "$scratch/$lane.merges"
   printf 'stream-working-set: %s budget=%s bytes, %s ms, %s real stage merges\n' \
     "$lane" "$budget" "$elapsed" "$(cat "$scratch/$lane.merges")"
 done

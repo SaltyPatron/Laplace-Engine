@@ -75,6 +75,13 @@ declared server-local `LAPLACE_TIER0`, `LAPLACE_FLAGS` and `LAPLACE_HIGHWAY`
 paths together. A remote client must leave that flag out. `laplace index`
 uses configured maintenance memory and analyzes only the Native relations.
 
+Claim readers keep complete Native-decoded tuples in one allocation, with no
+fixed operand count. Sorting and filtering move descriptors while their operand
+arena stays owned by the returned result. Chain traversal returns an explicit
+standing summary and reads fallback subjects as a set. Positional provenance
+selectors also retain every supplied operand. `tests/claim-width.py` reads a real
+80-operand PostgreSQL claim, including a late predicate and its true last operand.
+
 `src/ingest.c` finds recorded file trunks from the OS metadata before opening
 source bytes. Each level reads distinct metadata IDs as a set through the path
 index, while retaining every selected file occurrence associated with each ID.

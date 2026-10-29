@@ -33,7 +33,7 @@ DECLARE last_frame jsonb;
 BEGIN
   IF EXISTS (SELECT FROM pg_stat_statements
       WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database())
-        AND query LIKE 'SELECT wanted.id,c.entity,public.ST_AsEWKB(c.path),c.tier%') THEN
+        AND query LIKE 'SELECT wanted.id,c.entity,%.ST_AsEWKB(c.path),c.tier%') THEN
     RAISE EXCEPTION 'absent metadata IDs reached reverse-path discovery';
   END IF;
   SELECT j INTO STRICT last_frame FROM progress WHERE j->>'event'='complete';

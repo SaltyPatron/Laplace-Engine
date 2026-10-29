@@ -554,7 +554,7 @@ static int fork_choice(void *vc, const Claim *cl, int n){
 /* A chain the firmware names, followed from a word (chain_follow), the oriented reading taken where the chain passes
  * through it, and at every other fork the branch the context supports; *rating: the standing of its last strand. */
 static int chain_from(State *st, const lp_id *word, const lp_id *reading, lp_id *answer, lp_rating *rating){
-    Claim last; int alt; ForkCtx fc = { st, word, 0, 0 }; chain_follow(st->pg, st->rd, (Firmware *)st->fw, word, reading, NULL, fork_choice, &fc, answer, &last, &alt);
+    ClaimStanding last; int alt; ForkCtx fc = { st, word, 0, 0 }; chain_follow(st->pg, st->rd, (Firmware *)st->fw, word, reading, NULL, fork_choice, &fc, answer, &last, &alt);
     if (alt < 0) return 0;
     *rating = last.r; return 1;
 }

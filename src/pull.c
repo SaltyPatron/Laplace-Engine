@@ -18,6 +18,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 
 /* ---- naming an entity: the text's trunk, computed on the client */
@@ -61,7 +62,33 @@ int cmd_text(int argc, char **argv){
 }
 
 /* ---- the claims that hold an entity */
-/* Claim, MAXPARTS: engine.h */
+/* Claim arrays own their complete Native-decoded operands in one trailing
+ * arena. Filtering and sorting move descriptors, never truncate a tuple. */
+static Claim *claim_block(size_t count,size_t operands){
+    size_t capacity=count?count:1;
+    if(capacity>SIZE_MAX/sizeof(Claim) || operands>(SIZE_MAX-capacity*sizeof(Claim))/sizeof(lp_id)){
+        fputs("claim result exceeds addressable memory\n",stderr);exit(1);
+    }
+    Claim *out=malloc(capacity*sizeof(Claim)+operands*sizeof(lp_id));
+    if(!out){perror("claim result");exit(1);}return out;
+}
+static Claim *claims_held(const Hold *holds,int count,double k,int *n){
+    size_t operands=0;
+    for(int i=0;i<count;i++)if(holds[i].claim && holds[i].stood){
+        size_t length=lp_path_ids(holds[i].path,(size_t)holds[i].path_len,NULL,0);
+        if(length>INT_MAX || length>SIZE_MAX-operands){fputs("claim operand count exceeds the reader's addressable range\n",stderr);exit(1);}
+        operands+=length;
+    }
+    Claim *out=claim_block((size_t)count,operands);lp_id *parts=(lp_id *)(out+(count?count:1));int used=0;
+    for(int i=0;i<count;i++)if(holds[i].claim && holds[i].stood){
+        size_t length=lp_path_ids(holds[i].path,(size_t)holds[i].path_len,NULL,0);if(length<2)continue;
+        lp_path_ids(holds[i].path,(size_t)holds[i].path_len,parts,length);
+        out[used++]=(Claim){.id=holds[i].entity,.part=parts,.np=(int)length,.r=holds[i].r,
+            .matches=holds[i].matches,.conf=lp_confidence(&holds[i].r,k)};
+        parts+=length;
+    }
+    *n=used;return out;
+}
 
 int claim_by_conf(const void *a, const void *b){ double x = ((const Claim *)a)->conf, y = ((const Claim *)b)->conf; return x < y ? 1 : x > y ? -1 : memcmp(a, b, 16); }
 
@@ -106,19 +133,16 @@ Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, doub
     lp_id keys[3]; uint32_t nk = 0; for (int i = 0; i < 3; i++) if (have[i]) keys[nk++] = part[i];
     /* the tier is known once the IDs are: every leaf above it, together, then the fan keeps the hardest pulling */
     int nh = 0; Hold *h = holds_above(keys, (int)nk, tier_max(keys, (int)nk), 0, 1, &nh);
-    Claim *c = malloc(sizeof(Claim) * (size_t)(nh ? nh : 1)); int m = 0;
-    for (int j = 0; j < nh; j++) {
-        if (!h[j].claim || !h[j].stood) continue;
-        Claim *x = &c[m]; memcpy(x->id.b, h[j].entity.b, 16); x->np = 0; x->position = 0;
-        size_t np_ = lp_path_ids(h[j].path, (size_t)h[j].path_len, x->part, MAXPARTS); x->np = np_ < MAXPARTS ? (int)np_ : MAXPARTS;
-        if (x->np < 2) continue;
+    int count=0;Claim *c=claims_held(h,nh,k,&count);int m=0;
+    for(int j=0;j<count;j++){
+        Claim *x=&c[j];
         /* in its place: the first part given is the claim's first, the last its last, and the middle one between them */
         int fits = 1, last = x->np - 1;
         if (have[0] > 1 && memcmp(&x->part[0], &part[0], 16)) fits = 0;
         if (have[2] > 1 && memcmp(&x->part[last], &part[2], 16)) fits = 0;
         if (have[1] > 1) { int in = 0; for (int i = 1; i < last || (i == 1 && x->np == 2 && i <= last); i++) if (!memcmp(&x->part[i], &part[1], 16)) in = 1; if (!in) fits = 0; }
         if (!fits) continue;
-        x->r = h[j].r; x->matches = h[j].matches; x->conf = lp_confidence(&x->r, k); m++;
+        c[m++]=*x;
     }
     holds_free(h, nh); *n = m;
     qsort(c, (size_t)m, sizeof(Claim), claim_by_conf);
@@ -135,23 +159,36 @@ Claim *claims_each(PGconn *pg, const lp_id *keys, int nk, const lp_id *rel, int 
     lp_idmap *km = lp_idmap_new(); int *head = malloc(sizeof(int) * (size_t)nk), *link = malloc(sizeof(int) * (size_t)nk);
     for (int i = 0; i < nk; i++) head[i] = -1;
     for (int i = nk - 1; i >= 0; i--) { bool fresh; size_t u = lp_idmap_put(km, &keys[i], &fresh); link[i] = head[u]; head[u] = i; }
-    int nh = 0; Hold *h = holds_pair(keys, nk, rel, 1, &nh); SrcClaim *s = malloc(sizeof(SrcClaim) * (size_t)(nh ? nh : 1)); int m = 0, cap = nh ? nh : 1;
-    for (int j = 0; j < nh; j++) {
-        if (!h[j].claim || !h[j].stood) continue;
-        Claim x; memset(&x, 0, sizeof x); x.id = h[j].entity; size_t np = lp_path_ids(h[j].path, (size_t)h[j].path_len, x.part, MAXPARTS); x.np = np < MAXPARTS ? (int)np : MAXPARTS; if (x.np < 2) continue;
-        int last = x.np - 1;
-        if (rel) { int in = 0; for (int i = 1; i < last || (i == 1 && x.np == 2 && i <= last); i++) in |= !memcmp(&x.part[i], rel, 16); if (!in) continue; }
-        x.r = h[j].r; x.matches = h[j].matches; x.conf = lp_confidence(&x.r, k);
-        int64_t got[MAXPARTS]; int ng = 0;
-        for (int p = 0; p < (subject ? 1 : x.np); p++) { int64_t u = lp_idmap_find(km, &x.part[p]); if (u < 0) continue;     /* every key it holds, once */
-            int dup = 0; for (int q = 0; q < ng; q++) dup |= got[q] == u; if (dup) continue; got[ng++] = u;
-            for (int i = head[u]; i >= 0; i = link[i]) { if (m == cap) { cap *= 2; s = xrealloc(s, sizeof(SrcClaim) * (size_t)cap); } s[m++] = (SrcClaim){ x, i }; } }
+    int nh=0,nc=0;Hold *h=holds_pair(keys,nk,rel,1,&nh);Claim *decoded=claims_held(h,nh,k,&nc);
+    holds_free(h,nh);
+    SrcClaim *s=malloc(sizeof(SrcClaim)*(size_t)(nc?nc:1));int m=0,cap=nc?nc:1;
+    uint64_t *seen=calloc(lp_idmap_count(km),sizeof *seen);
+    for(int j=0;j<nc;j++){
+        Claim x=decoded[j];int last=x.np-1;
+        if(rel){int in=0;for(int i=1;i<last || (i==1 && x.np==2 && i<=last);i++)in|=lp_id_eq(&x.part[i],rel);if(!in)continue;}
+        for(int p=0;p<(subject?1:x.np);p++){
+            int64_t u=lp_idmap_find(km,&x.part[p]);if(u<0 || seen[u]==(uint64_t)j+1)continue;
+            seen[u]=(uint64_t)j+1;
+            for(int i=head[u];i>=0;i=link[i]){
+                if(m==cap){cap*=2;s=xrealloc(s,sizeof(SrcClaim)*(size_t)cap);}s[m++]=(SrcClaim){x,i};
+            }
+        }
     }
-    holds_free(h, nh); lp_idmap_free(km); free(head); free(link);
+    free(seen);lp_idmap_free(km);free(head);free(link);
     qsort(s, (size_t)m, sizeof(SrcClaim), by_src_conf);
-    Claim *c = malloc(sizeof(Claim) * (size_t)(m ? m : 1)); int *sr = malloc(sizeof(int) * (size_t)(m ? m : 1)), w = 0, per = 0;
-    for (int j = 0; j < m; j++) { per = j && s[j].src == s[j - 1].src ? per + 1 : 0; if (fan >= 0 && per >= fan) continue; c[w] = s[j].c; sr[w++] = s[j].src; }
-    free(s); *n = w; *src = sr; return c;
+    size_t operands=0;int kept=0,per=0;
+    for(int j=0;j<m;j++){
+        per=j && s[j].src==s[j-1].src?per+1:0;if(fan>=0 && per>=fan)continue;
+        if((size_t)s[j].c.np>SIZE_MAX-operands){fputs("claim result exceeds addressable memory\n",stderr);exit(1);}
+        operands+=(size_t)s[j].c.np;kept++;
+    }
+    Claim *c=claim_block((size_t)kept,operands);lp_id *parts=(lp_id *)(c+(kept?kept:1));
+    int *sr=malloc(sizeof(int)*(size_t)(kept?kept:1)),w=0;per=0;
+    for(int j=0;j<m;j++){
+        per=j && s[j].src==s[j-1].src?per+1:0;if(fan>=0 && per>=fan)continue;
+        c[w]=s[j].c;memcpy(parts,c[w].part,sizeof(lp_id)*(size_t)c[w].np);c[w].part=parts;parts+=c[w].np;sr[w++]=s[j].src;
+    }
+    free(s);free(decoded);*n=w;*src=sr;return c;
 }
 /* Every claim that holds an entity, wherever in it. */
 Claim *claims_of(PGconn *pg, const lp_id *e, int fan, double k, int *n, int *capped){
@@ -434,7 +471,7 @@ int cmd_translate(int argc, char **argv){
         for (int i = 1; i < n; i++) { int v = ord[i], j = i; while (j > 0 && uses[ord[j - 1]] < uses[v]) { ord[j] = ord[j - 1]; j--; } ord[j] = v; }      /* stable: ties keep the order above */
         Claim *f2 = malloc(sizeof(Claim) * (size_t)n); lp_id *l2 = malloc(sizeof(lp_id) * (size_t)n); long long *u2 = malloc(sizeof(long long) * (size_t)n);
         for (int i = 0; i < n; i++) { f2[i] = first[ord[i]]; l2[i] = ls[ord[i]]; u2[i] = uses[ord[i]]; }
-        free(first); free(ls); free(uses); free(ord); first = f2; ls = l2; uses = u2; }
+        memcpy(first,f2,sizeof(Claim)*(size_t)n);free(f2);free(ls);free(uses);free(ord);ls=l2;uses=u2; }
     Run *pr = parts_each(pg, ls, n); steps += n > 0;
     lp_id *cs = malloc(sizeof(lp_id) * (size_t)(n ? n : 1)); lp_rating *cr = malloc(sizeof(lp_rating) * (size_t)(n ? n : 1)); long long *cu = calloc((size_t)(n ? n : 1), sizeof(long long)); int nc = 0;
     for (int i = 0; i < n; i++) {
@@ -688,27 +725,33 @@ void take_top(Claim *cl, int n, int want, const Firmware *fw, unsigned *seed){
  * through it; otherwise the top, as the firmware takes it (seed NULL: the top every time). The first of the firmware's
  * chains that reaches its end answers. Returns the steps the answering chain took, or, when none reached its end, the
  * most the last one tried took and -1 in *alt; *last is the last strand taken. */
-int chain_follow(PGconn *pg, Reader *rd, Firmware *fw, const lp_id *word, const lp_id *reading, unsigned *seed, ChainFork fork, void *fork_ctx, lp_id *answer, Claim *last, int *alt){
+int chain_follow(PGconn *pg, Reader *rd, Firmware *fw, const lp_id *word, const lp_id *reading, unsigned *seed, ChainFork fork, void *fork_ctx, lp_id *answer, ClaimStanding *last, int *alt){
     firmware_ids(fw); int steps = 0;
     for (*alt = 0; *alt < fw->nalt; (*alt)++) {
         lp_id cur = *word; steps = 0;
         for (int z = 0; z < fw->nchain[*alt]; z++) {
-            lp_id tryv[66]; int nt = 0; tryv[nt++] = cur;
-            if (z > 0 && lp_tier0_codepoint(T0, &cur) < 0) {
-                lp_id parts[64]; size_t np = reader_parts(rd, &cur, parts, 64);
-                for (size_t k = np; k-- > 0 && nt < 65; ) if (lp_tier0_codepoint(T0, &parts[k]) < 0 && !lp_id_eq(&parts[k], word)) tryv[nt++] = parts[k];
-                tryv[nt++] = *word;                                                  /* a synset of one member is that word: what is said of it is said of the word */
+            Ids candidates={0};lp_push(&candidates,cur);
+            if(z>0 && lp_tier0_codepoint(T0,&cur)<0){
+                size_t count=reader_parts(rd,&cur,NULL,0);Ids parts={0};lp_vec_reserve(&parts,count);
+                reader_parts(rd,&cur,parts.v,count);
+                for(size_t i=count;i-- >0;)if(lp_tier0_codepoint(T0,&parts.v[i])<0 && !lp_id_eq(&parts.v[i],word))lp_push(&candidates,parts.v[i]);
+                lp_vec_free(&parts);lp_push(&candidates,*word);
             }
-            Claim *cl = NULL; int n = 0, capped;
-            for (int t = 0; t < nt && !n; t++) { lp_id part[3] = { tryv[t], fw->id.chain[*alt][z], fw->id.chain[*alt][z] }; int have[3] = { 2, 2, 0 };
-                cl = claims_like(pg, part, have, fw->fan, fw->k, &n, &capped); if (!n) { free(cl); cl = NULL; } }     /* a relation the firmware names to follow is not one it refuses */
-            if (!n) break;
+            if(candidates.n>INT_MAX){fputs("chain candidates exceed the reader's addressable range\n",stderr);exit(1);}
+            int n=0,*source=NULL;
+            Claim *cl=claims_each(pg,candidates.v,(int)candidates.n,&fw->id.chain[*alt][z],1,fw->fan,fw->k,&n,&source);
+            lp_vec_free(&candidates);
+            /* The source order remains the firmware's priority. Read all
+             * candidates together, then retain the first supported subject. */
+            if(n){int first=source[0],keep=0;while(keep<n && source[keep]==first)keep++;n=keep;}
+            free(source);
+            if (!n){free(cl);break;}
             positions_of(pg, cl, n); if (fw->order_witness) lp_sort(cl, (size_t)n, sizeof(Claim), claim_by_position);
             int take = -1;
             if (z == 0 && reading) for (int k = 0; k < n; k++) if (lp_id_eq(&cl[k].part[cl[k].np - 1], reading)) { take = k; break; }
             if (take < 0 && fork && n > 1) take = fork(fork_ctx, cl, n);        /* what the context supports, when it tells the branches apart */
             if (take < 0) { take_top(cl, n, 1, fw, seed); take = 0; }
-            *last = cl[take]; cur = cl[take].part[cl[take].np - 1]; steps++; free(cl);
+            *last = (ClaimStanding){cl[take].r,cl[take].matches}; cur = cl[take].part[cl[take].np - 1]; steps++; free(cl);
         }
         if (steps == fw->nchain[*alt]) { *answer = cur; return steps; }
     }

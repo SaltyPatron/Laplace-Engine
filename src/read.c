@@ -138,6 +138,7 @@ static Hold *holds_core_(const lp_id *keys, int nkeys, int floor, int each, int 
     uint8_t wb[40]; size_t wl = with ? ids_param(pool[0],wb, with, 1) : 0;          /* each key with this one too: a claim's key and its relation */
     #pragma omp parallel for num_threads(npool) schedule(dynamic)
     for (int j = 0; j < nj; j++) {
+        lp_idmap *seen=give?lp_idmap_new():NULL;
         char sql[1024];
         if (each == 2) snprintf(sql, sizeof sql, "SELECT entity, path, tier, mask FROM @extschema@.%s WHERE path OPERATOR(@extschema@.&&) $1::@extschema@.blake3[] AND tier > %d%s%s",     /* any key: one probe a leaf for the set; with is checked on the rows, never probed (a relation is a hub: its posting list is every claim of it) */
                                 phy[job[j]].name, floor, with ? " AND (path OPERATOR(@extschema@.@>) $2::@extschema@.blake3[]) IS TRUE" : "", kind == 1 ? " AND mask OPERATOR(@extschema@.?) 0::smallint" : kind == 0 ? " AND NOT (mask OPERATOR(@extschema@.?) 0::smallint)" : "");
@@ -159,15 +160,15 @@ static Hold *holds_core_(const lp_id *keys, int nkeys, int floor, int each, int 
             x.claim = (uint8_t)mask_claim(PQgetvalue(r, row, col + 3), PQgetlength(r, row, col + 3));
             if (!give) { bag_put(&bag[j], x); continue; }
             size_t nv = lp_path_ids(x.path, (size_t)x.path_len, NULL, 0); lp_id *pv = malloc(sizeof(lp_id) * (nv ? nv : 1)); lp_path_ids(x.path, (size_t)x.path_len, pv, nv);
-            int64_t seen[64]; int ns = 0, first = 1;
+            lp_idmap_clear(seen);int first=1;
             for (size_t v = 0; v < nv; v++) { int64_t u = lp_idmap_find(km, &pv[v]); if (u < 0) continue;
-                int dup = 0; for (int s = 0; s < ns; s++) dup |= seen[s] == u; if (dup) continue; if (ns < 64) seen[ns++] = u;      /* a path that holds a key twice holds it once */
+                bool fresh;lp_idmap_put(seen,&pv[v],&fresh);if(!fresh)continue;
                 for (int i = khead[u]; i >= 0; i = klink[i]) { Hold y = x; y.src = i;
                     if (!first) { y.path = malloc((size_t)(x.path_len ? x.path_len : 1)); memcpy(y.path, x.path, (size_t)x.path_len); }
                     first = 0; bag_put(&bag[j], y); } }
             if (first) free(x.path); free(pv);
         }
-        PQclear(r);
+        PQclear(r);lp_idmap_free(seen);
     }
     free(ab); free(job); if (km) { lp_idmap_free(km); free(khead); free(klink); }
     int n = 0; for (int j = 0; j < nj; j++) n += bag[j].n;

@@ -10,8 +10,10 @@
 
 static lp_id *strands_named(int argc, char **argv, int a, int *ns, Hold **hs, int *nhs){
     Ctx *c = lp_text_new(T0); if (!HW) HW = lp_highway_map(NULL);
-    int np = argc - a; lp_id part[MAXPARTS]; int have[MAXPARTS], nk = 0; lp_id key[MAXPARTS];
-    for (int i = 0; i < np && i < MAXPARTS; i++) { const char *p = argv[a + i]; have[i] = strcmp(p, "?") != 0; if (!have[i]) continue;
+    int np=argc-a,nk=0;size_t capacity=(size_t)(np?np:1);
+    lp_id *part=malloc(capacity*sizeof *part),*key=malloc(capacity*sizeof *key);int *have=calloc(capacity,sizeof *have);
+    if(!part || !key || !have){perror("claim selectors");exit(1);}
+    for (int i = 0; i < np; i++) { const char *p = argv[a + i]; have[i] = strcmp(p, "?") != 0; if (!have[i]) continue;
         const char *colon = strchr(p, ':'); int typed = 0;
         if (colon && colon > p && colon[1]) { char list[64]; snprintf(list, sizeof list, "%.*s", (int)(colon - p), p); Ref r = highway_typed(list, (const uint8_t *)colon + 1, strlen(colon + 1), &typed); if (typed) part[i] = r.id; }
         if (typed<0) { fprintf(stderr,"%s: ambiguous highway pointer; name its canonical target explicitly\n",p); exit(2); }
@@ -22,7 +24,7 @@ static lp_id *strands_named(int argc, char **argv, int a, int *ns, Hold **hs, in
     for (int j = 0; j < nh; j++) { if (!h[j].claim) continue; lp_path p = lp_path_of(h[j].path, (size_t)h[j].path_len); size_t n = path_into(&ids, p);
         if ((int)n != np) continue; int fits = 1; for (int i = 0; i < np && fits; i++) if (have[i] && memcmp(&ids.v[i], &part[i], 16)) fits = 0;
         if (fits) { Hold x = h[j]; h[j] = h[w]; h[w++] = x; } }
-    lp_vec_free(&ids);
+    lp_vec_free(&ids);free(part);free(key);free(have);
     lp_id *out = malloc(sizeof(lp_id) * (size_t)(w ? w : 1)); for (int j = 0; j < w; j++) out[j] = h[j].entity;
     *ns = w; *hs = h; *nhs = nh; lp_text_free(c); return out;
 }
