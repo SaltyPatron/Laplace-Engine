@@ -100,7 +100,9 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
 
     /* the top continuations as text: their paths fetched together, a level at a time */
     Reader *rd = reader_new(pg);
-    for (size_t i = 0; i < nacc && (int)i < limit; i++) reader_want(rd, &f[i].id);
+    lp_vec(lp_id) display={0};
+    for (size_t i = 0; i < nacc && (int)i < limit; i++) lp_push(&display,f[i].id);
+    reader_prefetch(rd,display.v,display.n,60);lp_vec_free(&display);
     printf("%-24s %14s %10s\n", "follows", "occurrences", "paths");
     for (size_t i = 0; i < nacc && (int)i < limit; i++) {
         char *tx = reader_text(rd, &f[i].id, 60);

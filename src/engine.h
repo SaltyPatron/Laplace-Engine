@@ -395,6 +395,7 @@ int  say_only_disposes(const Recipe *);
 Reader *reader_new(PGconn *pg);
 void    reader_free(Reader *);
 void    reader_want(Reader *, const lp_id *id);                       /* queue an entity; fetched by the next reader_text */
+void    reader_prefetch(Reader *, const lp_id *ids, size_t count, size_t limit); /* selected display prefixes, one shared frontier at a time */
 char   *reader_text(Reader *, const lp_id *id, size_t limit);         /* its text (malloc'd), cut at limit bytes with an ellipsis */
 uint64_t reader_trips(const Reader *);                                /* round trips made */
 size_t  reader_parts(Reader *, const lp_id *id, lp_id *out, size_t cap); /* an entity's constituents, runs written out; 0 for an atom or nothing recorded */

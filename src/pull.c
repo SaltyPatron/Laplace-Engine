@@ -273,7 +273,9 @@ int cmd_hop(int argc, char **argv){
     n = refused(pg, c, &fw, cl, n); weighed(c, &fw, cl, n);
     positions_of(pg, cl, n); if (!whole && fw.order_witness) qsort(cl, (size_t)n, sizeof(Claim), claim_by_position);
     Reader *rd = reader_new(pg);
-    for (int i = 0; i < n && i < limit; i++) for (int p = 0; p < cl[i].np; p++) reader_want(rd, &cl[i].part[p]);
+    lp_vec(lp_id) display={0};
+    for (int i = 0; i < n && i < limit; i++) for (int p = 0; p < cl[i].np; p++) lp_push(&display,cl[i].part[p]);
+    reader_prefetch(rd,display.v,display.n,72);lp_vec_free(&display);
     firmware_say(&fw, FW_HOP);
     printf("\nattested: %d claim%s%s\n", n, n == 1 ? "" : "s", capped ? " (more exist than the fan reads)" : "");
     if (n) printf("%10s %8s %6s %8s %6s   %s\n", "confidence", "rating", "dev", "matches", "given", "claim");
@@ -395,7 +397,9 @@ typedef struct { lp_id *id; int *of, n, cap; } Found;                      /* en
 int lexicalization_counts(PGconn *pg, Reader *rd, const Lexicalization *lx, const lp_id *ids, int n, int fan, double k, long long *uses){
     if (!lx->has_usage || !n) return 0;
     int count = 0, *src = NULL; Claim *claims = claims_each(pg, ids, n, &lx->usage, CLAIM_FIRST, fan, k, &count, &src);
-    for (int row = 0; row < count; row++) reader_want(rd, &claims[row].part[claims[row].np - 1]);
+    lp_vec(lp_id) display={0};
+    for (int row = 0; row < count; row++) lp_push(&display,claims[row].part[claims[row].np - 1]);
+    reader_prefetch(rd,display.v,display.n,32);lp_vec_free(&display);
     for (int row = 0; row < count; row++) { int entry = src[row]; if (entry < 0 || entry >= n) continue;
         char *text = reader_text(rd, &claims[row].part[claims[row].np - 1], 32), *end;
         long long value = strtoll(text, &end, 10); if (end != text && !*end && value > uses[entry]) uses[entry] = value; free(text);

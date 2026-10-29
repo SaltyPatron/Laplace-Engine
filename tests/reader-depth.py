@@ -54,6 +54,24 @@ def main():
             WHERE name='annotation';
           INSERT INTO entity(id,tier,coord,hilbert) SELECT id,1,coord,laplace_hilbert4(coord) # '-9223372036854775808'::bigint FROM extra_nodes;
           INSERT INTO physicality(entity,tier,hilbert,path) SELECT id,1,laplace_hilbert4(coord) # '-9223372036854775808'::bigint,path FROM extra_nodes;
+          CREATE TEMP TABLE batch_branches AS
+          SELECT i,laplace_compose(ARRAY[laplace_cp_id(1024+i),laplace_cp_id(65)]) id,
+            laplace_path(ARRAY[laplace_cp_id(1024+i),laplace_cp_id(65)]) path,
+            pg_temp.pair_coord(ST_GeomFromEWKB(laplace_cp_coord_ewkb(1024+i)),
+                               ST_GeomFromEWKB(laplace_cp_coord_ewkb(65))) coord
+          FROM generate_series(0,31) i;
+          INSERT INTO entity(id,tier,coord,hilbert)
+            SELECT id,1,coord,laplace_hilbert4(coord) # '-9223372036854775808'::bigint FROM batch_branches;
+          INSERT INTO physicality(entity,tier,hilbert,path)
+            SELECT id,1,laplace_hilbert4(coord) # '-9223372036854775808'::bigint,path FROM batch_branches;
+          CREATE TABLE public.reader_batch_fixture AS
+          SELECT i,laplace_compose(ARRAY[id,laplace_cp_id(66)]) id,
+            laplace_path(ARRAY[id,laplace_cp_id(66)]) path,
+            pg_temp.pair_coord(coord,ST_GeomFromEWKB(laplace_cp_coord_ewkb(66))) coord FROM batch_branches;
+          INSERT INTO entity(id,tier,coord,hilbert)
+            SELECT id,2,coord,laplace_hilbert4(coord) # '-9223372036854775808'::bigint FROM public.reader_batch_fixture;
+          INSERT INTO physicality(entity,tier,hilbert,path)
+            SELECT id,2,laplace_hilbert4(coord) # '-9223372036854775808'::bigint,path FROM public.reader_batch_fixture;
           SELECT id::text FROM expected WHERE depth=4096;
           SELECT id::text FROM extra_nodes WHERE name='run';
           SELECT id::text FROM extra_nodes WHERE name='annotation';

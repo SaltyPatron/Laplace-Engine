@@ -79,6 +79,19 @@ static void expand(Reader *r,const lp_id *id,Out *out){
     for(size_t i=0;i<stack.n;i++)r->e[stack.v[i].node].active=0;
     lp_vec_free(&stack);
 }
+void reader_prefetch(Reader *r,const lp_id *ids,size_t count,size_t limit){
+    if(!count)return;
+    Out out={.limit=limit?limit:SIZE_MAX,.cap=64};out.b=malloc(out.cap);
+    for(size_t i=0;i<count;i++)reader_want(r,ids+i);
+    for(;;){
+        fetch(r);bool pending=false;
+        for(size_t i=0;i<count;i++){
+            out.n=out.wants=0;expand(r,ids+i,&out);pending|=out.wants!=0;
+        }
+        if(!pending)break;
+    }
+    free(out.b);
+}
 char *reader_text(Reader *r,const lp_id *id,size_t limit){
     Out out={0};out.limit=limit?limit:SIZE_MAX;out.cap=64;out.b=malloc(out.cap);reader_want(r,id);
     for(;;){fetch(r);out.n=out.wants=0;expand(r,id,&out);if(!out.wants)break;}

@@ -26,6 +26,23 @@ int main(int argc,char **argv){
     assert(argc==6 || argc==7);T0=lp_tier0_map(argv[2]);assert(T0);
     PGconn *pg=PQconnectdb(argv[1]);assert(PQstatus(pg)==CONNECTION_OK);
     assert(db_binding(pg)->id_type);
+    PGresult *batch=ask_once(pg,"SELECT id FROM public.reader_batch_fixture ORDER BY i",NULL);
+    assert(PQntuples(batch)==32);lp_id selected[35];
+    for(int i=0;i<32;i++)selected[i]=*col_id(batch,i,0);PQclear(batch);
+    selected[32]=selected[0];lp_id_codepoint(128512,selected+33);memset(selected+34,0,sizeof(lp_id));
+    Reader *batched=reader_new(pg);reader_prefetch(batched,selected,35,3);
+    assert(reader_trips(batched)==2 && batched->n==65);
+    for(int i=0;i<32;i++){
+        char expected[16];size_t length=lp_utf8_put((uint32_t)(1024+i),(uint8_t *)expected);
+        expected[length++]='A';memcpy(expected+length,"\xE2\x80\xA6",4);
+        char *actual=reader_text(batched,selected+i,3);assert(!strcmp(expected,actual));free(actual);
+    }
+    char *duplicate=reader_text(batched,selected+32,3),*original=reader_text(batched,selected,3);
+    assert(!strcmp(duplicate,original));free(duplicate);free(original);
+    char *virtual=reader_text(batched,selected+33,0);assert(!strcmp(virtual,"\xF0\x9F\x98\x80"));free(virtual);
+    char *missing=reader_text(batched,selected+34,0);assert(!strcmp(missing,"{00000000000000000000000000000000}"));free(missing);
+    reader_prefetch(batched,NULL,0,3);assert(reader_trips(batched)==2);reader_free(batched);
+    puts("reader: 32 independent display prefixes, duplicates, missing IDs and virtual scalars in two exact frontiers passed");
     lp_id deep,run,annotated;assert(lp_id_unhex(argv[3],&deep));assert(lp_id_unhex(argv[4],&run));assert(lp_id_unhex(argv[5],&annotated));
     Reader *reader=reader_new(pg);reader_want(reader,&deep);reader_want(reader,&run);reader_want(reader,&annotated);
     fputs("reader acceptance: deep\n",stderr);char *text=reader_text(reader,&deep,0);

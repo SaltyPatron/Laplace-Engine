@@ -137,6 +137,9 @@ invalidation against cold database readings.
 `src/read_text.c` owns selected-ID CLI text and parts. One append-only child
 arena retains ordered runs for every fetched node; traversal uses an explicit
 occurrence stack. Only newly discovered IDs form another database frontier.
+`reader_prefetch(ids, count, limit)` advances selected display prefixes together;
+hop, continuations and lexical usage reads use it before formatting. Prefix
+limits remain authoritative, so batching does not fetch whole unselected trees.
 Metadata reads, selected text frontiers and COPY share the declared 4 MiB
 transport grain, with windows over complete inputs. Display byte limits unwind
 active branches safely for later reads. Claim and voice annotations retain their
