@@ -277,6 +277,55 @@ def main():
             assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
         print('PASS JSON-in-CSV lists decode once, retaining commas, quotes, Unicode and every array member')
 
+        checklist = root / 'train-mhs-choices.tsv'
+        checklist.write_text('text\tannotator_id\ttarget_race_asian\ttarget_religion_buddhist\t'
+            'annotator_race_asian\tannotator_gender_prefer_not_to_say\tannotator_age\n'
+            'Comment.\tworker-A\ttrue\tfalse\tfalse\ttrue\t24\n'
+            'Comment.\tworker-B\tfalse\ttrue\ttrue\tfalse\t25\n', encoding='utf-8')
+        expected_checklist = [
+            ('Comment.', 'directed at or about individuals: Asian', answer) for answer in ('true', 'false')]
+        expected_checklist += [
+            ('Comment.', 'directed at or about individuals: Buddhist', answer) for answer in ('true', 'false')]
+        for worker, age, race, refused in [('worker-A', '24', 'false', 'true'),
+                                          ('worker-B', '25', 'true', 'false')]:
+            expected_checklist += [(worker, 'self-reported age', age),
+                (worker, 'self-reported race choice selected: Asian', race),
+                (worker, 'self-reported gender choice selected: prefers not to state gender', refused)]
+        for workers in (1, 4):
+            text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'measuring-hate-speech', checklist)
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            assert sorted(claims) == sorted(expected_checklist), (workers, claims, text)
+            assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
+        unknown = root / 'train-mhs-unknown.tsv'
+        unknown.write_text('text\tstd_err\nComment.\t0.2\n', encoding='utf-8')
+        rejected = run('ingest', '--no-load', '-s', 'measuring-hate-speech', unknown, expected=1)
+        assert 'semantic_omissions=1' in rejected, rejected
+        print('PASS target checklists retain false answers and annotator demographics; unknown statistics remain blocked')
+
+        chess = Path(__file__).resolve().parent / 'chess/kinds.pgn'
+        chess_readings = []
+        for workers in (1, 4):
+            for window in (97, 4097, 65536):
+                text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'chess-com', chess,
+                           extra={'LAPLACE_RECORD_WINDOW_BYTES': str(window)})
+                claims = sorted(line for line in text.splitlines() if line.startswith('claim\t'))
+                assert len(claims) == 94, (workers, window, text)
+                chess_readings.append(claims)
+        assert all(reading == chess_readings[0] for reading in chess_readings), 'PGN read windows changed claims'
+        incomplete = root / 'missing-result.pgn'
+        incomplete.write_text('[Event "Incomplete"]\n[Result "1-0"]\n\n1. e4 e5\n', encoding='utf-8')
+        rejected = run('ingest', '--no-load', '-s', 'chess-com', incomplete, expected=2,
+                       extra={'LAPLACE_RECORD_WINDOW_BYTES': '97'})
+        assert 'invalid PGN packaging' in rejected, rejected
+        variant = root / 'drop-variant.pgn'
+        variant.write_text('[Event "Drop syntax"]\n[Variant "Crazyhouse"]\n[Result "*"]\n\n'
+                           '1. e4 e5 2. N@f3 B@g2 *\n', encoding='utf-8')
+        rejected = run('ingest', '--no-load', '-s', 'chess-com', variant, expected=1,
+                       extra={'LAPLACE_RECORD_WINDOW_BYTES': '29'})
+        assert 'variant Crazyhouse is in no rules' in rejected and '1 kept as text' in rejected, rejected
+        assert 'invalid PGN packaging' not in rejected, rejected
+        print('PASS PGN grammar boundaries retain every game; unsupported drop variants parse and remain explicit')
+
         chemistry = Path(__file__).resolve().parent / 'fixtures/social-chemistry'
         expected_selections = [
             ('First rule.', 'Who is the RoT most likely targeting', 'friend'),

@@ -67,14 +67,143 @@ relation "This comment calls for using violence against the group(s)" violence
 relation "calls for the deliberate killing of a large group of people" genocide
 relation "Is the comment attacking or defending the group(s)" attack_defend
 relation "Does this comment contain hate speech" hatespeech
-# Obligations:
-#   outfitms, annotator_outfitms, std_err: neither the card nor its two papers word them (Laplace-Engine#32).
-#   target_* (target_race_asian, ..., target_race, ...): each column is one identity group or subgroup of the
-#   checklist the annotator ticked, true where ticked; the answer is the group the column stands for, which the
-#   recipe cannot yet read as the value (Laplace-Engine#32).
-#   annotator_* (gender, trans, educ, income, ideology, age, and their ticked subgroups): what the corpus reports of
-#   the annotator, worded nowhere; with the people the corpus names (Laplace-Engine#29).
+# The binary target checklist and voluntary demographics are documented in
+# Sachdeva et al. (2022), sections 4.3-4.4 and Appendix B:
+# https://aclanthology.org/2022.nlperspectives-1.11.pdf
+# Every checkbox remains a boolean answer, including false; it is not an
+# unconditional identity assertion. Other/refused choices retain their group.
+# Rater outfit is identified by the dataset author as a rater fit diagnostic:
+# https://huggingface.co/datasets/ucberkeley-dlab/measuring-hate-speech/discussions/3
+# Kennedy et al. (2020), section 4.2, calls outfit the outlier-sensitive mean square:
+# https://arxiv.org/pdf/2009.10277v1
+relation "outlier-sensitive mean-squared fit statistic" outfitms annotator_outfitms
+# std_err is still an unresolved obligation: its quantity is not documented.
 attest row platform hate_speech_score infitms outfitms std_err hypothesis
 attest row sentiment respect insult humiliate status dehumanize violence genocide attack_defend hatespeech target_* with annotator_id
 # The annotator columns are named one by one: annotator_id, the annotator itself, is not said of itself.
 attest row annotator_severity annotator_infitms annotator_outfitms annotator_gender annotator_trans annotator_educ annotator_income annotator_ideology annotator_age annotator_gender_* annotator_transgender* annotator_cisgender annotator_education_* annotator_income_* annotator_ideology_* annotator_race_* annotator_religion_* annotator_sexuality_* of annotator_id
+
+# Whether the comment is directed at or about the named identity group.
+relation "directed at or about individuals based on race or ethnicity" target_race
+relation "directed at or about individuals: Asian" target_race_asian
+relation "directed at or about individuals: Black or African American" target_race_black
+relation "directed at or about individuals: Latino or non-white Hispanic" target_race_latinx
+relation "directed at or about individuals: Middle Eastern" target_race_middle_eastern
+relation "directed at or about individuals: Native American or Alaska Native" target_race_native_american
+relation "directed at or about individuals: Pacific Islander" target_race_pacific_islander
+relation "directed at or about individuals: non-Hispanic White" target_race_white
+relation "directed at or about individuals: other racial or ethnic identity" target_race_other
+relation "directed at or about individuals based on religious affiliation" target_religion
+relation "directed at or about individuals: atheist" target_religion_atheist
+relation "directed at or about individuals: Buddhist" target_religion_buddhist
+relation "directed at or about individuals: Christian" target_religion_christian
+relation "directed at or about individuals: Hindu" target_religion_hindu
+relation "directed at or about individuals: Jewish" target_religion_jewish
+relation "directed at or about individuals: Mormon" target_religion_mormon
+relation "directed at or about individuals: Muslim" target_religion_muslim
+relation "directed at or about individuals: other religious affiliation" target_religion_other
+relation "directed at or about individuals based on national origin or citizenship status" target_origin
+relation "directed at or about individuals: immigrants" target_origin_immigrant
+relation "directed at or about individuals: migrant workers" target_origin_migrant_worker
+relation "directed at or about individuals: people from a specific country" target_origin_specific_country
+relation "directed at or about individuals: undocumented people" target_origin_undocumented
+relation "directed at or about individuals: other national origin or citizenship status" target_origin_other
+relation "directed at or about individuals based on gender identity" target_gender
+relation "directed at or about individuals: men" target_gender_men
+relation "directed at or about individuals: women" target_gender_women
+relation "directed at or about individuals: non-binary or third gender" target_gender_non_binary
+relation "directed at or about individuals: transgender men" target_gender_transgender_men
+relation "directed at or about individuals: transgender women" target_gender_transgender_women
+relation "directed at or about individuals: transgender, unspecified" target_gender_transgender_unspecified
+relation "directed at or about individuals: other gender identity" target_gender_other
+relation "directed at or about individuals based on sexual orientation" target_sexuality
+relation "directed at or about individuals: bisexual" target_sexuality_bisexual
+relation "directed at or about individuals: gay" target_sexuality_gay
+relation "directed at or about individuals: lesbian" target_sexuality_lesbian
+relation "directed at or about individuals: heterosexual" target_sexuality_straight
+relation "directed at or about individuals: other sexual orientation" target_sexuality_other
+relation "directed at or about individuals based on age" target_age
+relation "directed at or about individuals: children, ages 0-12" target_age_children
+relation "directed at or about individuals: teenagers, ages 13-17" target_age_teenagers
+relation "directed at or about individuals: young adults, ages 18-39" target_age_young_adults
+relation "directed at or about individuals: middle-aged adults, ages 40-64" target_age_middle_aged
+relation "directed at or about individuals: seniors, ages 65 and older" target_age_seniors
+relation "directed at or about individuals: other age group" target_age_other
+relation "directed at or about individuals based on disability status" target_disability
+relation "directed at or about individuals: physical disability" target_disability_physical
+relation "directed at or about individuals: cognitive or learning disability" target_disability_cognitive
+relation "directed at or about individuals: neurological disability" target_disability_neurological
+relation "directed at or about individuals: visual impairment" target_disability_visually_impaired
+relation "directed at or about individuals: hearing impairment" target_disability_hearing_impaired
+relation "directed at or about individuals: unspecified disability" target_disability_unspecific
+relation "directed at or about individuals: other disability" target_disability_other
+relation "directed at or about individuals based on political identity" target_politics
+relation "directed at or about individuals: alt-right" target_politics_alt_right
+relation "directed at or about individuals: communist" target_politics_communist
+relation "directed at or about individuals: conservative" target_politics_conservative
+relation "directed at or about individuals: Democrat" target_politics_democrat
+relation "directed at or about individuals: Green Party" target_politics_green_party
+relation "directed at or about individuals: leftist" target_politics_leftist
+relation "directed at or about individuals: liberal" target_politics_liberal
+relation "directed at or about individuals: libertarian" target_politics_libertarian
+relation "directed at or about individuals: Republican" target_politics_republican
+relation "directed at or about individuals: socialist" target_politics_socialist
+relation "directed at or about individuals: other political identity" target_politics_other
+
+# Voluntary answers about the annotator, never the comment.
+relation "self-reported gender identity" annotator_gender
+relation "self-reported transgender identification" annotator_trans
+relation "self-reported educational level" annotator_educ
+relation "self-reported income" annotator_income
+relation "self-reported political affiliation" annotator_ideology
+relation "self-reported age" annotator_age
+relation "self-reported gender choice selected: men" annotator_gender_men
+relation "self-reported gender choice selected: women" annotator_gender_women
+relation "self-reported gender choice selected: non-binary or third gender" annotator_gender_non_binary
+relation "self-reported gender choice selected: prefers not to state gender" annotator_gender_prefer_not_to_say
+relation "self-reported gender choice selected: self-described gender" annotator_gender_self_describe
+relation "self-reported education choice selected: some high school" annotator_education_some_high_school
+relation "self-reported education choice selected: completed high school" annotator_education_high_school_grad
+relation "self-reported education choice selected: some college" annotator_education_some_college
+relation "self-reported education choice selected: associate degree" annotator_education_college_grad_aa
+relation "self-reported education choice selected: bachelor's degree" annotator_education_college_grad_ba
+relation "self-reported education choice selected: professional degree" annotator_education_professional_degree
+relation "self-reported education choice selected: master's degree" annotator_education_masters
+relation "self-reported education choice selected: doctorate" annotator_education_phd
+relation "self-reported income choice selected: below $10,000" annotator_income_<10k
+relation "self-reported income choice selected: $10,000-$50,000" annotator_income_10k-50k
+relation "self-reported income choice selected: $50,000-$100,000" annotator_income_50k-100k
+relation "self-reported income choice selected: $100,000-$200,000" annotator_income_100k-200k
+relation "self-reported income choice selected: above $200,000" annotator_income_>200k
+relation "self-reported ideology choice selected: extremely conservative" annotator_ideology_extremeley_conservative
+relation "self-reported ideology choice selected: conservative" annotator_ideology_conservative
+relation "self-reported ideology choice selected: slightly conservative" annotator_ideology_slightly_conservative
+relation "self-reported ideology choice selected: neutral" annotator_ideology_neutral
+relation "self-reported ideology choice selected: slightly liberal" annotator_ideology_slightly_liberal
+relation "self-reported ideology choice selected: liberal" annotator_ideology_liberal
+relation "self-reported ideology choice selected: extremely liberal" annotator_ideology_extremeley_liberal
+relation "self-reported ideology choice selected: no political opinion" annotator_ideology_no_opinion
+relation "self-reported race choice selected: Asian" annotator_race_asian
+relation "self-reported race choice selected: Black or African American" annotator_race_black
+relation "self-reported race choice selected: Latino or non-white Hispanic" annotator_race_latinx
+relation "self-reported race choice selected: Middle Eastern" annotator_race_middle_eastern
+relation "self-reported race choice selected: Native American or Alaska Native" annotator_race_native_american
+relation "self-reported race choice selected: Pacific Islander" annotator_race_pacific_islander
+relation "self-reported race choice selected: non-Hispanic White" annotator_race_white
+relation "self-reported race choice selected: other racial or ethnic identity" annotator_race_other
+relation "self-reported religion choice selected: atheist" annotator_religion_atheist
+relation "self-reported religion choice selected: Buddhist" annotator_religion_buddhist
+relation "self-reported religion choice selected: Christian" annotator_religion_christian
+relation "self-reported religion choice selected: Hindu" annotator_religion_hindu
+relation "self-reported religion choice selected: Jewish" annotator_religion_jewish
+relation "self-reported religion choice selected: Mormon" annotator_religion_mormon
+relation "self-reported religion choice selected: Muslim" annotator_religion_muslim
+relation "self-reported religion choice selected: other religious affiliation" annotator_religion_other
+relation "self-reported religion choice selected: no religious affiliation" annotator_religion_nothing
+relation "self-reported sexuality choice selected: bisexual" annotator_sexuality_bisexual
+relation "self-reported sexuality choice selected: gay" annotator_sexuality_gay
+relation "self-reported sexuality choice selected: heterosexual" annotator_sexuality_straight
+relation "self-reported sexuality choice selected: other sexual orientation" annotator_sexuality_other
+relation "self-reported transgender choice selected" annotator_transgender
+relation "self-reported cisgender choice selected" annotator_cisgender
+relation "prefers not to state transgender identification" annotator_transgender_prefer_not_to_say

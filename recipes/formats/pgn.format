@@ -1,5 +1,7 @@
 grammar pgn
-records game
+# Complete games are document children. The record framer can therefore
+# retain the grammar-validated prefix when a byte window ends inside a game.
+records children game
 node game group as game
 node tag_pair group as tag
 node tag_name text as name
