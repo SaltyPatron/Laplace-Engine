@@ -27,6 +27,7 @@ jobs:
     steps:
       - name: Select this run's canonical cache closure
         run: |
+          echo "LAPLACE_PREPARED_GRAMMARS=${LAPLACE_GRAMMARS:?prepared grammars must be declared}" >> "$GITHUB_ENV"
           echo "LAPLACE_TIER0=$RUNNER_TEMP/engine/inputs/tier0.bin" >> "$GITHUB_ENV"
           echo "LAPLACE_FLAGS=$RUNNER_TEMP/engine/inputs/tier0.flags" >> "$GITHUB_ENV"
           echo "LAPLACE_HIGHWAY=$RUNNER_TEMP/engine/inputs/highway.bin" >> "$GITHUB_ENV"
@@ -94,7 +95,9 @@ jobs:
           . Laplace-Operations/laplace.env
           . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
           export LAPLACE_OPERATIONS="$GITHUB_WORKSPACE/Laplace-Operations"
-          bash Laplace-Engine/tools/build_grammars.sh Laplace-Engine/recipes/formats/grammars "$LAPLACE_GRAMMARS"
+          compiled_grammars="$LAPLACE_BUILD/Laplace-Engine/grammars"
+          bash Laplace-Engine/tools/build_grammars.sh Laplace-Engine/recipes/formats/grammars "$compiled_grammars"
+          python3 Laplace-Operations/installation/artifact_store.py --prepared "$LAPLACE_PREPARED_GRAMMARS" --compiled "$compiled_grammars" --output "$LAPLACE_GRAMMARS"
           python3 Laplace-Engine/tests/grammar-build-cache.py
           python3 Laplace-Engine/tests/runtime-resources.py
       - name: Prepare canonical caches for this run from local Unicode and frozen manifests
