@@ -247,9 +247,20 @@ if(WIN32)
     file(MAKE_DIRECTORY "${CMAKE_INSTALL_PREFIX}/bin")
     foreach(_library IN LISTS _libraries)
       get_filename_component(_name "${_library}" NAME)
+      set(_destination "${CMAKE_INSTALL_PREFIX}/bin/${_name}")
+      # Intel's imported names can be symlinks. Compare their actual bytes
+      # before COPY_FILE, which can still try to replace an identical peer.
+      # Repeated builds must leave an already installed runtime file alone.
+      if(EXISTS "${_destination}")
+        file(SHA256 "${_library}" _source_sha)
+        file(SHA256 "${_destination}" _destination_sha)
+        if(_source_sha STREQUAL _destination_sha)
+          continue()
+        endif()
+      endif()
       # Preserve the imported DLL name while copying the symlink's bytes.
       # Ordinary Windows publishing does not need symlink creation privileges.
-      file(COPY_FILE "${_library}" "${CMAKE_INSTALL_PREFIX}/bin/${_name}" ONLY_IF_DIFFERENT)
+      file(COPY_FILE "${_library}" "${_destination}" ONLY_IF_DIFFERENT)
     endforeach()
   ]=])
   # Normalize and quote paths before embedding them in the install script.

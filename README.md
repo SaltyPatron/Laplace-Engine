@@ -147,6 +147,9 @@ projection of a 100,000-occurrence run, display limits, Unicode and cycle reject
 Native's shared Windows process manifest preserves UTF-8 before CRT argument
 conversion. `tests/utf8-input.py` compares scalar/grapheme argument identities
 against raw UTF-8 bytes and verifies byte-exact parsing through a Unicode path.
+Windows runtime publication compares dependency SHA-256 values before copying,
+including Intel's symlinked import names. Repeated builds reuse identical DLL
+bytes without rewriting a runtime peer.
 
 ## Commands
 
