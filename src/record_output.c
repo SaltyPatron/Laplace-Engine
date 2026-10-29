@@ -238,7 +238,16 @@ void record_build_provenance(RecordWorker *k, const SemanticRecord *t, int32_t r
             if (x->has_qualifier) {
                 int ok; Ref v=ref_of_id(&x->qualifier,&ok);
                 if (!ok) { fputs("content qualifier is missing from its record\n",stderr); abort(); }
-                v.said=v.outcome=v.position=v.spare=0; part[np++]=v;
+                v.said=v.outcome=v.position=v.spare=0;
+                if (c.position) {
+                    /* The same worker can state the same claim at different
+                     * places in different records. Its occurrence position
+                     * must be content of this qualified judgment as well as M;
+                     * otherwise one content ID would require conflicting M. */
+                    Ref context[]={v,tree_ordinal(c.position)};
+                    v=compose(context,2,ref_above(context,2)); v.said=0;
+                }
+                part[np++]=v;
             }
             if (x->has_dependence) { int ok; Ref v=ref_of_id(&x->dependence,&ok);
                 if (!ok) { fputs("dependence class is missing from its record\n",stderr); abort(); }

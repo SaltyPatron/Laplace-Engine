@@ -199,6 +199,8 @@ def main():
         expected_selections = [
             ('First rule.', 'Who is the RoT most likely targeting', 'friend'),
             ('First rule.', 'who is most likely to do the action or its opposite', 'narrator'),
+            ('First rule.', 'Who is the RoT most likely targeting', 'friend'),
+            ('First rule.', 'who is most likely to do the action or its opposite', 'narrator'),
             ('Second rule.', 'Who is the RoT most likely targeting', 'colleague'),
             ('Second rule.', 'who is most likely to do the action or its opposite', 'no one listed'),
             ('Third rule.', 'Who is the RoT most likely targeting', 'no one listed'),
@@ -374,6 +376,12 @@ def main():
                 WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('single-unlisted.01'),
                     public.laplace_text_id('identifier vocabulary'),public.laplace_text_id('pbroleset')])""")
             assert games == '1', ('Duplicate declarations manufactured observations', games)
+            run('ingest', '-d', connection, '-j', 4, '-s', 'social-chemistry-101', chemistry)
+            repeated = sql("""SELECT sum(games)::text || ':' || min(position)::text
+                FROM public.laplace_contained_series(ARRAY[public.laplace_text_id('Social-Chem-101 Dataset')])
+                WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('First rule.'),
+                    public.laplace_text_id('Who is the RoT most likely targeting'),public.laplace_text_id('friend')])""")
+            assert repeated == '2:1', ('Qualified observations or their source positions changed', repeated)
             # Use the product consumer: these are committed, ranked claims read
             # from PostgreSQL, not the preview or a test's reconstruction.
             duck = run('hop', '-d', connection, 'duck')

@@ -1,4 +1,5 @@
-rot	characters	rot-char-targeting	action-char-involved	rot-worker-id	breakdown-worker-id
-First rule.	narrator|friend	char-1	char-0	author	judge
-Second rule.	narrator|colleague	char-1	char-none	author	judge
-Third rule.	narrator|friend	char-none		author	judge
+rot	characters	rot-char-targeting	action-char-involved	rot-worker-id	breakdown-worker-id	rot-agree
+First rule.	narrator|friend	char-1	char-0	author	judge	1
+First rule.	narrator|friend	char-1	char-0	author	judge	
+Second rule.	narrator|colleague	char-1	char-none	author	judge	
+Third rule.	narrator|friend	char-none		author	judge	
