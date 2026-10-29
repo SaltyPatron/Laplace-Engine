@@ -376,9 +376,22 @@ def main():
                 WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('single-unlisted.01'),
                     public.laplace_text_id('identifier vocabulary'),public.laplace_text_id('pbroleset')])""")
             assert games == '1', ('Duplicate declarations manufactured observations', games)
-            run('ingest', '-d', connection, '-j', 4, '-s', 'social-chemistry-101', chemistry)
-            repeated = sql("""SELECT sum(games)::text || ':' || min(position)::text
-                FROM public.laplace_contained_series(ARRAY[public.laplace_text_id('Social-Chem-101 Dataset')])
+            source_file = recipes / 'social-chemistry-101/source'
+            source_file.write_text('\n'.join(
+                'root ' + chemistry.as_posix() if line.startswith('root ') else line
+                for line in source_file.read_text(encoding='utf-8').splitlines()) + '\n', encoding='utf-8')
+            progress = root / 'social-chemistry-progress.jsonl'
+            run('ingest', '-d', connection, '-j', 4, 'social-chemistry-101',
+                extra={'LAPLACE_INGEST_PROGRESS_PATH': str(progress), 'LAPLACE_INGEST_ONE': '1'})
+            events = [json.loads(line) for line in progress.read_text(encoding='utf-8').splitlines()]
+            completed = [event for event in events if event['event'] == 'complete']
+            assert len(completed) == 1, completed
+            # The witness is [source metadata, recorded file trunks], rather
+            # than the title alone. Read the actual published source ID.
+            witness = bytes.fromhex(completed[0]['source_id']).hex()
+            assert len(witness) == 32, witness
+            repeated = sql(f"""SELECT sum(games)::text || ':' || min(position)::text
+                FROM public.laplace_contained_series(ARRAY['{witness}'::public.blake3])
                 WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('First rule.'),
                     public.laplace_text_id('Who is the RoT most likely targeting'),public.laplace_text_id('friend')])""")
             assert repeated == '2:1', ('Qualified observations or their source positions changed', repeated)
