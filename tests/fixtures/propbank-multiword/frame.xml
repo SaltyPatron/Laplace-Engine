@@ -1,0 +1,8 @@
+<frameset><predicate lemma="consider"><roleset id="consider.01" name="consider">
+<aliases><alias pos="m">take_into_account</alias><argalias pos="n" arg="0">considerer</argalias>
+<mwp-descriptions id="take_into_account"><syntaxdesc slots="A B">
+<token slot="A" pos="VB" arg="0" head="" dep="">take</token>
+<token slot="B" pos="NN*" arg="" head="A" dep="obl">account</token>
+</syntaxdesc><mapping><source>Source expression.</source><target>Target expression.</target></mapping></mwp-descriptions>
+</aliases><roles><role n="0" f="PAG" descr="considerer"/></roles>
+</roleset></predicate></frameset>

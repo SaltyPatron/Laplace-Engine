@@ -161,6 +161,24 @@ def main():
             assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
         print('PASS individual and aggregate SGHateCheck judgments retain distinct source qualifiers and group metadata')
 
+        multiword = Path(__file__).resolve().parent / 'fixtures/propbank-multiword'
+        multiword_readings = {}
+        slot = '[[[consider.01, take_into_account], A B], A]'
+        for workers in (1, 4):
+            text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'propbank', multiword)
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            for claim in [('consider.01', 'm'), ('m', 'identifier vocabulary', 'propbank-pos'),
+                          ('[consider.01, 0]', 'argument alias', 'considerer'),
+                          ('[consider.01, 0]', 'NOUN'), (slot, 'part of speech', 'VB'),
+                          (slot, 'argument number', '0'), (slot, 'lexical content', 'take'),
+                          ('[consider.01, take_into_account]', 'source representation', 'Source expression.'),
+                          ('[consider.01, take_into_account]', 'target representation', 'Target expression.')]:
+                assert claim in claims, (workers, claim, claims)
+            assert len(claims) == 24 and 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
+            multiword_readings[workers] = sorted(claims)
+        assert multiword_readings[1] == multiword_readings[4], 'Worker count changed multiword slot identities'
+        print('PASS PropBank source categories, scoped argument aliases, multiword slots and representations')
+
         readings = {}
         for workers in (1, 4):
             text = run('ingest', '--claims', '-j', workers, 'semantic-alignment')

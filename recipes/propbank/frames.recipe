@@ -11,6 +11,11 @@ format xml
 thing predicate lemma
 thing roleset id
 thing role resolved ^roleset/id required n required
+thing argalias resolved ^roleset/id required arg required
+# Multiword slots are local to a particular syntax of a roleset's predication.
+thing mwp-descriptions id within
+thing syntaxdesc slots within
+thing token slot within
 key role n under ^roleset/id retain
 when type matches ^[RC-]*ARG[0-9]+$
 refer arg.type role under ^roleset/id matching ^[RC-]*ARG([0-9]+)$
@@ -24,8 +29,16 @@ when resource is FrameNet
 type class fnframe
 always
 content class
+# The DTD also permits l/x/m/d/f, but explicitly leaves their POS meanings
+# undocumented. Preserve those source categories without inventing UPOS tags.
+when pos matches ^(l|x|m|d|f)$
+type alias.pos propbank-pos node
+type argalias.pos propbank-pos node
+value propbank-pos alias.pos argalias.pos
+always
 type alias.pos upos vocabulary propbank-pos
-content id lemma name descr f n resource rolelink alias type text arg rel slots slot head dep
+type argalias.pos upos vocabulary propbank-pos
+content id lemma name descr f n resource rolelink alias argalias type text arg rel slots slot head dep token.pos token mapping source target
 # bookkeeping, read by nothing: which releases a roleset is in use in, a link's version, confidence and how it was made
 omit usagenotes inuse version confidence src start end relloc note
 
@@ -38,6 +51,19 @@ relation "sense description" roleset.name
 # frameset.dtd: "pos = Part of Speech / Can take the following values: r = Adverb, p = Preposition, v = Verb, n = Noun,
 # j = Adjective ...": the source category is retained beside its explicit UPOS interpretation.
 value upos alias.pos
+value upos argalias.pos
+relation "argument alias" argalias
+# The multiword token's POS uses a separate, mixed source tag inventory (VB,
+# NN*, IN, etc.), not the alias column's five documented single-letter tags.
+relation "part of speech" token.pos
+relation "argument number" token.arg
+relation "head slot" token.head
+relation "dependency" token.dep
+relation "lexical content" token
+relation "multi-word predication" mwp-descriptions
+relation "syntactic description" syntaxdesc
+relation "source representation" source
+relation "target representation" target
 # frameset.dtd: "roles have a number (or an "M" associated with them, for common adjuncts that don't qualify for
 # number argument status). Both numbered arguments and adjuncts are labeled with the function tags from the list
 # below: EXT extent, LOC location, ... PAG prototypical agent, PPT prototypical patient, ..." (an example's arg: "the n
@@ -70,6 +96,11 @@ relation "argument slot" role
 holds roleset role
 attest roleset name
 attest alias pos .
+attest argalias pos .
+holds roleset mwp-descriptions
+holds mwp-descriptions syntaxdesc
+attest token pos arg head dep .
+attest mapping source target
 attest role descr f n
 attest rolelink class .
 attest lexlink class
