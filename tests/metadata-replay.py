@@ -53,7 +53,7 @@ def main():
             shutil.copytree(Path(__file__).resolve().parents[1] / "recipes", recipes)
             source = recipes / "tatoeba/source"
             source.write_text("\n".join(line for line in source.read_text().splitlines()
-                                        if not line.startswith("after ")) + "\n", newline="\n")
+                                        if not line.startswith("after ")) + "\nlineage Fixture common lineage\n", newline="\n")
             data = root / "data/Tatoeba"
             data.mkdir(parents=True)
             sentences = data / "sentences.csv"
@@ -90,6 +90,7 @@ def main():
                 witness = found[1]
                 return sql(db, f"""
                   SELECT to_jsonb(e)::text FROM public.entity e WHERE id='{witness}'::public.blake3;
+                  SELECT to_jsonb(w)::text FROM public.witness w WHERE id='{witness}'::public.blake3;
                   SELECT md5(string_agg(to_jsonb(s)::text,E'\n' ORDER BY to_jsonb(s)::text))
                   FROM public.laplace_contained_series(ARRAY['{witness}'::public.blake3]) s;
                 """)
@@ -97,6 +98,7 @@ def main():
             warm = database("warm")
             initial = ingest(warm, "initial", explicit_root=True)
             assert sql(warm, 'SELECT count(*) FROM public.witness') == '1', 'explicit registered root lost its corpus witness'
+            assert sql(warm, "SELECT bool_and(lineage=public.laplace_text_id('Fixture common lineage')) FROM public.witness") == 't', 'source declaration lost its lineage'
             before = fingerprint(warm)
             replay = ingest(warm, "unchanged")
             assert source_reference(warm, initial) == source_reference(warm, replay), 'explicit root and named source disagree'

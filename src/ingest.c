@@ -1067,12 +1067,19 @@ int cmd_ingest(int argc, char **argv){
       fold_free(fold); fold = NULL;
       if (one && !many && !mism && !of) { table_reset(); table_size(64u << 20);   /* the last batch is written: an empty table for the trunk alone */
           if (source_trunk(one, files, nfiles, &trunk)) { File sf; memset(&sf, 0, sizeof sf); sf.path = one->name; sf.source = one; sf.trunk = trunk; sf.file = trunk; sf.has_file = 1;
+              /* Known files were not decomposed and carry no transient
+               * lineage Ref. The source declaration owns this metadata,
+               * including on an unchanged replay. Stage its entity too. */
+              if (one->lineage[0]) {
+                  sf.lineage=text_ref(CTX[0],(const uint8_t *)one->lineage,strlen(one->lineage));
+                  sf.has_lineage=1;
+              }
               LoadStats ss = { 0 }; double ts = now(); if (load(conninfo, threads, &sf, 1, &ss)) return 1;
               printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded");
               st.ent_rows += ss.ent_rows; st.phy_rows += ss.phy_rows;
               { char hx[33]; id_text(&trunk.id, hx); printf("  %-44s %s\n", "its ID, the witness", hx); }
               witness_trunk = trunk.id; witness_trust = trust; has_witness_trunk = 1; witness_supersedes = one->supersede;
-              for (int i = 0; i < nfiles && !has_witness_lineage; i++) if (!files[i].skipped && files[i].has_lineage) { witness_lineage = files[i].lineage.id; has_witness_lineage = 1; } }
+              witness_lineage=sf.lineage.id; has_witness_lineage=sf.has_lineage; }
           else printf("  the source's trunk: none, since its source file names no record (witness or called): what it says is held by its files' trunks, and no witness holds them\n");
           table_reset(); }
       else if (do_load > 0 && nev) printf("  no source's trunk (%s): what these files say is held by their trunks, and no witness holds them\n", of ? "a part of a source" : many ? "files of several sources, or of none" : "a file did not recompose"); }
