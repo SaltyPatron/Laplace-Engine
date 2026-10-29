@@ -21,13 +21,6 @@
 #include <limits.h>
 #include <errno.h>
 
-/* How many recipes a recipe's keys are reached through: 0 when it refers to none (refer NAME RECIPE), else one more
- * than the recipes it refers to. The files of a deeper recipe are read after the shallower ones' */
-static int refer_depth(const Recipe *rec, int nrec, const Recipe *r, int guard){
-    if (!r || guard > 16) return 0; int d = 0;
-    const char *nm; for (int z = 0; (nm = say_refers(r, z)); z++) for (int k = 0; k < nrec; k++) if (!strcmp(rec[k].name, nm)) { int x = 1 + refer_depth(rec, nrec, &rec[k], guard + 1); if (x > d) d = x; }
-    return d;
-}
 /* ---- recomposition: an entity back to its bytes, from the node table and tier 0 */
 typedef struct { uint8_t *b; size_t n, cap; } Buf;
 static int expand(const lp_id *id, Buf *o){
@@ -389,17 +382,22 @@ static uint64_t source_bytes(const Source *sc, Recipe *rec, int nrec){
 }
 /* A source's files its recipes read, in the order they are read: what refers to another recipe's keys after it, and
  * otherwise by name, so that whatever is made of them in order comes out the same on any machine. */
-static const Recipe *rec_now; static int nrec_now;
-static int by_depth(const void *x, const void *y){ const char *a = *(char *const *)x, *b = *(char *const *)y;
-    int da = refer_depth(rec_now, nrec_now, recipe_for((Recipe *)rec_now, nrec_now, a, walking), 0), db = refer_depth(rec_now, nrec_now, recipe_for((Recipe *)rec_now, nrec_now, b, walking), 0);
-    return da != db ? da - db : strcmp(a, b); }
+typedef struct { char *path;Recipe *recipe; } OrderedSourceFile;
+static int by_depth(const void *x,const void *y){
+    const OrderedSourceFile *a=x,*b=y;size_t da=a->recipe->dependency_level,db=b->recipe->dependency_level;
+    return da!=db?(da<db?-1:1):strcmp(a->path,b->path);
+}
 int source_files(const Source *sc, Recipe *rec, int nrec, char ***out, Recipe ***of){
     int from = npaths; const Source *was = walking; walking = sc;
     source_walk(sc);
-    int n = 0; char **p = malloc(sizeof(char *) * (size_t)(npaths - from + 1));
-    for (int i = from; i < npaths; i++) { if (recipe_for(rec, nrec, paths[i], sc)) p[n++] = paths[i]; else free(paths[i]); }
-    npaths = from; rec_now = rec; nrec_now = nrec; qsort(p, (size_t)n, sizeof(char *), by_depth);
-    Recipe **r = malloc(sizeof(Recipe *) * (size_t)(n + 1)); for (int i = 0; i < n; i++) r[i] = recipe_for(rec, nrec, p[i], sc);
+    int n=0;OrderedSourceFile *selected=malloc((size_t)(npaths-from+1)*sizeof *selected);
+    for(int i=from;i<npaths;i++){
+        Recipe *recipe=recipe_for(rec,nrec,paths[i],sc);
+        if(recipe)selected[n++]=(OrderedSourceFile){paths[i],recipe};else free(paths[i]);
+    }
+    npaths=from;qsort(selected,(size_t)n,sizeof *selected,by_depth);
+    char **p=malloc((size_t)(n+1)*sizeof *p);Recipe **r=malloc((size_t)(n+1)*sizeof *r);
+    for(int i=0;i<n;i++){p[i]=selected[i].path;r[i]=selected[i].recipe;}p[n]=NULL;r[n]=NULL;free(selected);
     walking = was; *out = p; *of = r; return n;
 }
 /* The room left where the database keeps its data, or -1 when that cannot be seen from here (another machine). */
@@ -511,6 +509,13 @@ static int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *re
 }
 static const uint64_t *by_size_of;                                    /* the batch's files, longest first, ties in the order given */
 static int by_size(const void *a, const void *b){ int i = *(const int *)a, j = *(const int *)b; uint64_t x = by_size_of[i], y = by_size_of[j]; return x < y ? 1 : x > y ? -1 : i - j; }
+static size_t file_dependency(const File *file){return file->recipe?file->recipe->dependency_level:0;}
+static int file_reading_order(const void *a,const void *b){
+    const File *x=a,*y=b;size_t xd=file_dependency(x),yd=file_dependency(y);
+    if(xd!=yd)return xd<yd?-1:1;
+    if(x->trust!=y->trust)return x->trust>y->trust?-1:1;
+    return x->order<y->order?-1:x->order>y->order;
+}
 /* Which files are recorded, before any is read (the inventor: "if you have the file's trunk node (and it's hash metadata
  * matches), you know you have everything in that file already"). A file's metadata tree begins with the OS's record of
  * it, one node computed from stat alone (say.c, file_os); the container index gives what holds that node: the file's
@@ -798,7 +803,7 @@ int cmd_ingest(int argc, char **argv){
 
     File *files = calloc(nfiles, sizeof(File));
     int uncovered = 0;
-    for (int i = 0; i < nfiles; i++) { files[i].path = paths[i]; files[i].recipe = recipe_select(rec, nrec, files[i].path, path_of[i], &files[i].coverage); files[i].source = path_of[i];
+    for (int i = 0; i < nfiles; i++) { files[i].path = paths[i]; files[i].recipe = recipe_select(rec, nrec, files[i].path, path_of[i], &files[i].coverage); files[i].source = path_of[i]; files[i].order=(uint32_t)i;
                                        if (files[i].recipe) files[i].trust = path_of[i] && files[i].recipe->source < 0 ? path_of[i]->trust : files[i].recipe->trust;
                                        if (!files[i].recipe) {
                                            files[i].skipped = 1; uncovered += files[i].coverage == RECIPE_UNCOVERED;
@@ -807,16 +812,12 @@ int cmd_ingest(int argc, char **argv){
                                                tsv_escaped((const uint8_t *)files[i].path,strlen(files[i].path)); putchar('\n');
                                            }
                                        } }     /* a source takes the files its recipes name */
-    /* a source's files, most trusted witness first; among equals, as they were found */
-    for (int i = 1; i < nfiles; i++) { File x = files[i]; int j = i;
-        while (j > 0 && path_of[i] && x.recipe && files[j - 1].recipe && x.recipe->trust > files[j - 1].recipe->trust) { files[j] = files[j - 1]; j--; }
-        files[j] = x; }
-    /* a file whose recipe refers to the keys of another recipe's rows is read after that recipe's files (refer COLUMN RECIPE) */
-    int *depth = calloc((size_t)nfiles, sizeof(int));
-    for (int i = 0; i < nfiles; i++) depth[i] = refer_depth(rec, nrec, files[i].recipe, 0);
-    for (int i = 1; i < nfiles; i++) { File x = files[i]; int d = depth[i], j = i;
-        while (j > 0 && depth[j - 1] > d) { files[j] = files[j - 1]; depth[j] = depth[j - 1]; j--; }
-        files[j] = x; depth[j] = d; }
+    /* Providers first, then stated witness trust, then original declaration
+     * order. One stable ordering replaces per-file recursive graph walks and
+     * two quadratic insertion sorts. Cyclic recipe groups share a level. */
+    qsort(files,(size_t)nfiles,sizeof *files,file_reading_order);
+    size_t *depth=calloc((size_t)nfiles,sizeof *depth);
+    for(int i=0;i<nfiles;i++)depth[i]=file_dependency(files+i);
     for (int i = 0; i < nfiles; i++) files[i].order = (uint32_t)i;              /* the order a key defined in two files is kept by */
     if (uncovered) {                                                                  /* what no recipe covers yet, by extension */
         typedef struct { char ext[16]; int n; } Ext; Ext ex[512]; int ne = 0;

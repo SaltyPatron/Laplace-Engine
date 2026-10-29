@@ -344,6 +344,50 @@ int source_named(const Source *s, const char *name){
     }
     return 0;
 }
+typedef struct { size_t *offsets; const size_t *children; } RecipeDependencies;
+static int recipe_dependency(void *context,size_t node,size_t *cursor,size_t *child,size_t *distance){
+    const RecipeDependencies *graph=context;size_t begin=graph->offsets[node],end=graph->offsets[node+1];
+    if(*cursor==end-begin)return 1;
+    *child=graph->children[begin+(*cursor)++];*distance=1;return 0;
+}
+/* Compile foreign recipe references once. Native groups logical cycles; its
+ * component order puts every external provider before its consumers. The
+ * existing source continuation solver retains declaration order inside a
+ * cyclic group. This graph schedules files, never canonical content nodes. */
+static void recipe_dependencies(Recipe *recipes,size_t count){
+    if(!count)return;
+    lp_strmap *names=lp_strmap_sized(sizeof(size_t));lp_vec(size_t) children={0};
+    size_t *offsets=calloc(count+1,sizeof *offsets),*components=malloc(count*sizeof *components);
+    size_t *heads=malloc(count*sizeof *heads),*next=malloc(count*sizeof *next);
+    if(!offsets || !components || !heads || !next){perror("recipe dependency graph");exit(2);}
+    for(size_t i=0;i<count;i++){
+        bool fresh;size_t *index=lp_strmap_get(names,recipes[i].name,strlen(recipes[i].name),&fresh);
+        if(fresh)*index=i;
+    }
+    for(size_t i=0;i<count;i++){
+        offsets[i]=children.n;const char *name;
+        for(int k=0;(name=say_refers(recipes+i,k));k++){
+            int64_t found=lp_strmap_find(names,name,strlen(name));
+            if(found>=0)lp_push(&children,*(size_t *)lp_strmap_at(names,(size_t)found));
+        }
+    }
+    offsets[count]=children.n;lp_strmap_free(names);
+    RecipeDependencies graph={offsets,children.v};size_t groups;
+    if(!lp_graph_components(count,recipe_dependency,&graph,components,&groups)){
+        perror("recipe dependency graph");exit(2);
+    }
+    for(size_t i=0;i<groups;i++)heads[i]=SIZE_MAX;
+    for(size_t i=0;i<count;i++){next[i]=heads[components[i]];heads[components[i]]=i;}
+    for(size_t group=0;group<groups;group++){
+        size_t level=0;
+        for(size_t i=heads[group];i!=SIZE_MAX;i=next[i])for(size_t edge=offsets[i];edge<offsets[i+1];edge++){
+            size_t child=children.v[edge];
+            if(components[child]!=group && level<=recipes[child].dependency_level)level=recipes[child].dependency_level+1;
+        }
+        for(size_t i=heads[group];i!=SIZE_MAX;i=next[i])recipes[i].dependency_level=level;
+    }
+    free(offsets);free(components);free(heads);free(next);lp_vec_free(&children);
+}
 static int recipes_load_mode(const char *dir, Recipe **out, int metadata){
     if (recipes_now) { *out = recipes_now; return nrecipes_now; }
     metadata_root = dir;
@@ -372,6 +416,7 @@ static int recipes_load_mode(const char *dir, Recipe **out, int metadata){
             fprintf(stderr, "source %s repeats name or alias %s\n", sources[i].name, name); exit(2);
         }
     }
+    recipe_dependencies(r,(size_t)n);
     recipes_now = r; nrecipes_now = n; snprintf(order_dir, sizeof order_dir, "%s", dir); sources_order();
     *out = r; return n;
 }

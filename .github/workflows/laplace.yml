@@ -117,6 +117,7 @@ jobs:
           python3 Laplace-Engine/tests/tree-occurrences.py "$L"
           python3 Laplace-Engine/tests/prompt-occurrences.py "$L"
           python3 Laplace-Engine/tests/firmware-relations.py "$L"
+          python3 Laplace-Engine/tests/recipe-order.py "$L"
           cmake -DWORK="$RUNNER_TEMP/reader-contract" -P Laplace-Engine/tests/reader-contract.cmake
           failed=0
           for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing rich-text; do

@@ -30,6 +30,15 @@ kill and resume a writer, and verify unchanged replay. Native's DAG tests also
 exercise shared/repeated edges, owner-local cohorts, cycles and a 200,000-node
 dependency chain without C recursion.
 
+Recipe references compile once when the registry loads. Native
+`lp_graph_components` groups logical cycles and orders external providers before
+their consumers. Each recipe keeps its resulting dependency level. Source-file
+listing and ingestion use that same level; ingestion then orders by stated
+witness trust and original file position with one sort. The existing compiled
+continuation solver resolves declarations inside a cyclic group without
+reopening source bytes. `tests/recipe-order.py` checks a 40-recipe chain, a cyclic
+pair with external providers, file-start order, and all 43 resolved claims.
+
 `src/pg_plan.c` owns prepared SQL by connection lifetime and copied SQL contents.
 libpq reset/destruction events release its Native map. A reused connection
 address or mutable query buffer cannot select another session's statement.
