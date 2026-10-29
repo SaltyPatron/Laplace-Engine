@@ -58,7 +58,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: "${{ github.repository_owner }}/Laplace-postgres"
-          ref: 7167508c4c08341cc331dd88bba3ccd41b30917d
+          ref: 8ee2c741bca7757b6ced34816aad15b8ca9169db
           path: Laplace-postgres
           token: "${{ secrets.LAPLACE_CHECKOUT }}"
       # Every job runs the binary its own run built (tests/ci-own-binary.py): the build directory is the runner's, shared
@@ -171,6 +171,7 @@ jobs:
           bash Laplace-Engine/tests/record-thing.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/stream-working-set.sh "$RUNNER_TEMP/engine/laplace"
           python3 Laplace-Engine/tests/publication-waves.py "$RUNNER_TEMP/engine/laplace"
+          python3 Laplace-Engine/tests/observation-windows.py "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/rich-text-db.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/presence-frontier.sh "$RUNNER_TEMP/engine/laplace" "$RUNNER_TEMP/engine/presence-frontier"
           bash Laplace-Engine/tests/framenet-differences.sh "$RUNNER_TEMP/engine/laplace"

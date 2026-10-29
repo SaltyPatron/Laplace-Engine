@@ -889,6 +889,7 @@ int cmd_ingest(int argc, char **argv){
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
         size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
     if (progress_open(files, nfiles, &st)) return 1;
+    if(do_load)load_begin(conninfo,threads);
     #define SHOW(F) do { if (show_claims) show_record_events(F); } while (0)
     /* What was read of a file is kept for its content; a file read to its end gets its trunk. */
     #define WHOLE(F) do { File *f_ = (F); if (!f_->partial) file_close(f_); } while (0)
@@ -1027,7 +1028,7 @@ int cmd_ingest(int argc, char **argv){
     printf("    %-42s %8.2f s\n", "Native selection and dependency order", st.t_prepare);
     printf("    %-42s %8.2f s\n", "parallel staging COPY", st.t_transfer);
     printf("    %-42s %8.2f s   %llu closed dependency waves, up to %llu writers\n", "parallel paired publication", st.t_publish, (unsigned long long)st.publish_waves, (unsigned long long)st.publish_lanes);
-    printf("  %-44s %8.2f s\n", "streamed series application", st.t_sem);
+    printf("  %-44s %8.2f s\n", "private observation windows", st.t_sem);
     { const Source *one = NULL; int many = 0; Ref trunk;                    /* one source, every file of it recorded: its trunk, last of all */
       for (int i = 0; i < nfiles; i++) { if (files[i].skipped) continue; if (!files[i].source) { many = 1; break; } if (!one) one = files[i].source; else if (one != files[i].source) many = 1; }
       /* The witness is the source's trunk (Semantics: Attestations, Witnesses): its trust and lineage are the source's,
@@ -1066,8 +1067,8 @@ int cmd_ingest(int argc, char **argv){
             lp_idmap_free(seen);
         }
         double publication_started=now();
-        if (load_register(conninfo, threads, roots, nr) || merge(conninfo, threads)) { free(roots); return 1; }
-        printf("  %-44s %8.2f s\n", "source registration and final series", now()-publication_started);
+        if (load_register(conninfo, threads, roots, nr, files, nfiles) || merge(conninfo, threads)) { free(roots); return 1; }
+        printf("  %-44s %8.2f s\n", "source publication", now()-publication_started);
         free(roots);
         if (has_witness_trunk && witness_supersedes && forget_superseded(conninfo, threads, &witness_trunk)) return 1;
     }

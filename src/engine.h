@@ -269,11 +269,12 @@ DbTraffic db_traffic(void);
 PGresult *db_command(PGconn *, const char *sql);
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
 typedef struct { lp_id id, lineage; double trust; int has_lineage; } LoadWitness;
-int load_register(const char *conninfo, int npg, const LoadWitness *, size_t count);
+void load_begin(const char *conninfo, int npg);
+int load_register(const char *conninfo, int npg, const LoadWitness *, size_t count, const File *, int nfiles);
 int files_known(PGconn **pg, int npg, File *files, int nfiles, LoadStats *st);   /* the files whose trunks are recorded: known, saying nothing again */
 int ingest_known(const char *conninfo, File *files, int nfiles);                /* the same, on a connection of its own */
-/* Accumulated per-witness claim series, updated in PostgreSQL as each batch flows
- * through the loader; published atomically with the source witness (db.c). */
+/* Window-local observations; PostgreSQL retains private cumulative series.
+ * Publish authoritative standings atomically with the source witness (db.c). */
 typedef struct Fold Fold;
 Fold *fold_new(void);
 void  fold_free(Fold *);

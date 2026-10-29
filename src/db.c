@@ -1,7 +1,7 @@
 /* The client composes and prunes; PostgreSQL merges whole COPY windows.
- * Structural batches commit as entity/path pairs. Consensus and witness
- * registration share a separate source transaction, so a failed source cannot
- * publish a standing based on an unregistered witness. */
+ * Structural and observation windows commit privately as they flow. Only
+ * canonical witness registration and authoritative standings share the final
+ * publication transaction; parsing never retains consensus bucket locks. */
 #include "engine.h"
 #include "laplace/tier0.h"
 #include "laplace/highway.h"
@@ -14,15 +14,15 @@
 #include <errno.h>
 #include <limits.h>
 
-typedef struct { lp_id claim, witness, lineage; uint64_t games; double sum, trust; uint8_t has_lineage, dirty, staged; } Series;
+typedef struct { lp_id claim, witness, lineage; uint64_t games; double sum, trust; uint8_t has_lineage, dirty; } Series;
 struct Fold { lp_strmap *series; lp_vec(size_t) dirty; };
 static Fold *active_fold;
 typedef struct { lp_mask lexical; uint8_t tier,kind,metadata; } Published;
 typedef struct {
-    PGconn **copy, *series; int ncopy, from_ingest, witness_changed;
+    PGconn **copy, *series; int ncopy, from_ingest, witness_changed, series_changed;
     char (*entity)[96], (*path)[96];
     char delta[96], pending[96], witnesses[96], affected[96];
-    lp_idmap *known, *changed;
+    lp_idmap *known;
 } Loader;
 static Loader writer;
 int load_whole;
@@ -36,10 +36,11 @@ static void start_loader(const char *conninfo, int requested){
         " - current_setting('superuser_reserved_connections')::int"
         " - current_setting('reserved_connections')::int - (SELECT count(*) FROM pg_stat_activity) - 4),"
         " to_regprocedure('public.laplace_stage_own(bigint,regclass[])') IS NOT NULL"
+        " AND to_regprocedure('public.laplace_accumulate_series(regclass,regclass)') IS NOT NULL"
         " AND to_regprocedure('public.laplace_attest_stage(regclass,regclass)') IS NOT NULL"
         " AND to_regprocedure('public.laplace_present_stage(regclass,regclass,name,name)') IS NOT NULL");
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "ingest connections: %s", PQerrorMessage(control)); exit(1); }
-    if(strcmp(PQgetvalue(q,0,1),"t")){fputs("ingest requires the installed Native load lifecycle API (laplace 1.42)\n",stderr);PQclear(q);PQfinish(control);exit(1);}
+    if(strcmp(PQgetvalue(q,0,1),"t")){fputs("ingest requires the installed Native observation-window API (laplace 1.44)\n",stderr);PQclear(q);PQfinish(control);exit(1);}
     int available = atoi(PQgetvalue(q, 0, 0)); PQclear(q);
     int cores = omp_get_max_threads();
     if (requested <= 0 || requested > cores) requested = cores;
@@ -80,8 +81,9 @@ static void start_loader(const char *conninfo, int requested){
         statement(control, sql);
     }
     snprintf(sql, sizeof sql,
-        "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, staged boolean NOT NULL);"
-        "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS);"
+        "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, wins double precision NOT NULL);"
+        "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, wins double precision NOT NULL,"
+        " CHECK(games>0 AND games<=9007199254740992 AND wins>=0 AND wins<=games));"
         "CREATE UNIQUE INDEX ON %s (claim,witness,lineage) NULLS NOT DISTINCT;"
         "CREATE UNLOGGED TABLE %s (LIKE public.witness INCLUDING DEFAULTS);"
         "CREATE UNLOGGED TABLE %s (claim blake3 PRIMARY KEY)",
@@ -102,10 +104,10 @@ static void start_loader(const char *conninfo, int requested){
     Args ownership={0};arg_text(&ownership,suffix);arg_text(&ownership,(const char *)owned.b);
     PQclear(ask_once(control,"SELECT public.laplace_stage_own($1::bigint,$2::regclass[])",&ownership));
     args_free(&ownership);lp_buf_free(&owned);statement(control,"COMMIT");
-    writer.known = lp_idmap_sized(sizeof(Published)); writer.changed = lp_idmap_new();
+    writer.known = lp_idmap_sized(sizeof(Published));
     writer.series = db_connect(conninfo);
-    statement(writer.series, "BEGIN ISOLATION LEVEL READ COMMITTED");
 }
+void load_begin(const char *conninfo,int npg){start_loader(conninfo,npg);writer.from_ingest=1;}
 
 /* A complete tier frontier is one Native indexed presence request. */
 static uint8_t *recorded(PGconn **pg,int npg,const lp_id *ids,uint64_t n){
@@ -349,31 +351,33 @@ void fold_events(Fold *f, const File *files, int nfiles){
             if (fresh) *s=(Series){.claim=event->claim,.witness=source.id,.lineage=lineage,
                 .trust=observation_trust,.has_lineage=has_lineage};
             if (s->games==UINT64_C(9007199254740992)) { fprintf(stderr,"series exceeds exact Native game range\n"); exit(1); }
-            /* Map slots are stable even when its backing storage grows. Queue
-             * each changed series once per window, retaining cumulative games
-             * without scanning the entire earlier source on every flush. */
+            /* Map slots are stable while a window grows. The database retains
+             * totals; the client releases this map after every committed window. */
             if(!s->dirty)lp_push(&f->dirty,index);
             s->games++; s->sum+=lp_score_carried(event->score); s->dirty=1;
         }
     }
 }
-static void flush_series(Fold *f, LoadStats *st){
+static void flush_series(Fold *f){
     if (!f || !f->dirty.n) return;
     lp_copy copy={0}; char sql[512];
-    snprintf(sql,sizeof sql,"COPY %s (claim,witness,lineage,games,score,trust,staged) FROM STDIN (FORMAT binary)",writer.delta);
+    snprintf(sql,sizeof sql,"BEGIN;COPY %s (claim,witness,lineage,games,score,trust,wins) FROM STDIN (FORMAT binary)",writer.delta);
     copy_open(&copy,writer.series,sql);
     for (size_t i=0;i<f->dirty.n;i++) {
         Series *s=lp_strmap_at(f->series,f->dirty.v[i]);
         lp_copy_row(&copy,7); lp_copy_id(&copy,&s->claim); lp_copy_id(&copy,&s->witness);
         if(s->has_lineage) lp_copy_id(&copy,&s->lineage); else lp_copy_null(&copy);
         lp_copy_i64(&copy,(int64_t)s->games); lp_copy_f64(&copy,s->sum/(double)s->games); lp_copy_f64(&copy,s->trust);
-        lp_copy_field(&copy,&s->staged,1);s->staged=1;
-        lp_idmap_put(writer.changed,&s->claim,NULL); s->dirty=0;
+        lp_copy_f64(&copy,s->sum);
     }
     copy_close(&copy); lp_buf_free(&copy.buf);
     Args a={0}; arg_text(&a,writer.pending); arg_text(&a,writer.delta);
-    PGresult *q=ask_once(writer.series,"SELECT laplace_apply_series($1::regclass,$2::regclass)",&a);
-    st->std_upd+=lp_be(PQgetvalue(q,0,0),8); PQclear(q); args_free(&a);
+    PGresult *q=ask(writer.series,"SELECT public.laplace_accumulate_series($1::regclass,$2::regclass)",&a);
+    writer.series_changed |= lp_be(PQgetvalue(q,0,0),8)!=0; PQclear(q); args_free(&a);
+    snprintf(sql,sizeof sql,"INSERT INTO %s SELECT DISTINCT claim FROM %s ON CONFLICT DO NOTHING;TRUNCATE %s;COMMIT",
+        writer.affected,writer.delta,writer.delta);
+    statement(writer.series,sql);
+    lp_strmap_free(f->series);f->series=lp_strmap_sized(sizeof(Series));
     f->dirty.n=0;
 }
 
@@ -714,7 +718,7 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         seen->kind|=row->node->kind;seen->metadata=1;
     }
     lp_vec_free(&selected);TABLE_EACH(x)if(x->keep==1 || x->keep==2)lp_idmap_put(writer.known,&x->id,NULL);
-    st->t_copy+=now()-persistence_begin;begin=now();flush_series(active_fold,st);st->t_sem+=now()-begin;
+    st->t_copy+=now()-persistence_begin;begin=now();flush_series(active_fold);st->t_sem+=now()-begin;
     DbTraffic after=db_traffic();
     fprintf(stderr,"batch database: %llu tier rounds, %llu SQL commands, %llu COPY streams; startup and source registration separate\n",
         (unsigned long long)(st->rounds-tier_rounds),(unsigned long long)(after.commands-before.commands),
@@ -723,8 +727,9 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     return 0;
 }
 
-int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t count){
+int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t count,const File *files,int nfiles){
     if(!count)return 0;start_loader(conninfo,npg);
+    statement(writer.series,"BEGIN ISOLATION LEVEL READ COMMITTED");
     lp_copy copy={0};char sql[1600];snprintf(sql,sizeof sql,"COPY %s (id,lineage,trust) FROM STDIN (FORMAT binary)",writer.witnesses);
     copy_open(&copy,writer.series,sql);
     for(size_t i=0;i<count;i++){
@@ -743,26 +748,37 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
     PGresult *result=PQexec(writer.series,sql);
     if(PQresultStatus(result)!=PGRES_TUPLES_OK){fprintf(stderr,"witness registration: %s",PQerrorMessage(writer.series));exit(1);}
     writer.witness_changed |= strtoull(PQgetvalue(result,0,0),NULL,10) != 0;
-    PQclear(result);return 0;
+    PQclear(result);
+    if(writer.series_changed || writer.witness_changed){
+        /* New assertions already supplied their exact claim IDs in each
+         * committed window. Only pruned files need their stored testimony
+         * restored; never walk the newly ingested corpus down to text again. */
+        lp_idmap *reused=lp_idmap_new();
+        for(int i=0;i<nfiles;i++)if(files[i].known && !files[i].skipped && files[i].has_file)
+            lp_idmap_put(reused,&files[i].file.id,NULL);
+        if(lp_idmap_count(reused)){
+            snprintf(sql,sizeof sql,"INSERT INTO %s SELECT DISTINCT claim FROM public.laplace_contained_series($1::public.blake3[]) ON CONFLICT DO NOTHING",writer.affected);
+            Args args={0};arg_ids(&args,lp_idmap_keys(reused),lp_idmap_count(reused));
+            PQclear(ask_once(writer.series,sql,&args));args_free(&args);
+        }
+        lp_idmap_free(reused);
+    }
+    return 0;
 }
 int merge(const char *conninfo,int npg){
     (void)conninfo;(void)npg;if(!writer.series)return 0;
-    lp_copy copy={0};char sql[2400];snprintf(sql,sizeof sql,"COPY %s (claim) FROM STDIN (FORMAT binary)",writer.affected);
-    copy_open(&copy,writer.series,sql);
-    const lp_id *changed=lp_idmap_keys(writer.changed);
-    for(size_t i=0;i<lp_idmap_count(writer.changed);i++){lp_copy_row(&copy,1);lp_copy_id(&copy,&changed[i]);}
-    copy_close(&copy);lp_buf_free(&copy.buf);
-    /* The registered trunk includes unchanged files too. Keep the complete
-     * changed set in PostgreSQL and calculate it in one shared Native context. */
+    if(PQtransactionStatus(writer.series)==PQTRANS_IDLE)statement(writer.series,"BEGIN ISOLATION LEVEL READ COMMITTED");
+    char sql[2400];
+    /* Resolve only the affected claims through the indexed upward Native
+     * provenance kernel, after the real trunk is registered. Private aliases
+     * and event estimates never become independent public witnesses. */
     snprintf(sql,sizeof sql,
         "DELETE FROM %s;"
-        "INSERT INTO %s SELECT claim FROM laplace_contained_series(ARRAY(SELECT id FROM %s))"
-        " ON CONFLICT DO NOTHING;"
-        "SELECT laplace_attest_stage('%s'::regclass,'%s'::regclass)",
-        writer.pending,writer.affected,writer.witnesses,writer.pending,writer.affected);
+        "SELECT public.laplace_attest_stage('%s'::regclass,'%s'::regclass)",
+        writer.pending,writer.pending,writer.affected);
     /* An unchanged registered source contributes no new evidence on replay.
      * Recompute only for new series or changed witness trust/containment. */
-    if(lp_idmap_count(writer.changed) || writer.witness_changed) statement(writer.series,sql);
+    if(writer.series_changed || writer.witness_changed) statement(writer.series,sql);
     for(int lane=0;lane<writer.ncopy;lane++){
         snprintf(sql,sizeof sql,"DROP TABLE %s,%s",writer.entity[lane],writer.path[lane]);
         statement(writer.series,sql);
@@ -770,7 +786,7 @@ int merge(const char *conninfo,int npg){
     snprintf(sql,sizeof sql,"DROP TABLE %s,%s,%s,%s",writer.delta,writer.pending,writer.witnesses,writer.affected);
     statement(writer.series,sql);statement(writer.series,"COMMIT");
     PQfinish(writer.series);for(int i=0;i<writer.ncopy;i++)PQfinish(writer.copy[i]);
-    free(writer.copy);free(writer.entity);free(writer.path);lp_idmap_free(writer.known);lp_idmap_free(writer.changed);writer=(Loader){0};return 0;
+    free(writer.copy);free(writer.entity);free(writer.path);lp_idmap_free(writer.known);writer=(Loader){0};return 0;
 }
 int cmd_merge(int argc,char **argv){
     const char *conninfo=laplace_db();

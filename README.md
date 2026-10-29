@@ -19,9 +19,20 @@ one writer; this affects execution grain, never admission or identity.
 
 Every child wave finishes before a parent wave begins. Interruption may retain
 complete branches, while a later replay still descends through an absent trunk.
-No two-phase commit is needed. Continuous series updates and final witness
-registration retain their separate source transaction, explicitly using read
-committed visibility of completed structural waves.
+No two-phase commit is needed. Observation totals commit in private UNLOGGED
+tables with each working window, preserving wins directly rather than recovering
+them from rounded means. The client then releases its observation map. Streaming
+holds no public consensus bucket locks and no source-wide transaction.
+
+Final registration publishes the canonical witness and authoritative standings
+in one read-committed transaction. Each window already recorded its changed
+claim IDs; the Native indexed upward provenance operator resolves those claims
+against all registered witnesses, including concurrently completed sources.
+Only pruned files need stored claim discovery. Newly ingested source contents
+are never walked downward again for publication. `tests/observation-windows.py`
+observes committed windows through a second connection, checks lock availability,
+rejects a repeated downward walk and compares final standings against complete
+Native evidence after concurrent publication and partial replay.
 
 The ingest phase report separates Native preparation, staging COPY and paired
 publication. `tests/publication-waves.py` uses real PostgreSQL databases to
