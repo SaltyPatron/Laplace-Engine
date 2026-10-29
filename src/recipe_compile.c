@@ -951,6 +951,11 @@ int say_has_keys(const Recipe *recipe){ const Say *say = recipe ? recipe->say : 
     return 0;
 }
 
+int say_reads_keys(const Recipe *recipe){ const Say *say = recipe ? recipe->say : NULL;
+    for (int i=0; say && i<say->ndis; i++) if (say->dis[i].what==D_REFER) return 1;
+    return 0;
+}
+
 int  say_has_highway(const Recipe *r){ const Say *s = r->say; return s && s->nhw; }
 
 void say_highway_lists(const Recipe *r, Hw *hw){
