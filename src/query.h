@@ -51,6 +51,8 @@ int lexicalization_of(lp_text *, const Firmware *, Lexicalization *);
 void firmware_say(const Firmware *, int op);
 lp_ref entity_named(lp_text *, const char *text, lp_ref *parts, size_t cap, size_t *np);      /* a text's trunk, computed here */
 /* Returned claims and all operands share one allocation; release with free(). */
+Claim *claim_block(size_t count,size_t operands);
+Claim *claims_from_holds(const Hold *,int count,double k,int *n);
 Claim *claims_like(PGconn *, const lp_id *part, const int *have, int fan, double k, int *n, int *capped);
 Claim *claims_of(PGconn *, const lp_id *e, int fan, double k, int *n, int *capped);    /* every claim that holds an entity */
 Claim *claims_each(PGconn *, const lp_id *keys, int nk, const lp_id *rel, int subject, int fan, double k, int *n, int **src);   /* the claims of each of a set, one set: src[i] is the place in keys of claim i */

@@ -75,11 +75,13 @@ jobs:
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target presence_frontier
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target pg_plan_lifecycle
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target reader_depth
+          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target claim_decode
           mkdir -p "$RUNNER_TEMP/engine" && cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace" "$RUNNER_TEMP/engine/laplace"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/file_reference_local" "$RUNNER_TEMP/engine/file-reference-local"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/presence_frontier" "$RUNNER_TEMP/engine/presence-frontier"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/pg_plan_lifecycle" "$RUNNER_TEMP/engine/pg-plan-lifecycle"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/reader_depth" "$RUNNER_TEMP/engine/reader-depth"
+          cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/claim_decode" "$RUNNER_TEMP/engine/claim-decode"
           sha256sum "$RUNNER_TEMP/engine/laplace" | tee "$RUNNER_TEMP/engine/laplace.sha256"
       - name: Provide the pinned Rust compiler for the Tree-sitter generator
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
@@ -109,6 +111,7 @@ jobs:
         run: |
           L=$RUNNER_TEMP/engine/laplace
           "$RUNNER_TEMP/engine/file-reference-local" "$LAPLACE_TIER0"
+          "$RUNNER_TEMP/engine/claim-decode"
           export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
           export TMPDIR=${RUNNER_TEMP:?}
           export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes

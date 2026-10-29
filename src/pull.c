@@ -62,33 +62,6 @@ int cmd_text(int argc, char **argv){
 }
 
 /* ---- the claims that hold an entity */
-/* Claim arrays own their complete Native-decoded operands in one trailing
- * arena. Filtering and sorting move descriptors, never truncate a tuple. */
-static Claim *claim_block(size_t count,size_t operands){
-    size_t capacity=count?count:1;
-    if(capacity>SIZE_MAX/sizeof(Claim) || operands>(SIZE_MAX-capacity*sizeof(Claim))/sizeof(lp_id)){
-        fputs("claim result exceeds addressable memory\n",stderr);exit(1);
-    }
-    Claim *out=malloc(capacity*sizeof(Claim)+operands*sizeof(lp_id));
-    if(!out){perror("claim result");exit(1);}return out;
-}
-static Claim *claims_held(const Hold *holds,int count,double k,int *n){
-    size_t operands=0;
-    for(int i=0;i<count;i++)if(holds[i].claim && holds[i].stood){
-        size_t length=lp_path_ids(holds[i].path,(size_t)holds[i].path_len,NULL,0);
-        if(length>INT_MAX || length>SIZE_MAX-operands){fputs("claim operand count exceeds the reader's addressable range\n",stderr);exit(1);}
-        operands+=length;
-    }
-    Claim *out=claim_block((size_t)count,operands);lp_id *parts=(lp_id *)(out+(count?count:1));int used=0;
-    for(int i=0;i<count;i++)if(holds[i].claim && holds[i].stood){
-        size_t length=lp_path_ids(holds[i].path,(size_t)holds[i].path_len,NULL,0);if(length<2)continue;
-        lp_path_ids(holds[i].path,(size_t)holds[i].path_len,parts,length);
-        out[used++]=(Claim){.id=holds[i].entity,.part=parts,.np=(int)length,.r=holds[i].r,
-            .matches=holds[i].matches,.conf=lp_confidence(&holds[i].r,k)};
-        parts+=length;
-    }
-    *n=used;return out;
-}
 
 int claim_by_conf(const void *a, const void *b){ double x = ((const Claim *)a)->conf, y = ((const Claim *)b)->conf; return x < y ? 1 : x > y ? -1 : memcmp(a, b, 16); }
 
@@ -133,7 +106,7 @@ Claim *claims_like(PGconn *pg, const lp_id *part, const int *have, int fan, doub
     lp_id keys[3]; uint32_t nk = 0; for (int i = 0; i < 3; i++) if (have[i]) keys[nk++] = part[i];
     /* the tier is known once the IDs are: every leaf above it, together, then the fan keeps the hardest pulling */
     int nh = 0; Hold *h = holds_above(keys, (int)nk, tier_max(keys, (int)nk), 0, 1, &nh);
-    int count=0;Claim *c=claims_held(h,nh,k,&count);int m=0;
+    int count=0;Claim *c=claims_from_holds(h,nh,k,&count);int m=0;
     for(int j=0;j<count;j++){
         Claim *x=&c[j];
         /* in its place: the first part given is the claim's first, the last its last, and the middle one between them */
@@ -159,7 +132,7 @@ Claim *claims_each(PGconn *pg, const lp_id *keys, int nk, const lp_id *rel, int 
     lp_idmap *km = lp_idmap_new(); int *head = malloc(sizeof(int) * (size_t)nk), *link = malloc(sizeof(int) * (size_t)nk);
     for (int i = 0; i < nk; i++) head[i] = -1;
     for (int i = nk - 1; i >= 0; i--) { bool fresh; size_t u = lp_idmap_put(km, &keys[i], &fresh); link[i] = head[u]; head[u] = i; }
-    int nh=0,nc=0;Hold *h=holds_pair(keys,nk,rel,1,&nh);Claim *decoded=claims_held(h,nh,k,&nc);
+    int nh=0,nc=0;Hold *h=holds_pair(keys,nk,rel,1,&nh);Claim *decoded=claims_from_holds(h,nh,k,&nc);
     holds_free(h,nh);
     SrcClaim *s=malloc(sizeof(SrcClaim)*(size_t)(nc?nc:1));int m=0,cap=nc?nc:1;
     uint64_t *seen=calloc(lp_idmap_count(km),sizeof *seen);

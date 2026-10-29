@@ -36,6 +36,7 @@ else()
 endif()
 
 set(ENGINE_QUERY_SOURCES
+    src/claim_read.c
     src/fills.c
     src/pull.c
     src/firmware.c
@@ -280,3 +281,15 @@ install(CODE "
 install(DIRECTORY "${LAPLACE_GRAMMARS}/" DESTINATION "${CMAKE_INSTALL_BINDIR}/grammars"
         COMPONENT LaplaceRecipeRuntime FILES_MATCHING
         PATTERN "libtree-sitter-*.dll" PATTERN "libtree-sitter-*.so" PATTERN "libtree-sitter-*.dylib")
+
+add_executable(claim_decode EXCLUDE_FROM_ALL tests/claim-decode.c src/claim_read.c)
+target_include_directories(claim_decode PRIVATE src ${LAPLACE_NATIVE}/include ${LAPLACE_PG_DIR}/include)
+target_compile_options(claim_decode PRIVATE ${LP_C_FLAGS} -UNDEBUG)
+target_link_libraries(claim_decode PRIVATE laplace_static lp_crmath BLAKE3::blake3 OpenMP::OpenMP_C)
+if(WIN32)
+  target_sources(claim_decode PRIVATE src/os.c)
+  target_include_directories(claim_decode BEFORE PRIVATE src/win)
+  target_link_libraries(claim_decode PRIVATE shlwapi)
+else()
+  target_link_libraries(claim_decode PRIVATE m)
+endif()
