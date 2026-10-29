@@ -91,6 +91,9 @@ share that reader, including translation. `tests/claim-width.py` reads a real
 80-operand PostgreSQL claim and follows the true endpoint of a 5,003-operand relation.
 Observation counts retain PostgreSQL's signed 64-bit representation through
 held rows, claim results, traversal summaries and CLI formatting.
+Parsed value lists and compound identities share an arena composer sized from
+their actual arity. `tests/record-values-width.py` checks complete 64-, 65- and
+512-member records with one and four workers.
 
 `src/ingest.c` finds recorded file trunks from the OS metadata before opening
 source bytes. Each level reads distinct metadata IDs as a set through the path

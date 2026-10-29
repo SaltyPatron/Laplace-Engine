@@ -121,6 +121,7 @@ jobs:
           python3 Laplace-Engine/tests/prompt-occurrences.py "$L"
           python3 Laplace-Engine/tests/firmware-relations.py "$L"
           python3 Laplace-Engine/tests/recipe-order.py "$L"
+          python3 Laplace-Engine/tests/record-values-width.py "$L"
           python3 Laplace-Engine/tests/semantic-interpretation.py "$L"
           cmake -DWORK="$RUNNER_TEMP/reader-contract" -P Laplace-Engine/tests/reader-contract.cmake
           failed=0
