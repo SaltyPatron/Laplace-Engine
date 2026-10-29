@@ -35,10 +35,11 @@ static void start_loader(const char *conninfo, int requested){
     PGresult *q = PQexec(control, "SELECT greatest(1, current_setting('max_connections')::int"
         " - current_setting('superuser_reserved_connections')::int"
         " - current_setting('reserved_connections')::int - (SELECT count(*) FROM pg_stat_activity) - 4),"
-        " to_regprocedure('public.laplace_attest_stage(regclass,regclass)') IS NOT NULL"
+        " to_regprocedure('public.laplace_stage_own(bigint,regclass[])') IS NOT NULL"
+        " AND to_regprocedure('public.laplace_attest_stage(regclass,regclass)') IS NOT NULL"
         " AND to_regprocedure('public.laplace_present_stage(regclass,regclass,name,name)') IS NOT NULL");
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "ingest connections: %s", PQerrorMessage(control)); exit(1); }
-    if(strcmp(PQgetvalue(q,0,1),"t")){fputs("ingest requires the installed Native classified batch API (laplace 1.37)\n",stderr);PQclear(q);PQfinish(control);exit(1);}
+    if(strcmp(PQgetvalue(q,0,1),"t")){fputs("ingest requires the installed Native load lifecycle API (laplace 1.42)\n",stderr);PQclear(q);PQfinish(control);exit(1);}
     int available = atoi(PQgetvalue(q, 0, 0)); PQclear(q);
     int cores = omp_get_max_threads();
     if (requested <= 0 || requested > cores) requested = cores;
@@ -55,6 +56,7 @@ static void start_loader(const char *conninfo, int requested){
     writer.copy[0] = control;
     for (int i = 1; i < writer.ncopy; i++) writer.copy[i] = db_connect(conninfo);
     statement(control, "SELECT laplace_ensure_stage()");
+    statement(control, "SELECT * FROM public.laplace_stage_retire()");
     q = PQexec(control, "SELECT pg_current_xact_id()::text");
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "ingest identity: %s", PQerrorMessage(control)); exit(1); }
     char suffix[40]; snprintf(suffix, sizeof suffix, "%s", PQgetvalue(q, 0, 0)); PQclear(q);
@@ -67,6 +69,7 @@ static void start_loader(const char *conninfo, int requested){
     snprintf(writer.witnesses, sizeof writer.witnesses, "stage.lp_witness_%s", suffix);
     snprintf(writer.affected, sizeof writer.affected, "stage.lp_affected_%s", suffix);
     char sql[1800];
+    statement(control, "BEGIN");
     for (int lane=0; lane<writer.ncopy; lane++) {
         snprintf(sql, sizeof sql,
             "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS,present boolean NOT NULL);"
@@ -84,6 +87,21 @@ static void start_loader(const char *conninfo, int requested){
         "CREATE UNLOGGED TABLE %s (claim blake3 PRIMARY KEY)",
         writer.delta,writer.pending,writer.pending,writer.witnesses,writer.affected);
     statement(control, sql);
+    /* Creation and the durable ownership marker become visible together.
+     * The control connection holds the session lease across all COPY/source
+     * transactions. A later load may reclaim these objects only after it exits. */
+    lp_buf owned={0};lp_buf_put(&owned,"{",1);
+    for(int lane=0;lane<writer.ncopy;lane++){
+        if(lane)lp_buf_put(&owned,",",1);
+        lp_buf_put(&owned,writer.entity[lane],strlen(writer.entity[lane]));lp_buf_put(&owned,",",1);
+        lp_buf_put(&owned,writer.path[lane],strlen(writer.path[lane]));
+    }
+    const char *extra[]={writer.delta,writer.pending,writer.witnesses,writer.affected};
+    for(size_t i=0;i<sizeof extra/sizeof *extra;i++){lp_buf_put(&owned,",",1);lp_buf_put(&owned,extra[i],strlen(extra[i]));}
+    lp_buf_put(&owned,"}",2);
+    Args ownership={0};arg_text(&ownership,suffix);arg_text(&ownership,(const char *)owned.b);
+    PQclear(ask_once(control,"SELECT public.laplace_stage_own($1::bigint,$2::regclass[])",&ownership));
+    args_free(&ownership);lp_buf_free(&owned);statement(control,"COMMIT");
     writer.known = lp_idmap_sized(sizeof(Published)); writer.changed = lp_idmap_new();
     writer.series = db_connect(conninfo);
     statement(writer.series, "BEGIN ISOLATION LEVEL READ COMMITTED");

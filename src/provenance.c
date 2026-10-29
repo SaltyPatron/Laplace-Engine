@@ -64,10 +64,12 @@ int cmd_held(int argc,char **argv){
 }
 static void replay_open(PGconn *pg,char table[96]){
     exec(pg,"SELECT laplace_ensure_stage()");
+    exec(pg,"SELECT * FROM public.laplace_stage_retire()");
     PGresult *q=ask_once(pg,"SELECT pg_current_xact_id()::text",NULL);const char *id=PQgetvalue(q,0,0);
     if(!*id||strspn(id,"0123456789")!=strlen(id)){fputs("invalid replay transaction identity\n",stderr);exit(1);}
-    snprintf(table,96,"stage.lp_replay_%s",id);PQclear(q);
+    snprintf(table,96,"stage.lp_replay_%s",id);
     char sql[256];snprintf(sql,sizeof sql,"CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS)",table);exec(pg,sql);
+    snprintf(sql,sizeof sql,"SELECT public.laplace_stage_own(%s,ARRAY['%s'::regclass])",id,table);exec(pg,sql);PQclear(q);
 }
 static void replay_close(PGconn *pg,const char *table){char sql[160];snprintf(sql,sizeof sql,"DROP TABLE %s",table);exec(pg,sql);}
 static int replay_export(PGconn *pg,int files,FILE *out){
