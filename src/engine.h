@@ -227,6 +227,7 @@ void say_source_begin(void);
 int say_source_poll(source_file_ready_fn, void *);
 int say_source_end(source_file_ready_fn, void *);
 int say_has_keys(const Recipe *);
+int say_reads_keys(const Recipe *);                                       /* any keyed reference, including this recipe's own declarations */
 /* The highway, read from the resources by their recipes (types, keyed, alias, maps lines): what a file says of its
  * types, handed over in the file's order (highway.c keeps them). */
 typedef struct Hw Hw;

@@ -67,14 +67,14 @@ def main():
             base.update(LAPLACE_DATA=str(root / "data"), LAPLACE_RECIPES=str(root / 'missing-build-checkout'),
                         LAPLACE_INGEST_ONE="1", LAPLACE_WORKING_SET_BYTES=str(1 << 28))
 
-            def ingest(db, name, explicit_root=False):
+            def ingest(db, name, explicit_root=False, source_name='tatoeba'):
                 env = base.copy()
                 work = root / (name + "-work")
                 work.mkdir()
                 env["LAPLACE_WORK"] = str(work)
                 conn = " ".join(f"{key}='{value.replace(chr(39), chr(92)+chr(39))}'" for key, value in
                                 [("host", host), ("port", port), ("user", user), ("dbname", db)])
-                selection = ['-s', 'tatoeba', str(data)] if explicit_root else ['tatoeba']
+                selection = ['-s', source_name, str(data)] if explicit_root else [source_name]
                 result = subprocess.run([str(engine), "ingest", "-r", str(recipes), "-d", conn, "-j", "2", *selection],
                                         env=env, capture_output=True, text=True, timeout=180)
                 text = result.stdout + result.stderr
@@ -121,8 +121,36 @@ def main():
             cold = database("context")
             cold_report = ingest(cold, "cold_provider")
             assert source_reference(warm, changed) == source_reference(cold, cold_report), "context invalidation differs from cold read"
+
+            # Adding independent content must not hydrate every recorded key
+            # provider. WordNet's alias-only index.sense exposed this overhead
+            # with more than half a million unnecessary binding reads.
+            independent = recipes / 'independent'
+            independent.mkdir()
+            (independent / 'source').write_text(
+                'name independent\nwitness Independent cached providers\nclass AcademicCurated\n'
+                'root $LAPLACE_DATA/independent\n', encoding='utf-8')
+            (independent / 'provider.recipe').write_text(
+                'name independent-provider\nmatch provider.tsv\ntier row by \\n\n'
+                'names id text\ntier field by \\t\nthing row text\nkey row id\ncontent text\n', encoding='utf-8')
+            (independent / 'addition.recipe').write_text(
+                'name independent-addition\nmatch addition.tsv\ntier row by \\n\n'
+                'names text\ntier field by \\t\nthing row text\ncontent text\n', encoding='utf-8')
+            independent_data = root / 'data/independent'
+            independent_data.mkdir()
+            (independent_data / 'provider.tsv').write_text('1\tRecorded independent content.\n', encoding='utf-8')
+            warm = database('independent')
+            ingest(warm, 'independent_initial', source_name='independent')
+            (independent_data / 'addition.tsv').write_text('New independent content.\n', encoding='utf-8')
+            added = ingest(warm, 'independent_added', source_name='independent')
+            assert '1 files recorded already' in added, added
+            assert 'compiled reference bindings from recorded metadata:' not in added, added
+            cold = database('independent_cold')
+            cold_report = ingest(cold, 'independent_cold', source_name='independent')
+            assert source_reference(warm, added) == source_reference(cold, cold_report), 'independent replay differs from cold read'
             print(json.dumps({"unchanged_state": "identical", "provider_restore": "identical to cold",
-                              "changed_context": "reinterpreted and identical to cold"}))
+                              "changed_context": "reinterpreted and identical to cold",
+                              "independent_addition": "no key hydration, identical to cold"}))
     finally:
         for name in reversed(databases):
             sql("postgres", 'DROP DATABASE "' + name + '"')

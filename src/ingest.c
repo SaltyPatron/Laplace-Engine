@@ -872,7 +872,10 @@ int cmd_ingest(int argc, char **argv){
     free(identities);
     if (do_load) { double tk = now(); nknown = files_recorded(conninfo, files, nfiles); if (nknown < 0) return 1; if (nknown) fprintf(stderr, "  %d files recorded already, found by the OS's record of them, not read (%.2f s)\n", nknown, now() - tk); }
     int restore_keys = 0;
-    for (int i = 0; i < nfiles; i++) if (!files[i].known && !files[i].skipped) { restore_keys = 1; break; }
+    /* Restoring a provider's complete declaration table is needed only when
+     * pending work reads keys. Local-program references can cross files too;
+     * say_refers() lists only external recipes and would miss those readers. */
+    for (int i = 0; i < nfiles; i++) if (!files[i].known && !files[i].skipped && say_reads_keys(files[i].recipe)) { restore_keys = 1; break; }
 
     /* ---- a batch at a time: decomposed on every core, recomposed and compared, recorded, and the table emptied for
      * the next. A file too long for one batch is read a stretch at a time, if its records can be parted. */
