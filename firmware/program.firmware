@@ -60,6 +60,8 @@
 #   take chain N RELATION...   from each of the N words that pull hardest, the relations followed in order, each by its
 #                              witness's order then its standing: where the chain ends is the answer. Chains
 #                              parted by | are tried in turn until one reaches its end (a form through its lemma)
+# A chain or up relation may be written @RECIPE/FIELD: resolve it from that recipe's
+# declaration. A renamed or missing declaration fails before any database access.
 k 2
 lambda 0.05
 hops 8
@@ -110,7 +112,7 @@ for pull
   # a word more than the fan's strands hold is reached, not crossed: it is read by bubbling up, the word together with
   # each of these relations (a two-key probe, selective however many strands the word has), and the pass goes on
   # from what that reaches (its senses), which are not hubs
-  up Sense
+  up @wn-lmf/Sense
   # A fork's prior uses observed counts of the lexicalization, then the witness's order.
   usages wordnet-cntlist tag_cnt
   # layers: coupling rounds, each carrying on the entities that responded hardest in the round before
@@ -129,7 +131,7 @@ for pull
   # strands of a kind the pull does not navigate (Sequence: Web 15.x): a sentence's tag layers and an example's marked
   # arguments pull back their tags, not what the sentence is about. A default to be ruled on; the firmware is the inventor's.
   refuse predicate BNC PENN GF PT NER WSL Target Other Sent Verb Noun Adj Prep Adv UPOS XPOS DEPREL FEATS MISC LEMMA type n f itype
-  take chain 1 Sense Definition | LEMMA Sense Definition
+  take chain 1 @wn-lmf/Sense @wn-lmf/Definition | @conllu/LEMMA @wn-lmf/Sense @wn-lmf/Definition
   # how much of what a prompt's words owe a turn leaves open once it has answered: half, so a word that pulls a
   # quarter as hard (a determiner, a pronoun) is not answered for its own sake once the words that carry the prompt
   # are. A default to be ruled on; the firmware is the inventor's.

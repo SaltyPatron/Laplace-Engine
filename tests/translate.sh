@@ -195,3 +195,26 @@ sed -i 's/^relation "number of times the sense is tagged" tag_cnt$/relation "num
 rc=0; err=$(LAPLACE_RECIPES=$r2 "$L" translate -d "$conn" --firmware "$fwf" game en en 2>&1) || rc=$?
 [[ $rc == 2 ]] && grep -q 'usages: the recipe wordnet-cntlist declares no relation' <<<"$err" || fail "a cntlist recipe that declares no relation of tag_cnt did not fail translate (rc $rc): $err"
 echo "translate: a usage recipe that renames what translate reads fails it at once (rc 2)"
+
+# Salience reads the same typed value claims the general UD recipe writes.
+# A zero-weight AUX differs from a missing role (which defaults to weight 1).
+cat >"$scratch/roles.conllu" <<'CONLLU'
+# text = game is played
+1	game	game	NOUN	_	_	3	nsubj	_	_
+2	is	be	AUX	_	_	3	aux	_	_
+3	played	play	VERB	_	_	0	root	_	_
+
+CONLLU
+"$L" ingest -d "$conn" -j 2 "$scratch/roles.conllu" >"$scratch/roles.run" 2>&1 || fail "role ingest: $(tail -12 "$scratch/roles.run")"
+cat >"$scratch/roles.firmware" <<'FIRMWARE'
+role by UPOS
+role 1 NOUN
+role 0 AUX
+for pull
+walks 0
+nearest 0
+emit 0
+FIRMWARE
+"$L" turn --read -d "$conn" --firmware "$scratch/roles.firmware" 'game is' >"$scratch/roles.out" 2>&1 || fail "role read: $(tail -12 "$scratch/roles.out")"
+grep -q 'game(1.00).*is(0.00)' "$scratch/roles.out" || fail "typed UPOS salience was not read: $(cat "$scratch/roles.out")"
+echo 'query roles: Native UD value claims drive NOUN/AUX salience without changing standings'

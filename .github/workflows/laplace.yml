@@ -116,6 +116,7 @@ jobs:
           python3 Laplace-Engine/tests/utf8-input.py "$L" "$RUNNER_TEMP/engine/reader-depth"
           python3 Laplace-Engine/tests/tree-occurrences.py "$L"
           python3 Laplace-Engine/tests/prompt-occurrences.py "$L"
+          python3 Laplace-Engine/tests/firmware-relations.py "$L"
           failed=0
           for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing rich-text; do
             if ! bash "Laplace-Engine/tests/$suite.sh" "$L"; then

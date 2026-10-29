@@ -26,6 +26,7 @@ static const Param
     FINGERPRINT = { "fingerprint", "--fingerprint", ARG_FLAG, NULL, "read the existing highway fingerprint without generation" },
     IDENTITIES = { "identities", "--identities", ARG_FLAG, NULL, "report stored and canonical highway identifier IDs as TSV, without changing the registry" },
     FIRMWARE = { "firmware", "--firmware", ARG_PATH, "LAPLACE_FIRMWARE", "the firmware: how a standing is read, how far a search walks, how many claims are read and what is refused" },
+    FW_OPERATION = { "operation", "--operation", ARG_TEXT, "pull", "hop, search, translate, follows or pull" },
     SEED     = { "seed", "--seed", ARG_INT, "the clock", "N: the seed that breaks ties between claims taken" },
     FAN      = { "fan", "--fan", ARG_INT, "the firmware's", "to measure against the firmware: over the firmware's fan" },
     K        = { "k", "--k", ARG_REAL, "the firmware's", "to measure against the firmware: over the firmware's k" },
@@ -95,6 +96,7 @@ static const Arg A_JOINS[] = { O(CONNINFO), O(JOINS), END };
 static const Arg A_STRUCTURE[] = { { &NODES, 0, NULL, "60" }, { &LAYOUT, ARG_REQUIRED, NULL, NULL }, { &FILE_, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_TREE[] = { O(RECIPES), O(GRAMMAR), { &NODES, 0, NULL, "400" }, { &FILE_, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_TEXT[] = { O(SEGMENTS), { &TEXT, ARG_REQUIRED, NULL, NULL }, END };
+static const Arg A_FIRMWARE[] = { O(FIRMWARE), O(FW_OPERATION), END };
 static const Arg A_PULL[] = { O(CONNINFO), O(FIRMWARE), O(SEED), { &PROMPT, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_TURN[] = { O(CONNINFO), O(FIRMWARE), O(AS), O(SESSION), O(SEED), O(READ), { &PROMPT, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_HOP[] = { O(CONNINFO), { &LIMIT, 0, NULL, "24" }, O(FIRMWARE), O(FAN), O(K),
@@ -128,6 +130,7 @@ const Op OPS[] = {
     { "structure", cmd_structure, "a file's tree, as a layout parts it", A_STRUCTURE, R_F, "text" },
     { "tree",      cmd_tree,      "a file's syntax tree, as its recipe's grammar reads it", A_TREE, R_F, "text" },
     { "text",      cmd_text,      "a text's ID, coordinate and constituents, computed here", A_TEXT, R_F, "text" },
+    { "firmware",  cmd_firmware,  "inspect the recipe relations a query will use, without database access", A_FIRMWARE, R_F, "JSON" },
     { "pull",      cmd_pull,      "the forward pass: a prompt, and the segments and strands its firmware takes", A_PULL, R_DB | R_F, "text" },
     { "turn",      cmd_turn,      "a turn of a session: the one forward program, RESOLVE to WITNESS, each emitted constituent changing the next", A_TURN, W_DB | R_F, "text" },
     { "hop",       cmd_hop,       "everything attested about an entity", A_HOP, R_DB | R_F, "text" },

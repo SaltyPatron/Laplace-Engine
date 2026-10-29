@@ -77,6 +77,7 @@ against raw UTF-8 bytes and verifies byte-exact parsing through a Unicode path.
 | `laplace index` | the indexes again, if one was dropped; `laplace deploy` makes them all from the start |
 | `laplace text text` | a text's ID, tier, coordinate and constituents, computed here without the database |
 | `laplace pull prompt` | the forward pass: the prompt broken down, and the segments and strands its firmware takes |
+| `laplace firmware` | inspect the compiled query relation IDs without opening a database |
 | `laplace hop text` | everything attested about an entity, by how hard each strand tugs back, and the content that holds it |
 | `laplace hop subject predicate object` | the claims that hold the given parts in their places, with `?` for a part left open; a claim is a tuple or longer path of any arity, and this asks for those with three parts |
 | `laplace translate word from to...` | a word up to its concepts and down into other languages, two lookups |

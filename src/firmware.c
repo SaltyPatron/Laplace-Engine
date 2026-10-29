@@ -131,6 +131,24 @@ Firmware firmware_for(const char *path, int op){
     fclose(f);
     refuse_named(&fw); return fw;
 }
+/* A qualified relation names its producer's declaration, rather than copying the
+ * current wording of that relation into a second consumer vocabulary. */
+static lp_id firmware_name(lp_text *c, const Firmware *fw, const char *name){
+    const char *text = name;
+    if (name[0] == '@') {
+        const char *slash = strchr(name + 1, '/');
+        if (!slash || slash == name + 1 || !slash[1]) {
+            fprintf(stderr, "%s: invalid relation reference %s; use @RECIPE/FIELD\n", fw->path, name); exit(2);
+        }
+        Recipe *r; int nr = recipes_load(laplace_recipes(), &r); text = NULL;
+        for (int i = 0; i < nr; i++) if (!r[i].broken && strlen(r[i].name) == (size_t)(slash - name - 1)
+                && !memcmp(r[i].name, name + 1, (size_t)(slash - name - 1))) {
+            text = say_relation(&r[i], slash + 1); break;
+        }
+        if (!text) { fprintf(stderr, "%s: %s does not name a loaded recipe's declared relation\n", fw->path, name); exit(2); }
+    }
+    return entity_named(c, text, NULL, 0, NULL).id;
+}
 /* Every name the firmware says, as the entity it names: the text's trunk, decomposed as any text is. A pass computes
  * them once, not again for every stage, step or strand that uses them. */
 const Firmware *firmware_ids(Firmware *fw){
@@ -143,13 +161,32 @@ const Firmware *firmware_ids(Firmware *fw){
     for (int i = 0; i < fw->nweigh; i++) fw->id.weigh[i] = NAMED(fw->weigh_name[i]);
     if (fw->role_by[0]) fw->id.role_by = NAMED(fw->role_by);
     for (int i = 0; i < fw->nrole; i++) fw->id.role[i] = NAMED(fw->role_name[i]);
-    for (int a = 0; a < fw->nalt; a++) for (int i = 0; i < fw->nchain[a]; i++) fw->id.chain[a][i] = NAMED(fw->chain[a][i]);
-    for (int i = 0; i < fw->nup; i++) fw->id.up[i] = NAMED(fw->up[i]);
+    for (int a = 0; a < fw->nalt; a++) for (int i = 0; i < fw->nchain[a]; i++) fw->id.chain[a][i] = firmware_name(c, fw, fw->chain[a][i]);
+    for (int i = 0; i < fw->nup; i++) fw->id.up[i] = firmware_name(c, fw, fw->up[i]);
     for (int i = 0; i < 2; i++) if (fw->language[i][0]) fw->id.language[i] = NAMED(fw->language[i]);
     if (fw->prevalence[0] && !fw->prevalence_pair) fw->id.prevalence = NAMED(fw->prevalence);
     #undef NAMED
     lp_text_free(c); fw->id.ready = 1;
     return fw;
+}
+static void binding_json(const char *name, const lp_id *id){
+    char hex[33]; lp_id_hex(id, hex); fputs("{\"name\":", stdout); json_str(stdout, name);
+    printf(",\"entity\":\"%s\"}", hex);
+}
+int cmd_firmware(int argc, char **argv){
+    const char *path = NULL, *operation = "pull";
+    int a = opts(argc, argv, (const Opt[]){ { .flag="--firmware", .kind='s', .at=&path },
+        { .flag="--operation", .kind='s', .at=&operation }, { 0 } });
+    int op = 0; while (op < FW_OPS && strcmp(OPS[op], operation)) op++;
+    if (a != argc || op == FW_OPS) { fprintf(stderr, "usage: laplace firmware [--firmware FILE] [--operation hop|search|translate|follows|pull]\n"); return 2; }
+    Firmware fw = firmware_for(path, op); tier0_open(NULL); firmware_ids(&fw);
+    fputs("{\"operation\":", stdout); json_str(stdout, operation); fputs(",\"up\":[", stdout);
+    for (int i=0; i<fw.nup; i++) { if (i) putchar(','); binding_json(fw.up[i], &fw.id.up[i]); }
+    fputs("],\"chains\":[", stdout);
+    for (int a_=0; a_<fw.nalt; a_++) { if (a_) putchar(','); putchar('[');
+        for (int i=0; i<fw.nchain[a_]; i++) { if (i) putchar(','); binding_json(fw.chain[a_][i], &fw.id.chain[a_][i]); }
+        putchar(']'); }
+    puts("]}"); return 0;
 }
 void firmware_say(const Firmware *fw, int op){
     printf("firmware   %s   for %s: k %g, lambda %g, fan %d, hops %d, top %s", fw->path, OPS[op], fw->k, fw->lambda, fw->fan, fw->hops, fw->top_within > 0 ? "within" : "always");

@@ -31,6 +31,7 @@ int cmd_pull(int argc, char **argv){
     double T = now(); if (!seeded) seed = (unsigned)(T * 1e6);
     Firmware fw = firmware_for(fwp, FW_PULL);
     tier0_open(NULL); table_init(); ctx_open(1); lp_text *c = lp_text_new(T0);
+    firmware_ids(&fw);
     const char *prompt = argv[a];
 
     /* ---- the prompt: broken down, and its trunk */

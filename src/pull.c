@@ -635,6 +635,30 @@ int cmd_degrees(int argc, char **argv){
  * in the claims' order), the weight the firmware gives the first x it names. -1 when nothing it names is attested. */
 double role_of(PGconn *pg, Firmware *fw, const lp_id *word){
     if (!fw->role_by[0]) return -1;
+    firmware_ids(fw);
+    /* A highway feature is a typed value claim [word, value], not a fabricated
+     * [word, bank-name, value] relation. Probe all configured values together. */
+    char bank_name[96]; size_t b = 0;
+    for (; fw->role_by[b] && b + 1 < sizeof bank_name; b++) {
+        unsigned char ch = (unsigned char)fw->role_by[b]; bank_name[b] = ch >= 'A' && ch <= 'Z' ? (char)(ch + 'a' - 'A') : (char)ch;
+    }
+    bank_name[b] = 0; const lp_highway *highway = lp_highway_map(NULL);
+    const lp_bank *bank = highway ? lp_highway_bank(highway, bank_name) : NULL;
+    if (bank && fw->nrole) {
+        int nh = 0; Hold *h = holds_both(fw->id.role, fw->nrole, word, &nh);
+        double best = -INFINITY, weight = -1;
+        for (int q = 0; q < nh; q++) {
+            lp_id pair[3]; size_t np = lp_path_ids(h[q].path, (size_t)h[q].path_len, pair, 3);
+            if (!h[q].claim || !h[q].stood || np != 2 || !lp_id_eq(&pair[0], word)
+                || lp_highway_slot(highway, bank->list, &pair[1]) < 0) continue;
+            double conf = lp_confidence(&h[q].r, fw->k);
+            for (int z = 0; z < fw->nrole; z++) if (lp_id_eq(&pair[1], &fw->id.role[z])
+                    && (conf > best || (conf == best && (weight < 0 || fw->role[z] < weight)))) {
+                best = conf; weight = fw->role[z];
+            }
+        }
+        holds_free(h, nh); if (weight >= 0) return weight;
+    }
     firmware_ids(fw); lp_id part[3] = { *word, fw->id.role_by, fw->id.role_by }; int have[3] = { 2, 2, 0 }, n, capped; double w = -1;
     Claim *cl = claims_like(pg, part, have, fw->fan, fw->k, &n, &capped);
     for (int q = 0; q < n && w < 0; q++) for (int z = 0; z < fw->nrole; z++) if (lp_id_eq(&cl[q].part[cl[q].np - 1], &fw->id.role[z])) { w = fw->role[z]; break; }

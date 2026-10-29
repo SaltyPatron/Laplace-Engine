@@ -98,6 +98,7 @@ int cmd_degrees(int argc, char **argv);
 int cmd_pull(int argc, char **argv);
 int cmd_turn(int argc, char **argv);
 int cmd_text(int argc, char **argv);
+int cmd_firmware(int argc, char **argv);
 int cmd_tree(int argc, char **argv);
 int cmd_deploy(int argc, char **argv);
 int cmd_index(int argc, char **argv);
