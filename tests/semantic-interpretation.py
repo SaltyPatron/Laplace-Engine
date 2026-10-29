@@ -223,6 +223,28 @@ def main():
         absent_resolution = resolutions(absent)
         assert absent_resolution == resolutions(present), 'Reference and declaration used different identifier interpretations'
         assert absent_resolution[0][-1] in ('eng', 'language:eng'), absent_resolution
+        backlog = recipes / 'forward-backlog'
+        backlog.mkdir()
+        (backlog / 'source').write_text('name forward-backlog\nwitness Deferred canonical references\n'
+            'class AcademicCurated\nroot $LAPLACE_DATA/backlog\n', encoding='utf-8')
+        (backlog / 'reading.recipe').write_text('name forward-backlog\nmatch *.xml\nformat xml\n'
+            'key Entry id\nthing Entry resolved target required\nthing Entry text\nthing Use text\n'
+            'content text\nrefer target Entry\nrelation "points to" target\nattest Use target\n', encoding='utf-8')
+        deferred = root / 'backlog.xml'
+        expected = [(f'use{i:04}', 'points to', 'canonical') for i in range(1100)]
+        deferred.write_text('<Root>' + ''.join(f'<Use text="use{i:04}" target="shared"/>' for i in range(1100)) +
+            '<Entry id="shared" target="terminal"/><Entry id="shared" text="later duplicate"/>'
+            '<Entry id="terminal" text="canonical"/></Root>', encoding='utf-8')
+        for workers, window in ((1, 97), (4, 97), (1, 65536), (4, 65536)):
+            text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'forward-backlog', deferred,
+                       extra={'LAPLACE_RECORD_WINDOW_BYTES': str(window)})
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            assert sorted(claims) == sorted(expected), (workers, window, claims, text)
+            assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
+        deferred.write_text('<Root><Use text="unresolved" target="absent"/></Root>', encoding='utf-8')
+        rejected = run('ingest', '--claims-tsv', '-s', 'forward-backlog', deferred, expected=1)
+        assert 'semantic_omissions=1' in rejected, rejected
+        print('PASS long forward-key backlog, chained identities, first-declaration ownership and missing-key rejection across windows and workers')
         manifest = Path(os.environ.get('LAPLACE_MANIFEST', Path(__file__).resolve().parents[2] / 'Laplace-Native/manifest'))
         with (manifest / 'banks.tsv').open(encoding='utf-8') as file:
             closed = {row['list'] for row in csv.DictReader((line for line in file if not line.startswith('#')), delimiter='\t')}

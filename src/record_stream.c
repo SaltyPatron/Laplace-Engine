@@ -45,6 +45,7 @@ typedef struct DeferredJob {
 } DeferredJob;
 typedef struct {
     FILE *operands, *products; DeferredJob *first, *last, *free;
+    uint64_t waiting, bound_revision, evaluated_revision;
     SayScratch jobs, read;
 } DeferredRecords;
 typedef struct RecordPipeline {
@@ -170,6 +171,7 @@ static DeferredJob *deferred_job(DeferredRecords *records){
 }
 static void journal_products(DeferredRecords *records, DeferredJob *job, const Ref *things, size_t n, const Ref *metadata, size_t nm){
     if (!records->products) records->products = record_journal();
+    if (!job->ready && job->operands >= 0) records->waiting--;
     job->products = journal_seek(records->products, 0, SEEK_END); job->ready = 1;
     uint64_t counts[2] = {n, nm}; journal_write(records->products, counts, sizeof counts);
     journal_write(records->products, things, n * sizeof(Ref)); journal_write(records->products, metadata, nm * sizeof(Ref));
@@ -203,8 +205,20 @@ static void reset_record_worker(RecordPipeline *pipeline, RecordWorker *worker){
     worker->reserve_declarations = pipeline->key_gaps != 0;
     record_worker_outputs(worker);
 }
+/* A lexical scope can be just one header. Replaying every deferred operand
+ * after every such scope makes a forward-reference span quadratic, with idle
+ * workers while one lane rereads its journals. Amortize that work against new
+ * binding publications and the outstanding backlog. Source closure still runs
+ * the full fixed point, including absent references and canonical duplicates. */
+static int deferred_retry(DeferredRecords *records, uint64_t *last, int final){
+    uint64_t revision = keys_revision();
+    uint64_t interval = records->waiting > RECORD_WINDOW ? records->waiting : RECORD_WINDOW;
+    if (!final && revision - *last < interval) return 0;
+    *last = revision; return 1;
+}
 static void deferred_bind(RecordPipeline *pipeline, int final){
     DeferredRecords *records = &pipeline->deferred; RecordWorker *worker = &pipeline->evaluators[0];
+    if (!records->waiting || !deferred_retry(records, &records->bound_revision, final)) return;
     for (DeferredJob *job = records->first; job; job = job->next) if (!job->ready && job->operands >= 0) {
         records->read.used = records->read.stack_used = 0;
         SayScratch previous = scratch_enter(&records->read);
@@ -215,6 +229,9 @@ static void deferred_bind(RecordPipeline *pipeline, int final){
 }
 static void deferred_finish(RecordPipeline *pipeline, int final){
     DeferredRecords *records = &pipeline->deferred; RecordWorker *worker = &pipeline->evaluators[0];
+    if (!final && (!records->waiting || !deferred_retry(records, &records->evaluated_revision, 0))) {
+        deferred_drain(pipeline); return;
+    }
     if (final) {
         uint64_t before;
         do { before = keys_revision(); deferred_bind(pipeline, 1); } while (keys_revision() != before);
@@ -385,6 +402,7 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
                     if (reserved && reserved->key_gap) { pipeline->key_gaps--; reserved->key_gap = 0; }
                     if (!record->ready) {
                         DeferredJob *job = reserved ? reserved : deferred_job(deferred);
+                        if (job->operands < 0) deferred->waiting++;
                         job->operands = journal_operands(deferred, record); job->tried = keys_revision();
                     } else if (reserved || deferred->first) {
                         DeferredJob *job = reserved ? reserved : deferred_job(deferred);
