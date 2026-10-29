@@ -44,17 +44,38 @@ static void database_made(const char *conninfo){
     PQfreemem(id); PQfinish(pg); PQconninfoFree(o);
 }
 int cmd_deploy(int argc, char **argv){
-    int configure_cache=0;
+    int configure_cache=0;const char *schema=NULL;
     for(int i=1;i<argc;i++){
         if(!strcmp(argv[i],"-d") && i+1<argc){i++;continue;}
+        if(!strcmp(argv[i],"--schema") && i+1<argc){schema=argv[++i];continue;}
         if(!strcmp(argv[i],"--configure-server-cache")){configure_cache=1;continue;}
-        fputs("usage: laplace deploy [-d conninfo] [--configure-server-cache]\n",stderr);return 2;
+        fputs("usage: laplace deploy [-d conninfo] [--schema name] [--configure-server-cache]\n",stderr);return 2;
     }
     database_made(conn_arg(argc, argv));
     PGconn *pg = db_connect(conn_arg(argc, argv)); tier0_open(NULL);
     printf("laplace deploy   %s\n", PQdb(pg));
-    static const char *ext[] = { "postgis", "laplace" };
-    for (int i = 0; i < 2; i++) { char q[128], w[64]; snprintf(q, sizeof q, "CREATE EXTENSION IF NOT EXISTS %s", ext[i]); snprintf(w, sizeof w, "extension %s", ext[i]); if (!run(pg, q, w)) return 1; }
+    if(schema){
+        PGresult *r=db_exec(pg,"SELECT (SELECT n.nspname FROM pg_catalog.pg_extension e JOIN pg_catalog.pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='laplace'),current_setting('max_identifier_length')::integer");
+        if(PQresultStatus(r)!=PGRES_TUPLES_OK){fprintf(stderr,"extension namespace: %s",PQerrorMessage(pg));PQclear(r);PQfinish(pg);return 1;}
+        if(!PQgetisnull(r,0,0) && strcmp(PQgetvalue(r,0,0),schema)){
+            fprintf(stderr,"laplace is installed in schema %s; --schema does not move an existing installation\n",PQgetvalue(r,0,0));
+            PQclear(r);PQfinish(pg);return 1;
+        }
+        if(!*schema || strlen(schema)>(size_t)atoi(PQgetvalue(r,0,1))){
+            fputs("extension namespace exceeds PostgreSQL's identifier length or is empty\n",stderr);PQclear(r);PQfinish(pg);return 2;
+        }
+        PQclear(r);
+        char *quoted=PQescapeIdentifier(pg,schema,strlen(schema)),sql[192];
+        if(!quoted){PQfinish(pg);return 1;}
+        snprintf(sql,sizeof sql,"CREATE SCHEMA IF NOT EXISTS %s",quoted);
+        if(!run(pg,sql,"Native namespace")){PQfreemem(quoted);PQfinish(pg);return 1;}
+        PQfreemem(quoted);
+    }
+    if(!run(pg,"CREATE EXTENSION IF NOT EXISTS postgis SCHEMA public","extension postgis")){PQfinish(pg);return 1;}
+    char *quoted=PQescapeIdentifier(pg,schema?schema:"public",strlen(schema?schema:"public")),sql[256];
+    if(!quoted){PQfinish(pg);return 1;}
+    snprintf(sql,sizeof sql,"CREATE EXTENSION IF NOT EXISTS laplace SCHEMA %s",quoted);PQfreemem(quoted);
+    if(!run(pg,sql,"extension laplace")){PQfinish(pg);return 1;}
     if (!run(pg, "ALTER EXTENSION laplace UPDATE", "laplace extension at its newest version")) return 1;
     /* Only a host installer may select server-local cache paths. A remote
      * extension install/upgrade preserves the server's existing configuration. */

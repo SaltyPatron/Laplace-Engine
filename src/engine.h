@@ -26,7 +26,6 @@ const char *db_snapshot(void);                       /* that snapshot, for the p
 #include "pg_plan.h"
 
 typedef struct Reader Reader;
-#define MAXPARTS 12
 
 /* ---- commands */
 int cmd_ingest(int argc, char **argv);

@@ -74,6 +74,10 @@ installers explicitly use `deploy --configure-server-cache` to persist their
 declared server-local `LAPLACE_TIER0`, `LAPLACE_FLAGS` and `LAPLACE_HIGHWAY`
 paths together. A remote client must leave that flag out. `laplace index`
 uses configured maintenance memory and analyzes only the Native relations.
+For installation beside existing application objects, `laplace deploy --schema
+laplace` creates Native objects in that named schema. Existing Native and
+PostGIS namespaces are discovered automatically. A conflicting `--schema` on
+an existing installation fails without moving its objects.
 
 Claim readers keep complete Native-decoded tuples in one allocation, with no
 fixed operand count. Sorting and filtering move descriptors while their operand

@@ -37,10 +37,8 @@ def main():
             sql('postgres', 'CREATE DATABASE "' + database + '"')
             databases.append(database)
             sql(database, f'''
-              CREATE SCHEMA "native {suffix}";
               CREATE SCHEMA "spatial {suffix}";
               CREATE EXTENSION postgis SCHEMA "spatial {suffix}";
-              CREATE EXTENSION laplace SCHEMA "native {suffix}";
               CREATE DOMAIN public.blake3 AS integer;
               CREATE TABLE public.entity(id integer);
               INSERT INTO public.entity VALUES(17);
@@ -48,6 +46,9 @@ def main():
             values = [*connection.items(), ('dbname', database), ('options', '-c search_path=pg_catalog')]
             connections.append(' '.join(f"{name}='{value.replace(chr(39), chr(92)+chr(39))}'"
                                         for name, value in values))
+            installed=subprocess.run([str(engine),'deploy','--schema',f'native {suffix}','-d',connections[-1]],
+                                     capture_output=True,text=True,encoding='utf-8',timeout=180)
+            if installed.returncode:raise RuntimeError(installed.stdout+installed.stderr)
         result = subprocess.run([str(adapter), *connections], capture_output=True, text=True,
                                 encoding='utf-8', timeout=60)
         if result.returncode:
@@ -73,6 +74,8 @@ def main():
             run('deploy','-d',connections[0])
             after=sql(database,"SELECT coalesce(array_to_string(setconfig,E'\\n'),'') FROM pg_catalog.pg_db_role_setting WHERE setdatabase=(SELECT oid FROM pg_catalog.pg_database WHERE datname=current_database()) ORDER BY setrole")
             assert before==after,(before,after)
+            mismatch=subprocess.run([str(engine),'deploy','--schema','other','-d',connections[0]],capture_output=True,text=True,timeout=60)
+            assert mismatch.returncode and 'does not move' in mismatch.stderr,mismatch.stdout+mismatch.stderr
             assert sql(database,"SELECT count(*) FROM pg_catalog.pg_depend WHERE classid='pg_catalog.pg_class'::regclass AND objid='public.entity'::regclass AND deptype='e'")=='0'
             command=['ingest','-r',str(recipes),'-d',connections[0],'-j','2','-s','binding-reading',str(data)]
             report=run(*command)
