@@ -225,6 +225,8 @@ endif()
 # Its executable is the canonical Engine, with the same compiled grammars and estate.
 install(TARGETS laplace_engine
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LaplaceRecipeRuntime)
+option(LAPLACE_INSTALL_RECIPE_RESOURCES "Install resource inputs through CMake (standalone runtime)" ON)
+if(LAPLACE_INSTALL_RECIPE_RESOURCES)
 if(WIN32)
   file(REAL_PATH "${CMAKE_C_COMPILER}" _recipe_compiler)
   get_filename_component(_recipe_compiler_bin "${_recipe_compiler}" DIRECTORY)
@@ -312,6 +314,7 @@ install(CODE "
 install(DIRECTORY "${LAPLACE_GRAMMARS}/" DESTINATION "${CMAKE_INSTALL_BINDIR}/grammars"
         COMPONENT LaplaceRecipeRuntime FILES_MATCHING
         PATTERN "libtree-sitter-*.dll" PATTERN "libtree-sitter-*.so" PATTERN "libtree-sitter-*.dylib")
+endif()
 
 add_executable(claim_decode EXCLUDE_FROM_ALL tests/claim-decode.c src/claim_read.c)
 target_include_directories(claim_decode PRIVATE src ${LAPLACE_NATIVE}/include ${LAPLACE_PG_DIR}/include)
