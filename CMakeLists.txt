@@ -262,6 +262,8 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/recipes/"
         FILES_MATCHING PATTERN "*.recipe" PATTERN "*.format" PATTERN "*.LICENSE" PATTERN "source" PATTERN "order")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/grammar-sources.tsv"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/laplace" COMPONENT LaplaceRecipeRuntime)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/firmware/program.firmware"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/laplace/firmware" COMPONENT LaplaceRecipeRuntime)
 install(CODE "
   foreach(_grammar xml lp_words)
     if(NOT EXISTS \"${LAPLACE_GRAMMARS}/libtree-sitter-\${_grammar}${CMAKE_SHARED_LIBRARY_SUFFIX}\")
