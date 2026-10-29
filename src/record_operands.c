@@ -184,6 +184,7 @@ int record_collect_fields(void *sink, int event, const SField *field){
     if (event == S_CLOSE) {
         if (!collector->depth) return 0;
         uint32_t scope = collector->scopes[--collector->depth].scope;
+        record->n[scope].scalar=(uint8_t)((field->flags & S_FIELD_PAYLOAD)!=0);
         RecordSelectionFrame previous = record_selection_enter(record, NULL, output->s, record->bindings);
         for (int32_t value = record_field_first(&record->n[scope]); value >= 0; value = record_field_next(&record->n[value])) finish_text(output, &record->n[value]);
         record_selection_leave(&previous);

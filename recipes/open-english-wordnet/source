@@ -4,6 +4,9 @@ aliases oewn
 witness Open English WordNet
 lineage WordNet
 class AcademicCurated
+# Prefer an extracted release when acquisition retained the gzip beside it.
+# The fallback still streams the compressed download on archive-only hosts.
+root $LAPLACE_DATA/OpenEnglishWordNet-*/english-wordnet-*.xml
 root $LAPLACE_DATA/OpenEnglishWordNet-*
 # Measured when it was loaded: 4,489,027 compositions from 103 MB, at 750 bytes each with their indexes and standings.
 room 33

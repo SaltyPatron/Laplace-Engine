@@ -983,6 +983,7 @@ typedef struct { uint8_t mode[G_DECODE_DEPTH], n, escaped[G_DECODE_DEPTH], quote
 typedef struct {
     const uint8_t *src;
     const Layout *parts;
+    const SPart *active_part;
     uint32_t length;
     TSRange range;
     GDecodePlan decode;
@@ -1881,10 +1882,11 @@ static int close_field(s_visit_fn visit, void *sink, const SField *field){
     return 1;
 }
 
-static int cursor_injection(GW *worker, TSNode payload, const Layout *inner, int raw, SField field,
+static int cursor_injection(GW *worker, TSNode payload, const Layout *inner, const SPart *part, int raw, SField field,
                             s_visit_fn visit, void *sink){
     GInput input;
     if (!injected_input(worker, payload, raw, &input)) return 0;
+    if (part) input.active_part=part;
     if (field.flags & S_FIELD_RECORD) {
         TSTree *tree = parse_input_tree(inner, &input);
         if (!tree) { fputs("record does not parse completely with its product grammar\n", stderr); return 0; }
@@ -1905,6 +1907,15 @@ static int cursor_injection(GW *worker, TSNode payload, const Layout *inner, int
                     (int)field.name_length, field.name, input.range.start_byte, input.range.end_byte);
             return 0;
         }
+        /* A grammar-declared list exposes its decoded members. Keeping the
+         * encoded container as a scalar would attest JSON syntax as one value. */
+        TSNode root=ts_tree_root_node(tree);
+        GW nested={.l=inner,.src=input.src,.input=&input};
+        const GRule *shape=rule_at(&nested,root,0,0);
+        while (!shape && ts_node_named_child_count(root)==1) {
+            root=ts_node_named_child(root,0); shape=rule_at(&nested,root,0,0);
+        }
+        if (shape && shape->what==G_GROUP && shape->list) field.flags &= (uint16_t)~S_FIELD_PAYLOAD;
         int valid = cursor_project(inner, ts_tree_root_node(tree), &input, visit, sink,
                                    field.name, field.name_length, 1, 1);
         ts_tree_delete(tree);
@@ -1942,7 +1953,7 @@ static int part_piece(const SPart *part, const GInput *input, SField field, TSRa
  * selects symbol IDs; it never scans the field again to find delimiters. */
 static int cursor_parts(GW *worker, TSNode payload, const SPart *part, int raw, SField field,
                         s_visit_fn visit, void *sink){
-    if (part->inner) return cursor_injection(worker, payload, part->inner, raw, field, visit, sink);
+    if (part->inner) return cursor_injection(worker, payload, part->inner, part, raw, field, visit, sink);
     GInput input;
     if (!injected_input(worker, payload, raw, &input)) return 0;
     TSTree *tree = parse_input_tree(part->syntax, &input);
@@ -2110,17 +2121,22 @@ static int cursor_project(const Layout *layout, TSNode root, const GInput *input
                 if (parent->counts) *parent->counts = (CountFrame){.program=groups ? program : NULL, .remaining=groups};
             }
             if (rule->compiled.inner) {
-                if (!cursor_injection(&worker, payload, rule->compiled.inner, text_mode, field, visit, sink)) { valid = 0; break; }
+                if (!cursor_injection(&worker, payload, rule->compiled.inner, NULL, text_mode, field, visit, sink)) { valid = 0; break; }
             } else {
+                int inherited_name=0;
                 if (!frame->count_input) g_text(&worker, payload, text_mode, &field.value, &field.value_length);
                 field.range = source_range(input, node_range(payload));
                 if (rule->what == G_NOTE) {
                     size_t n = field.value_length; field.value = trimmed(field.value, &n); field.value_length = (uint32_t)n;
                 } else if (field.name && !(rule->alias_tier && rule->alias_tier <= layout->ntier)) field.kind = S_VALUE;
-                else if (!field.name && !frame->unnamed) { field.name = frame->context_name; field.name_length = frame->context_length; }
+                else if (!field.name && !frame->unnamed) { field.name = frame->context_name; field.name_length = frame->context_length; inherited_name=1; }
                 if (rule->join) field.flags |= S_FIELD_JOIN;
                 const SPart *part = field.name ? part_at(input->parts, field.name, field.name_length) : NULL;
                 if (!part && field.name && input->parts!=layout) part=part_at(layout,field.name,field.name_length);
+                /* List members inherit their enclosing field's semantic name.
+                 * They are already products of its injection, not another
+                 * encoded container. Explicit inner member names still chain. */
+                if (inherited_name && part==input->active_part) part=NULL;
                 if (part && !s_empty(layout, field.value, field.value_length)) {
                     if (!cursor_parts(&worker, payload, part, text_mode, field, visit, sink)) { valid = 0; break; }
                 } else if (!visit(sink, S_FIELD, &field)) { valid = 0; break; }

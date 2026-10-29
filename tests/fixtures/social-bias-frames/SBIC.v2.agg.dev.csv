@@ -1,0 +1,2 @@
+post,targetMinority,targetCategory,targetStereotype,whoTarget,intentYN,sexYN,offensiveYN,dataSource,hasBiasedImplication
+Sample text.,"[""group, one"", ""group two""]","[""category""]","[""A quoted \""word\""."", ""Ω text""]",0.5,1,0,0.5,fixture,0

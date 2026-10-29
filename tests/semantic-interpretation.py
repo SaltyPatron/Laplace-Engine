@@ -2,6 +2,7 @@
 """Source notation, open identifiers, scoped argument slots and real readback."""
 import argparse
 import csv
+import gzip
 import json
 import os
 from pathlib import Path
@@ -179,6 +180,21 @@ def main():
         assert multiword_readings[1] == multiword_readings[4], 'Worker count changed multiword slot identities'
         print('PASS PropBank source categories, scoped argument aliases, multiword slots and representations')
 
+        bias_frames = Path(__file__).resolve().parent / 'fixtures/social-bias-frames'
+        expected_bias_frames = [('Sample text.', relation, value) for relation, value in [
+            ('demographic group targeted', 'group, one'), ('demographic group targeted', 'group two'),
+            ('high-level category of the demographic group(s) targeted', 'category'),
+            ('implied statement', 'A quoted "word".'), ('implied statement', 'Ω text'),
+            ('group vs. individual target', '0.5'), ('was the intent behind the statement to offend', '1'),
+            ('is the post a sexual or lewd reference', '0'), ('could the post be offensive to anyone', '0.5'),
+            ('source of the post', 'fixture')]]
+        for workers in (1, 4):
+            text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'social-bias-frames', bias_frames)
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            assert sorted(claims) == sorted(expected_bias_frames), (workers, claims, text)
+            assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
+        print('PASS JSON-in-CSV lists decode once, retaining commas, quotes, Unicode and every array member')
+
         readings = {}
         for workers in (1, 4):
             text = run('ingest', '--claims', '-j', workers, 'semantic-alignment')
@@ -206,6 +222,25 @@ def main():
 </Lexicon></LexicalResource>''', encoding='utf-8')
         proposed = run('ingest', '--claims', '-s', 'open-english-wordnet', wordnet)
         assert '[in, eng, wnlmf-new]' in proposed and '[wnlmf-new, in]' not in proposed, proposed
+        # Acquisition can retain the download beside its extracted directory.
+        # Read one release representation, with archive-only hosts supported.
+        release = root / 'data/OpenEnglishWordNet-2099-test'
+        extracted = release / 'english-wordnet-2099-test.xml'
+        extracted.mkdir(parents=True)
+        plain = extracted / extracted.name
+        plain.write_bytes(wordnet.read_bytes())
+        with gzip.open(release / (extracted.name + '.gz'), 'wb') as archive:
+            archive.write(wordnet.read_bytes())
+        representations = []
+        for extracted_present in (True, False):
+            if not extracted_present:
+                plain.unlink()
+                extracted.rmdir()
+            text = run('ingest', '--claims-tsv', 'open-english-wordnet')
+            assert 'decomposition: 1 files,' in text and 'mismatched 0' in text, text
+            representations.append(sorted(line.split('\t')[3:] for line in text.splitlines() if line.startswith('claim\t')))
+        assert representations[0] == representations[1], 'Extracted and compressed copies changed the source claims'
+        print('PASS one Open English WordNet representation, with extracted preference and compressed fallback')
         constructors = recipes / 'key-constructors'
         constructors.mkdir()
         (constructors / 'source').write_text('name key-constructors\nwitness Declared key constructors\n'
