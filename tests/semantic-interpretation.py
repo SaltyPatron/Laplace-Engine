@@ -116,6 +116,53 @@ def main():
         assert 'injected field FEATS' in rejected, rejected
         print('PASS original sentence spacing, numeric and literal construction anchors, MISC markers and strict FEATS')
 
+        homograph = root / 'category-homograph.conllu'
+        homograph.write_text('# text = go flat\n'
+            '1\tgo\tgo\tVERB\t_\t_\t0\troot\t_\t_\n'
+            '2\tflat\tflat\tX\t_\t_\t1\tflat:name\t_\t_\n\n', encoding='utf-8')
+        for workers in (1, 4):
+            text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'universal-dependencies', homograph)
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            assert ('flat', 'flat:name', 'go') in claims, claims
+            assert ('flat', 'flat') not in claims and 'unresolved obligations: 0 ' in text, text
+        self_source = recipes / 'self-values'
+        self_source.mkdir()
+        (self_source / 'source').write_text('name self-values\nwitness Self values\n'
+            'class AcademicCurated\nroot $LAPLACE_DATA/self-values\n', encoding='utf-8')
+        self_data = root / 'data/self-values'
+        self_data.mkdir()
+        for name, category in [('untyped', '-'), ('unknown', 'deprel')]:
+            (self_source / f'{name}.recipe').write_text(f'name self-{name}\nmatch {name}.tsv\n'
+                'tier row by \\n\nnames word category\ntier field by \\t\n'
+                f'thing row word\ncontent word category\nvalue {category} category\nattest row category\n', encoding='utf-8')
+            path = self_data / f'{name}.tsv'
+            path.write_text('laplace-unlisted-self\tlaplace-unlisted-self\n', encoding='utf-8')
+            text = run('ingest', '--no-load', '-s', 'self-values', path, expected=1)
+            assert 'value equal to its thing' in text, text
+        print('PASS known category homographs retain edges without repeated-run claims; unknown self-values remain blocked')
+
+        annotations = root / 'treebank-annotations.conllu'
+        annotation_text = ('# text = go home\n'
+            '1\tgo\tgo\tVERB\t_\t_\t0\troot\t_\tFunctor=0:PRED|LUWPOS=verb|LUWBILabel=B|BunsetuPositionType=SEM_HEAD\n'
+            '2\thome\thome\tNOUN\t_\t_\t1\tobl\t_\tFunctor=1:DIR3,2:LOC|CxnElt=1:Agent,named:Patient\n\n')
+        annotations.write_text(annotation_text, encoding='utf-8')
+        expected_annotations = [('go', 'The tectogrammatical functor and its parent', 'PRED'),
+            ('home', 'The tectogrammatical functor and its parent', '[goDIR3, homeLOC]'),
+            ('go', 'Long Unit Word part-of-speech label', 'verb'),
+            ('go', 'Long Unit Word boundary label', 'B'),
+            ('go', 'Bunsetsu position type', 'SEM_HEAD')]
+        for workers in (1, 4):
+            text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'universal-dependencies', annotations)
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            for claim in expected_annotations:
+                assert claim in claims, (claim, claims)
+            assert ('home', '[goAgent, namedPatient]') in claims, claims
+            assert 'unresolved obligations: 0 ' in text, text
+        annotations.write_text(annotation_text.replace('1:DIR3', '99:DIR3'), encoding='utf-8')
+        rejected = run('ingest', '--no-load', '-s', 'universal-dependencies', annotations, expected=1)
+        assert 'unresolved identifier references' in rejected, rejected
+        print('PASS documented treebank annotations retain independent layers, root functors and resolved t-tree parents; dangling parents fail')
+
         pages = root / 'ud-pages'
         pages.mkdir()
         for feature,definition,value in [('Poss','possessive','it is possessive'),('Abbr','abbreviation','it is abbreviated')]:
@@ -533,6 +580,7 @@ def main():
             ud_data = root / 'data/ud'
             ud_data.mkdir()
             (ud_data / 'spacing.conllu').write_text(conllu.format(text='see  a.'), encoding='utf-8')
+            (ud_data / 'annotations.conllu').write_text(annotation_text, encoding='utf-8')
             (recipes / 'universal-dependencies/source').write_text(
                 'name universal-dependencies\nwitness Universal Dependencies\nclass AcademicCurated\n'
                 'root $LAPLACE_DATA/ud\n', encoding='utf-8')
@@ -543,6 +591,17 @@ def main():
                     public.laplace_text_id('the fluent translation of the sentence to English'),
                     public.laplace_text_id('Translated.')])""")
             assert preserved == '1', ('Original sentence spacing did not survive database publication', preserved, publication)
+            for relation, pairs in [('The tectogrammatical functor and its parent', [('go','DIR3'),('home','LOC')]),
+                                    (None, [('go','Agent'),('named','Patient')])]:
+                pair_ids = ','.join("public.laplace_compose(ARRAY[public.laplace_text_id('%s'),public.laplace_text_id('%s')])" % pair
+                                    for pair in pairs)
+                operands = "public.laplace_text_id('home'),"
+                if relation:
+                    operands += "public.laplace_text_id('%s')," % relation
+                operands += 'public.laplace_compose(ARRAY[' + pair_ids + '])'
+                observed = sql("SELECT sum(games) FROM public.laplace_contained_series("
+                    "(SELECT array_agg(id) FROM public.witness)) WHERE claim=public.laplace_compose(ARRAY[" + operands + '])')
+                assert observed == '1', ('Structured bindings or parent association changed in PostgreSQL', relation, observed, publication)
             usage = run('hop', '-d', connection, 'see  a.')
             # The CLI truncates long display labels; the exact full relation
             # and whitespace-preserving subject were checked above in SQL.

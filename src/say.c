@@ -24,7 +24,18 @@
 #include <io.h>
 #endif
 
-static void said_as(RecordWorker *k, const Dis *m, Ref S, Ref v){ if (m->what != 1 && !memcmp(&v.id, &S.id, 16)) { record_obligation_note(k, 'o', &record_diagnostic_labels[DIAG_SELF_VALUE], (const uint8_t *)m->name, m->name_length, NULL, 0); return; } record_statement_count(k, m);     /* a relation to itself is a statement (fra's 639-2/T code is fra); a value that is the thing itself, [x, x], is a run, no claim: counted */
+static void said_as(RecordWorker *k, const Dis *m, Ref S, Ref v){
+    if (m->what != 1 && !memcmp(&v.id, &S.id, 16)) {
+        /* A word can spell its own known category (UD's word "flat" and
+         * deprel flat). The highway already records that membership. Do not
+         * fabricate [flat, flat], which canonically denotes a repeated run.
+         * An untyped or unknown self-value still lacks a readable claim. */
+        const lp_list *list = HW && m->arg[0] ? lp_highway_list(HW, m->arg) : NULL;
+        if (list && lp_highway_slot(HW, list, &v.id) >= 0) record_statement_count(k, m);
+        else record_obligation_note(k, 'o', &record_diagnostic_labels[DIAG_SELF_VALUE], (const uint8_t *)m->name, m->name_length, NULL, 0);
+        return;
+    }
+    record_statement_count(k, m);
     if (m->what == 1) { Ref p[3] = { S, string_ref((const uint8_t *)m->text, m->text_length), v }; record_emit_claim(k, p, 3); return; }     /* relation "TEXT": [thing, TEXT, value] */
     record_note_road_value(k, m, &v); Ref p[2] = { S, v }; record_emit_claim(k, p, 2); }
 
@@ -135,6 +146,13 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                 if (record_field_defaulted(s,t,c)) continue;
                 if (s->att[a].with[0] && record_selector_code(s->att[a].with)->special==SELECT_LABEL) field_qualifier(k,y,s->att[a].file);
                 if (y->kind == S_GROUP && y->join != S_PIECES && strchr(s->att[a].name[z], '*')) continue;      /* a wildcard names the part's values, not the elements inside it, which speak for themselves */
+                /* A recipe can name a structured field as one composition,
+                 * including several injected bindings. Honor that identity
+                 * before walking scalar children; groups have no scalar vlen. */
+                if (y->kind == S_GROUP) {
+                    const Dis *meaning=record_value_meaning(s,y); Ref value;
+                    if (meaning && record_thing(k,t,c,&value,0)) { said_as(k,meaning,S,value); continue; }
+                }
                 /* A declared meaning attests a structured scalar as one value.
                  * Otherwise its named parts retain their own scoped meanings. */
                 if (y->kind == S_GROUP && (!y->scalar || !record_value_meaning(s, y))) {

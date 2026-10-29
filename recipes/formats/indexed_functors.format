@@ -1,0 +1,4 @@
+grammar indexed_roles
+node binding group as functor
+node target text as functor_head
+node role text as functor_role

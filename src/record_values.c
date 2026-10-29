@@ -261,10 +261,15 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
     int typed_payload=x->kind==S_GROUP && x->scalar && d &&
         (d->what==D_CONTENT || d->what==D_TYPE || d->what==D_REFER || d->what==D_CODEPOINTS || d->what==D_RANGE);
     SemanticValue payload;
+    /* An injected list may have a recipe-defined identity made from its
+     * structured members. Resolve that identity before the flat scalar-list
+     * path, which deliberately refuses group members. */
+    if (x->kind == S_GROUP && depth < 16 && k->tc_tree == t && (uint32_t)c < k->tc_n && !composing(c)) {
+        Ref value; if (record_thing(k,t,c,&value,depth+1)) { *out=value; return 1; }
+    }
     if (!typed_payload && x->kind == S_GROUP && x->join == S_PIECES && record_field_first(x) >= 0 && record_field_next(&t->n[record_field_first(x)]) >= 0) {      /* a list of values: the tuple of what each is ([display text, target]) */
         return compose_values(k,t,c,depth,VALUE_PARTS_FLAT|VALUE_PARTS_TUPLE,out); }
     if (x->kind == S_GROUP && depth < 16) {                                    /* a part that is a thing: that thing */
-        if (k->tc_tree == t && (uint32_t)c < k->tc_n && !composing(c)) { Ref v; if (record_thing(k, t, c, &v, depth + 1)) { *out = v; return 1; } }
         int32_t only = record_field_first(x); if (!typed_payload && only >= 0 && record_field_next(&t->n[only]) < 0 && t->n[only].kind == S_GROUP) return record_value(k, t, only, out, depth + 1); }     /* holding one part: what that part is */
     if (typed_payload) { payload=*x; payload.kind=S_TEXT; x=&payload; }
     if (x->kind == S_GROUP) {                                                 /* a part that holds only its text: that text, as the part is disposed of */

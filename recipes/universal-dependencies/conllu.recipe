@@ -60,8 +60,22 @@ always
 content target
 content role
 thing binding target role
-thing MISC.CxnElt of binding
+thing CxnElt of binding
 value - MISC.CxnElt
+# Czech-PDTC README, "Source of annotations": Functor is the node's
+# tectogrammatical functor with respect to its t-tree parent, which need not
+# be its UD HEAD. The source writes parent-row:functor pairs, separated by
+# commas. Resolve those row references instead of attesting their numbers.
+part Functor grammar indexed_functors
+when functor_head is 0
+omit functor_head
+always
+refer functor_head row
+content functor_role
+thing functor functor_head functor_role
+thing functor functor_role
+thing Functor of functor
+relation "The tectogrammatical functor and its parent" MISC.Functor
 # A treebank's own keys and positions: where a document, paragraph or sentence is in the treebank, and MISC's identifiers
 # and offsets of a token (its unit, lemma, occurrence, chunk, XML and tree node ids, its alignment to the raw text) are
 # how the treebank points at its own things, written nowhere. SpaceAfter is what the sentence's text already says.
@@ -149,6 +163,12 @@ relation "the vibhakti" MISC.Vib
 relation "Sentence type" MISC.Stype
 #   Reduplication: "expresses in terms of UD morphological features the value of the reduplication"
 relation "the value of the reduplication" MISC.Reduplication
+# UD_Japanese-GSD and GSDLUW README, "MISC field": preserve the separately
+# annotated long-word POS and boundary label, and the role of a word within
+# its bunsetsu. These annotations do not replace the token's UPOS or XPOS.
+relation "Long Unit Word part-of-speech label" MISC.LUWPOS
+relation "Long Unit Word boundary label" MISC.LUWBILabel
+relation "Bunsetsu position type" MISC.BunsetuPositionType
 #   Subject: "the outer subject(s) is (are) then labeled with the relation subtype nsubj:outer ... This is done by
 #   adding Subject=Outer to the MISC column"
 relation "the outer subject(s)" MISC.Subject
