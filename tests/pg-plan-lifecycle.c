@@ -28,15 +28,41 @@ static void binding_answer(PGconn *pg,Args *arguments){
     r=db_exec(pg,"SELECT count(*) FROM @extschema@.entity");
     assert(PQresultStatus(r)==PGRES_TUPLES_OK && !strcmp(PQgetvalue(r,0,0),"0"));PQclear(r);
 }
+static void command(PGconn *pg,const char *sql){
+    PGresult *r=db_exec(pg,sql);if(PQresultStatus(r)!=PGRES_COMMAND_OK){fputs(PQerrorMessage(pg),stderr);assert(0);}PQclear(r);
+}
+static void count_at(PGconn *pg,const char *expected){
+    PGresult *r=db_exec(pg,"SELECT count(*) FROM public.snapshot_fixture");
+    assert(PQresultStatus(r)==PGRES_TUPLES_OK && !strcmp(PQgetvalue(r,0,0),expected));PQclear(r);
+}
+static void snapshot_scope(PGconn *master,const char *connection){
+    PGconn *writer=connect(connection),*reader=connect(connection);assert(writer && reader);
+    command(writer,"CREATE TABLE public.snapshot_fixture(id integer)");
+    assert(db_read_begin(master,NULL));assert(!db_read_begin(master,NULL));
+    assert(db_read_begin(reader,db_read_snapshot(master)));
+    command(writer,"INSERT INTO public.snapshot_fixture VALUES(1)");
+    count_at(master,"0");count_at(reader,"0");
+    PGresult *r=db_exec(reader,"SELECT current_setting('transaction_read_only'),current_setting('transaction_isolation')");
+    assert(PQresultStatus(r)==PGRES_TUPLES_OK && !strcmp(PQgetvalue(r,0,0),"on") && !strcmp(PQgetvalue(r,0,1),"repeatable read"));PQclear(r);
+    assert(db_read_end(reader) && db_read_end(master));
+    assert(PQtransactionStatus(reader)==PQTRANS_IDLE && !db_read_snapshot(reader));
+    assert(db_read_begin(master,NULL) && db_read_begin(reader,db_read_snapshot(master)));
+    count_at(master,"1");count_at(reader,"1");
+    r=db_exec(reader,"INSERT INTO public.snapshot_fixture VALUES(2)");assert(PQresultStatus(r)==PGRES_FATAL_ERROR);PQclear(r);
+    assert(db_read_end(reader) && PQtransactionStatus(reader)==PQTRANS_IDLE && db_read_end(master));
+    assert(db_read_begin(reader,NULL));PQreset(reader);assert(PQstatus(reader)==CONNECTION_OK && !db_read_snapshot(reader));
+    command(writer,"DROP TABLE public.snapshot_fixture");PQfinish(reader);PQfinish(writer);
+}
 int main(int argc,char **argv){
     if(argc==3){
         PGconn *a=connect(argv[1]),*b=connect(argv[2]);assert(a && b);
+        snapshot_scope(a,argv[1]);
         assert(db_binding(a)->id_type!=db_binding(b)->id_type);
         lp_id ids[2];lp_id_codepoint(65,ids);ids[1]=ids[0];Args arguments={0};arg_ids(&arguments,ids,2);
         binding_answer(a,&arguments);binding_answer(b,&arguments);binding_answer(a,&arguments);
         PQreset(b);assert(PQstatus(b)==CONNECTION_OK);binding_answer(b,&arguments);
         args_free(&arguments);PQfinish(a);PQfinish(b);
-        puts("pg-plan-lifecycle: distinct installed schemas and type OIDs, reusable binary arrays and reset passed");return 0;
+        puts("pg-plan-lifecycle: installed namespaces and OIDs, reusable arrays, shared read-only snapshots, refresh and reset passed");return 0;
     }
     if(argc!=2){fputs("usage: pg-plan-lifecycle conninfo [other-connection]\n",stderr);return 2;}
     PGconn *a=connect(argv[1]),*b=connect(argv[1]);if(!a || !b)return 1;

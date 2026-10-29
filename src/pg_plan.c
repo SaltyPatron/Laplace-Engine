@@ -9,7 +9,7 @@
 #include <string.h>
 
 typedef struct { char name[40]; int ready; lp_buf sql; } PreparedPlan;
-typedef struct { lp_strmap *plans; DbBinding binding; } PreparedConnection;
+typedef struct { lp_strmap *plans; DbBinding binding; char *snapshot; } PreparedConnection;
 
 static void notice(void *context,const PGresult *result){
     (void)context;
@@ -26,6 +26,7 @@ static void connection_clear(PreparedConnection *state){
     if(state->binding.native_schema)PQfreemem((void *)state->binding.native_schema);
     if(state->binding.postgis_schema)PQfreemem((void *)state->binding.postgis_schema);
     state->binding=(DbBinding){0};
+    free(state->snapshot);state->snapshot=NULL;
 }
 
 static int prepared_event(PGEventId event, void *info, void *context){
@@ -54,6 +55,38 @@ static PreparedConnection *connection_state(PGconn *pg){
         state=PQinstanceData(pg,prepared_event);
     }
     return state;
+}
+const char *db_read_snapshot(PGconn *pg){return connection_state(pg)->snapshot;}
+int db_read_end(PGconn *pg){
+    PreparedConnection *state=connection_state(pg);if(!state->snapshot)return 1;
+    PGTransactionStatusType status=PQtransactionStatus(pg);
+    if(status!=PQTRANS_IDLE){
+        if(status!=PQTRANS_INTRANS && status!=PQTRANS_INERROR)return 0;
+        PGresult *r=PQexec(pg,"ROLLBACK");int ok=PQresultStatus(r)==PGRES_COMMAND_OK;PQclear(r);
+        if(!ok)return 0;
+    }
+    free(state->snapshot);state->snapshot=NULL;return 1;
+}
+int db_read_begin(PGconn *pg,const char *snapshot){
+    PreparedConnection *state=connection_state(pg);
+    if(state->snapshot || PQtransactionStatus(pg)!=PQTRANS_IDLE)return 0;
+    PGresult *r;int ok=0;
+    if(snapshot){
+        char *quoted=PQescapeLiteral(pg,snapshot,strlen(snapshot));lp_buf sql={0};
+        if(!quoted)goto failed;
+        const char *prefix="BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY; SET TRANSACTION SNAPSHOT ";
+        lp_buf_put(&sql,prefix,strlen(prefix));lp_buf_put(&sql,quoted,strlen(quoted)+1);PQfreemem(quoted);
+        r=PQexec(pg,(const char *)sql.b);lp_buf_free(&sql);
+        ok=PQresultStatus(r)==PGRES_COMMAND_OK;PQclear(r);
+        if(ok)state->snapshot=strdup(snapshot);
+    }else{
+        r=PQexec(pg,"BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY; SELECT pg_catalog.pg_export_snapshot()");
+        ok=PQresultStatus(r)==PGRES_TUPLES_OK && PQntuples(r)==1;
+        if(ok)state->snapshot=strdup(PQgetvalue(r,0,0));PQclear(r);
+    }
+    if(ok && state->snapshot)return 1;
+failed:
+    r=PQexec(pg,"ROLLBACK");PQclear(r);return 0;
 }
 const DbBinding *db_binding(PGconn *pg){
     PreparedConnection *state=connection_state(pg);

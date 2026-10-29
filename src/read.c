@@ -38,6 +38,16 @@ static PGconn **pool;
 static int npool;
 static char *pool_connection;
 static char pool_snapshot[64];
+static void pool_close(void);
+int db_read_pool_end(void){
+    if(!pool_snapshot[0])return 1;
+    int ok=1;
+    #pragma omp parallel for num_threads(npool?npool:1) reduction(&:ok)
+    for(int i=0;i<npool;i++)ok&=db_read_end(pool[i]);
+    if(!ok)pool_close();
+    else pool_snapshot[0]=0;
+    return ok;
+}
 static void pool_close(void){
     for(int i=0;i<npool;i++)PQfinish(pool[i]);
     free(pool);pool=NULL;npool=0;free(pool_connection);pool_connection=NULL;pool_snapshot[0]=0;
@@ -48,6 +58,15 @@ static void pool_open(void){
     const char *ci = db_noted(); if (!ci || !*ci) ci = laplace_db();
     const char *snap=db_snapshot();if(!snap)snap="";
     if(pool && !strcmp(pool_connection,ci) && !strcmp(pool_snapshot,snap))return;
+    if(pool && !strcmp(pool_connection,ci)){
+        if(!db_read_pool_end()){pool_close();}
+        else{
+            if(*snap)for(int i=0;i<npool;i++)if(!db_read_begin(pool[i],snap)){
+                fprintf(stderr,"read snapshot: %s",PQerrorMessage(pool[i]));exit(1);
+            }
+            snprintf(pool_snapshot,sizeof pool_snapshot,"%s",snap);return;
+        }
+    }
     if(pool)pool_close();
     static int registered;if(!registered){atexit(pool_close);registered=1;}
     pool_connection=strdup(ci);snprintf(pool_snapshot,sizeof pool_snapshot,"%s",snap);
@@ -59,13 +78,10 @@ static void pool_open(void){
     #pragma omp parallel for num_threads(npool) schedule(static, 1)
     for (int i = 0; i < npool; i++) { PGconn *c = PQconnectdb(ci);
         if (PQstatus(c) != CONNECTION_OK) { fprintf(stderr, "%s", PQerrorMessage(c)); exit(1); }
-        db_notices(c); db_binding(c); pool[i] = c; }
+        db_notices(c);
+        if(*snap && !db_read_begin(c,snap)){fprintf(stderr,"snapshot: %s",PQerrorMessage(c));exit(1);}
+        db_binding(c); pool[i] = c; }
     if (times_on()) fprintf(stderr, "times: %d connections opened in %.1f ms\n", npool, (now() - t0) * 1000);
-    /* Every leaf reads the command's exported snapshot. */
-    if (*snap) for (int i = 0; i < npool; i++) {
-        char q[160]; snprintf(q, sizeof q, "BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY; SET TRANSACTION SNAPSHOT '%s'", snap);
-        PGresult *r = db_exec(pool[i], q);
-        if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "snapshot: %s", PQerrorMessage(pool[i])); exit(1); } PQclear(r); }
 }
 static int tier_in(const char *name){
     const char *p = strstr(name, "_t"); if (!p) return -1; p += 2;

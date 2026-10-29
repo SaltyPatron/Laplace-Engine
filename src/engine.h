@@ -23,6 +23,7 @@ void db_connect_many(const char *conninfo, int n, PGconn **out);   /* n of them,
 const char *db_noted(void);                          /* the conninfo of the last db_connect */
 PGconn *db_read(const char *conninfo);               /* db_connect for a read: one world, a repeatable-read snapshot every connection of the command shares */
 const char *db_snapshot(void);                       /* that snapshot, for the pool's connections; NULL outside a read */
+int db_read_pool_end(void);                          /* release imported snapshots, retaining connections and plans */
 #include "pg_plan.h"
 
 typedef struct Reader Reader;

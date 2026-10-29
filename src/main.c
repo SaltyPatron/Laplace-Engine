@@ -66,11 +66,8 @@ static char snapshot[64];
 const char *db_snapshot(void){ return snapshot[0] ? snapshot : NULL; }
 PGconn *db_read(const char *conninfo){
     PGconn *pg = db_connect(conninfo);
-    PGresult *r = db_exec(pg, "BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY");
-    if (PQresultStatus(r) != PGRES_COMMAND_OK) { fprintf(stderr, "read: %s", PQerrorMessage(pg)); exit(1); } PQclear(r);
-    r = db_exec(pg, "SELECT pg_export_snapshot()");
-    if (PQresultStatus(r) != PGRES_TUPLES_OK || !PQntuples(r)) { fprintf(stderr, "snapshot: %s", PQerrorMessage(pg)); exit(1); }
-    snprintf(snapshot, sizeof snapshot, "%s", PQgetvalue(r, 0, 0)); PQclear(r);
+    if(!db_read_begin(pg,NULL)){fprintf(stderr,"read snapshot: %s",PQerrorMessage(pg));exit(1);}
+    snprintf(snapshot,sizeof snapshot,"%s",db_read_snapshot(pg));
     return pg;
 }
 int main(int argc, char **argv){

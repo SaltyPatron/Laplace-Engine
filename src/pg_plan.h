@@ -9,6 +9,11 @@ typedef struct {
 } DbBinding;
 const DbBinding *db_binding(PGconn *);
 void db_notices(PGconn *);
+/* A read scope owns one repeatable-read, read-only transaction. Import the
+ * supplied snapshot, or export one when NULL. End releases only this scope. */
+int db_read_begin(PGconn *,const char *snapshot);
+const char *db_read_snapshot(PGconn *);
+int db_read_end(PGconn *);
 /* Expand only explicit schema tokens, once per SQL template and connection. */
 const char *db_sql(PGconn *,const char *sql);
 PGresult *db_exec(PGconn *,const char *sql);

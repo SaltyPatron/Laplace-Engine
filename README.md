@@ -64,6 +64,9 @@ tables, functions, types and operators through `@extschema@` and `@postgis@`;
 no search-path change is needed. Binary ID parameters bind when sent, so one
 argument set can be reused against separate databases with different OIDs.
 Reset reconnects and rebinds; finish releases bindings and rendered statements.
+Read scopes use the same connection owner to export or import a read-only,
+repeatable-read snapshot. Pool scope completion releases transactions while
+retaining connections, namespace bindings and plans for the next read.
 `tests/db-binding.py` installs both extensions in separate named schemas with
 conflicting public objects, then exercises ingestion, replay, reads, indexing
 and source removal through the production Engine.
