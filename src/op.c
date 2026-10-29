@@ -1,7 +1,7 @@
 /* The catalog: every parameter defined once, every operation declared by the parameters it takes, its effects and
  * what it gives (op.h). A default left NULL is the operation's own and is not repeated here. */
 #include "op.h"
-#include "engine.h"
+#include "query.h"
 #include <string.h>
 
 int cmd_highway_joins(int argc,char **argv);

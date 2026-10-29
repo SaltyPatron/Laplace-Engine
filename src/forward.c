@@ -7,7 +7,7 @@
  *
  * The lookups are the ones hop and fills make: the container index finds what holds an entity, O(log N), and the set
  * is read, O(K). Nothing here changes a standing, and nothing here is a record: the choice is the firmware's. */
-#include "engine.h"
+#include "query.h"
 #include <arpa/inet.h>
 #include <math.h>
 #include <stdio.h>
@@ -202,48 +202,25 @@ int cmd_pull(int argc, char **argv){
              * is made of), in the order their witness gave them, then by standing; the top is taken, and the pull stands
              * at what that claim says. Where it ends is what is returned. */
             typedef struct { lp_id id; double w; int at; } Puller; Puller *pl = malloc(sizeof(Puller) * (size_t)(np ? np : 1)); int npl = 0;
-            lp_id by; memset(&by, 0, sizeof by); if (fw.role_by[0]) by = entity_named(c, fw.role_by, NULL, 0, NULL).id;
-            lp_id rid[FW_WEIGHS]; for (int z = 0; z < fw.nrole; z++) rid[z] = entity_named(c, fw.role_name[z], NULL, 0, NULL).id;
             { lp_idmap *sm = lp_idmap_new();
               for (int i = 0; i < np; i++) { if (!table_find(&ph[i]) || (np > 1 && !memcmp(&ph[i], &pr.id, 16))) continue;
                   bool fresh; lp_idmap_put(sm, &ph[i], &fresh); if (fresh) pl[npl++] = (Puller){ ph[i], fw.role_by[0] ? 0.5 : 1.0, i }; }     /* a word nothing says the role of pulls half */
               lp_idmap_free(sm); }
-            if (fw.role_by[0] && npl) {                                                  /* every word's role, one set */
-                lp_id *ws = malloc(sizeof(lp_id) * (size_t)npl); for (int i = 0; i < npl; i++) ws[i] = pl[i].id;
-                int n, *src; Claim *cl = claims_each(pg, ws, npl, &by, 1, fw.fan, fw.k, &n, &src); uint8_t *done = calloc((size_t)npl, 1);
-                for (int q = 0; q < n; q++) { if (done[src[q]]) continue;
-                    for (int z = 0; z < fw.nrole; z++) if (!memcmp(&cl[q].part[cl[q].np - 1], &rid[z], 16)) { pl[src[q]].w = fw.role[z]; done[src[q]] = 1; break; } }
-                free(cl); free(src); free(done); free(ws); }
+            for (int i = 0; i < npl; i++) {
+                double weight = role_of(pg, &fw, &pl[i].id); if (weight >= 0) pl[i].w = weight;
+            }
             for (int a_ = 1; a_ < npl; a_++) { Puller x = pl[a_]; int b_ = a_; while (b_ > 0 && pl[b_ - 1].w < x.w) { pl[b_] = pl[b_ - 1]; b_--; } pl[b_] = x; }
             for (int u = 0; u < npl && u < fw.take[s].n; u++) {
                 if (pl[u].w <= 0) break;
-                lp_id cur = pl[u].id; Claim kept[FW_CHAIN]; int nk = 0, alt = 0;
-                for (alt = 0; alt < fw.nalt; alt++) { cur = pl[u].id; nk = 0;                /* each chain the firmware names, until one reaches its end */
-                for (int z = 0; z < fw.nchain[alt]; z++) {
-                    lp_id pred = entity_named(c, fw.chain[alt][z], NULL, 0, NULL).id, tryv[66]; int nt = 0; tryv[nt++] = cur;
-                    if (z > 0 && lp_tier0_codepoint(T0, &cur) < 0) {                       /* what it is made of, the last first, the puller itself left out */
-                        uint8_t ab[40]; size_t al = ids_param(ab, &cur, 1); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-                        PGresult *q = db_ask(pg, "SELECT path FROM laplace_paths($1::blake3[]) LIMIT 1", 1, v, l, f);
-                        if (PQresultStatus(q) == PGRES_TUPLES_OK && PQntuples(q)) { Run rn = run_of((const uint8_t *)PQgetvalue(q, 0, 0), (size_t)PQgetlength(q, 0, 0));
-                            for (int k = rn.n - 1; k >= 0 && nt < 66; k--) if (lp_tier0_codepoint(T0, &rn.id[k]) < 0 && memcmp(&rn.id[k], &pl[u].id, 16)) tryv[nt++] = rn.id[k];
-                            free(rn.id); }
-                        PQclear(q);
-                        if (nt < 66) tryv[nt++] = pl[u].id; }                                    /* a synset of one member is that word: what is said of it is said of the word */
-                    Claim *cl = NULL; int n = 0, cap2;
-                    for (int t2 = 0; t2 < nt && !n; t2++) { lp_id part[3] = { tryv[t2], pred, pred }; int have[3] = { 2, 2, 0 };
-                        cl = claims_like(pg, part, have, fw.fan, fw.k, &n, &cap2); if (!n) { free(cl); cl = NULL; } }     /* a relation the firmware names to follow is not one it refuses */
-                    if (!n) break;
-                    positions_of(pg, cl, n); if (fw.order_witness) qsort(cl, (size_t)n, sizeof(Claim), claim_by_position);
-                    take_top(cl, n, 1, &fw, &seed);
-                    kept[nk++] = cl[0]; cur = cl[0].part[cl[0].np - 1]; free(cl);
-                }
-                if (nk == fw.nchain[alt]) break; }
-                if (alt == fw.nalt) alt = fw.nalt - 1;
+                lp_id cur = pl[u].id; Claim last = { 0 }; int alt;
+                int nk = chain_follow(pg, rd, &fw, &pl[u].id, NULL, &seed, NULL, NULL, &cur, &last, &alt);
+                int complete = alt >= 0;
+                if (!complete) alt = fw.nalt - 1;
                 char *who = reader_text(rd, &pl[u].id, 64);
-                if (nk == fw.nchain[alt]) { char *tx = reader_text(rd, &cur, 600);
+                if (complete) { char *tx = reader_text(rd, &cur, 600);
                     printf("\nanswer     %s: %s\n", who, tx); free(tx);
                     printf("           through"); for (int z = 0; z < nk; z++) printf(" %s", fw.chain[alt][z]); printf(", %s pulling at %.2f", who, pl[u].w);
-                    printf("; standing of the last strand %.0f +/- %.0f, %d matches   (%.1f ms)\n", kept[nk - 1].r.rating, kept[nk - 1].r.deviation, kept[nk - 1].matches, (now() - t) * 1000); took++; }
+                    printf("; standing of the last strand %.0f +/- %.0f, %d matches   (%.1f ms)\n", last.r.rating, last.r.deviation, last.matches, (now() - t) * 1000); took++; }
                 else printf("\nanswer     %s: the chain stops after %d of %d relations: nothing is attested there   (%.1f ms)\n", who, nk, fw.nchain[alt], (now() - t) * 1000);
                 free(who);
             }

@@ -13,7 +13,7 @@
  *   laplace degrees [-d conninfo] [-n N] [--firmware FILE] [--batch B] from [to]
  * How a standing is read, how far a search walks, how many claims are read and what is refused are the firmware's
  * decisions (firmware.c), not the program's; --k, --fan, --hops and --per-hop are there to measure against it. */
-#include "engine.h"
+#include "query.h"
 #include <arpa/inet.h>
 #include <math.h>
 #include <stdio.h>

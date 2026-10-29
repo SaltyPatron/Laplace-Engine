@@ -18,7 +18,7 @@
  *   laplace model   a transformer checkpoint read as "b beats c given a"
  *
  * Where things are comes from the environment (laplace.env), else from what the engine was built with. */
-#include "engine.h"
+#include "query.h"
 #include "op.h"
 #include "laplace_config.h"
 #include <stdio.h>

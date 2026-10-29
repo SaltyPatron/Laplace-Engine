@@ -43,7 +43,7 @@
  *           place in the session ([session, turn], at its ordinal, UserPromptContent) and Laplace the response's
  *           dependence on the prompt ([response, prompt], ResponseContent).
  * Every stage's state is printed as the pass's trace. Nothing here changes a standing except by witnessing. */
-#include "engine.h"
+#include "query.h"
 #include "blake3.h"
 #include <arpa/inet.h>
 #include <math.h>

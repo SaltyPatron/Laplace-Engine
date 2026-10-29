@@ -9,10 +9,18 @@
 set -euo pipefail
 L=${1:?usage: tests/translate.sh path/to/laplace}; here=$(cd "$(dirname "$0")" && pwd)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/translate.XXXXXX")
+if command -v cygpath >/dev/null 2>&1; then
+  scratch=$(cygpath -m "$scratch"); here=$(cygpath -m "$here")
+fi
 db=lp_translate_$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')
 conn="host=${PGHOST:-/tmp} port=${PGPORT:-5432} user=${PGUSER:-laplace} dbname=$db"
 dropdb=${DROPDB:-$(dirname "${PSQL:-$(command -v psql)}")/dropdb}
-trap '"$dropdb" -h "${PGHOST:-/tmp}" -p "${PGPORT:-5432}" -U "${PGUSER:-laplace}" --if-exists "$db" >/dev/null 2>&1 || true; rm -rf "$scratch"' EXIT
+cleanup(){
+  "$dropdb" -h "${PGHOST:-/tmp}" -p "${PGPORT:-5432}" -U "${PGUSER:-laplace}" --if-exists "$db" >/dev/null 2>&1 || true
+  local target base; target=$(cd "$scratch" && pwd -P); base=$(cd "${TMPDIR:-/tmp}" && pwd -P)
+  case "$target" in "$base"/translate.*) rm -rf -- "$scratch";; *) return 1;; esac
+}
+trap cleanup EXIT
 fail(){ echo "translate: $*" >&2; exit 1; }
 export LAPLACE_WORK=$scratch/work LAPLACE_DATA=$scratch/data LAPLACE_RECIPES=${LAPLACE_RECIPES:-$here/../recipes}
 en=$LAPLACE_DATA/OpenEnglishWordNet-test; fr=$LAPLACE_DATA/OMW-2.0/omw-2.0/omw-fr; mkdir -p "$en" "$fr"
@@ -198,14 +206,15 @@ echo "translate: a usage recipe that renames what translate reads fails it at on
 
 # Salience reads the same typed value claims the general UD recipe writes.
 # A zero-weight AUX differs from a missing role (which defaults to weight 1).
-cat >"$scratch/roles.conllu" <<'CONLLU'
+ud=$LAPLACE_DATA/UD-Treebanks/ud-treebanks-test; mkdir -p "$ud"
+cat >"$ud/roles.conllu" <<'CONLLU'
 # text = game is played
 1	game	game	NOUN	_	_	3	nsubj	_	_
 2	is	be	AUX	_	_	3	aux	_	_
 3	played	play	VERB	_	_	0	root	_	_
 
 CONLLU
-"$L" ingest -d "$conn" -j 2 "$scratch/roles.conllu" >"$scratch/roles.run" 2>&1 || fail "role ingest: $(tail -12 "$scratch/roles.run")"
+LAPLACE_INGEST_ONE=1 "$L" ingest -d "$conn" -j 2 universal-dependencies >"$scratch/roles.run" 2>&1 || fail "role ingest: $(tail -12 "$scratch/roles.run")"
 cat >"$scratch/roles.firmware" <<'FIRMWARE'
 role by UPOS
 role 1 NOUN
@@ -216,5 +225,11 @@ nearest 0
 emit 0
 FIRMWARE
 "$L" turn --read -d "$conn" --firmware "$scratch/roles.firmware" 'game is' >"$scratch/roles.out" 2>&1 || fail "role read: $(tail -12 "$scratch/roles.out")"
-grep -q 'game(1.00).*is(0.00)' "$scratch/roles.out" || fail "typed UPOS salience was not read: $(cat "$scratch/roles.out")"
+if ! grep -q 'game(1.00).*is~(0.00)' "$scratch/roles.out"; then
+  "$L" hop -d "$conn" -n 20 is >"$scratch/roles.hop" 2>&1 || true
+  fail "typed UPOS salience was not read: $(cat "$scratch/roles.out"); ingestion: $(cat "$scratch/roles.run"); claims: $(cat "$scratch/roles.hop")"
+fi
 echo 'query roles: Native UD value claims drive NOUN/AUX salience without changing standings'
+out=$("$L" pull -d "$conn" --firmware "$fwf" --seed 0 dog 2>&1) || fail "pull dog: $out"
+grep '^answer ' <<<"$out" | grep -Fq "$dog" || fail "shared recipe chain did not read the stored definition: $out"
+echo 'query navigation: pull follows the producer-declared sense, synset reference and definition'

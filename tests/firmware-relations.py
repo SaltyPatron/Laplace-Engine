@@ -58,4 +58,6 @@ with tempfile.TemporaryDirectory(prefix="firmware-relations-", dir=env.get("LAPL
 env["LAPLACE_RECIPES"] = str(root / "recipes")
 default = json.loads(run("firmware", "--firmware", str(root / "firmware/program.firmware")))
 assert default["up"][0]["name"] == "@wn-lmf/Sense", default
+assert [step["entity"] for step in default["chains"][0]] == [entity(text) for text in
+    ("lexical sense", "reference", "definition of the synset")], default
 print("firmware relations: producer wording, chained references, literals and fail-before-connect checks passed")

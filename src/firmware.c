@@ -3,7 +3,7 @@
  * (Semantics: Personality firmware). What the file can say is described in firmware/program.firmware.
  *
  *   $LAPLACE_FIRMWARE, or --firmware FILE on a command: the firmware a pull runs under */
-#include "engine.h"
+#include "query.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

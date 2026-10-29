@@ -35,9 +35,21 @@ else()
   target_compile_options(ts_runtime PRIVATE -w -O3 -fPIC)
 endif()
 
+set(ENGINE_QUERY_SOURCES
+    src/fills.c
+    src/pull.c
+    src/firmware.c
+    src/forward.c
+    src/program.c
+    src/bench.c
+    src/provenance.c
+    src/read_text.c
+    src/query.h
+)
 set(ENGINE_SOURCES
     src/main.c
     src/op.c
+    src/chess.c
     src/os.c
     src/pg.c
     src/pg_plan.c
@@ -46,24 +58,15 @@ set(ENGINE_SOURCES
     src/ingest.c
     src/db.c
     src/read.c
-    src/read_text.c
-    src/fills.c
-    src/pull.c
-    src/firmware.c
-    src/forward.c
     src/file.c
     src/structure.c
     src/say.c
-    src/program.c
     src/deploy.c
     src/forget.c
     src/tier0.c
     src/flags.c
     src/highway.c
-    src/bench.c
-    src/provenance.c
     src/walk.c
-    src/chess.c
     src/grammars.c
     src/literal_sql.c
     src/file_metadata.c
@@ -87,7 +90,7 @@ endif()
 if(WIN32)
   find_library(LAPLACE_ZLIB NAMES z zlib HINTS ENV LAPLACE_ZLIB_DIR PATH_SUFFIXES lib REQUIRED)
 endif()
-add_executable(laplace_engine ${ENGINE_SOURCES})
+add_executable(laplace_engine ${ENGINE_SOURCES} ${ENGINE_QUERY_SOURCES})
 laplace_utf8_executable(laplace_engine)
 if(WIN32)
   # POSIX headers the Windows C runtime lacks (src/win: byte order, regex), and POSIX regex itself from musl's
@@ -114,24 +117,8 @@ target_compile_options(laplace_engine PRIVATE ${LP_C_FLAGS} -Wno-missing-field-i
 # timestamps, linkage and build paths differ between standalone and embedded builds).
 # Watch all reader/native inputs, normalize checkout line endings, and frame each
 # relative pathname and digest so a source change still invalidates the OS precheck.
-set(_reader_contract "")
-foreach(_reader_root IN ITEMS "${CMAKE_CURRENT_SOURCE_DIR}" "${LAPLACE_NATIVE}" "${LAPLACE_TREESITTER}/lib")
-  file(GLOB_RECURSE _reader_inputs CONFIGURE_DEPENDS RELATIVE "${_reader_root}"
-       "${_reader_root}/src/*.c" "${_reader_root}/src/*.h" "${_reader_root}/src/*.inc"
-       "${_reader_root}/include/*.h" "${_reader_root}/manifest/*.tsv" "${_reader_root}/manifest/*.toml")
-  list(SORT _reader_inputs)
-  foreach(_reader_input IN LISTS _reader_inputs)
-    set(_reader_path "${_reader_root}/${_reader_input}")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_reader_path}")
-    file(READ "${_reader_path}" _reader_text)
-    string(REPLACE "\r\n" "\n" _reader_text "${_reader_text}")
-    string(SHA256 _reader_digest "${_reader_text}")
-    string(LENGTH "${_reader_input}" _reader_length)
-    string(APPEND _reader_contract "${_reader_length}:${_reader_input}:${_reader_digest}\n")
-  endforeach()
-  string(APPEND _reader_contract "\n")
-endforeach()
-string(SHA256 LAPLACE_READER_SOURCE_ID "${_reader_contract}")
+include(cmake/ReaderContract.cmake)
+laplace_reader_source_id(LAPLACE_READER_SOURCE_ID "${CMAKE_CURRENT_SOURCE_DIR}" "${LAPLACE_NATIVE}" "${LAPLACE_TREESITTER}/lib" "${ENGINE_QUERY_SOURCES}")
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/laplace_reader_source.h"
      CONTENT "#define LAPLACE_READER_SOURCE_ID \"${LAPLACE_READER_SOURCE_ID}\"\n")
 configure_file(src/config.h.in ${CMAKE_CURRENT_BINARY_DIR}/laplace_config.h @ONLY)

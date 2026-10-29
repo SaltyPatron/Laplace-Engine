@@ -54,7 +54,7 @@
  *                    a file's (or a record's) PGN written again from the database alone; --verify recomputes every
  *                    ID under it from its constituents with BLAKE3 alone, every leaf a codepoint, and replays every
  *                    line: each position the one its move makes of the one before */
-#include "engine.h"
+#include "query.h"
 #include "structure.h"
 #include "record_output.h"
 #include "blake3.h"
