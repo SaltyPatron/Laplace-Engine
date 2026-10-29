@@ -88,6 +88,34 @@ def main():
                   ('language:eng','identifier vocabulary','language')]*2]),(workers,claims,text)
         print('PASS WN-LMF dependencies retain both the required resource and its version')
 
+        sentence = root / 'spacing.conllu'
+        conllu = ('# text = {text}\n# text_en = Translated.\n'
+            '1\tsee\tsee\tVERB\t_\t_\t0\troot\t_\tCxnElt=1:Agent\n'
+            '2\ta\ta\tNOUN\t_\t_\t1\tobj\t_\tSpaceAfter=No|CxnElt=named:Patient\n'
+            '3\t.\t.\tPUNCT\t_\t_\t1\tpunct\t_\t_\n\n')
+        for spacing in ('see a.', 'see  a.', 'see\u00a0a.'):
+            sentence.write_text(conllu.format(text=spacing), encoding='utf-8')
+            readings = []
+            for workers in (1, 4):
+                text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'universal-dependencies', sentence)
+                claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+                assert (spacing, 'the fluent translation of the sentence to English', 'Translated.') in claims, claims
+                assert ('see', '[see, Agent]') in claims and ('a', '[named, Patient]') in claims, claims
+                assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
+                readings.append(claims)
+            assert readings[0] == readings[1], readings
+        sentence.write_text(conllu.format(text='see b.'), encoding='utf-8')
+        rejected = run('ingest', '--no-load', '-s', 'universal-dependencies', sentence, expected=2)
+        assert sentence.as_posix() in rejected and 'at byte' in rejected and 'declared text differs' in rejected, rejected
+        for annotation in ('__', 'GTtags=', '_|literal-marker'):
+            sentence.write_text(conllu.format(text='see a.').replace('CxnElt=1:Agent', annotation), encoding='utf-8')
+            rejected = run('ingest', '--no-load', '-s', 'universal-dependencies', sentence, expected=1)
+            assert 'semantic_omissions=' in rejected and 'does not parse completely' not in rejected, rejected
+        sentence.write_text(conllu.format(text='see a.').replace('VERB\t_\t_', 'VERB\t_\tBareFlag'), encoding='utf-8')
+        rejected = run('ingest', '--no-load', '-s', 'universal-dependencies', sentence, expected=2)
+        assert 'injected field FEATS' in rejected, rejected
+        print('PASS original sentence spacing, numeric and literal construction anchors, MISC markers and strict FEATS')
+
         pages = root / 'ud-pages'
         pages.mkdir()
         for feature,definition,value in [('Poss','possessive','it is possessive'),('Abbr','abbreviation','it is abbreviated')]:
@@ -141,18 +169,21 @@ def main():
         print('PASS both FrameNet alignments, complete valence patterns, absent GF slots and all release annotation layers')
 
         brown=root/'ca01'
-        brown.write_text('\n\nCount/nn //in minute/nn ./.\nUse/vb and/or/cc !/!\n\n',encoding='utf-8')
+        brown.write_text('\n\nCount/nn //in minute/nn ./.\nUse/vb and/or/cc !/!\n'
+                         '/l//nn AAb//nn /r//nn ///nn\n\n',encoding='utf-8')
         readings=[]
         for workers in (1,4):
             text=run('ingest','--claims-tsv','-j',workers,'-s','brown',brown)
             claims=[tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
-            assert len(claims)==9,(claims,text)
+            assert len(claims)==14,(claims,text)
             assert ('/','part of speech annotation','in') in claims,claims
             assert ('and/or','part of speech annotation','cc') in claims,claims
+            assert all((word,'part of speech annotation','nn') in claims
+                       for word in ('/l/', 'AAb/', '/r/', '//')),claims
             assert 'mismatched 0' in text,text
             readings.append(sorted(claims))
         assert readings[0]==readings[1],readings
-        print('PASS Brown literal slash words and embedded slashes retain the final word/tag separator')
+        print('PASS Brown leading, embedded, trailing and repeated slashes retain the final word/tag separator')
 
         # Real CLDR excerpts cover every field class which rejected the ISO639
         # foundation rung. Check the claims as well as the omission counter:
@@ -499,6 +530,23 @@ def main():
             run('ingest', '-d', connection, '-j', 4, 'propbank')
             before = sql('SELECT count(*) FROM public.witness')
             assert before == '2', before
+            ud_data = root / 'data/ud'
+            ud_data.mkdir()
+            (ud_data / 'spacing.conllu').write_text(conllu.format(text='see  a.'), encoding='utf-8')
+            (recipes / 'universal-dependencies/source').write_text(
+                'name universal-dependencies\nwitness Universal Dependencies\nclass AcademicCurated\n'
+                'root $LAPLACE_DATA/ud\n', encoding='utf-8')
+            publication = run('ingest', '-d', connection, '-j', 4, 'universal-dependencies')
+            preserved = sql("""SELECT sum(games) FROM public.laplace_contained_series(
+                (SELECT array_agg(id) FROM public.witness))
+                WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('see  a.'),
+                    public.laplace_text_id('the fluent translation of the sentence to English'),
+                    public.laplace_text_id('Translated.')])""")
+            assert preserved == '1', ('Original sentence spacing did not survive database publication', preserved, publication)
+            usage = run('hop', '-d', connection, 'see  a.')
+            # The CLI truncates long display labels; the exact full relation
+            # and whitespace-preserving subject were checked above in SQL.
+            assert 'the fluent translation of the sentence to' in usage and 'Translated.' in usage, usage
             run('ingest', '-d', connection, 'open-identifiers')
             # Two declarations describe one reference in one source record.
             # Replaying actual containment must still recover one observation.

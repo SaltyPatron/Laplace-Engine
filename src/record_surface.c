@@ -15,7 +15,12 @@ typedef struct {
 typedef struct { SurfaceRow *rows; uint32_t count; } SurfaceRows;
 
 static void invalid_surface(const RecordWorker *worker, const char *reason){
-    fprintf(stderr,"%s: invalid indexed surface: %s\n",worker->r->name,reason); exit(2);
+    /* This path terminates the process; retain the thread's source context
+     * before clearing it so a bad sentence identifies its file and offset. */
+    const File *file=table_reading_file(NULL);
+    fprintf(stderr,"%s: %s at byte %llu: invalid indexed surface: %s\n",
+        worker->r->name,file ? file->path : "(unknown input)",
+        (unsigned long long)worker->kr.at,reason); exit(2);
 }
 static const SemanticValue *scalar(const SemanticRecord *record, int32_t at){
     if (at<0) return NULL;
@@ -81,6 +86,24 @@ static int surface_row(const SurfaceRow *row, uint32_t *covered){
     if (row->kind==SURFACE_RANGE) { *covered=row->last; return 1; }
     return row->first>*covered;
 }
+static size_t skip_spacing(const SurfaceProgram *program, const SemanticValue *text, size_t at){
+    while (at<text->vlen) {
+        size_t next=at; uint32_t cp;
+        if (!lp_utf8_next(text->val,text->vlen,&next,&cp) || !lp_flags_get(program->flags,cp,program->white_space)) break;
+        at=next;
+    }
+    return at;
+}
+static int same_tokens(const SurfaceProgram *program, const SemanticValue *text, const SurfaceRows *rows){
+    size_t at=0; uint32_t covered=0;
+    for (uint32_t i=0; i<rows->count; i++) if (surface_row(&rows->rows[i],&covered)) {
+        const SemanticValue *form=rows->rows[i].form;
+        at=skip_spacing(program,text,at);
+        if (form->vlen>text->vlen-at || memcmp(form->val,text->val+at,form->vlen)) return 0;
+        at+=form->vlen;
+    }
+    return skip_spacing(program,text,at)==text->vlen;
+}
 int record_surface_text(RecordWorker *worker, const SemanticRecord *record, int32_t root, Ref *out){
     const SurfaceProgram *program=&worker->s->surface;
     if (!program->thing || !record_field_matches(&record->n[root],program->tier)) return 0;
@@ -107,8 +130,13 @@ int record_surface_text(RecordWorker *worker, const SemanticRecord *record, int3
         memcpy(bytes+used,rows.rows[i].form->val,rows.rows[i].form->vlen); used+=rows.rows[i].form->vlen; previous=&rows.rows[i];
     }
     const SemanticValue *declared=program->linear ? NULL : scalar(record,record_select_first(record,root,program->verify));
-    if (declared && (declared->vlen!=length || memcmp(declared->val,bytes,length))) invalid_surface(worker,"declared text differs from the composed tokens");
-    *out=record_text(bytes,length); out->said=0; scratch_restore(mark); return 1;
+    if (declared && (declared->vlen!=length || memcmp(declared->val,bytes,length)) &&
+        (!program->preserve_spacing || !same_tokens(program,declared,&rows)))
+        invalid_surface(worker,"declared text differs from the composed tokens");
+    /* The declared sentence is authoritative about its original whitespace.
+     * Preserve those bytes while independently retaining all token layers. */
+    *out=declared ? record_text(declared->val,declared->vlen) : record_text(bytes,length);
+    out->said=0; scratch_restore(mark); return 1;
 }
 int record_surface_position(RecordWorker *worker, const SemanticRecord *record, int32_t scope,
     int last, Ref *out, int depth){

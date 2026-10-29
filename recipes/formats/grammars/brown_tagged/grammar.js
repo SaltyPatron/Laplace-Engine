@@ -9,9 +9,12 @@ module.exports = grammar({
     document: $ => repeat(choice($.paragraph, $._newline)),
     paragraph: $ => prec.right(repeat1($.sentence)),
     sentence: $ => prec.right(seq(repeat1($.token), optional($._newline))),
-    token: $ => seq(field('word', $.word), '/', field('tag', $.segment)),
-    // The corpus writes a literal slash as //in (word '/', tag 'in').
-    word: $ => choice('/', seq($.segment, repeat(seq('/', $.segment)))),
+    token: $ => seq(field('word', $.word), token.immediate('/'),
+      field('tag', alias(token.immediate(/[^\s/]+/), $.segment))),
+    // Slashes can lead or trail a word as well as occur inside it: //in,
+    // /l//nn and AAb//nn spell '/', '/l/' and 'AAb/' respectively.
+    word: $ => seq(choice($.segment, '/'),
+      repeat(choice(token.immediate('/'), token.immediate(/[^\s/]+/)))),
     segment: $ => /[^\s/]+/,
     _newline: $ => /\r?\n/
   }

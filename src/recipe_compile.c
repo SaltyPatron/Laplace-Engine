@@ -711,9 +711,17 @@ int say_says(Recipe *r, const char *path, char *tok){
             name_next(&at,program->adjoining,sizeof program->adjoining) &&
             name_next(&at,program->adjoining_value,sizeof program->adjoining_value) &&
             name_next(&at,keyword,sizeof keyword) && !strcmp(keyword,"verify") &&
-            name_next(&at,program->verify,sizeof program->verify) && !name_next(&at,extra,sizeof extra);
+            name_next(&at,program->verify,sizeof program->verify);
+        if (valid && !program->linear && name_next(&at,extra,sizeof extra)) {
+            valid=!strcmp(extra,"spacing") && !name_next(&at,extra,sizeof extra);
+            if (valid) {
+                program->preserve_spacing=1; program->flags=lp_flags_map(NULL);
+                program->white_space=program->flags ? lp_flags_field(program->flags,"White_Space") : NULL;
+                valid=program->white_space!=NULL;
+            }
+        }
         if (!valid) {
-            fprintf(stderr,"%s: surface TIER ROW FORM, or surface TIER ROW ID FORM separator TEXT unless FIELD VALUE verify FIELD (one per recipe)\n",path); return -1;
+            fprintf(stderr,"%s: surface TIER ROW FORM, or surface TIER ROW ID FORM separator TEXT unless FIELD VALUE verify FIELD [spacing] (spacing requires Unicode flags; one per recipe)\n",path); return -1;
         }
         program->separator_length=(uint16_t)strlen(program->separator);
         program->adjoining_length=(uint16_t)strlen(program->adjoining_value);

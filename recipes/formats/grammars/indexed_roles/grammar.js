@@ -5,7 +5,9 @@ module.exports = grammar({
   rules: {
     document: $ => seq($.binding, repeat(seq(',', $.binding))),
     binding: $ => seq($.target, ':', $.role),
-    target: $ => /[0-9]+(\.[0-9]+)?/,
+    // Some treebanks name the construction anchor; others use a row ID.
+    // The recipe resolves only the latter and preserves literal anchors.
+    target: $ => /[^:,|\t\r\n]+/,
     role: $ => /[^,|\t\r\n]+/
   }
 });

@@ -10,7 +10,9 @@ format conllu
 empty _
 
 # A record is the sentence its text note writes; a row is the word its FORM writes.
-surface record row ID FORM separator " " unless MISC.SpaceAfter No verify text
+# The text comment is the original untokenized sentence. Preserve its spacing
+# while verifying every surface form, including multiword tokens, in order.
+surface record row ID FORM separator " " unless MISC.SpaceAfter No verify text spacing
 thing row FORM
 layers record row FORM LEMMA UPOS XPOS FEATS DEPREL DEPS MISC
 tree record row HEAD DEPREL
@@ -52,7 +54,10 @@ pair row MISC.CopyOf
 # Construction elements bind the component word to a role at a sentence-local
 # construction head (EWT/GUM README, Cxn and CxnElt annotations).
 part CxnElt grammar indexed_roles
+when target matches ^[0-9]+([.][0-9]+)?$
 refer target row
+always
+content target
 content role
 thing binding target role
 thing MISC.CxnElt of binding
