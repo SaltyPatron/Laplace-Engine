@@ -135,6 +135,7 @@ typedef struct {
     int tier0;                                        /* it records every codepoint, tier 0 (its source file says tier0): the Unicode source, first */
     char after[16][64]; int nafter;                   /* the sources it comes after */
     char except[8][128]; int nexcept;                 /* files of its roots that are not the source */
+    struct { char preferred[128], fallback[128]; } prefer[8]; int nprefer; /* sibling representations, preferred when present */
     char files[16][512]; int nfiles;                  /* the files it is, by pattern, when it is not everything under a root; a directory is every file under it */
     int supersede;                                    /* supersede: a whole reading of it replaces the readings before it (a working tree, not an edition) */
     char ignore[64];                                  /* ignore NAME: files of that name, found while walking, say in gitignore's notation which files under them are not the source */

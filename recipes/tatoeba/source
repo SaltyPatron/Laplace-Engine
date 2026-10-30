@@ -8,6 +8,10 @@ name tatoeba
 witness Tatoeba
 class UserCuratedResource
 root $LAPLACE_DATA/Tatoeba
+# The detailed export contains the same sentence, ID and language columns plus
+# ownership and dates. Read one complete sentence export, retaining the plain
+# export as a fallback on estates without the detailed export.
+prefer sentences_detailed.csv over sentences.csv
 # Measured, not loaded: 294,452,005 compositions from 3,191 MB, at 750 bytes each with their indexes and standings.
 room 69
 # It comes after no source it does not need first, as conceptnet's source says (BRIEF.md, "Nothing is order-dependent"):

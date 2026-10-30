@@ -20,8 +20,9 @@ typedef struct { char canonical[64]; uint16_t length; } VocabularyValue;
 typedef struct { char list[32], path[160], as[4][64]; int nas; regex_t re; int has_re, node; KeyProgram *program;
                  lp_strmap *vocabulary; char vocabulary_name[64]; } KSpec; /* immutable, field-scoped vocabulary */
 typedef struct Dis Dis;
+enum { RECIPE_ARGUMENT_BYTES = 256 };
 typedef struct { char name[64]; uint16_t length, tier_id, scope_key; uint8_t within, local, constructor; lp_id domain; const Dis *constructor_value; } TargetCode;
-struct Dis { char name[64]; int what; char arg[64], under[64]; uint8_t key_radix, index_base; KSpec k; uint32_t when;
+struct Dis { char name[64]; int what; char arg[RECIPE_ARGUMENT_BYTES], under[64]; uint8_t key_radix, index_base; KSpec k; uint32_t when;
                  struct { uint8_t off, len, wild, note; } whole, part; uint8_t el_l; const char *text;
                  TargetCode *targets; uint8_t ntargets; uint16_t name_length, arg_length, text_length;
                  DiagnosticLabel *road_label, *statement_label; uint32_t name_slot, part_slot, parent_slot; };   /* k: of a type, how its key is written; whole, part, el_l: its name as matched, split once (dis_parse); text: what a relation line words it as */

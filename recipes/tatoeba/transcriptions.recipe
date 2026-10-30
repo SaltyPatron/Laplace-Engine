@@ -13,7 +13,7 @@ tier field by \t
 empty \\N
 
 thing row "Sentence id"
-refer "Sentence id" tatoeba-sentences
+refer "Sentence id" tatoeba-sentences-detailed tatoeba-sentences tatoeba-sentences-cc0
 content Username
 content Lang "Script name" Transcription
 # the script a transcription is in: the relation of the sentence to its transcription, a value of the scripts ("The

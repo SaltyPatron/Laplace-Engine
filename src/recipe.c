@@ -16,6 +16,7 @@
  *   ignore NAME                   files of this name found under what is walked (.gitignore) say, in gitignore's
  *                                 notation, which files beside and below them are not the source
  *   except PATTERN...             files under its root that are not the source
+ *   prefer NAME over NAME         use a preferred sibling file when it exists; otherwise read the fallback
  *   room N                        what it takes in the database, in times what its files hold, as it was measured
  *   called NAME                   the source's record, where its witness is named file by file: its trunk is
  *                                 [record, its files' trunks] (file.c)
@@ -254,11 +255,31 @@ static int source_parse(const char *path, Source *s, int metadata){
         else if (!strcmp(tok, "called")) { char *v = strtok(NULL, "\r\n"); while (v && (*v == ' ' || *v == '\t')) v++; if (v) snprintf(s->called, sizeof s->called, "%s", v); }
         else if (!strcmp(tok, "after")) while ((tok = strtok(NULL, " \t\r\n")) && s->nafter < 16) snprintf(s->after[s->nafter++], 64, "%s", tok);
         else if (!strcmp(tok, "except")) while ((tok = strtok(NULL, " \t\r\n")) && s->nexcept < 8) snprintf(s->except[s->nexcept++], 128, "%s", tok);
+        else if (!strcmp(tok,"prefer")) {
+            char *preferred=strtok(NULL," \t\r\n"), *over=strtok(NULL," \t\r\n"), *fallback=strtok(NULL," \t\r\n");
+            int valid=s->nprefer<8 && preferred && over && fallback && !strcmp(over,"over") &&
+                !strtok(NULL," \t\r\n") && strlen(preferred)<128 && strlen(fallback)<128 &&
+                !strpbrk(preferred,"/\\*?[") && !strpbrk(fallback,"/\\*?[") && strcmp(preferred,fallback) &&
+                strcmp(preferred,".") && strcmp(preferred,"..") && strcmp(fallback,".") && strcmp(fallback,"..");
+            for(int i=0;valid && i<s->nprefer;i++) if(!strcmp(s->prefer[i].fallback,fallback)) valid=0;
+            if(!valid){fprintf(stderr,"%s: prefer SIBLING_NAME over FALLBACK_NAME (distinct filenames, one preference per fallback, at most 8)\n",path);fclose(f);return 0;}
+            snprintf(s->prefer[s->nprefer].preferred,128,"%s",preferred);
+            snprintf(s->prefer[s->nprefer++].fallback,128,"%s",fallback);
+        }
         else if (!strcmp(tok, "ignore")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(s->ignore, sizeof s->ignore, "%s", tok); }
         else if (!strcmp(tok, "reads")) while ((tok = strtok(NULL, " \t\r\n")) && s->nreads < 32) snprintf(s->reads[s->nreads++], 64, "%s", tok);
         else { fprintf(stderr, "%s: \"%s\" is not something a source says\n", path, tok); fclose(f); return 0; }
     }
     fclose(f);
+    for(int i=0;i<s->nprefer;i++) {
+        const char *next=s->prefer[i].preferred;
+        for(int step=0;step<s->nprefer;step++) {
+            if(!strcmp(next,s->prefer[i].fallback)){fprintf(stderr,"%s: cyclic source file preference\n",path);return 0;}
+            int j=0;while(j<s->nprefer && strcmp(s->prefer[j].fallback,next))j++;
+            if(j==s->nprefer)break;
+            next=s->prefer[j].preferred;
+        }
+    }
     if (metadata) return s->name[0] != 0;
     if (s->unset[0]) { s->nroot = s->nfiles = 0; return s->name[0] != 0; }   /* a root it names is not set: it is at none, and says why (source_unset) */
     if (s->nfiles) { os_list g; os_glob(s->files[0], &g); if (g.n) snprintf(s->found, sizeof s->found, "%s", s->files[0]); os_list_free(&g); }
@@ -494,6 +515,15 @@ Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, Reci
     for (int i = 0; of && i < of->nexcept; i++) if (!os_fnmatch(of->except[i], path)) {
         if (coverage) *coverage=RECIPE_OMITTED;
         return NULL;
+    }
+    for(int i=0;of && i<of->nprefer;i++) if(!strcmp(b0,of->prefer[i].fallback)) {
+        char preferred[4096]; size_t directory=(size_t)(b0-path);
+        int size=snprintf(preferred,sizeof preferred,"%.*s%s",(int)directory,path,of->prefer[i].preferred);
+        if(size<0 || (size_t)size>=sizeof preferred){fprintf(stderr,"source preference path exceeds Native path limit: %s\n",path);exit(2);}
+        if(os_exists(preferred) && !os_is_dir(preferred)) {
+            if(coverage)*coverage=RECIPE_OMITTED;
+            return NULL;
+        }
     }
     for (int i = 0; i < n; i++) {
         if (r[i].broken) continue;

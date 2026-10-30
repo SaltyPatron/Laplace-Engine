@@ -88,6 +88,47 @@ def main():
                   ('language:eng','identifier vocabulary','language')]*2]),(workers,claims,text)
         print('PASS WN-LMF dependencies retain both the required resource and its version')
 
+        tatoeba = root / 'data/tatoeba'
+        tatoeba.mkdir()
+        tatoeba_source = recipes / 'tatoeba/source'
+        tatoeba_source.write_text('name tatoeba\nwitness Tatoeba\nclass UserCuratedResource\n'
+            'root $LAPLACE_DATA/tatoeba\nprefer sentences_detailed.csv over sentences.csv\n', encoding='utf-8')
+        plain_sentences = '1\teng\tPreferred cat.\n2\teng\tFallback dog.\n'
+        rich_sentences = ''.join(line+'\t\\N\t2026-01-01\t2026-01-01\n'
+            for line in plain_sentences.splitlines()) + '3\teng\tOnly detailed.\t\\N\t2026-01-01\t2026-01-01\n'
+        (tatoeba / 'links.csv').write_text('1\t2\n', encoding='utf-8')
+        for available in ('both', 'detailed', 'plain', 'cc0', 'directory'):
+            plain = tatoeba / 'sentences.csv'
+            detailed = tatoeba / 'sentences_detailed.csv'
+            cc0 = tatoeba / 'sentences_CC0.csv'
+            if plain.exists(): plain.unlink()
+            if cc0.exists(): cc0.unlink()
+            if detailed.is_dir(): detailed.rmdir()
+            elif detailed.exists(): detailed.unlink()
+            if available not in ('detailed', 'cc0'): plain.write_text(plain_sentences, encoding='utf-8')
+            if available in ('both', 'detailed'): detailed.write_text(rich_sentences, encoding='utf-8')
+            elif available == 'directory': detailed.mkdir()
+            if available == 'cc0': cc0.write_text(''.join(line+'\t2026-01-01\n' for line in plain_sentences.splitlines()), encoding='utf-8')
+            readings = []
+            for workers in (1, 4):
+                text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'tatoeba', tatoeba)
+                claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+                languages = [claim for claim in claims if len(claim)==3 and claim[1]=='ISO 639-3 language code']
+                expected_languages = [(word, 'ISO 639-3 language code', 'eng') for word in
+                    (['Preferred cat.', 'Fallback dog.', 'Only detailed.'] if available in ('both','detailed')
+                     else ['Preferred cat.', 'Fallback dog.'])]
+                assert sorted(languages)==sorted(expected_languages), (available, claims, text)
+                assert claims.count(('Fallback dog.', 'is the translation of', 'Preferred cat.'))==1, claims
+                assert 'unresolved obligations: 0 ' in text, text
+                readings.append(claims)
+            assert readings[0]==readings[1], (available, readings)
+        preferred_source = tatoeba_source.read_text(encoding='utf-8')
+        tatoeba_source.write_text(preferred_source+'prefer sentences.csv over sentences_detailed.csv\n', encoding='utf-8')
+        rejected = run('ingest', '--catalog', expected=2)
+        assert 'cyclic source file preference' in rejected, rejected
+        tatoeba_source.write_text(preferred_source, encoding='utf-8')
+        print('PASS preferred sentence export avoids duplicate readings; links resolve with either provider and directories do not hide the fallback')
+
         sentence = root / 'spacing.conllu'
         conllu = ('# text = {text}\n# text_en = Translated.\n'
             '1\tsee\tsee\tVERB\t_\t_\t0\troot\t_\tCxnElt=1:Agent\n'
@@ -602,6 +643,15 @@ def main():
                 observed = sql("SELECT sum(games) FROM public.laplace_contained_series("
                     "(SELECT array_agg(id) FROM public.witness)) WHERE claim=public.laplace_compose(ARRAY[" + operands + '])')
                 assert observed == '1', ('Structured bindings or parent association changed in PostgreSQL', relation, observed, publication)
+            detailed.rmdir()
+            detailed.write_text(rich_sentences, encoding='utf-8')
+            run('ingest', '-d', connection, '-j', 4, 'tatoeba')
+            language_games = sql("""SELECT sum(games) FROM public.laplace_contained_series(
+                (SELECT array_agg(id) FROM public.witness))
+                WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('Preferred cat.'),
+                    public.laplace_text_id('ISO 639-3 language code'),public.laplace_text_id('eng')])""")
+            assert language_games == '1', ('Mirrored sentence exports manufactured observations', language_games)
+            assert 'Fallback dog.' in run('hop', '-d', connection, 'Preferred cat.')
             usage = run('hop', '-d', connection, 'see  a.')
             # The CLI truncates long display labels; the exact full relation
             # and whitespace-preserving subject were checked above in SQL.

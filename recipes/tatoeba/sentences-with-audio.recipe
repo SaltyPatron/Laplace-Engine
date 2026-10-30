@@ -14,7 +14,7 @@ tier field by \t
 empty \\N
 
 thing row "Sentence id"
-refer "Sentence id" tatoeba-sentences
+refer "Sentence id" tatoeba-sentences-detailed tatoeba-sentences tatoeba-sentences-cc0
 key row "Audio id"
 content Username
 omit License "Attribution URL"

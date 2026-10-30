@@ -306,6 +306,7 @@ static void compile_targets(Say *say, Dis *rules, int count, const char *recipe)
             const char *next = memchr(at, ' ', (size_t)(end - at)); if (!next) next = end;
             TargetCode *target = &rule->targets[rule->ntargets++];
             if (rule->what == D_REFER && *at == '^') { target->within = 1; at++; }
+            if ((size_t)(next-at)>=sizeof target->name) { fprintf(stderr,"%s: reference/type target exceeds %zu bytes\n",recipe,sizeof target->name-1);exit(2); }
             target->length = (uint16_t)(next - at); memcpy(target->name, at, target->length); target->name[target->length] = 0;
             for (int j = 0; j < say->nkey; j++) if (!strcmp(say->key[j].tier, target->name)) {
                 target->local = 1; target->tier_id = say->key[j].tier_id;
@@ -529,11 +530,17 @@ int recipe_property_cached(const Say *s, const char *name, size_t n){
     if (!s->perf || !n || n >= 64) return 0; char folded[64]; size_t length=perf_fold(name,n,folded);
     return lp_strmap_find(s->perf,folded,length) >= 0; }
 static int dis_add(Say *s, const char *path, const char *name, int what, const char *arg){
+    if(arg && strlen(arg)>=RECIPE_ARGUMENT_BYTES){fprintf(stderr,"%s: disposition argument exceeds %d bytes\n",path,RECIPE_ARGUMENT_BYTES-1);return -1;}
     if (s->ndis == 256) { fprintf(stderr, "%s: more parts than a recipe disposes of (256)\n", path); return -1; }
     for (int i = 0; i < s->ndis; i++) if (!strcmp(s->dis[i].name, name)) { if (what == D_KEY && s->dis[i].what == D_KEY && s->dis[i].when==s->now) return 1;      /* one name may be the key of several kinds of thing (id) */
         if (s->dis[i].when && s->dis[i].when!=s->now) continue; /* ordered conditional cases, followed by at most one fallback */
         fprintf(stderr, "%s: the part %s is given two dispositions\n", path, name); return -1; }
     Dis *d = &s->dis[s->ndis++]; snprintf(d->name, sizeof d->name, "%s", name); dis_parse(d); d->what = what; d->when=s->now; snprintf(d->arg, sizeof d->arg, "%s", arg ? arg : ""); return 1;
+}
+static int target_append(char *targets,size_t capacity,const char *next,const char *path){
+    size_t length=strlen(targets), added=strlen(next);
+    if(length+1+added>=capacity){fprintf(stderr,"%s: reference/type target list exceeds %zu bytes\n",path,capacity-1);return 0;}
+    targets[length]=' ';memcpy(targets+length+1,next,added+1);return 1;
 }
 /* A recipe's line, if it lays the file out or disposes of a part: 1, or 0 for something else, or -1 when written wrong. */
 /* A recipe's line, its comment off, as written: each word of it kept, so that a part the recipe names nowhere is known to be
@@ -610,7 +617,7 @@ int recipe_product_format(Recipe *r, const char *name){
 }
 int say_says(Recipe *r, const char *path, char *tok){
     Say *s = r->say; if (!s) s = r->say = calloc(1, sizeof(Say)); s->laid_line = 0;
-    char nm[160], a2[64], *at;
+    char nm[160], a2[RECIPE_ARGUMENT_BYTES], *at;
     #define LAID (s->lay.ntier || s->lay.g.n)
     if (!strcmp(tok,"dependence") && LAID) {
         at=strtok(NULL,"\r\n"); char label[128],extra[8];
@@ -802,12 +809,12 @@ int say_says(Recipe *r, const char *path, char *tok){
                     }
                     continue;
                 }
-                size_t l = strlen(a2); snprintf(a2 + l, sizeof a2 - l, " %s", more); }
+                if(!target_append(a2,sizeof a2,more,path))return -1; }
             if (ks.vocabulary && (ks.has_re || ks.nas || strchr(a2,' '))) {
                 fprintf(stderr,"%s: vocabulary lookup takes one list and the source spelling directly\n",path); return -1;
             }
             int rv = dis_add(s, path, nm, D_TYPE, a2); if (rv > 0) s->dis[s->ndis - 1].k = ks; return rv; }
-        else { char more[64], targets[64], under[64]=""; uint8_t key_radix=0; snprintf(targets, sizeof targets, "%s", a2);       /* under qualifies a transient pointer by canonical parent content */
+        else { char more[64], targets[RECIPE_ARGUMENT_BYTES], under[64]=""; uint8_t key_radix=0; snprintf(targets, sizeof targets, "%s", a2);       /* under qualifies a transient pointer by canonical parent content */
             while (name_next(&at, more, sizeof more)) { size_t l = strlen(targets);
                 if (!strcmp(more,"matching")) {
                     if (ks.has_re || !name_next(&at,more,sizeof more) || regcomp(&ks.re,more,REG_EXTENDED)) return -1;
@@ -823,8 +830,10 @@ int say_says(Recipe *r, const char *path, char *tok){
                         fprintf(stderr,"%s: refer radix must be 2..36\n",path); return -1;
                     }
                     key_radix=(uint8_t)radix;
-                } else if (!strcmp(more, "within")) { char *last = strrchr(targets, ' '); last = last ? last + 1 : targets; memmove(last + 1, last, strlen(last) + 1); *last = '^'; }
-                else snprintf(targets + l, sizeof targets - l, " %s", more); }
+                } else if (!strcmp(more, "within")) {
+                    if(l+1>=sizeof targets){fprintf(stderr,"%s: scoped reference target list is too long\n",path);return -1;}
+                    char *last = strrchr(targets, ' '); last = last ? last + 1 : targets; memmove(last + 1, last, strlen(last) + 1); *last = '^'; }
+                else if(!target_append(targets,sizeof targets,more,path))return -1; }
             int rv=dis_add(s,path,nm,D_REFER,targets); if (rv>0) { Dis *rule=&s->dis[s->ndis-1]; snprintf(rule->under,sizeof rule->under,"%s",under); rule->key_radix=key_radix; rule->k=ks; } return rv; }
         return dis_add(s, path, nm, tok[0] == 'r' ? D_REFER : D_TYPE, a2); }
     if (!strcmp(tok, "perfcache") && LAID) {                                    /* nothing read from the flags is attested: without them, nothing is read at all */

@@ -17,8 +17,8 @@ empty \\N
 # [77, is the translation of, 1]. Both ids are pointers (Laplace-Engine#20), resolved and in no claim; the reciprocal
 # row says the reverse.
 thing row "Translation id"
-refer "Sentence id" tatoeba-sentences
-refer "Translation id" tatoeba-sentences
+refer "Sentence id" tatoeba-sentences-detailed tatoeba-sentences tatoeba-sentences-cc0
+refer "Translation id" tatoeba-sentences-detailed tatoeba-sentences tatoeba-sentences-cc0
 # "1 [tab] 77 means that sentence #77 is the translation of sentence #1."
 relation "is the translation of" "Sentence id"
 attest row "Sentence id"
