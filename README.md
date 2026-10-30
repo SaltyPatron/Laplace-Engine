@@ -2,6 +2,29 @@
 
 Laplace itself: one program, `laplace`, built on [Laplace-Native](https://github.com/SaltyPatron/Laplace-Native) and working against a PostgreSQL database extended by [Laplace-postgres](https://github.com/SaltyPatron/Laplace-postgres). The documentation is [Laplace-Wiki](https://github.com/SaltyPatron/Laplace-Wiki), published at <https://saltypatron.github.io/Laplace-Wiki/>; each source under `recipes/` has its page under the wiki's Corpora.
 
+## Recipe-declared binary sections
+
+A format can declare `input length-prefix u64le` before its grammar. The generic
+reader consumes an unsigned length and passes exactly that many following bytes
+to the existing grammar and semantic pipeline. Supported encodings are `u8`,
+`u16le`, `u16be`, `u32le`, `u32be`, `u64le`, and `u64be`. It rejects truncated
+prefixes, sections beyond the held file's size, and sections beyond Tree-sitter's
+byte address space before allocating the section. Remaining bytes are excluded
+from this projection. Reported read bytes cover the prefix and selected section;
+file metadata still describes the original file.
+
+`formats/safetensors.format` declares the eight-byte little-endian length and
+reuses `formats/json.format` for the descriptor section. Both `tree` and generic
+recipe ingestion use this framing. No model source is registered automatically:
+this format reads descriptors, without validating tensor payloads, interpreting
+weights, or asserting learned relationships. Config, tokenizer and tensor
+semantics still belong in source recipes and shared numeric operations.
+
+`input_frame_test` checks the native reader's bounds and byte orders, including
+sparse multi-gigabyte payloads. `bash tests/input-frame.sh path/to/laplace`
+compares generic native claims with an unframed JSON source and checks malformed
+input rejection. These checks need no database writes.
+
 ## Closed parallel publication
 
 Creation composes leaves upward; recorded-subtree pruning still runs trunks

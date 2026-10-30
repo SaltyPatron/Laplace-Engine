@@ -1,0 +1,6 @@
+# Container framing only: an unsigned little-endian header length, its JSON
+# descriptor section, then tensor data. The data is not text and is not read by
+# this projection. Tensor validity and learned testimony require source recipes
+# and numeric interpretation; reading this header does not ingest a model.
+input length-prefix u64le
+include json

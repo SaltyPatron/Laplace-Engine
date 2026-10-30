@@ -8,6 +8,7 @@
 
 #include "laplace/laplace.h"
 #include "laplace/consensus.h"
+#include "input_frame.h"
 #include <libpq-fe.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -112,6 +113,7 @@ typedef struct {
     void *product;                                    /* compiled format projection, independent of retained packaging */
     const struct NativeGrammar *native;               /* the grammar the recipe names, when it is a reading of the engine's own, not tree-sitter's */
     void *native_recipe;                              /* what that grammar's own lines said */
+    InputFrame input_frame;                           /* recipe-declared byte section before grammar interpretation */
     size_t dependency_level;                          /* compiled logical reference group, providers before consumers */
     uint8_t program_hash[32]; void *program_state;     /* effective recipe/format source; state exists only while compiling */
 } Recipe;

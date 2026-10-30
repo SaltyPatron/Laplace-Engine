@@ -256,6 +256,15 @@ the whole source once at the end.
 
 ## The recipe language
 
+Binary framing is structural configuration, before a format's grammar runs:
+`input length-prefix u8|u16le|u16be|u32le|u32be|u64le|u64be` selects the section
+immediately following that unsigned byte length. Declare it once in the input
+format, alongside its grammar or `include`; a `product-format` cannot declare a
+second input frame. Only that section is read by this projection. For example,
+`format safetensors` recovers the JSON header through the common JSON grammar;
+it does not read tensor data, validate its shape/offset contract, or attest model
+knowledge. Do not describe this projection as whole-model ingestion.
+
 The recipe compiler is `src/recipe_compile.c`, with immutable program types in `src/recipe_program.h`.
 The grammar walker is `src/structure.c` and its layout is `src/structure.h`. Selector binding, semantic values,
 record output and streaming have separate `src/record_*.c` owners; `src/say.c` executes statement instructions.

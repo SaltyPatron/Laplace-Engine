@@ -115,6 +115,7 @@ void recipe_reading_hash(const Recipe *recipe, uint8_t out[32]){
         program_text(&hash, recipe->witness); program_text(&hash, recipe->lineage);
         uint64_t trust; memcpy(&trust, &recipe->trust, sizeof trust); program_size(&hash, trust);
         program_size(&hash, recipe->curated != 0); program_size(&hash, recipe->native != NULL);
+        program_size(&hash, recipe->input_frame.width); program_size(&hash, recipe->input_frame.big_endian);
         uint8_t semantic[32]; say_program_hash(recipe, semantic); blake3_hasher_update(&hash, semantic, sizeof semantic);
         if (recipe->lang) {
             grammar_program_hash(grammar_id_for_language(recipe->lang), semantic); blake3_hasher_update(&hash, semantic, sizeof semantic);
@@ -210,6 +211,9 @@ static int recipe_parse(const char *path, Recipe *r, int metadata){
     fclose(f);
     blake3_hasher_finalize(&program, r->program_hash, sizeof r->program_hash); r->program_state = NULL;
     if (metadata || r->like[0]) return 1;
+    if (r->input_frame.width && (r->native || !say_lays(r))) {
+        fprintf(stderr, "%s: a framed input requires an explicit generic format or tier layout\n", path); return 0;
+    }
     /* A grammar-only recipe records packaging bytes. Native semantic execution
      * requires its explicit directives, rather than silently turning a raw PGN
      * file into curated chess claims. */
@@ -716,6 +720,9 @@ static uint8_t *read_all(const char *path, size_t *n){
     uint8_t *b = malloc(m + 1); if (fread(b, 1, m, fp) != m) { fclose(fp); free(b); return NULL; }
     fclose(fp); *n = m; return b;
 }
+static uint8_t *read_recipe_input(const Recipe *recipe, const char *path, size_t *length){
+    return recipe && recipe->input_frame.width ? input_frame_read(&recipe->input_frame, path, length) : read_all(path, length);
+}
 /* A witness's name, with {dir} as the directory the file is in. */
 static void named_for(const char *name, const char *path, const uint8_t *src, size_t n, char *out, size_t cap){
     const char *fa = strstr(name, "{first ");
@@ -736,7 +743,9 @@ static void named_for(const char *name, const char *path, const uint8_t *src, si
 }
 /* A file read for the highway: what its recipe says of its types (laplace highway). */
 void highway_file(Ctx *c, File *f, Hw *hw){
-    size_t n; uint8_t *src0 = read_all(f->path, &n); if (!src0) { perror(f->path); return; } const Recipe *r = f->recipe; uint8_t *src = src0;
+    const Recipe *r = f->recipe;
+    size_t n; uint8_t *src0 = read_recipe_input(r, f->path, &n); if (!src0) { perror(f->path); return; } uint8_t *src = src0;
+    if (r && r->input_frame.width) f->at = r->input_frame.width;
     if (n >= 3 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF) { src += 3; n -= 3; }
     char w[512]; named_for(r->witness[0] ? r->witness : r->name, f->path, src, n, w, sizeof w); f->witness = text_ref(c, (const uint8_t *)w, strlen(w));
     say_highway(r, f, src, n, hw); free(src0);
@@ -747,7 +756,7 @@ int reads_in_stretches(const Recipe *r, char *boundary){
 }
 typedef struct { FILE *plain; gzFile compressed; File *file; int failed; } RecipeInput;
 int recipe_record_streamable(const Recipe *recipe){
-    return recipe && recipe->curated && (recipe->native ? recipe->native->input != NULL : say_record_streamable(recipe));
+    return recipe && !recipe->input_frame.width && recipe->curated && (recipe->native ? recipe->native->input != NULL : say_record_streamable(recipe));
 }
 static size_t recipe_input_read(void *context, uint8_t *out, size_t capacity){
     RecipeInput *input = context; size_t n;
@@ -793,8 +802,9 @@ static void decompose_input(Ctx *c, File *f){
         if (reader.failed) { fprintf(stderr, "%s: input did not close cleanly\n", f->path); exit(2); }
         f->exact = 1; return;
     }
-    size_t n; uint8_t *src0 = read_all(f->path, &n); if (!src0) { perror(f->path); f->exact = -1; exit(2); }
-    f->bytes = n; decompose_bytes(c, f, src0, n, 1);
+    size_t n; uint8_t *src0 = read_recipe_input(r, f->path, &n); if (!src0) { perror(f->path); f->exact = -1; exit(2); }
+    if (r && r->input_frame.width) f->at = r->input_frame.width;
+    f->bytes = (uint64_t)n + (r ? r->input_frame.width : 0); decompose_bytes(c, f, src0, n, 1);
     if (f->recipe && f->recipe->curated) f->exact = 1;
     else {
         f->exact = file_matches_bytes(f->has_packaging ? &f->packaging.id : &f->trunk.id, src0, n);
@@ -877,12 +887,14 @@ int cmd_tree(int argc, char **argv){
     int a = opts(argc, argv, (const Opt[]){ { "-r", 's', &rdir, 0 }, { "-g", 's', &grammar, 0 }, { "-n", 'l', &nodes_opt, 0 }, { 0 } });
     long nodes = (long)nodes_opt;
     if (a >= argc) { fprintf(stderr, "usage: laplace tree [-r recipes] [-g grammar] [-n nodes] file\n"); return 2; }
-    const TSLanguage *lang = NULL;
+    const TSLanguage *lang = NULL; const Recipe *selected = NULL;
     if (grammar) lang = grammar_load(grammar);
     else { Recipe *rec = NULL; int n = recipes_load(rdir, &rec); Recipe *r = recipe_for(rec, n, argv[a], NULL);
-           if (r) { lang = r->lang; printf("recipe %s, grammar %s\n", r->name, r->grammar); } }
+           if (r) { selected = r; lang = r->lang; printf("recipe %s, grammar %s\n", r->name, r->grammar); } }
     if (!lang) { fprintf(stderr, "no tree-sitter grammar reads %s (name one with -g)\n", argv[a]); return 1; }
-    size_t n; uint8_t *src = read_all(argv[a], &n); if (!src) { perror(argv[a]); return 1; }
+    size_t n; uint8_t *src = read_recipe_input(selected, argv[a], &n); if (!src) { perror(argv[a]); return 1; }
+    if (n > UINT32_MAX) { fprintf(stderr, "%s: Tree-sitter input exceeds its 32-bit byte range\n", argv[a]); free(src); return 1; }
+    if (selected && selected->input_frame.width) printf("input section: offset %u, bytes %zu\n", selected->input_frame.width, n);
     TSParser *ps = ts_parser_new(); ts_parser_set_language(ps, lang);
     TSTree *t = ts_parser_parse_string(ps, NULL, (const char *)src, (uint32_t)n);
     TSNode root = ts_tree_root_node(t); int malformed = ts_node_has_error(root);
