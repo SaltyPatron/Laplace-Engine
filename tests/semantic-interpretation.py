@@ -131,11 +131,16 @@ def main():
         print('PASS preferred sentence export avoids duplicate readings; links resolve with either provider and directories do not hide the fallback')
         (tatoeba / 'links.csv').write_text('1\t2\n1\t999\n999\t2\n999\t998\n', encoding='utf-8')
         for workers in (1,4):
-            text = run('ingest','--claims-tsv','-j',workers,'-s','tatoeba',tatoeba)
+            progress = root / f'tatoeba-domain-{workers}.jsonl'
+            text = run('ingest','--claims-tsv','-j',workers,'-s','tatoeba',tatoeba,
+                extra={'LAPLACE_INGEST_PROGRESS_PATH':str(progress),'LAPLACE_RECORD_WINDOW_BYTES':'1'})
             claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
             assert claims.count(('Fallback dog.','is the translation of','Preferred cat.'))==1, claims
             assert 'declared reference-domain exclusions: 3 records' in text, text
             assert 'unresolved obligations: 0 ' in text, text
+            frames = [json.loads(line) for line in progress.read_text(encoding='utf-8').splitlines()]
+            links_done = [frame for frame in frames if frame['event']=='file-composed' and frame['file'].endswith('links.csv')]
+            assert len(links_done)==1 and links_done[0]['records']==4, ('Framed rows read, including exclusions, were not reported',frames)
         link_recipe = recipes / 'tatoeba/links.recipe'
         admitted_recipe = link_recipe.read_text(encoding='utf-8')
         link_recipe.write_text('\n'.join(line for line in admitted_recipe.splitlines()

@@ -511,6 +511,9 @@ static void read_records(RecordPipeline *pipeline){
             }
         }
         ordinal = records.ordinal;
+        /* Report framed records read, independently of the persistence window.
+         * A large file can be making progress before its first rows commit. */
+        pipeline->file->records = ordinal;
         if (scopes) consumed = s_scope_stream_consumed(&records);
         if (records.file_layout) {
             Layout *next = records.file_layout; records.file_layout = NULL;
