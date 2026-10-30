@@ -1,15 +1,16 @@
 /* Selected text and parts share an append-only Native node/child arena.
  * Each new frontier is fetched once; ordered occurrences use an explicit stack. */
 #include "engine.h"
+#include "laplace/highway.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 typedef struct {lp_id id;uint32_t run;} ReadChild;
 typedef struct {lp_id id;size_t first,nv;uint8_t state,active;} Ent;
-struct Reader {PGconn *pg;Ent *e;size_t n,cap,fetched;lp_idmap *m;lp_vec(ReadChild) children;uint64_t trips;};
-Reader *reader_new(PGconn *pg){Reader *r=calloc(1,sizeof *r);r->pg=pg;return r;}
-void reader_free(Reader *r){if(!r)return;free(r->e);lp_vec_free(&r->children);lp_idmap_free(r->m);free(r);}
+struct Reader {PGconn *pg;Ent *e;size_t n,cap,fetched;lp_idmap *m;lp_vec(ReadChild) children;uint64_t trips;const lp_highway *highway;lp_text *text;};
+Reader *reader_new(PGconn *pg){Reader *r=calloc(1,sizeof *r);r->pg=pg;r->highway=lp_highway_map(NULL);return r;}
+void reader_free(Reader *r){if(!r)return;free(r->e);lp_vec_free(&r->children);lp_idmap_free(r->m);lp_text_free(r->text);free(r);}
 uint64_t reader_trips(const Reader *r){return r->trips;}
 static Ent *ent(Reader *r,const lp_id *id,int add){
     if(!add){int64_t i=lp_idmap_find(r->m,id);return i<0?NULL:r->e+i;}
@@ -17,14 +18,42 @@ static Ent *ent(Reader *r,const lp_id *id,int add){
     lp_reserve((void **)&r->e,&r->cap,r->n+1,sizeof *r->e);
     Ent *x=r->e+r->n++;*x=(Ent){.id=*id};return x;
 }
-void reader_want(Reader *r,const lp_id *id){if(lp_tier0_codepoint(T0,id)<0)ent(r,id,1);}
+/* The immutable Highway stores the canonical identifier components, including
+ * structured tuples. Native decomposes those bytes into this reader's shared
+ * arena. Their content is available even when no database row exists. This
+ * never supplies source assertions, occurrence annotations or standing. */
+static lp_ref cached_compose(void *context,const lp_ref *children,uint32_t count,uint8_t tier){
+    Reader *reader=context;lp_ref value=lp_ref_compose(children,count,tier);
+    Ent *node=ent(reader,&value.id,1);
+    if(node->state==1)return value;
+    node->first=reader->children.n;node->nv=count;node->state=1;
+    for(uint32_t i=0;i<count;i++)lp_push(&reader->children,((ReadChild){children[i].id,1}));
+    return value;
+}
+static int cached_content(Reader *reader,const lp_id *id){
+    if(!lp_highway_contains(reader->highway,id))return 0;
+    if(!reader->text)reader->text=lp_text_new(T0);
+    if(!reader->text){fputs("reader: cannot open Native text context\n",stderr);exit(1);}
+    lp_ref root;
+    if(!lp_highway_decompose(reader->highway,reader->text,id,cached_compose,reader,&root,NULL,0,NULL)){
+        fputs("reader: Highway components disagree with canonical content\n",stderr);exit(1);
+    }
+    return 1;
+}
+void reader_want(Reader *r,const lp_id *id){
+    if(lp_tier0_codepoint(T0,id)>=0)return;
+    Ent *node=ent(r,id,0);
+    if(node && node->state)return;
+    if(!cached_content(r,id))ent(r,id,1);
+}
 static size_t fetch(Reader *r){
     size_t begin=r->fetched,end=r->n;if(begin==end)return 0;r->fetched=end;
     lp_vec(lp_id) ids={0};Args args={0};
     for(size_t at=begin;at<end;){
         size_t amount=end-at;if(amount>DB_ID_WINDOW)amount=DB_ID_WINDOW;
         ids.n=0;
-        for(size_t i=at;i<at+amount;i++){lp_push(&ids,r->e[i].id);r->e[i].state=2;}
+        for(size_t i=at;i<at+amount;i++)if(!r->e[i].state){lp_push(&ids,r->e[i].id);r->e[i].state=2;}
+        if(!ids.n){at+=amount;continue;}
         args_reset(&args);arg_ids(&args,ids.v,ids.n);
         PGresult *rows=ask(r->pg,"SELECT entity,path FROM @extschema@.laplace_paths($1::@extschema@.blake3[])",&args);r->trips++;
         for(int row=0;row<PQntuples(rows);row++){
@@ -55,7 +84,7 @@ static void scalar(Out *out,uint32_t cp){
 static void expand(Reader *r,const lp_id *id,Out *out){
     int64_t cp=lp_tier0_codepoint(T0,id);if(cp>=0){scalar(out,(uint32_t)cp);return;}
     Ent *root=ent(r,id,0);
-    if(!root){if(out->wants<out->limit){ent(r,id,1);out->wants++;}return;}
+    if(!root){if(out->wants<out->limit){reader_want(r,id);out->wants++;}return;}
     if(root->state==0){out->wants++;return;}if(root->state!=1)return;
     lp_vec(ReadFrame) stack={0};size_t first=(size_t)(root-r->e);enter(r,first);lp_push(&stack,((ReadFrame){.node=first}));
     while(stack.n && out->n<out->limit){
@@ -67,7 +96,7 @@ static void expand(Reader *r,const lp_id *id,Out *out){
             lp_id child=r->children.v[node->first+frame->child-1].id;frame->repeat--;
             cp=lp_tier0_codepoint(T0,&child);if(cp>=0){scalar(out,(uint32_t)cp);continue;}
             Ent *next=ent(r,&child,0);
-            if(!next){if(out->wants<out->limit){ent(r,&child,1);out->wants++;}frame->repeat=0;continue;}
+            if(!next){if(out->wants<out->limit){reader_want(r,&child);out->wants++;}frame->repeat=0;continue;}
             if(next->state!=1){if(next->state==0)out->wants++;frame->repeat=0;continue;}
             size_t index=(size_t)(next-r->e);enter(r,index);lp_push(&stack,((ReadFrame){.node=index}));continue;
         }
@@ -105,7 +134,7 @@ char *reader_text(Reader *r,const lp_id *id,size_t limit){
 }
 size_t reader_parts(Reader *r,const lp_id *id,lp_id *out,size_t cap){
     if(!cap || lp_tier0_codepoint(T0,id)>=0)return 0;
-    Ent *x=ent(r,id,1);if(!x->state)fetch(r);x=ent(r,id,0);if(!x || x->state!=1)return 0;
+    reader_want(r,id);Ent *x=ent(r,id,0);if(x && !x->state)fetch(r);x=ent(r,id,0);if(!x || x->state!=1)return 0;
     size_t n=0;
     for(size_t i=0;i<x->nv && n<cap;i++){
         ReadChild *child=r->children.v+x->first+i;size_t amount=child->run;

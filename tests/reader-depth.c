@@ -10,6 +10,32 @@ const lp_tier0_record *T0;
 void *xrealloc(void *memory,size_t bytes){void *p=realloc(memory,bytes?bytes:1);assert(p);return p;}
 
 int main(int argc,char **argv){
+    if(argc==3 && !strcmp(argv[1],"--cache-only")){
+        T0=lp_tier0_map(argv[2]);assert(T0);
+        const lp_highway *highway=lp_highway_map(NULL);assert(highway);
+        Reader *reader=reader_new(NULL); /* Any database call fails this test. */
+        lp_text *text=lp_text_new(T0);assert(text);lp_id noun;
+        assert(lp_text_id(text,"NOUN",4,&noun));assert(lp_highway_find(highway,&noun));
+        char *rendered=reader_text(reader,&noun,0);assert(!strcmp(rendered,"NOUN"));free(rendered);
+        lp_id children[4];assert(reader_parts(reader,&noun,children,4)==4);
+        for(size_t i=0;i<4;i++)assert(lp_tier0_codepoint(T0,children+i)=="NOUN"[i]);
+        const lp_list *list=lp_highway_list(highway,"fnlu");assert(list);bool tuple=false;
+        for(uint32_t slot=0;slot<list->count && !tuple;slot++){
+            const lp_tier0_record *record=lp_highway_at(highway,list,slot);if(!record)continue;
+            const char *const *parts;size_t count=lp_highway_identifier_parts_for_id(highway,&record->id,&parts);
+            if(count!=2)continue;
+            lp_id actual[2],expected[2];assert(reader_parts(reader,&record->id,actual,2)==2);
+            for(size_t i=0;i<2;i++)assert(lp_text_id(text,parts[i],strlen(parts[i]),expected+i) && lp_id_eq(actual+i,expected+i));
+            rendered=reader_text(reader,&record->id,0);assert(strlen(rendered)==strlen(parts[0])+strlen(parts[1]));
+            assert(!memcmp(rendered,parts[0],strlen(parts[0])) && !strcmp(rendered+strlen(parts[0]),parts[1]));free(rendered);tuple=true;
+        }
+        assert(tuple && reader_trips(reader)==0);
+        lp_id ids[3]={noun,noun};lp_id_codepoint('N',ids+2);double coords[12];uint8_t has[3];
+        coords_of(NULL,ids,3,coords,has);assert(has[0] && has[1] && has[2]);
+        assert(!memcmp(coords,coords+4,4*sizeof(double)));
+        reader_free(reader);lp_text_free(text);
+        puts("reader cache: Tier-0, Highway text, tuple constituents and duplicate coordinates resolved with no database connection");return 0;
+    }
     if(argc==2 && !strcmp(argv[1],"--id-stdin")){
         uint8_t bytes[128];size_t count=fread(bytes,1,sizeof bytes,stdin);lp_id id;char hex[33];
         assert(!ferror(stdin) && count && lp_id_codepoints_utf8(bytes,count,&id));lp_id_hex(&id,hex);puts(hex);return 0;

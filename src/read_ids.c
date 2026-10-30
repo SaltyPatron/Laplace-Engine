@@ -1,5 +1,6 @@
 /* Connection-owned exact-ID reads over the shared Native PostgreSQL owner. */
 #include "engine.h"
+#include "laplace/highway.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -53,15 +54,20 @@ Hold *paths_of(PGconn *pg,const lp_id *ids,int n,int *nout){
     args_free(&args);if(bag.n>1)qsort(bag.v,(size_t)bag.n,sizeof(Hold),hold_order);
     *nout=bag.n;return bag.v;
 }
-/* Atoms remain mmap reads. Only the remaining unique IDs cross the socket;
+/* Canonical Tier-0 and Highway coordinates remain mmap reads. Only misses cross the socket;
  * request ordinals distribute each coordinate back to every occurrence. */
 void coords_of(PGconn *pg,const lp_id *ids,int n,double *out,uint8_t *has){
     if(n<=0)return;memset(has,0,(size_t)n);
+    const lp_highway *highway=lp_highway_map(NULL);
     lp_idmap *wanted=lp_idmap_new();
     for(int i=0;i<n;i++){
         int64_t cp=lp_tier0_codepoint(T0,ids+i);
         if(cp>=0){lp_ref atom=lp_ref_atom(T0,(uint32_t)cp);lp_coord_xyzm(&atom.c,out+4*(size_t)i);has[i]=1;}
-        else lp_idmap_put(wanted,ids+i,NULL);
+        else {
+            const lp_tier0_record *cached=lp_highway_find(highway,ids+i);
+            if(cached){lp_coord coord;memcpy(coord.m,cached->m,sizeof coord.m);lp_coord_xyzm(&coord,out+4*(size_t)i);has[i]=1;}
+            else lp_idmap_put(wanted,ids+i,NULL);
+        }
     }
     size_t count=lp_idmap_count(wanted);double *coords=malloc(sizeof(double)*4*(count?count:1));
     uint8_t *found=calloc(count?count:1,1);Args args={0};
