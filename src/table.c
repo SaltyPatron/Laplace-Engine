@@ -414,17 +414,21 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
         k = (k + 1) & smask;
     }
 }
-/* A node by its ID; safe while others insert (a slot being written is waited for). */
-Node *table_find(const lp_id *id){
-    if (!slot) return NULL;
-    Seen *c = seen_of(); enter(c); Node *found = NULL;
+/* Caller holds an active table guard, so its slot area cannot be resized. */
+static Node *table_find_active(const lp_id *id){
+    Node *found = NULL;
     uint64_t tag = tag_of(id), k = hkey(id) & smask, w;
     while ((w = __atomic_load_n(&slot[k], __ATOMIC_ACQUIRE))) {
         if ((w & ~IDX_MASK) == tag) { if ((w & IDX_MASK) == BUSY) w = published(&slot[k]);
             Node *x = &NODE[(w & IDX_MASK) - 1]; if (!memcmp(&x->id, id, 16)) { found = x; break; } }
         k = (k + 1) & smask;
     }
-    leave(c); return found;
+    return found;
+}
+/* A node by its ID; safe while others insert (a slot being written is waited for). */
+Node *table_find(const lp_id *id){
+    if (!slot) return NULL;
+    Seen *c=seen_of(); enter(c); Node *found=table_find_active(id); leave(c); return found;
 }
 void table_pin(const lp_id *id){
     Node *node = table_find(id); if (node) __atomic_store_n(&node->pin, 1, __ATOMIC_RELEASE);
@@ -437,21 +441,30 @@ size_t table_parts(const lp_id *id, lp_id *out, size_t cap){
 uint64_t table_end(void){ uint64_t e = __atomic_load_n(&node_top, __ATOMIC_ACQUIRE); return e < node_cap ? e : node_cap; }
 /* What each child of every node is said to be, kept on the child: a claim, a record, a tuple, a file's metadata (its
  * holder is a file). Read off the vertices' M after the decomposition, when nothing inserts. */
-static void table_kind(const lp_id *id, uint64_t said){
-    if (said == LP_SAID_HOLDS) { Node *child=table_find(id); if(child)__atomic_store_n(&child->spine,1,__ATOMIC_RELAXED); }
+static void table_kind(const lp_id *id, uint64_t said, int active){
     uint8_t bit = said == LP_SAID_CLAIM ? LP_KIND_CLAIM : said == LP_SAID_RECORD ? LP_KIND_RECORD : said == LP_SAID_TUPLE ? LP_KIND_TUPLE : 255;
-    if (bit != 255) { Node *child=table_find(id); if(child)__atomic_fetch_or(&child->kind,(uint8_t)(1u<<bit),__ATOMIC_RELAXED); }
+    if (said!=LP_SAID_HOLDS && bit==255) return;
+    Node *child=active?table_find_active(id):table_find(id); if (!child) return;
+    if (said==LP_SAID_HOLDS) __atomic_store_n(&child->spine,1,__ATOMIC_RELAXED);
+    if (bit!=255) __atomic_fetch_or(&child->kind,(uint8_t)(1u<<bit),__ATOMIC_RELAXED);
 }
 void table_annotate_roots(const Ref *roots, size_t count){
-    for(size_t i=0;i<count;i++)table_kind(&roots[i].id,roots[i].said);
+    for(size_t i=0;i<count;i++)table_kind(&roots[i].id,roots[i].said,0);
 }
 void table_kinds(void){
     uint64_t end = table_end();
-    #pragma omp parallel for schedule(dynamic, 65536)
-    for (uint64_t i = 0; i < end; i++) { Node *x = &NODE[i]; if (!x->live) continue;
-        for (uint32_t v = 0; v < x->nv; v++) { uint64_t said = VSAID(VTX[x->voff + v].m); if (!said) continue;
-            table_kind(&VTX[x->voff + v].id, said);
-            if (said == LP_SAID_METADATA) __atomic_fetch_or(&x->kind, (uint8_t)(1u << LP_KIND_FILE), __ATOMIC_RELAXED); } }
+    #pragma omp parallel
+    {
+        /* This scan never composes. Protect its stable slot area once per
+         * worker rather than issuing a resize fence for every marked edge. */
+        Seen *c=seen_of(); enter(c);
+        #pragma omp for schedule(dynamic, 65536)
+        for (uint64_t i = 0; i < end; i++) { Node *x = &NODE[i]; if (!x->live) continue;
+            for (uint32_t v = 0; v < x->nv; v++) { uint64_t said = VSAID(VTX[x->voff + v].m); if (!said) continue;
+                table_kind(&VTX[x->voff + v].id, said,1);
+                if (said == LP_SAID_METADATA) __atomic_fetch_or(&x->kind, (uint8_t)(1u << LP_KIND_FILE), __ATOMIC_RELAXED); } }
+        leave(c);
+    }
 }
 static lp_ref compose_sink(void *sink, const lp_ref *ch, uint32_t n, uint8_t tier){ (void)sink; return compose(ch, n, tier); }
 
