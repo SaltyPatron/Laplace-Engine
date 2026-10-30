@@ -62,11 +62,13 @@ def main():
           WHERE oid='"native a".laplace_isa()'::regprocedure''')
         parent,name=module.rsplit('/',1)
         alias=parent+'/./'+name
-        definition=sql(database,'''SELECT pg_catalog.pg_get_functiondef(
-          '"native a".laplace_isa()'::regprocedure)''')
-        sql(database,definition.replace("'"+module+"'","'"+alias+"'"))
+        alias_literal="'"+alias.replace("'","''")+"'"
+        definition=sql(database,"""SELECT pg_catalog.format(
+          'CREATE OR REPLACE FUNCTION %I.laplace_isa() RETURNS text LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE AS %L,%L',
+          'native a',"""+alias_literal+",'laplace_isa')")
+        sql(database,definition)
         assert sql(database,'''SELECT probin FROM pg_catalog.pg_proc
-          WHERE oid='"native a".laplace_isa()'::regprocedure''')==alias
+          WHERE oid='"native a".laplace_isa()'::regprocedure''')==alias,(module,alias,definition)
         repaired=subprocess.run([str(engine),'deploy','-d',connections[0]],
                                 capture_output=True,text=True,encoding='utf-8',timeout=180)
         if repaired.returncode:raise RuntimeError(repaired.stdout+repaired.stderr)
