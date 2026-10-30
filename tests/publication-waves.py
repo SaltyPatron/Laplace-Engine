@@ -116,6 +116,14 @@ def main():
             if process.returncode != 0:
                 raise RuntimeError(log.read_text(errors="replace"))
             assert fingerprint(parallel) == expected, "parallel publication changed canonical state"
+            pending = sql(parallel, """
+                SELECT coalesce(sum(public.laplace_clean_pending_list(i.indexrelid)),0)
+                FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid
+                JOIN pg_am a ON a.oid=c.relam
+                WHERE a.amname='gin' AND c.relkind='i' AND i.indrelid IN
+                  (SELECT relid FROM pg_partition_tree('public.physicality'))
+            """)
+            assert pending == "0", "working-window publication left GIN maintenance for its reader"
             lanes = re.findall(r"up to (\d+) writers", log.read_text(errors="replace"))
             assert lanes and max(map(int, lanes)) > 1, "fixture did not exercise parallel publication"
             reports.append({"case": "parallel_observed", "seconds": round(time.monotonic() - before, 3),

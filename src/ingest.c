@@ -294,7 +294,7 @@ static int stream_window_add(StreamWindow *window, File *file){
         for (uint64_t i=0; i<file->nsaid; i++) stream_window_root(window, &file->said[i]);
     }
     if (file->has_lineage) stream_window_root(window, &file->lineage);
-    if (!file->partial) {
+    if (!file->partial && !file->incomplete && !file->invalid) {
         if (window->ncomplete == window->ccomplete) {
             window->ccomplete = window->ccomplete ? window->ccomplete * 2 : 1;
             window->complete = xrealloc(window->complete, window->ccomplete * sizeof *window->complete);
@@ -1052,6 +1052,7 @@ int cmd_ingest(int argc, char **argv){
     printf("    %-42s %8.2f s\n", "Native selection and dependency order", st.t_prepare);
     printf("    %-42s %8.2f s\n", "parallel staging COPY", st.t_transfer);
     printf("    %-42s %8.2f s   %llu closed dependency waves, up to %llu writers\n", "parallel paired publication", st.t_publish, (unsigned long long)st.publish_waves, (unsigned long long)st.publish_lanes);
+    if(st.t_index)printf("      %-40s %8.2f s   included in paired publication\n", "GIN maintenance per working window", st.t_index);
     printf("  %-44s %8.2f s\n", "private observation windows", st.t_sem);
     { const Source *one = NULL; int many = 0; Ref trunk;                    /* one source, every file of it recorded: its trunk, last of all */
       for (int i = 0; i < nfiles; i++) { if (files[i].skipped) continue; if (!files[i].source) { many = 1; break; } if (!one) one = files[i].source; else if (one != files[i].source) many = 1; }
