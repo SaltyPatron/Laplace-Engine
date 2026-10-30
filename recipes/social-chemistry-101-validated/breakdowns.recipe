@@ -1,0 +1,4 @@
+name social-chemistry-101-validated-breakdowns
+match social-chem-101.v1.0.tsv
+# The retained records have the publisher's exact bytes and the same meanings.
+like social-chemistry-101-breakdowns

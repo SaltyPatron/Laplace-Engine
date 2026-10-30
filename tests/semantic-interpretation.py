@@ -523,6 +523,25 @@ def main():
         assert 'semantic_omissions=3' in rejected, rejected
         print('PASS row-local character pointers, explicit no-one answers, absent answers and invalid-index rejection')
 
+        validated_chemistry = root / 'data/Safety/SocialChemistry101/validated-subset'
+        validated_chemistry.mkdir(parents=True)
+        shutil.copyfile(chemistry / 'social-chem-101.v1.0.tsv',
+                        validated_chemistry / 'social-chem-101.v1.0.tsv')
+        shutil.copyfile(invalid_selections, validated_chemistry / 'quarantined-records.tsv')
+        (validated_chemistry / 'subset-receipt.json').write_text(
+            json.dumps({'quarantined_rows': 3, 'invalid_references': 3}), encoding='utf-8')
+        (validated_chemistry / 'invalid-character-references.csv').write_text(
+            'row,column,value\n2,rot-char-targeting,char-2\n', encoding='utf-8')
+        for workers in (1, 4):
+            text = run('ingest', '--claims-tsv', '-j', workers,
+                       '-s', 'social-chemistry-101-validated', validated_chemistry)
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            selections = [claim for claim in claims if len(claim) == 3 and claim[1] in {x[1] for x in expected_selections}]
+            assert sorted(selections) == sorted(expected_selections), (workers, claims, text)
+            assert not any(claim[0].startswith('Invalid ') for claim in claims), claims
+            assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
+        print('PASS named validated subset retains quarantined bytes as provenance without interpreting invalid judgments')
+
         readings = {}
         for workers in (1, 4):
             text = run('ingest', '--claims', '-j', workers, 'semantic-alignment')
@@ -743,6 +762,18 @@ def main():
                 WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('First rule.'),
                     public.laplace_text_id('Who is the RoT most likely targeting'),public.laplace_text_id('friend')])""")
             assert repeated == '2:1', ('Qualified observations or their source positions changed', repeated)
+            subset_progress = root / 'social-chemistry-subset-progress.jsonl'
+            subset_environment = {'LAPLACE_INGEST_PROGRESS_PATH': str(subset_progress), 'LAPLACE_INGEST_ONE': '1'}
+            run('ingest', '-d', connection, '-j', 4, 'social-chemistry-101-validated', extra=subset_environment)
+            subset_events = [json.loads(line) for line in subset_progress.read_text(encoding='utf-8').splitlines()]
+            subset_id = next(event['source_id'] for event in subset_events if event['event'] == 'complete')
+            assert subset_id != witness, 'A derived subset impersonated the complete publisher source'
+            subset_lineage = sql(f"SELECT public.laplace_text(lineage) FROM public.witness WHERE id='{subset_id}'::public.blake3")
+            assert subset_lineage == 'Social-Chem-101 Dataset', subset_lineage
+            subset_query = f"SELECT jsonb_agg(to_jsonb(s) ORDER BY claim,dependence_root) FROM public.laplace_contained_series(ARRAY['{subset_id}'::public.blake3]) s"
+            subset_before = sql(subset_query)
+            run('ingest', '-d', connection, '-j', 4, 'social-chemistry-101-validated', extra=subset_environment)
+            assert sql(subset_query) == subset_before, 'Subset replay changed its published testimony'
             # Use the product consumer: these are committed, ranked claims read
             # from PostgreSQL, not the preview or a test's reconstruction.
             duck = run('hop', '-d', connection, 'duck')

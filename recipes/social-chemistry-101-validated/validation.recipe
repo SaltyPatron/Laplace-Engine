@@ -1,0 +1,5 @@
+name social-chemistry-101-validation-records
+match subset-receipt.json quarantined-records.tsv invalid-character-references.csv
+# Keep the validation receipt and rejected publisher records as provenance.
+# Their unresolved character selections are never interpreted as judgments.
+grammar text

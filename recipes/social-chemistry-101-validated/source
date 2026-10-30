@@ -1,0 +1,10 @@
+name social-chemistry-101-validated
+aliases socialchem-valid
+# A separately named, reproducible subset of the unchanged publisher export.
+# subset-receipt.json records the original hash, retained rows and quarantine.
+witness Social-Chem-101 Dataset (validated character references)
+lineage Social-Chem-101 Dataset
+class AcademicCurated
+root $LAPLACE_DATA/Safety/SocialChemistry101/validated-subset
+
+after unicode iso-639
