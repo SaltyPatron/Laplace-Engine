@@ -499,6 +499,27 @@ def main():
         assert 'invalid PGN packaging' not in rejected, rejected
         print('PASS PGN grammar boundaries retain every game; unsupported drop variants parse and remain explicit')
 
+        missing_move = root / 'twic-missing-move.pgn'
+        missing_move.write_text('[Event "Missing move fixture"]\n[Result "1-0"]\n\n1. e4 -- 2. Nf3 1-0\n', encoding='utf-8')
+        rejected = run('ingest', '--no-load', '-s', 'twic', missing_move, expected=1)
+        assert 'incomplete_parts=1' in rejected and '-- is no legal move' in rejected, rejected
+        twic_subset = root / 'data/twic-validated'
+        twic_subset.mkdir()
+        shutil.copy2(chess, twic_subset / 'twic-fixture.pgn')
+        shutil.copy2(missing_move, twic_subset / 'quarantined-game-fixture-1.txt')
+        (twic_subset / 'subset-receipt.json').write_text('{"excluded_games":1}\n', encoding='utf-8')
+        (twic_subset / 'grammar-validated-exclusions.json').write_text('{"game_ordinal":1}\n', encoding='utf-8')
+        subset_source = recipes / 'twic-validated/source'
+        subset_source.write_text('\n'.join(
+            'root ' + twic_subset.as_posix() if line.startswith('root ') else line
+            for line in subset_source.read_text(encoding='utf-8').splitlines()) + '\n', encoding='utf-8')
+        for workers in (1, 4):
+            text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'twic-validated', twic_subset)
+            claims = [line for line in text.splitlines() if line.startswith('claim\t')]
+            assert len(claims) == 94 and all('Missing move fixture' not in claim for claim in claims), text
+            assert 'mismatched 0' in text and '1 kept as text' not in text, text
+        print('PASS validated TWIC source preserves quarantined bytes without inventing legal transitions')
+
         chemistry = Path(__file__).resolve().parent / 'fixtures/social-chemistry'
         expected_selections = [
             ('First rule.', 'Who is the RoT most likely targeting', 'friend'),
@@ -774,6 +795,17 @@ def main():
             subset_before = sql(subset_query)
             run('ingest', '-d', connection, '-j', 4, 'social-chemistry-101-validated', extra=subset_environment)
             assert sql(subset_query) == subset_before, 'Subset replay changed its published testimony'
+            chess_progress = root / 'twic-subset-progress.jsonl'
+            chess_environment = {'LAPLACE_INGEST_PROGRESS_PATH': str(chess_progress), 'LAPLACE_INGEST_ONE': '1'}
+            run('ingest', '-d', connection, '-j', 4, 'twic-validated', extra=chess_environment)
+            chess_events = [json.loads(line) for line in chess_progress.read_text(encoding='utf-8').splitlines()]
+            chess_id = next(event['source_id'] for event in chess_events if event['event'] == 'complete')
+            assert sql(f"SELECT public.laplace_text(lineage) FROM public.witness WHERE id='{chess_id}'::public.blake3") == 'The Week in Chess'
+            chess_query = f"SELECT jsonb_agg(to_jsonb(s) ORDER BY claim,dependence_root) FROM public.laplace_contained_series(ARRAY['{chess_id}'::public.blake3]) s"
+            chess_before = sql(chess_query)
+            assert chess_before != 'null', 'Validated games published no Native testimony'
+            run('ingest', '-d', connection, '-j', 4, 'twic-validated', extra=chess_environment)
+            assert sql(chess_query) == chess_before, 'Validated chess replay changed its testimony'
             # Use the product consumer: these are committed, ranked claims read
             # from PostgreSQL, not the preview or a test's reconstruction.
             duck = run('hop', '-d', connection, 'duck')

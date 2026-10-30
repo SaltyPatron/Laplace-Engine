@@ -1,0 +1,5 @@
+name twic-validated-quarantine
+match quarantined-game-*.txt grammar-validated-exclusions.json subset-receipt.json
+# Preserve the two incomplete games and the exact exclusions as provenance.
+# They assert no played transitions or results.
+grammar text
