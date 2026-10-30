@@ -64,7 +64,7 @@ def main():
         alias=parent+'/./'+name
         alias_literal="'"+alias.replace("'","''")+"'"
         definition=sql(database,"""SELECT pg_catalog.format(
-          'CREATE OR REPLACE FUNCTION %I.laplace_isa() RETURNS text LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE AS %L,%L',
+          'CREATE OR REPLACE FUNCTION %I.laplace_isa() RETURNS text LANGUAGE C STABLE PARALLEL SAFE AS %L,%L',
           'native a',"""+alias_literal+",'laplace_isa')")
         sql(database,definition)
         assert sql(database,'''SELECT probin FROM pg_catalog.pg_proc
