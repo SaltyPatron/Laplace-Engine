@@ -58,6 +58,14 @@ relation "translation" translations
 relation "synonym" synonyms
 relation "antonym" antonyms
 relation "hypernym" hypernyms
+# Wiktionary's semantic-relations guide defines the direction: members of a
+# Hyponyms section are more specific than the entry, and Troponyms give a
+# particular manner of its action. Wiktextract maps Instances/Archetypes to
+# its instances linkage list (extractor/en/section_titles.py).
+# https://en.wiktionary.org/wiki/Wiktionary:Semantic_relations
+relation "more specific term" hyponyms
+relation "particular manner of this action" troponyms
+relation "has instance" instances
 #   "holonyms - non-disambiguated linkages indicating being part of something"
 relation "being part of something" holonyms
 #   "meronyms - non-disambiguated linkages indicating having a part"
@@ -85,7 +93,12 @@ relation "inflected form of" form_of
 #   "participle", "plural", "feminine""; of a form, "The tags identify what type of form it is"; of a translation,
 #   "optional list of qualifiers for the translations, e.g., gender"; of a linkage, "qualifiers specified for the sense
 #   (e.g., field of study, region, dialect, style)": a value of Wiktextract's tags ([dico, masculine])
-value - tags
+relation "qualifier of this form or sense" tags
+# The English extractor retains qualifier text it cannot normalize in
+# raw_tags; LinkageData and SenseData also retain a free-text qualifier.
+# Preserve that text as a qualifier without claiming a normalized category.
+# https://github.com/tatuylonen/wiktextract/blob/19f9a3006a405fb7bfb40193dca41c7117a009a5/src/wiktextract/extractor/en/linkages.py
+relation "unparsed qualifier" raw_tags qualifier
 #   "type field containing example type (currently example or quotation if present)"
 value - type
 #   "lang - name of the language this word belongs to (e.g., English)"; of a translation, "the language name that the
@@ -130,8 +143,8 @@ relation "IPA string associated with the audio file" audio-ipa
 relation "text associated with an audio file" sounds.text
 #
 # Members that stay unresolved obligations, because Wiktextract's README gives them no wording (Laplace-Engine#32):
-# hyponyms, instances, troponyms, proverbs, abbreviations, anagrams, compound_of (linkages and lists the README's list
-# of linkages does not name); raw_tags, qualifier, head_nr, ruby, urls, links, literal_meaning, attestations
+# proverbs, abbreviations, anagrams, compound_of (linkages and lists the README's list
+# of linkages does not name); head_nr, ruby, urls, links, literal_meaning, attestations
 # (date, references, refn), etymology_examples, original_title, redirects, hyphenations (parts), and of a sound
 # rhymes, zh_pron, hangeul, other, form. hyphenation ("hyphenation - list of hyphenations") and homophone
 # ("homophones - list of homophones for the word") are worded only by their own names, which is no relation.

@@ -151,6 +151,37 @@ def main():
         (tatoeba / 'links.csv').write_text('1\t2\n',encoding='utf-8')
         print('PASS explicit exported reference domains count exclusions and preserve strict references elsewhere')
 
+        dictionary = root / 'data/Wiktionary'
+        dictionary.mkdir()
+        dictionary_file = dictionary / 'kaikki.org-dictionary-fixture.jsonl'
+        dictionary_entries = [
+            {'lang_code':'en','word':'animal','pos':'noun',
+             'hyponyms':[{'word':'domestic','tags':['domestic'],'raw_tags':['regional label'],
+                          'qualifier':'chiefly rural'}], 'instances':[{'word':'Spot'}]},
+            {'lang_code':'en','word':'move','pos':'verb','troponyms':[{'word':'run'}]}]
+        dictionary_text = ''.join(json.dumps(entry)+'\n' for entry in dictionary_entries)
+        dictionary_file.write_text(dictionary_text,encoding='utf-8')
+        readings=[]
+        for workers in (1,4):
+            text=run('ingest','--claims-tsv','-j',workers,'-s','wiktionary-kaikki',dictionary)
+            claims=[tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            for expected in [('[en, animal, noun]','more specific term','domestic'),
+                             ('[en, animal, noun]','has instance','Spot'),
+                             ('[en, move, verb]','particular manner of this action','run'),
+                             ('domestic','qualifier of this form or sense','domestic'),
+                             ('domestic','unparsed qualifier','regional label'),
+                             ('domestic','unparsed qualifier','chiefly rural')]:
+                assert claims.count(expected)==1,(expected,claims,text)
+            assert 'unresolved obligations: 0 ' in text,text
+            readings.append(claims)
+        assert readings[0]==readings[1],readings
+        dictionary_entries[0]['head_nr']=1
+        dictionary_file.write_text(''.join(json.dumps(entry)+'\n' for entry in dictionary_entries),encoding='utf-8')
+        rejected=run('ingest','--claims-tsv','-s','wiktionary-kaikki',dictionary,expected=1)
+        assert 'attest head_nr' in rejected,rejected
+        dictionary_file.write_text(dictionary_text,encoding='utf-8')
+        print('PASS dictionary linkage direction and original qualifiers, including category homographs; unresolved head pointers remain explicit')
+
 
         sentence = root / 'spacing.conllu'
         conllu = ('# text = {text}\n# text_en = Translated.\n'
@@ -675,6 +706,12 @@ def main():
                     public.laplace_text_id('ISO 639-3 language code'),public.laplace_text_id('eng')])""")
             assert language_games == '1', ('Mirrored sentence exports manufactured observations', language_games)
             assert 'Fallback dog.' in run('hop', '-d', connection, 'Preferred cat.')
+            run('ingest','-d',connection,'wiktionary-kaikki')
+            dictionary_games=sql("""SELECT sum(games) FROM public.laplace_contained_series(
+                ARRAY(SELECT id FROM public.witness WHERE lineage=public.laplace_text_id('Wiktionary')))
+                WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('domestic'),
+                    public.laplace_text_id('qualifier of this form or sense'),public.laplace_text_id('domestic')])""")
+            assert dictionary_games=='1',('Dictionary homograph qualifier was lost or duplicated',dictionary_games)
             usage = run('hop', '-d', connection, 'see  a.')
             # The CLI truncates long display labels; the exact full relation
             # and whitespace-preserving subject were checked above in SQL.
