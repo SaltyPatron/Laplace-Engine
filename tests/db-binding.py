@@ -55,6 +55,25 @@ def main():
             raise RuntimeError(result.stdout + result.stderr)
         print(result.stdout.strip())
         database=databases[0]
+        # A binary repair can retain the SQL version. Simulate a predecessor
+        # binding through another spelling of the same installed module, then
+        # require the normal deploy command to restore its canonical binding.
+        module=sql(database,'''SELECT probin FROM pg_catalog.pg_proc
+          WHERE oid='"native a".laplace_isa()'::regprocedure''')
+        parent,name=module.rsplit('/',1)
+        alias=parent+'/./'+name
+        definition=sql(database,'''SELECT pg_catalog.pg_get_functiondef(
+          '"native a".laplace_isa()'::regprocedure)''')
+        sql(database,definition.replace("'"+module+"'","'"+alias+"'"))
+        assert sql(database,'''SELECT probin FROM pg_catalog.pg_proc
+          WHERE oid='"native a".laplace_isa()'::regprocedure''')==alias
+        repaired=subprocess.run([str(engine),'deploy','-d',connections[0]],
+                                capture_output=True,text=True,encoding='utf-8',timeout=180)
+        if repaired.returncode:raise RuntimeError(repaired.stdout+repaired.stderr)
+        current_module=sql(database,'''SELECT probin FROM pg_catalog.pg_proc
+          WHERE oid='"native a".laplace_fingerprint()'::regprocedure''')
+        assert sql(database,'''SELECT probin FROM pg_catalog.pg_proc
+          WHERE oid='"native a".laplace_isa()'::regprocedure''')==current_module
         before=sql(database,"SELECT coalesce(array_to_string(setconfig,E'\\n'),'') FROM pg_catalog.pg_db_role_setting WHERE setdatabase=(SELECT oid FROM pg_catalog.pg_database WHERE datname=current_database()) ORDER BY setrole")
         with tempfile.TemporaryDirectory(prefix='db-binding-',dir=os.environ.get('LAPLACE_WORK')) as scratch:
             root=Path(scratch);recipes=root/'recipes'

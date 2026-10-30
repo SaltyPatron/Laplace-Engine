@@ -85,6 +85,7 @@ int cmd_deploy(int argc, char **argv){
     snprintf(sql,sizeof sql,"CREATE EXTENSION IF NOT EXISTS laplace SCHEMA %s",quoted);PQfreemem(quoted);
     if(!run(pg,sql,"extension laplace")){PQfinish(pg);return 1;}
     if (!run(pg, "ALTER EXTENSION laplace UPDATE", "laplace extension at its newest version")) return 1;
+    if (!run(pg, "SELECT @extschema@.laplace_restore_function_bindings()", "matching Native implementation bindings")) return 1;
     /* Only a host installer may select server-local cache paths. A remote
      * extension install/upgrade preserves the server's existing configuration. */
     if(configure_cache){
