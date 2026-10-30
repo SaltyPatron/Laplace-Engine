@@ -92,12 +92,13 @@ def main():
         tatoeba.mkdir()
         tatoeba_source = recipes / 'tatoeba/source'
         tatoeba_source.write_text('name tatoeba\nwitness Tatoeba\nclass UserCuratedResource\n'
-            'root $LAPLACE_DATA/tatoeba\nprefer sentences_detailed.csv over sentences.csv\n', encoding='utf-8')
+            'root $LAPLACE_DATA/tatoeba\nprefer sentences_detailed.csv over sentences.csv\n'
+            'prefer sentences.csv over sentences_CC0.csv\n', encoding='utf-8')
         plain_sentences = '1\teng\tPreferred cat.\n2\teng\tFallback dog.\n'
         rich_sentences = ''.join(line+'\t\\N\t2026-01-01\t2026-01-01\n'
             for line in plain_sentences.splitlines()) + '3\teng\tOnly detailed.\t\\N\t2026-01-01\t2026-01-01\n'
         (tatoeba / 'links.csv').write_text('1\t2\n', encoding='utf-8')
-        for available in ('both', 'detailed', 'plain', 'cc0', 'directory'):
+        for available in ('both', 'detailed', 'plain', 'cc0', 'all', 'detailed_cc0', 'plain_cc0', 'directory'):
             plain = tatoeba / 'sentences.csv'
             detailed = tatoeba / 'sentences_detailed.csv'
             cc0 = tatoeba / 'sentences_CC0.csv'
@@ -105,17 +106,17 @@ def main():
             if cc0.exists(): cc0.unlink()
             if detailed.is_dir(): detailed.rmdir()
             elif detailed.exists(): detailed.unlink()
-            if available not in ('detailed', 'cc0'): plain.write_text(plain_sentences, encoding='utf-8')
-            if available in ('both', 'detailed'): detailed.write_text(rich_sentences, encoding='utf-8')
+            if available not in ('detailed', 'detailed_cc0', 'cc0'): plain.write_text(plain_sentences, encoding='utf-8')
+            if available in ('both', 'detailed', 'all', 'detailed_cc0'): detailed.write_text(rich_sentences, encoding='utf-8')
             elif available == 'directory': detailed.mkdir()
-            if available == 'cc0': cc0.write_text(''.join(line+'\t2026-01-01\n' for line in plain_sentences.splitlines()), encoding='utf-8')
+            if available in ('cc0', 'all', 'detailed_cc0', 'plain_cc0'): cc0.write_text(''.join(line+'\t2026-01-01\n' for line in plain_sentences.splitlines()), encoding='utf-8')
             readings = []
             for workers in (1, 4):
                 text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'tatoeba', tatoeba)
                 claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
                 languages = [claim for claim in claims if len(claim)==3 and claim[1]=='ISO 639-3 language code']
                 expected_languages = [(word, 'ISO 639-3 language code', 'eng') for word in
-                    (['Preferred cat.', 'Fallback dog.', 'Only detailed.'] if available in ('both','detailed')
+                    (['Preferred cat.', 'Fallback dog.', 'Only detailed.'] if available in ('both','detailed','all','detailed_cc0')
                      else ['Preferred cat.', 'Fallback dog.'])]
                 assert sorted(languages)==sorted(expected_languages), (available, claims, text)
                 assert claims.count(('Fallback dog.', 'is the translation of', 'Preferred cat.'))==1, claims

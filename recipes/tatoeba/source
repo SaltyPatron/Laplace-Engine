@@ -12,6 +12,9 @@ root $LAPLACE_DATA/Tatoeba
 # ownership and dates. Read one complete sentence export, retaining the plain
 # export as a fallback on estates without the detailed export.
 prefer sentences_detailed.csv over sentences.csv
+# CC0 is a subset of the full licensed sentence export, with the same sentence
+# text and language. Keep it as the last fallback, including detailed-only estates.
+prefer sentences.csv over sentences_CC0.csv
 # Measured, not loaded: 294,452,005 compositions from 3,191 MB, at 750 bytes each with their indexes and standings.
 room 69
 # It comes after no source it does not need first, as conceptnet's source says (BRIEF.md, "Nothing is order-dependent"):

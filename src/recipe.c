@@ -517,12 +517,18 @@ Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, Reci
         return NULL;
     }
     for(int i=0;of && i<of->nprefer;i++) if(!strcmp(b0,of->prefer[i].fallback)) {
-        char preferred[4096]; size_t directory=(size_t)(b0-path);
-        int size=snprintf(preferred,sizeof preferred,"%.*s%s",(int)directory,path,of->prefer[i].preferred);
-        if(size<0 || (size_t)size>=sizeof preferred){fprintf(stderr,"source preference path exceeds Native path limit: %s\n",path);exit(2);}
-        if(os_exists(preferred) && !os_is_dir(preferred)) {
-            if(coverage)*coverage=RECIPE_OMITTED;
-            return NULL;
+        const char *next=of->prefer[i].preferred;
+        for(int step=0;step<of->nprefer;step++) {
+            char preferred[4096]; size_t directory=(size_t)(b0-path);
+            int size=snprintf(preferred,sizeof preferred,"%.*s%s",(int)directory,path,next);
+            if(size<0 || (size_t)size>=sizeof preferred){fprintf(stderr,"source preference path exceeds Native path limit: %s\n",path);exit(2);}
+            if(os_exists(preferred) && !os_is_dir(preferred)) {
+                if(coverage)*coverage=RECIPE_OMITTED;
+                return NULL;
+            }
+            int j=0;while(j<of->nprefer && strcmp(of->prefer[j].fallback,next))j++;
+            if(j==of->nprefer)break;
+            next=of->prefer[j].preferred;
         }
     }
     for (int i = 0; i < n; i++) {
