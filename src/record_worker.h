@@ -59,7 +59,7 @@ typedef struct { const Recipe *r; const Say *s; Events ev; Refs things, meta; ui
                  Ref dependence; const lp_trust_class *dependence_class;
                  const SemanticRecord *ix_tree; uint32_t ix_count; LocalKey *local_keys; size_t local_capacity, local_count;
                  BindingMatrix bindings;
-                 uint64_t blocked; uint8_t binding_phase, defer_missing, reserve_declarations;
+                 uint64_t blocked, excluded; uint8_t binding_phase, defer_missing, reserve_declarations;
                  SayScratch output;
                  const SemanticRecord *tc_tree; uint32_t tc_n; Ref *tc, *text_products; uint8_t *ts, *uk, *text_ready;
                  SurfacePosition *surface_positions;

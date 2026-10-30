@@ -128,6 +128,23 @@ def main():
         assert 'cyclic source file preference' in rejected, rejected
         tatoeba_source.write_text(preferred_source, encoding='utf-8')
         print('PASS preferred sentence export avoids duplicate readings; links resolve with either provider and directories do not hide the fallback')
+        (tatoeba / 'links.csv').write_text('1\t2\n1\t999\n999\t2\n999\t998\n', encoding='utf-8')
+        for workers in (1,4):
+            text = run('ingest','--claims-tsv','-j',workers,'-s','tatoeba',tatoeba)
+            claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
+            assert claims.count(('Fallback dog.','is the translation of','Preferred cat.'))==1, claims
+            assert 'declared reference-domain exclusions: 3 records' in text, text
+            assert 'unresolved obligations: 0 ' in text, text
+        link_recipe = recipes / 'tatoeba/links.recipe'
+        admitted_recipe = link_recipe.read_text(encoding='utf-8')
+        link_recipe.write_text('\n'.join(line for line in admitted_recipe.splitlines()
+            if not line.startswith('admit references '))+'\n',encoding='utf-8')
+        strict = run('ingest','--claims-tsv','-s','tatoeba',tatoeba,expected=1)
+        assert 'unresolved identifier references' in strict, strict
+        link_recipe.write_text(admitted_recipe,encoding='utf-8')
+        (tatoeba / 'links.csv').write_text('1\t2\n',encoding='utf-8')
+        print('PASS explicit exported reference domains count exclusions and preserve strict references elsewhere')
+
 
         sentence = root / 'spacing.conllu'
         conllu = ('# text = {text}\n# text_en = Translated.\n'

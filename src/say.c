@@ -256,6 +256,9 @@ void record_execute(RecordWorker *sink, const SemanticRecord *t, int32_t root, u
     }
     Tls previous = tls_save(t, k->dm, s, &k->bindings);
     record_index_keys(k, t);
+    if (s->nadmission && !record_admit_references(k,t,root,!bind_keys)) {
+        k->binding_phase=binding_phase; tls_back(&previous); scratch_restore(record_mark); return;
+    }
     if (bind_keys) { record_publish_keys(k, t, root, bind_keys == 3); k->binding_phase = binding_phase; tls_back(&previous); scratch_restore(record_mark); return; }
     if (k->hw) { record_highway_values(k, t, root); record_publish_keys(k, t, root, 0); k->binding_phase = binding_phase; tls_back(&previous); scratch_restore(record_mark); return; }     /* read for the highway: its types, not what it attests */
     if (s->nline && t->n[root].kind == S_TEXT) {                             /* a line of a page: where it matches a pattern, it says the pattern's parts */

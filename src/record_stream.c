@@ -561,6 +561,7 @@ static void finish_laid(RecordPipeline *pipeline){
     { uint64_t unk = 0; for (size_t i = 0; i < nc; i++) unk += part[i].unknown;
       if (unk) { fprintf(stderr, "\n  %s: %llu keys in %s name a type no list of the highway holds, and say nothing; for instance:", r->name, (unsigned long long)unk, f->path);
           for (size_t i = 0, shown = 0; i < nc && shown < 3; i++) for (int j = 0; j < part[i].nunk && shown < 3; j++, shown++) fprintf(stderr, " [%s]", part[i].unknm[j]); fputc('\n', stderr); } }
+    if (part[0].excluded) fprintf(stderr,"\n  %s: declared reference-domain exclusions: %llu records in %s\n",r->name,(unsigned long long)part[0].excluded,f->path);
     if (f->emit) { file_stream_finish(f); record_workers_free(part, nc); free(pipeline); return; }
     if (hw) {                                                                /* for the highway: what the file says of its types, in the file's order */
         for (size_t i = 0; i < nc; i++) { for (size_t j = 0; j < part[i].nhr; j++) { HwRec *x = &part[i].hr[j]; const HwLine *h = &sy->hw[x->line];

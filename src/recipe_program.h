@@ -61,6 +61,7 @@ typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thi
                  Dis val[256]; int nval;                                     /* value LIST NAME...: what a part means in a claim; arg: its road class's list, "" for none the highway holds */
                  Dis defaults[256]; int ndefaults;                           /* indexed field defaults; literals or compiled sibling selectors */
                  Score score[4]; int nscore; Where where[16]; int nwhere; uint32_t whole, now;   /* whole: outermost conditions; now: conditions on the current declaration */
+                 struct { char field[64]; const Dis *reference; } admission[8]; int nadmission; /* closed exported domains, checked before any product/key is published */
                  /* a record's layers down its rows and its tree by head, where the recipe gives them (layers, tree): parts of the
                   * record's path beside the claims it says (record_of) */
                  struct { char tier[32], row[32], field[16][64]; int count; } layers[8]; int nlayers;

@@ -18,3 +18,9 @@ content "Tag name"
 # [sentence, proverb].
 value - "Tag name"
 attest row "Tag name"
+
+# The publisher filters sentence exports by correctness and licence, while
+# related exports include a wider domain. Only admit relations on exported
+# sentences. Missing IDs are counted as domain exclusions, never invented.
+# https://github.com/Tatoeba/tatoeba2/blob/f2c80b81032630648f7896182174a9f5784ccde2/docs/database/scripts/weekly_exports.sql
+admit references "Sentence id"

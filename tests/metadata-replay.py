@@ -60,7 +60,7 @@ def main():
             links = data / "links.csv"
             sentences.write_text("1\teng\tAlpha native sentence.\n2\tfra\tBeta native sentence.\n",
                                  encoding="utf-8", newline="\n")
-            links.write_text("1\t2\n2\t1\n", encoding="utf-8", newline="\n")
+            links.write_text("1\t2\n2\t1\n1\t999\n", encoding="utf-8", newline="\n")
             base = os.environ.copy()
             # A relocated package selects its estate with -r. The caller may
             # still carry a build-machine/default path; includes must follow -r.
@@ -107,7 +107,7 @@ def main():
 
             # Only the consumer changes. Its provider must be restored from
             # recorded metadata, retaining ordered entry fields and targets.
-            links.write_text("1\t2\n2\t1\n1\t2\n", encoding="utf-8", newline="\n")
+            links.write_text("1\t2\n2\t1\n1\t2\n1\t999\n", encoding="utf-8", newline="\n")
             restored = ingest(warm, "consumer_changed")
             assert re.search(r"restored [1-9][0-9]* compiled reference bindings", restored), restored
             cold = database("restored")
@@ -123,6 +123,17 @@ def main():
             cold = database("context")
             cold_report = ingest(cold, "cold_provider")
             assert source_reference(warm, changed) == source_reference(cold, cold_report), "context invalidation differs from cold read"
+
+            # A formerly excluded reference enters the admitted provider domain.
+            # Its unchanged consumer must be reconsidered just like changed text.
+            with sentences.open('a',encoding='utf-8',newline='\n') as handle:
+                handle.write('999\teng\tNewly exported native sentence.\n')
+            newly_admitted = ingest(warm, 'domain_expanded')
+            assert 'source reference context changed; reinterpret' in newly_admitted, newly_admitted
+            assert 'declared reference-domain exclusions:' not in newly_admitted, newly_admitted
+            cold = database('expanded')
+            cold_report = ingest(cold, 'cold_expanded')
+            assert source_reference(warm,newly_admitted)==source_reference(cold,cold_report), 'domain expansion differs from cold read'
 
             # Adding independent content must not hydrate every recorded key
             # provider. WordNet's alias-only index.sense exposed this overhead

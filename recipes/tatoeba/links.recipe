@@ -22,3 +22,9 @@ refer "Translation id" tatoeba-sentences-detailed tatoeba-sentences tatoeba-sent
 # "1 [tab] 77 means that sentence #77 is the translation of sentence #1."
 relation "is the translation of" "Sentence id"
 attest row "Sentence id"
+
+# The publisher filters sentence exports by correctness and licence, while
+# related exports include a wider domain. Only admit relations on exported
+# sentences. Missing IDs are counted as domain exclusions, never invented.
+# https://github.com/Tatoeba/tatoeba2/blob/f2c80b81032630648f7896182174a9f5784ccde2/docs/database/scripts/weekly_exports.sql
+admit references "Sentence id" "Translation id"

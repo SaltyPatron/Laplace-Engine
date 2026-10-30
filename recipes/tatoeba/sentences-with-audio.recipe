@@ -22,3 +22,9 @@ omit License "Attribution URL"
 # corpus's [sentence, who recorded the audio, member] assertion.
 relation "who recorded the audio" Username
 attest row Username
+
+# The publisher filters sentence exports by correctness and licence, while
+# related exports include a wider domain. Only admit relations on exported
+# sentences. Missing IDs are counted as domain exclusions, never invented.
+# https://github.com/Tatoeba/tatoeba2/blob/f2c80b81032630648f7896182174a9f5784ccde2/docs/database/scripts/weekly_exports.sql
+admit references "Sentence id"

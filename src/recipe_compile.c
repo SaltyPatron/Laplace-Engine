@@ -19,6 +19,7 @@
  *   dependence TIER CLASS      observations in this TIER use the named native trust class's canonical dependence
  *                              root and prior; the corpus trunk remains the witness. Applies under when/always.
  *   where NAME is VALUE | is-not VALUE | matches PATTERN
+ *   admit references NAME...  admit only records whose external keys belong to the exported provider domain
  *                              the outermost parts the recipe speaks of; another is in the file's tree and attests nothing
  *   when NAME is VALUE | is-not VALUE | matches PATTERN
  *                              the attest, pair and relate lines after it are said only of the parts that meet it
@@ -486,6 +487,7 @@ static void compile_semantic_paths(Say *say, const char *recipe){
         if (!strcmp(key->tier, say->tree_row)) say->tree_key_index = (uint16_t)(i + 1);
     }
     for (int i = 0; i < say->nwhere; i++) path_register(say, say->where[i].name);
+    for (int i = 0; i < say->nadmission; i++) path_register(say, say->admission[i].field);
     for (int i = 0; i < say->nscore; i++) { path_register(say, say->score[i].tier); path_register(say, say->score[i].name); }
     for (int i = 0; i < say->nhw; i++) { path_register(say, say->hw[i].tier); path_register(say, say->hw[i].a.path); path_register(say, say->hw[i].b.path); compile_key_forms(&say->hw[i].a); compile_key_forms(&say->hw[i].b); }
     for (int i = 0; i < say->ndis; i++) { compile_key_forms(&say->dis[i].k); path_register(say,say->dis[i].under);
@@ -501,6 +503,16 @@ static void compile_semantic_paths(Say *say, const char *recipe){
     path_register(say, say->surface.key); path_register(say, say->surface.form);
     path_register(say, say->surface.adjoining); path_register(say, say->surface.verify);
     compile_targets(say, say->dis, say->ndis, recipe); compile_targets(say, say->val, say->nval, recipe);
+    for (int i=0; i<say->nadmission; i++) {
+        const Dis *reference=NULL;
+        for (int j=0; j<say->ndis; j++) if (!strcmp(say->dis[j].name,say->admission[i].field)) reference=&say->dis[j];
+        int valid=reference && reference->what==D_REFER && !reference->when && reference->ntargets &&
+            !reference->under[0] && !reference->key_radix && !reference->k.has_re && !reference->k.nas;
+        for (int j=0; valid && j<reference->ntargets; j++)
+            if (reference->targets[j].local || reference->targets[j].within || reference->targets[j].constructor) valid=0;
+        if (!valid) { fprintf(stderr,"%s: admit references requires an unconditional, direct external reference: %s\n",recipe,say->admission[i].field);exit(2); }
+        say->admission[i].reference=reference;
+    }
     compile_diagnostics(say->dis, say->ndis); compile_diagnostics(say->val, say->nval);
     for (int i = 0; i < say->nline; i++) say->line[i].pred_length = (uint16_t)strlen(say->line[i].pred);
     compile_name_slots(say);
@@ -619,6 +631,16 @@ int say_says(Recipe *r, const char *path, char *tok){
     Say *s = r->say; if (!s) s = r->say = calloc(1, sizeof(Say)); s->laid_line = 0;
     char nm[160], a2[RECIPE_ARGUMENT_BYTES], *at;
     #define LAID (s->lay.ntier || s->lay.g.n)
+    if (!strcmp(tok,"admit") && LAID) {
+        at=strtok(NULL,"\r\n"); char mode[64]; int before=s->nadmission;
+        if (!name_next(&at,mode,sizeof mode) || strcmp(mode,"references")) return -1;
+        while (name_next(&at,nm,sizeof nm)) {
+            if (s->nadmission==8 || strlen(nm)>=64 || s->now) return -1;
+            for (int i=0;i<s->nadmission;i++) if (!strcmp(s->admission[i].field,nm)) return -1;
+            snprintf(s->admission[s->nadmission++].field,64,"%s",nm);
+        }
+        return s->nadmission>before ? 1 : -1;
+    }
     if (!strcmp(tok,"dependence") && LAID) {
         at=strtok(NULL,"\r\n"); char label[128],extra[8];
         if (s->ndependence==8 || !name_next(&at,a2,sizeof a2) || !name_next(&at,label,sizeof label) || name_next(&at,extra,sizeof extra)) {

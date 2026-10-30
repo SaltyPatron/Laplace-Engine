@@ -20,3 +20,9 @@ omit "Date added" "Date last modified"
 # The corpus reports a member's review. Preserve its original -1/0/1 value as
 # content in the judgment; do not turn the person into an independent witness.
 pair row . of Username
+
+# The publisher filters sentence exports by correctness and licence, while
+# related exports include a wider domain. Only admit relations on exported
+# sentences. Missing IDs are counted as domain exclusions, never invented.
+# https://github.com/Tatoeba/tatoeba2/blob/f2c80b81032630648f7896182174a9f5784ccde2/docs/database/scripts/weekly_exports.sql
+admit references "Sentence id"

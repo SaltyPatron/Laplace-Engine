@@ -175,6 +175,34 @@ static void record_unknown_key(RecordWorker *k, const SemanticRecord *t, int32_t
     }
 }
 
+/* A publisher may export relations over a wider domain than the licensed or
+ * approved records it exports. Such recipes explicitly restrict admission.
+ * Missing providers defer until source closure; a broken declaration remains
+ * an error, and ordinary references retain their strict unresolved behavior. */
+int record_admit_references(RecordWorker *k, const SemanticRecord *t, int32_t root, int count){
+    const Say *s=k->s; int missing=0, broken=0;
+    for (int i=0;i<s->nadmission;i++) {
+        int32_t at=record_select_first(t,root,s->admission[i].field);
+        if (at<0) { record_note_open_name(k,(const uint8_t *)s->admission[i].field,(uint32_t)strlen(s->admission[i].field),1);broken=1;continue; }
+        const SemanticValue *value=&t->n[at]; const Dis *reference=s->admission[i].reference;
+        if (!value->vlen || value->kind==S_GROUP || record_value_empty(s,value)) { record_unknown_key(k,t,at,value);broken=1;continue; }
+        int present=0, blocked=0;
+        for (int j=0;j<reference->ntargets;j++) {
+            const KeyField *key=keys_field_get(&reference->targets[j].domain,value->val,value->vlen);
+            if (key && key->has_value) { present=1;break; }
+            if (key && key->blocked) { blocked=1;break; }
+        }
+        if (present) continue;
+        if (blocked) { k->blocked++;if (!k->binding_phase) record_unknown_key(k,t,at,value);broken=1; }
+        else missing=1;
+    }
+    if (broken) return 0;
+    if (!missing) return 1;
+    if (k->binding_phase) k->blocked++;
+    else if (count) k->excluded++;
+    return 0;
+}
+
 Ref record_text(const uint8_t *p, size_t n){ return n > 256 ? text_ref(CTX[omp_get_thread_num()], p, n) : string_ref(p, n); }
 
 /* A positional pointer is local to its canonical parent. These bytes are an

@@ -17,7 +17,7 @@ const DiagnosticLabel record_diagnostic_labels[DIAG_COUNT] = {
     {"ambiguous highway pointer:", 26, 0}
 };
 
-static struct { char recipe[64], name[160]; uint64_t n; char what; } *OBL; static size_t NOBL, COBL; static uint64_t OBL_MORE, UNKNOWN;
+static struct { char recipe[64], name[160]; uint64_t n; char what; } *OBL; static size_t NOBL, COBL; static uint64_t OBL_MORE, UNKNOWN, EXCLUDED;
 
 typedef struct {
     const DiagnosticLabel *label;
@@ -135,7 +135,7 @@ void record_statement_count(RecordWorker *k, const Dis *m){
 
 void record_collect_diagnostics(const char *recipe, const RecordWorker *k){
     #pragma omp critical(laplace_obligations)
-    { OBL_MORE += k->obl_more; UNKNOWN += k->unknown;
+    { OBL_MORE += k->obl_more; UNKNOWN += k->unknown; EXCLUDED += k->excluded;
       for (int i = 0; i < k->nobl; i++) { size_t j = 0; char name[160]; format_obligation(&k->obl[i], name);
           for (; j < NOBL; j++) if (OBL[j].what == k->obl[i].what && !strcmp(OBL[j].recipe, recipe) && !strcmp(OBL[j].name, name)) break;
           if (j == NOBL) { if (NOBL == COBL) { COBL = COBL ? COBL * 2 : 64; OBL = xrealloc(OBL, sizeof *OBL * COBL); }
@@ -156,7 +156,8 @@ uint64_t say_obligations(FILE *o){
     if (m) { fprintf(o, "   values said as a road class's that the highway's list does not hold (claimed as written; no slot): %'llu\n", (unsigned long long)m);
         for (size_t i = 0; i < NOBL; i++) if (OBL[i].what == 'm') fprintf(o, "   %-22s %-80s %'14llu\n", OBL[i].recipe, OBL[i].name, (unsigned long long)OBL[i].n); }
     if (UNKNOWN) fprintf(o,"   unresolved identifier references (included above): %'llu; see per-file field/value samples\n",(unsigned long long)UNKNOWN);
-    free(OBL); OBL = NULL; NOBL = COBL = 0; OBL_MORE = UNKNOWN = 0;
+    if (EXCLUDED) fprintf(o,"\n== declared reference-domain exclusions: %'llu records outside the recipe's admitted provider domain\n",(unsigned long long)EXCLUDED);
+    free(OBL); OBL = NULL; NOBL = COBL = 0; OBL_MORE = UNKNOWN = EXCLUDED = 0;
     return n;
 }
 
@@ -173,6 +174,7 @@ void record_merge_diagnostics(RecordWorker *result, const RecordWorker *worker){
         }
     }
     result->unknown += worker->unknown;
+    result->excluded += worker->excluded;
     for (int i = 0; i < worker->nunk && result->nunk < 8; i++)
         memcpy(result->unknm[result->nunk++], worker->unknm[i], sizeof result->unknm[0]);
     result->obl_more += worker->obl_more;
