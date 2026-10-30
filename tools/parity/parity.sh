@@ -50,8 +50,27 @@ db_e=laplace_parity_${run}_engine db_m=laplace_parity_${run}_mono
 mkdir -p "$out"/{engine,mono,logs}
 conn_e="host=$PGHOST user=$PGUSER dbname=$db_e"
 stamp() { printf '[%(%H:%M:%S)T] %s\n' -1 "$*"; }
-drop() { "$psql" -XqAt -d postgres -c "DROP DATABASE IF EXISTS \"$1\" WITH (FORCE)" >/dev/null 2>&1 || true; }
-cleanup() { [[ $keep == 1 ]] && { stamp "kept $db_e and $db_m"; return; }; drop "$db_e"; drop "$db_m"; }
+drop() {
+  [[ "$1" =~ ^laplace_parity_[a-z0-9_]+$ ]] || { echo "parity.sh: refusing to drop a non-parity database: $1" >&2; return 2; }
+  if ! "$psql" -XqAt -v ON_ERROR_STOP=1 -d postgres -c "DROP DATABASE IF EXISTS \"$1\" WITH (FORCE)"; then
+    echo "parity.sh: database cleanup failed: $1 (retained; see PostgreSQL error above)" >&2
+    return 1
+  fi
+}
+cleanup() {
+  local result=$? failed=0
+  trap - EXIT
+  if [[ $keep == 1 ]]; then
+    stamp "kept $db_e and $db_m (--keep)"
+  else
+    drop "$db_e" || failed=1
+    drop "$db_m" || failed=1
+  fi
+  # Try both databases and preserve the original failure; cleanup cannot turn
+  # either a failed run or a failed deletion into success.
+  if [[ $result == 0 && $failed == 1 ]]; then result=1; fi
+  exit "$result"
+}
 trap cleanup EXIT
 timed() {   # timed LOG CMD...: run, log, and print the wall time; the log's tail on failure
   local log=$1; shift; local t0=$SECONDS rc=0
