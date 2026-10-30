@@ -56,6 +56,7 @@ set(ENGINE_SOURCES
     src/pg_plan.c
     src/table.c
     src/recipe.c
+    src/input_frame.c
     src/ingest.c
     src/db.c
     src/read.c
@@ -126,6 +127,9 @@ file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/laplace_reader_source.h"
 configure_file(src/config.h.in ${CMAKE_CURRENT_BINARY_DIR}/laplace_config.h @ONLY)
 target_include_directories(laplace_engine PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 if(NOT WIN32)
+  add_executable(input_frame_test EXCLUDE_FROM_ALL tests/input-frame.c src/input_frame.c)
+  target_include_directories(input_frame_test PRIVATE src)
+  target_compile_options(input_frame_test PRIVATE ${LP_C_FLAGS} -UNDEBUG)
   add_executable(file_reference_local EXCLUDE_FROM_ALL tests/file-reference-local.c src/table.c)
   target_include_directories(file_reference_local PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}
     ${LAPLACE_NATIVE}/include ${LAPLACE_NATIVE}/src ${LAPLACE_BLAKE3_DIR}

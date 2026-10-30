@@ -618,6 +618,9 @@ static int format_says(Recipe *r, const char *name, unsigned depth){
 int recipe_product_format(Recipe *r, const char *name){
     Recipe projection = {0}; projection.program_state = r->program_state;
     if (format_says(&projection, name, 0) <= 0 || !projection.say) return 0;
+    if (projection.input_frame.width) {
+        fprintf(stderr, "%s: input framing belongs to the packaging format, not a product projection\n", r->name); return 0;
+    }
     Say *s = projection.say;
     if (!layout_compile_recipe(&s->lay, projection.grammar, sizeof projection.grammar)) return 0;
     if (r->grammar[0] && strcmp(r->grammar, projection.grammar)) {
@@ -640,6 +643,15 @@ int say_says(Recipe *r, const char *path, char *tok){
             snprintf(s->admission[s->nadmission++].field,64,"%s",nm);
         }
         return s->nadmission>before ? 1 : -1;
+    }
+    if (!strcmp(tok, "input")) {
+        char *kind = strtok(NULL, " \t\r\n"), *encoding = strtok(NULL, " \t\r\n");
+        InputFrame frame;
+        if (!kind || strcmp(kind, "length-prefix") || !encoding || strtok(NULL, " \t\r\n") ||
+            r->input_frame.width || !input_frame_encoding(&frame, encoding)) {
+            fprintf(stderr, "%s: input length-prefix u8|u16le|u16be|u32le|u32be|u64le|u64be (once)\n", path); return -1;
+        }
+        r->input_frame = frame; s->laid_line = 1; return 1;
     }
     if (!strcmp(tok,"dependence") && LAID) {
         at=strtok(NULL,"\r\n"); char label[128],extra[8];
