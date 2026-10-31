@@ -190,7 +190,7 @@ void record_emit_layers(RecordWorker *worker, const SemanticRecord *record, int3
 }
 
 int record_claim_vertex(const Event *e, Ref *out){
-    int ok; Ref c = ref_of_id(&e->claim, &ok); if (!ok) { __atomic_fetch_add(&claims_unplaced, 1, __ATOMIC_RELAXED); return 0; }
+    int ok; Ref c = ref_of_id(&e->claim, &ok); if (!ok) { table_reading_invalid(); __atomic_fetch_add(&claims_unplaced, 1, __ATOMIC_RELAXED); return 0; }
     c.said = LP_SAID_CLAIM; c.outcome = (uint8_t)lp_outcome_of((double)e->score, &c.spare); c.position = e->position; *out = c; return 1;
 }
 

@@ -556,6 +556,8 @@ static void finish_laid(RecordPipeline *pipeline){
         for (size_t j = 0; j < part[i].things.n; j++) record_refs_push(&things, &part[i].things.c[j]);
         for (size_t j = 0; j < part[i].meta.n; j++) record_refs_push(&meta, &part[i].meta.c[j]);
         open += part[i].open[0]; record_collect_diagnostics(r->name, &part[i]);
+        if(part[i].unknown || part[i].obl_more)f->invalid=1;
+        for(int j=0;j<part[i].nobl;j++)if(part[i].obl[j].what=='o' && part[i].obl[j].count)f->invalid=1;
     }
     if (open) { fprintf(stderr, "\n  %s: %llu named parts of %s have no disposition in the recipe: they are left open, not read:", r->name, (unsigned long long)open, f->path);
         char seen[64][64]; int ns = 0;
@@ -590,9 +592,9 @@ static void finish_laid(RecordPipeline *pipeline){
     memcpy(m + nr, meta.c, sizeof(Ref) * meta.n);
     size_t nm = nr + meta.n; Ref metadata; memset(&metadata, 0, sizeof metadata); if (nm) metadata = blocks_of(m, nm); free(m);
     if (things.n) { Ref content = blocks_of(things.c, things.n); if (content.said != LP_SAID_HOLDS && content.said != LP_SAID_RECORD) content.said = 0;     /* what holds records says so in the file's path */
-        if (nm) { Ref two[2] = { said_metadata(metadata), content }; f->file = compose(two, 2, ref_above(two, 2)); } else f->file = content;
+        if (nm && !f->incomplete && !f->invalid) { Ref two[2] = { said_metadata(metadata), content }; f->file = compose(two, 2, ref_above(two, 2)); } else if(!nm) f->file = content;
         if (nm) { f->file.said = 0; f->file.outcome = 0; f->file.position = 0; f->file.spare = 0; }   /* a file with no metadata is its content: it says in its source's trunk what its content is (records, or a record) */
-        f->has_file = 1; f->trunk = content; }
+        f->has_file = !f->incomplete && !f->invalid; f->trunk = content; }
     else if (f->ev.n && nm) { Ref two[1] = { said_metadata(metadata) }; f->file = two[0]; f->file.said = 0; f->has_file = 0; }
     record_workers_free(part, nc); free(pipeline);
 }

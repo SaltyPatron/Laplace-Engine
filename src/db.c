@@ -19,7 +19,7 @@ struct Fold { lp_strmap *series; lp_vec(size_t) dirty; };
 static Fold *active_fold;
 typedef struct { lp_mask lexical; uint8_t tier,kind,metadata; } Published;
 typedef struct {
-    PGconn **copy, *series; int ncopy, from_ingest, witness_changed, series_changed;
+    PGconn **copy, *series; int ncopy, from_ingest, witness_changed, series_changed, window_index;
     char (*entity)[96], (*path)[96];
     char delta[96], pending[96], witnesses[96], affected[96];
     lp_idmap *known;
@@ -38,9 +38,13 @@ static void start_loader(const char *conninfo, int requested){
         " to_regprocedure('@extschema@.laplace_stage_own(bigint,regclass[])') IS NOT NULL"
         " AND to_regprocedure('@extschema@.laplace_accumulate_series(regclass,regclass)') IS NOT NULL"
         " AND to_regprocedure('@extschema@.laplace_attest_stage(regclass,regclass)') IS NOT NULL"
-        " AND to_regprocedure('@extschema@.laplace_present_stage(regclass,regclass,name,name)') IS NOT NULL");
+        " AND to_regprocedure('@extschema@.laplace_present_stage(regclass,regclass,name,name)') IS NOT NULL,"
+        " to_regprocedure('@extschema@.laplace_merge_stage(regclass,regclass,boolean)') IS NOT NULL"
+        " AND to_regprocedure('@extschema@.laplace_stage_partitions(regclass)') IS NOT NULL"
+        " AND to_regprocedure('@extschema@.laplace_clean_partitions(oid[])') IS NOT NULL");
     if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "ingest connections: %s", PQerrorMessage(control)); exit(1); }
     if(strcmp(PQgetvalue(q,0,1),"t")){fputs("ingest requires the installed Native observation-window API (laplace 1.44)\n",stderr);PQclear(q);PQfinish(control);exit(1);}
+    writer.window_index=!strcmp(PQgetvalue(q,0,2),"t");
     int available = atoi(PQgetvalue(q, 0, 0)); PQclear(q);
     int cores = omp_get_max_threads();
     if (requested <= 0 || requested > cores) requested = cores;
@@ -616,6 +620,40 @@ static void copy_rows(PGconn *pg,int lane,const Row *rows,size_t lo,size_t hi){
     copy_close(&copy);lp_buf_free(&copy.buf);
     free(path.ids);free(path.runs);free(path.spare);free(path.bytes);
 }
+typedef lp_vec(uint32_t) IndexPartitions;
+static void maintenance_partitions(IndexPartitions *out,const PGresult *q){
+    size_t bytes=(size_t)PQgetlength(q,0,3);const uint8_t *p=(const uint8_t *)PQgetvalue(q,0,3);
+    if(PQgetisnull(q,0,3) || bytes<12 || lp_be(p+4,4) || lp_be(p+8,4)!=26)goto invalid;
+    uint64_t dimensions=lp_be(p,4);
+    if(!dimensions && bytes==12)return;
+    if(dimensions!=1 || bytes<20 || lp_be(p+16,4)!=1)goto invalid;
+    uint64_t n=lp_be(p+12,4);
+    if(n!=(bytes-20)/8 || (bytes-20)%8)goto invalid;
+    for(size_t i=0;i<(size_t)n;i++){
+        const uint8_t *element=p+20+i*8;
+        if(lp_be(element,4)!=4)goto invalid;
+        uint32_t oid=(uint32_t)lp_be(element+4,4);if(!oid)goto invalid;
+        lp_push(out,oid);
+    }
+    return;
+invalid:
+    fputs("publication: invalid Native index-maintenance partition array\n",stderr);exit(1);
+}
+static int partition_order(const void *a,const void *b){
+    uint32_t x=*(const uint32_t *)a,y=*(const uint32_t *)b;return (x>y)-(x<y);
+}
+static void maintain_window(PGconn *pg,IndexPartitions *partitions){
+    if(!partitions->n)return;
+    qsort(partitions->v,partitions->n,sizeof *partitions->v,partition_order);
+    size_t n=0;
+    for(size_t i=0;i<partitions->n;i++)
+        if(!i || partitions->v[i]!=partitions->v[i-1])partitions->v[n++]=partitions->v[i];
+    lp_buf ids={0};lp_pg_array(&ids,26,n);
+    for(size_t i=0;i<n;i++){lp_buf_be(&ids,4,4);lp_buf_be(&ids,partitions->v[i],4);}
+    Args input={0};arg_raw(&input,ids.b,ids.n);
+    PQclear(ask_once(pg,"SELECT @extschema@.laplace_clean_partitions($1::oid[])",&input));
+    args_free(&input);lp_buf_free(&ids);
+}
 int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     start_loader(conninfo,npg);table_kinds();
     DbTraffic before=db_traffic();uint64_t tier_rounds=st->rounds;
@@ -676,6 +714,8 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     st->t_prepare+=now()-begin;
     size_t *bounds=malloc(((size_t)lanes+1)*sizeof *bounds);
     if(!bounds){perror("publication lane bounds");exit(1);}
+    IndexPartitions *maintenance=calloc(lanes,sizeof *maintenance);
+    if(!maintenance){perror("publication maintenance lanes");exit(1);}
     uint64_t waves=0;
     for(size_t lo=0;lo<count;){
         size_t hi=lo+1;while(hi<count && rows[hi].wave==rows[lo].wave)hi++;
@@ -694,15 +734,21 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         #pragma omp parallel for num_threads(lanes) schedule(static,1) reduction(+:entities,paths)
         for(unsigned lane=0;lane<lanes;lane++)if(bounds[lane]<bounds[lane+1]){
             char sql[512];snprintf(sql,sizeof sql,
-                "SELECT * FROM @extschema@.laplace_merge_stage('%s'::regclass,'%s'::regclass)",
-                writer.entity[lane],writer.path[lane]);
-            PGresult *q=db_command(writer.copy[lane],sql);
+                "SELECT * FROM @extschema@.laplace_merge_stage('%s'::regclass,'%s'::regclass%s)",
+                writer.entity[lane],writer.path[lane],writer.window_index?",true":"");
+            PGresult *q=db_command_binary(writer.copy[lane],sql);
             if(PQresultStatus(q)!=PGRES_TUPLES_OK){
                 merge_failure(writer.copy[lane],writer.entity[lane],writer.path[lane],PQresultErrorMessage(q));
                 PQclear(q);exit(1);
             }
-            entities+=strtoull(PQgetvalue(q,0,0),NULL,10);
-            paths+=strtoull(PQgetvalue(q,0,1),NULL,10);PQclear(q);
+            if(PQntuples(q)!=1 || PQnfields(q)!=(writer.window_index?4:3)
+                || PQgetisnull(q,0,0) || PQgetisnull(q,0,1)){
+                fputs("publication: invalid Native merge result\n",stderr);PQclear(q);exit(1);
+            }
+            entities+=(uint64_t)col_int(q,0,0);
+            paths+=(uint64_t)col_int(q,0,1);
+            if(writer.window_index)maintenance_partitions(maintenance+lane,q);
+            PQclear(q);
         }
         /* A parent wave starts only after EVERY child wave transaction has
          * committed. A failed/cancelled lane can leave complete branches, never
@@ -711,6 +757,14 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         st->t_publish+=now()-phase;waves++;lo=hi;
     }
     free(bounds);st->publish_waves+=waves;
+    if(writer.window_index){
+        double phase=now();
+        #pragma omp parallel for num_threads(lanes) schedule(static,1)
+        for(unsigned lane=0;lane<lanes;lane++)maintain_window(writer.copy[lane],maintenance+lane);
+        double elapsed=now()-phase;st->t_index+=elapsed;st->t_publish+=elapsed;
+    }
+    for(unsigned lane=0;lane<lanes;lane++)lp_vec_free(maintenance+lane);
+    free(maintenance);
     for(size_t i=0;i<count;i++){
         const Row *row=rows+i;Published *seen=lp_idmap_get(writer.known,&row->node->id,NULL);
         if(!seen->metadata || row->node->tier<seen->tier)seen->tier=row->node->tier;
