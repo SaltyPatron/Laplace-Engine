@@ -128,11 +128,11 @@ void file_stream_finish(File *file){
     if (assembly->content.total) {
         Ref content = file_block_finish(&assembly->content);
         if (content.said != LP_SAID_HOLDS && content.said != LP_SAID_RECORD) content.said = 0;
-        if (has_metadata) {
+        if (has_metadata && !file->incomplete && !file->invalid) {
             Ref parts[2] = {said_metadata(metadata), content}; file->file = compose(parts, 2, ref_above(parts, 2));
             file->file.said = 0; file->file.outcome = 0; file->file.position = 0; file->file.spare = 0;
-        } else file->file = content;
-        file->has_file = 1; file->trunk = content;
+        } else if(!has_metadata) file->file = content;
+        file->has_file = !file->incomplete && !file->invalid; file->trunk = content;
     } else if (assembly->events && has_metadata) { file->file = metadata; file->file.said = 0; file->has_file = 0; }
     file->partial = 0; file_block_free(&assembly->content); file_block_free(&assembly->metadata);
     free(assembly->roots); free(assembly); file->assembly = NULL;
@@ -149,6 +149,7 @@ static Ref recs_of(Ref *r, size_t n){
 
 /* The file is whole: its trunk, over its metadata, its content, and any records its structure attests. */
 void file_close(File *f){
+    if(f->incomplete || f->invalid){f->has_file=0;return;}
     if (f->laid) {
         /* The provider owns the content. Compiled lookup state belongs beside
          * it in file metadata, so it can be restored after trunk pruning. */

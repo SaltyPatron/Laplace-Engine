@@ -25,6 +25,11 @@ static __thread const File *reading_file;
 const File *table_reading_file(const File *file){
     const File *previous = reading_file; reading_file = file; return previous;
 }
+void table_reading_invalid(void){
+    /* File owns mutable admission state; workers share only its immutable
+     * reading fields. Rejection is monotonic across those workers. */
+    if(reading_file)__atomic_store_n(&((File *)reading_file)->invalid,1,__ATOMIC_RELAXED);
+}
 static void input_error_prefix(void){
     if (reading_file) fprintf(stderr, "%s: ", reading_file->path);
 }
@@ -369,9 +374,9 @@ static void said_same(const Ref *ch, uint32_t n, const lp_id *id){
     if (!any) return;
     Node *x = table_find(id); if (!x) return; uint32_t v = 0, r = 0;
     for (uint32_t i = 0; i < n; i++) {
-        if (v >= x->nv) { __atomic_fetch_add(&said_differently, 1, __ATOMIC_RELAXED); return; }
+        if (v >= x->nv) { table_reading_invalid(); __atomic_fetch_add(&said_differently, 1, __ATOMIC_RELAXED); return; }
         const Vtx *w = &VTX[x->voff + v];
-        if ((w->m & ~((1ull << LP_M_RUN_BITS) - 1)) != m_above(&ch[i]) || w->spare != ch[i].spare) { __atomic_fetch_add(&said_differently, 1, __ATOMIC_RELAXED); return; }
+        if ((w->m & ~((1ull << LP_M_RUN_BITS) - 1)) != m_above(&ch[i]) || w->spare != ch[i].spare) { table_reading_invalid(); __atomic_fetch_add(&said_differently, 1, __ATOMIC_RELAXED); return; }
         if (++r == VRUN(w->m)) { v++; r = 0; } }
 }
 /* A composition, recorded: Laplace-Native gives its ID and coordinate; the table keeps it, once, with its path. */
