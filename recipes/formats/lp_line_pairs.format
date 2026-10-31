@@ -1,8 +1,0 @@
-# Source/result pairs framed by the grammar, never by a second file scan.
-grammar lp_line_pairs
-records record comment blank_line
-node record group as record
-node source text as source
-node result text as normalized
-node comment skip
-node blank_line skip

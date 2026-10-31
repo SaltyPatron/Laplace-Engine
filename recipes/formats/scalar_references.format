@@ -1,6 +1,0 @@
-grammar scalar_references
-node reference group as reference
-node scalar text as target
-node qualifier group as qualifier
-node source text as source
-node flags text as flags

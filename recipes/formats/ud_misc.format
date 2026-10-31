@@ -1,4 +1,0 @@
-grammar ud_misc
-node pair value name key text value same-tier
-node flag text raw
-node empty_pair text raw

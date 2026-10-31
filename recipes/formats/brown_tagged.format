@@ -1,7 +1,0 @@
-grammar brown_tagged
-records paragraph
-node paragraph group as paragraph
-node sentence group as sentence
-node token group as token
-node word text as word
-node segment text field tag as tag

@@ -1,4 +1,0 @@
-grammar deps
-node edge group as edge
-node head text as head
-node relation text as relation grammar ud_relation

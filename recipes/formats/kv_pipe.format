@@ -1,2 +1,0 @@
-grammar kv_pipe
-node pair value name key text value same-tier

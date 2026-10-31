@@ -1,4 +1,0 @@
-name lumbras-gigabase-games
-match LumbrasGigaBase_*.pgn
-# Read as chess-com's games are (chess.c, grammar pgn, records played).
-like chess-com-games

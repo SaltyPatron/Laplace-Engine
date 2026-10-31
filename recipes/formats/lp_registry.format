@@ -1,8 +1,0 @@
-# Field continuations are grammar children; line unfolding is normalization.
-grammar lp_registry
-resolve lines
-trim
-records record
-node document group
-node record group kind tier 0
-node pair value name key text value

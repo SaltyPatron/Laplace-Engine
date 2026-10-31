@@ -1,9 +1,0 @@
-# The layout of a wndb.5 data file, as tests/layout-counted.sh reads it: counted groups and a kept remark.
-tier row by \n
-comment space
-remark | gloss
-names synset_offset lex_filenum ss_type w_cnt p_cnt f_cnt
-counted w_cnt radix 16 word word lex_id
-counted p_cnt pointer pointer_symbol offset pos source_target
-counted f_cnt frame plus f_num w_num
-tier field by space

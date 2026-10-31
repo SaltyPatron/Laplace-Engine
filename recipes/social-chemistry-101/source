@@ -1,8 +1,0 @@
-name social-chemistry-101
-aliases socialchem
-# Rules-of-thumb written by workers about situations, and the breakdowns workers made of them. The README's title:
-# "Social-Chem-101 Dataset".
-witness Social-Chem-101 Dataset
-class AcademicCurated
-root $LAPLACE_DATA/Safety/SocialChemistry101/social-chem-101
-after unicode iso-639

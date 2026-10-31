@@ -1,5 +1,0 @@
-name xml
-# XML as its syntax tree and structural element/attribute claims; leaves are text.
-match *.xml *.xhtml *.svg *.owl *.rdf *.gml *.xsd *.xsl
-class UserCuratedResource
-grammar xml

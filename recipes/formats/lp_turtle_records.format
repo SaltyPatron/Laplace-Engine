@@ -1,8 +1,0 @@
-# Outer statement framing; full Turtle syntax is parsed in record workers.
-grammar lp_turtle_records
-records record triple
-node document group
-node record text raw
-node triple text raw
-node directive skip
-node comment skip

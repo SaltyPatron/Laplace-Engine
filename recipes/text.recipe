@@ -1,5 +1,0 @@
-name text
-# Plain text: UAX #29 codepoint, grapheme, word segment, sentence, paragraph, file.
-match *.txt *.md *.markdown *.rst *.adoc *.org *.tex *.log *.ini *.cfg *.conf *.yaml *.yml *.toml
-class UserCuratedResource
-grammar text

@@ -1,9 +1,0 @@
-name sghatecheck
-# SGHateCheck: functional tests for hate speech detection in Malay, Mandarin, Singlish and Tamil: test cases made of
-# templates and placeholders, annotations of a sample of them, and language models' readings of them.
-# The README's title: "SGHateCheck: Functional Tests for Detecting Hate Speech in Low-Resource Languages of Singapore".
-witness SGHateCheck
-class AcademicCurated
-root $LAPLACE_DATA/Safety/SGHateCheck/sghatecheck-*
-except */code/* *.png
-after unicode iso-639 hatecheck

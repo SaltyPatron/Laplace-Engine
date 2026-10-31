@@ -1,4 +1,0 @@
-grammar postgresql
-include sql_nodes
-records children
-node @record group as packaging capture source

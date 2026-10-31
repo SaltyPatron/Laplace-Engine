@@ -1,4 +1,0 @@
-name opensubtitles-readme
-# The package's own README and LICENSE: ordinary text.
-match README LICENSE
-grammar text

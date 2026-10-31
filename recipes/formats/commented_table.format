@@ -1,7 +1,0 @@
-# Shared record policy for padded text tables with hash comments.
-# The source recipe declares its column names and field separator.
-# Those declarations compile into the existing delimiter grammar dispatch.
-tier row by \n
-comment hash
-remark hash
-padded

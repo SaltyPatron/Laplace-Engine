@@ -1,9 +1,0 @@
-# Whitespace-separated fields; padding remains packaging rather than content.
-grammar lp_words
-records row blank_line
-columns field under row tier 0
-node document group
-node row group kind tier 0
-node field text
-node spacing skip
-node blank_line skip

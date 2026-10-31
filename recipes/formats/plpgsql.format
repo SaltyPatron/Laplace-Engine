@@ -1,5 +1,0 @@
-grammar plpgsql
-node sql_expression text as code_fragment grammar sql_expression required
-node sql_statement text as code_fragment grammar plpgsql_sql required
-node any_identifier group as reference capture referenced_identifier
-node identifier group as reference capture referenced_identifier

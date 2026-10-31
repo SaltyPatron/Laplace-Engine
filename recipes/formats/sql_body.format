@@ -1,2 +1,0 @@
-grammar postgres
-include sql_nodes

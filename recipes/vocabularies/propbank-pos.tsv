@@ -1,7 +1,0 @@
-# frameset.dtd alias.pos: these letters apply only in this source field.
-list upos
-n NOUN
-v VERB
-j ADJ
-r ADV
-p ADP

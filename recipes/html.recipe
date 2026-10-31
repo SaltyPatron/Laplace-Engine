@@ -1,8 +1,0 @@
-name html
-# Recover character content through the compiled HTML projection, then compose
-# it through the shared Native text kernel. Inline markup never splits a word.
-# The original syntax and bytes remain in the file's packaging metadata.
-match *.html *.htm
-class UserCuratedResource
-grammar html
-product-format html_text

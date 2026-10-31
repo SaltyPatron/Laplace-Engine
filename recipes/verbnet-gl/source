@@ -1,6 +1,0 @@
-name verbnet-gl
-# The vn-gl branch uses the same published VNCLASS schema as VerbNet.
-witness VerbNet Generative Lexicon
-class AcademicCurated
-root $LAPLACE_DATA/VerbNet/verbnet-*/vn-gl
-after verbnet

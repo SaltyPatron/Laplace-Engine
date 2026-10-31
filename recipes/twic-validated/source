@@ -1,6 +1,0 @@
-name twic-validated
-witness The Week in Chess (validated legal main lines)
-lineage The Week in Chess
-class StructuredCorpus
-root $LAPLACE_DATA/Games/Chess/twic-validated
-after unicode

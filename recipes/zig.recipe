@@ -1,5 +1,0 @@
-name zig
-# Packaging syntax; leaves retain the original bytes.
-match *.zig
-class UserCuratedResource
-grammar zig

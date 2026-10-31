@@ -1,9 +1,0 @@
-name xstest
-# XSTest: test prompts for exaggerated safety behaviours in language models, and three models' completions of them
-# with their annotations. The readme's title: "XSTest: A Test Suite for Identifying Exaggerated Safety Behaviours in
-# Large Language Models".
-witness XSTest
-class AcademicCurated
-root $LAPLACE_DATA/Safety/XSTest/xstest-*
-except */evaluation/* *.gitignore
-after unicode iso-639

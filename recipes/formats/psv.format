@@ -1,7 +1,0 @@
-# Pipe-separated packaging, including quoted fields and embedded newlines.
-grammar psv
-resolve csv
-quotes field
-node document group
-node row group kind
-node field text trim

@@ -1,6 +1,0 @@
-name openings
-# lichess-org/chess-openings: eco, name, pgn; one named opening per TSV row.
-witness Lichess Chess Openings
-class AcademicCurated
-root $LAPLACE_DATA/Games/Chess/openings
-after unicode

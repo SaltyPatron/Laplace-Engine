@@ -1,9 +1,0 @@
-name wordframenet
-witness WordFrameNet
-called WordFrameNet
-class AcademicCurated
-# WordFrameNet (WFN/WordFrameNet) and its extension (XWFN/eXtendedWFN): under a line "Frame: NAME", rows of words with
-# a part of speech and a WordNet synset offset.
-root $LAPLACE_DATA/WordFrameNet
-except *.tar.gz
-after unicode iso-639

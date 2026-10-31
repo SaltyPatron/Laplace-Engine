@@ -1,6 +1,0 @@
-# Grammar-bounded physical lines and explicit paragraph boundaries.
-grammar lp_records
-records line blank_line
-node document group
-node line text tier 0
-node blank_line skip

@@ -1,3 +1,0 @@
-grammar hex_pair
-node source text kind
-node target text kind

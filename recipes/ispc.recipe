@@ -1,5 +1,0 @@
-name ispc
-# Packaging syntax; leaves retain the original bytes.
-match *.ispc
-class UserCuratedResource
-grammar ispc

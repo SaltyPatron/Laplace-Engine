@@ -1,5 +1,0 @@
-name dtd
-# Packaging syntax; leaves retain the original bytes.
-match *.dtd
-class UserCuratedResource
-grammar dtd

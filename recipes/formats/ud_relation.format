@@ -1,3 +1,0 @@
-grammar ud_relation
-node base text as base
-node subtype text as subtype

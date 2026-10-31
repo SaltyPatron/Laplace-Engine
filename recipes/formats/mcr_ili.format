@@ -1,5 +1,0 @@
-grammar mcr_ili
-node reference group
-node version text kind
-node offset text kind
-node pos text kind

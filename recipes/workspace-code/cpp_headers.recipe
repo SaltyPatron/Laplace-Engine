@@ -1,4 +1,0 @@
-# These headers declare C++ templates despite their .h packaging suffix.
-name workspace-cpp-headers
-match */engine/dynamics/include/laplace/dynamics/*.h
-like workspace-cpp

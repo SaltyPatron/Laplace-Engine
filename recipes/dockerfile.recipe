@@ -1,7 +1,0 @@
-name dockerfile
-# Source code as its syntax tree, by the tree-sitter grammar dockerfile ($LAPLACE_GRAMMARS, built from $LAPLACE_GRAMMAR_SRC by
-# tools/build_grammars.sh): each node the composition of its children with the bytes between them, so the file
-# recomposes byte for byte; leaves are text.
-match Dockerfile *.dockerfile
-class UserCuratedResource
-grammar dockerfile

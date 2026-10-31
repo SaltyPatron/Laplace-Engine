@@ -1,7 +1,0 @@
-grammar unicode_breaks
-records record
-node record group as record
-node token group as token
-node hex text as codepoint
-node boundary text field before as before
-node boundary text field after as after

@@ -1,5 +1,0 @@
-name llvm
-# Packaging syntax; leaves retain the original bytes.
-match *.ll
-class UserCuratedResource
-grammar llvm

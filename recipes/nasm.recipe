@@ -1,5 +1,0 @@
-name nasm
-# Packaging syntax; leaves retain the original bytes.
-match *.nasm *.asm *.s
-class UserCuratedResource
-grammar nasm

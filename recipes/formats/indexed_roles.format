@@ -1,4 +1,0 @@
-grammar indexed_roles
-node binding group as binding
-node target text as target
-node role text as role

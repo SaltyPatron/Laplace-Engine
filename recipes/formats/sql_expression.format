@@ -1,4 +1,0 @@
-grammar postgresql_expr
-node columnref group as reference capture referenced_identifier
-node func_name group as reference capture referenced_identifier
-node ColId group as reference capture referenced_identifier

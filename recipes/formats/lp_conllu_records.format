@@ -1,6 +1,0 @@
-# Framing is independent of each worker's full CoNLL-U parse.
-grammar lp_conllu_records
-records record
-node document group
-node record text raw
-node separator skip

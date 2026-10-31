@@ -1,9 +1,0 @@
-# Compiled delimiter layout; row and column names come from its tier declarations.
-grammar lp_psv
-quotes field
-resolve delimited
-records row
-columns field under row tier 0
-node document group
-node row group kind tier 0
-node field text

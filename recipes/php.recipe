@@ -1,5 +1,0 @@
-name php
-# Packaging syntax; leaves retain the original bytes.
-match *.php
-class UserCuratedResource
-grammar php

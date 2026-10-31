@@ -1,5 +1,0 @@
-name glsl
-# Packaging syntax; leaves retain the original bytes.
-match *.glsl *.vert *.frag *.comp
-class UserCuratedResource
-grammar glsl

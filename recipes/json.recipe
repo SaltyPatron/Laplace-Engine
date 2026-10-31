@@ -1,5 +1,0 @@
-name json
-# JSON as its syntax tree and structural key-value claims; leaves are text.
-match *.json *.jsonl *.ndjson *.geojson
-class UserCuratedResource
-grammar json

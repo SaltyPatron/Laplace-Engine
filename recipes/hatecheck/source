@@ -1,7 +1,0 @@
-name hatecheck
-# The data of the paper "HateCheck: Functional Tests for Hate Speech Detection Models": test cases, and the labels
-# ten annotators gave them. The README names it by that title.
-witness HateCheck
-class AcademicCurated
-root $LAPLACE_DATA/Safety/HateCheck/hatecheck-*
-after unicode iso-639
