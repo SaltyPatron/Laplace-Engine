@@ -1,4 +1,4 @@
-/* Engine orchestrates the shared native UCD -> scalar Tier-0 cache generator. */
+/* Engine orchestrates the shared native UCD -> complete Unicode Tier-0 cache generator. */
 #include "engine.h"
 #include "laplace/tier0.h"
 #include <stdio.h>
@@ -19,7 +19,7 @@ int cmd_tier0(int argc, char **argv){
     if (!ok) { perror("native Tier-0 generation"); free(records); return 1; }
     uint8_t digest[32]; char hex[65];
     lp_tier0_fingerprint(records, digest); lp_hex(digest, 32, hex);
-    printf("%s: %u Unicode scalar records, sorted by ID\nfingerprint (BLAKE3-256 of the table) %s\n",
+    printf("%s: %u Unicode codepoint records, sorted by ID\nfingerprint (BLAKE3-256 of the table) %s\n",
            output, LP_TIER0_COUNT, hex);
     printf("native generation completed in %.2f s\n", now() - started);
     free(records); return 0;
