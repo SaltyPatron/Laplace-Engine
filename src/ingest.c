@@ -516,8 +516,7 @@ static int file_reading_order(const void *a,const void *b){
     if(x->trust!=y->trust)return x->trust>y->trust?-1:1;
     return x->order<y->order?-1:x->order>y->order;
 }
-/* Which files are recorded, before any is read (the inventor: "if you have the file's trunk node (and it's hash metadata
- * matches), you know you have everything in that file already"). A file's metadata tree begins with the OS's record of
+/* Probe recorded file identities before reading file content. A file's metadata tree begins with the OS's record of
  * it, one node computed from stat alone (say.c, file_os); the container index gives what holds that node: the file's
  * trunk, where it is the metadata, or the metadata tree that begins with it, whose container is the trunk. A file found
  * is recorded with everything under it, and is never decomposed. Returns how many were found. */
