@@ -54,7 +54,7 @@ jobs:
           echo "parity=$parity" >> "$GITHUB_OUTPUT"
           echo "parity: $parity ($EVENT)" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/Laplace-Native", ref: 38f4139bab5ea44f860d5e9e2b322b963b7f5a71, path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
+        with: { repository: "${{ github.repository_owner }}/Laplace-Native", ref: eb00ac7f86318127f39605905641f8a90ba70f4e, path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
@@ -67,6 +67,10 @@ jobs:
       # by every run, so a job after this one reads the binary this job hands over, never the directory.
       - name: workflow contract
         run: python3 Laplace-Engine/tests/ci-own-binary.py Laplace-Engine/.github/workflows/laplace.yml
+      - name: Select qualified Native inputs for the exact source revision
+        env:
+          GH_TOKEN: ${{ secrets.LAPLACE_CHECKOUT }}
+        run: bash Laplace-Operations/native-inputs.sh prepare "$GITHUB_WORKSPACE/Laplace-Native"
       - name: Verify Native source selection across reconfiguration
         run: cmake "-DSOURCE=$GITHUB_WORKSPACE/Laplace-Engine" "-DWORK=$RUNNER_TEMP/native-source-defaults" -P Laplace-Engine/tests/native-source-defaults.cmake
       - name: build
@@ -74,7 +78,7 @@ jobs:
           . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
           export LAPLACE_SRC=$GITHUB_WORKSPACE LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native OMP_NUM_THREADS=$(nproc) MKL_NUM_THREADS=$(nproc)
           cmake -S Laplace-Engine -B "$LAPLACE_BUILD/Laplace-Engine/icx-release" -G Ninja -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DLAPLACE_NATIVE:PATH="$LAPLACE_NATIVE" -DLAPLACE_OPERATIONS:PATH="$GITHUB_WORKSPACE/Laplace-Operations"
+            -DLAPLACE_TIER0:FILEPATH="$LAPLACE_TIER0" -DLAPLACE_NATIVE:PATH="$LAPLACE_NATIVE" -DLAPLACE_OPERATIONS:PATH="$GITHUB_WORKSPACE/Laplace-Operations"
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target file_reference_local
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target presence_frontier
@@ -105,14 +109,13 @@ jobs:
           python3 Laplace-Operations/installation/artifact_store.py --prepared "$LAPLACE_PREPARED_GRAMMARS" --compiled "$compiled_grammars" --output "$LAPLACE_GRAMMARS"
           python3 Laplace-Engine/tests/grammar-build-cache.py
           python3 Laplace-Engine/tests/runtime-resources.py
-      - name: Prepare canonical caches for this run from local Unicode and frozen manifests
+      - name: Stage the qualified Native closure with this run's candidate
         run: |
-          set -euo pipefail
-          mkdir -p "$(dirname "$LAPLACE_TIER0")"
-          ucd="${LAPLACE_UCD:-/vault/Data/UCD}/Public/UCD/latest"
-          "$RUNNER_TEMP/engine/laplace" tier0 -u "$ucd" -o "$LAPLACE_TIER0"
-          "$RUNNER_TEMP/engine/laplace" flags -u "$ucd" -o "$LAPLACE_FLAGS"
-          LAPLACE_MANIFEST="$GITHUB_WORKSPACE/Laplace-Native/manifest" "$RUNNER_TEMP/engine/laplace" highway -o "$LAPLACE_HIGHWAY"
+          mkdir -p "$RUNNER_TEMP/engine/inputs"
+          cp -a --reflink=auto --no-preserve=ownership "$LAPLACE_TIER0" "$RUNNER_TEMP/engine/inputs/tier0.bin"
+          cp -a --reflink=auto --no-preserve=ownership "$LAPLACE_FLAGS" "$RUNNER_TEMP/engine/inputs/tier0.flags"
+          cp -a --reflink=auto --no-preserve=ownership "${LAPLACE_FLAGS}.layout" "$RUNNER_TEMP/engine/inputs/tier0.flags.layout"
+          cp -a --reflink=auto --no-preserve=ownership "$LAPLACE_HIGHWAY" "$RUNNER_TEMP/engine/inputs/highway.bin"
       # The run's binary, for its plan and parity jobs: a later run's build cannot replace it (one name per run; a job run
       # again replaces it with its own build).
       - uses: actions/upload-artifact@v4
