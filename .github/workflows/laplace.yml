@@ -199,7 +199,7 @@ jobs:
           bash Laplace-Engine/tests/rich-text-db.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/presence-frontier.sh "$RUNNER_TEMP/engine/laplace" "$RUNNER_TEMP/engine/presence-frontier"
           bash Laplace-Engine/tests/framenet-differences.sh "$RUNNER_TEMP/engine/laplace"
-      - name: Unicode ranges retain non-scalar addresses without admitting atoms
+      - name: Unicode ranges and sequences retain the complete codepoint floor
         run: |
           . Laplace-Operations/laplace.env
           export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
