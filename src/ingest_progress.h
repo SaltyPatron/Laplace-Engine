@@ -26,6 +26,9 @@ static void progress_write(const char *event, File *file, const lp_id *source_id
         (unsigned long long)ingest_progress.bytes,
         (unsigned long long)ingest_progress.stats->ent_rows,
         (unsigned long long)ingest_progress.stats->phy_rows);
+    fprintf(out, ",\"attestations\":%llu,\"attestations_measured\":%s",
+        (unsigned long long)ingest_progress.stats->attestations,
+        ingest_progress.stats->attestations_measured ? "true" : "false");
     if (file) {
         fputs(",\"file\":", out); json_str(out, file->path);
         fprintf(out, ",\"file_bytes\":%llu,\"records\":%llu",

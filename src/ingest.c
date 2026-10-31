@@ -703,7 +703,7 @@ static int ingest_highway(const char *conninfo, const char *t0p, int threads, in
     if (!do_load) { printf("highway contents validated; no database access: %llu identifiers, %llu compositions\n",(unsigned long long)types,(unsigned long long)n); return 0; }
         extern int load_whole; load_whole = 1; File one = { 0 }; one.path = "the highway's contents"; LoadStats st = { 0 };
         if (load(conninfo, threads, &one, 1, &st)) return 1;
-        if (merge(conninfo, threads)) return 1;                  /* what the load staged, into the real tables */
+        if (merge(conninfo, threads, &st)) return 1;              /* what the load staged, into the real tables */
         printf("  %-52s %'llu types, %'llu compositions, %'llu entities new, %'llu not as written%s   %.1f s\n", "the highway's contents, as entities", (unsigned long long)types, (unsigned long long)n, (unsigned long long)st.ent_rows, (unsigned long long)wrong, "", now() - t);
     return 0;
 }
@@ -1098,7 +1098,7 @@ int cmd_ingest(int argc, char **argv){
             lp_idmap_free(seen);
         }
         double publication_started=now();
-        if (load_register(conninfo, threads, roots, nr, files, nfiles) || merge(conninfo, threads)) { free(roots); return 1; }
+        if (load_register(conninfo, threads, roots, nr, files, nfiles) || merge(conninfo, threads, &st)) { free(roots); return 1; }
         printf("  %-44s %8.2f s\n", "source publication", now()-publication_started);
         free(roots);
         if (has_witness_trunk && witness_supersedes && forget_superseded(conninfo, threads, &witness_trunk)) return 1;

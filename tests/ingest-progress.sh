@@ -21,6 +21,7 @@ printf '0041\n0042\n0041\n' > "$LAPLACE_DATA/UCD/Public/UCD/latest/LinkEmail.txt
 printf '# Provisional named sequences\n# No provisional entries are currently defined.\n' \
     > "$LAPLACE_DATA/UCD/Public/UCD/latest/NamedSequencesProv.txt"
 "$L" deploy -d "$conn" > "$scratch/deploy.log" 2>&1 || { cat "$scratch/deploy.log"; exit 1; }
+"$psql" -Xw -v ON_ERROR_STOP=1 -d "$conn" -c 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements;'
 # Cross grammar-framed windows so the last row updates an earlier cumulative
 # series with a NULL lineage rather than duplicating or adding its total again.
 LAPLACE_RECORD_WINDOW_BYTES=1 "$L" ingest -d "$conn" -j 2 unicode > "$scratch/ingest.log" 2>&1 || { cat "$scratch/ingest.log"; cat "$LAPLACE_WORK/logs/ingest/unicode.log"; exit 1; }
@@ -47,6 +48,11 @@ BEGIN
      OR NOT EXISTS (SELECT FROM progress WHERE j->>'event'='file-composed' AND j ? 'file_id') THEN
     RAISE EXCEPTION 'producer progress disagrees with persisted source: %', last_frame;
   END IF;
+  IF last_frame->>'attestations_measured' <> 'true'
+     OR (last_frame->>'attestations')::bigint <> 2
+     OR (SELECT attestations FROM public.witness WHERE id::text=last_frame->>'source_id') <> 2 THEN
+    RAISE EXCEPTION 'two distinct assertions became sources, repeated games, or unmeasured counters: %',last_frame;
+  END IF;
   IF NOT EXISTS (SELECT FROM laplace_contained_series(ARRAY[(last_frame->>'source_id')::blake3])
        WHERE claim=laplace_compose(ARRAY[laplace_cp_id(65),laplace_id('Link_Email')]) AND games=2 AND score=2)
      OR (SELECT count(*) FROM progress WHERE j->>'event'='progress' AND j->>'file' LIKE '%/LinkEmail.txt')<3 THEN
@@ -65,9 +71,23 @@ root_reference(){
        FROM public.witness w JOIN public.entity e ON e.id=w.id $selected;"
 }
 before=$(root_reference "$conn")
+standing_before=$("$psql" -XwAt -v ON_ERROR_STOP=1 -d "$conn" -c 'SELECT jsonb_agg(to_jsonb(c) ORDER BY claim) FROM public.consensus c')
 "$L" ingest -d "$conn" -j 2 unicode > "$scratch/replay.log" 2>&1 || { cat "$scratch/replay.log"; exit 1; }
 grep -q 'files recorded already' "$LAPLACE_WORK/logs/ingest/unicode.log"
 [[ "$before" == "$(root_reference "$conn")" ]] || { echo 'unchanged precheck changed the source reference'; exit 1; }
+# A missing operational measurement is recovered from retained testimony. It
+# does not replay the source or invoke the standing solver.
+"$psql" -Xw -v ON_ERROR_STOP=1 -d "$conn" <<'SQL'
+UPDATE public.witness SET attestations=NULL;
+CALL public.laplace_measure_attestations();
+DO $$BEGIN
+  IF EXISTS(SELECT FROM public.witness WHERE attestations IS DISTINCT FROM 2::bigint) THEN
+    RAISE EXCEPTION 'attestation recovery counted games or failed to measure the source';
+  END IF;
+END$$;
+SQL
+[[ "$standing_before" == "$("$psql" -XwAt -v ON_ERROR_STOP=1 -d "$conn" -c 'SELECT jsonb_agg(to_jsonb(c) ORDER BY claim) FROM public.consensus c')" ]] \
+  || { echo 'measurement recovery changed standing'; exit 1; }
 # Reuse an unread recorded file while adding a new one. Its locally composed
 # or indexed reference must give the same source geometry as a cold reading.
 printf 'Unicode fixture description\n' > "$LAPLACE_DATA/UCD/Public/UCD/latest/ReadMe.txt"

@@ -23,6 +23,8 @@ typedef struct {
     char (*entity)[96], (*path)[96];
     char delta[96], pending[96], witnesses[96], affected[96];
     lp_idmap *known;
+    lp_idmap *registered, *new_witnesses;
+    int counts_unknown;
 } Loader;
 static Loader writer;
 int load_whole;
@@ -777,13 +779,27 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     fprintf(stderr,"batch database: %llu tier rounds, %llu SQL commands, %llu COPY streams; startup and source registration separate\n",
         (unsigned long long)(st->rounds-tier_rounds),(unsigned long long)(after.commands-before.commands),
         (unsigned long long)(after.copy_streams-before.copy_streams));
-    if(!writer.from_ingest)return merge(conninfo,npg);
+    if(!writer.from_ingest)return merge(conninfo,npg,st);
     return 0;
 }
 
 int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t count,const File *files,int nfiles){
     if(!count)return 0;start_loader(conninfo,npg);
     statement(writer.series,"BEGIN ISOLATION LEVEL READ COMMITTED");
+    if(!writer.registered)writer.registered=lp_idmap_new();
+    if(!writer.new_witnesses)writer.new_witnesses=lp_idmap_new();
+    lp_id *ids=malloc(count*sizeof *ids);
+    if(!ids){perror("witness measurement roots");return 1;}
+    for(size_t i=0;i<count;i++){ids[i]=roots[i].id;lp_idmap_put(writer.registered,ids+i,NULL);}
+    Args existing_args={0};arg_ids(&existing_args,ids,count);free(ids);
+    PGresult *existing=ask(writer.series,"SELECT id,attestations FROM @extschema@.witness WHERE id OPERATOR(@extschema@.=) ANY($1)",&existing_args);
+    lp_idmap *known_witnesses=lp_idmap_new();
+    for(int i=0;i<PQntuples(existing);i++){
+        lp_idmap_put(known_witnesses,col_id(existing,i,0),NULL);
+        if(PQgetisnull(existing,i,1))writer.counts_unknown=1;
+    }
+    for(size_t i=0;i<count;i++)if(lp_idmap_find(known_witnesses,&roots[i].id)<0)lp_idmap_put(writer.new_witnesses,&roots[i].id,NULL);
+    lp_idmap_free(known_witnesses);PQclear(existing);args_free(&existing_args);
     lp_copy copy={0};char sql[1600];snprintf(sql,sizeof sql,"COPY %s (id,lineage,trust) FROM STDIN (FORMAT binary)",writer.witnesses);
     copy_open(&copy,writer.series,sql);
     for(size_t i=0;i<count;i++){
@@ -797,14 +813,14 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
         "WITH updated AS (UPDATE @extschema@.witness w SET lineage=s.lineage,trust=s.trust FROM %s s WHERE w.id OPERATOR(@extschema@.=) s.id"
         " AND (NOT coalesce(w.lineage OPERATOR(@extschema@.=) s.lineage,w.lineage IS NULL AND s.lineage IS NULL)"
         " OR w.trust IS DISTINCT FROM s.trust) RETURNING w.id),"
-        " inserted AS (INSERT INTO @extschema@.witness SELECT DISTINCT s.* FROM %s s"
+        " inserted AS (INSERT INTO @extschema@.witness (id,lineage,trust) SELECT DISTINCT s.id,s.lineage,s.trust FROM %s s"
         " WHERE NOT EXISTS(SELECT FROM @extschema@.witness w WHERE w.id OPERATOR(@extschema@.=) s.id) RETURNING id)"
         " SELECT (SELECT count(*) FROM updated)+(SELECT count(*) FROM inserted)",writer.witnesses,writer.witnesses);
     PGresult *result=db_exec(writer.series,sql);
     if(PQresultStatus(result)!=PGRES_TUPLES_OK){fprintf(stderr,"witness registration: %s",PQerrorMessage(writer.series));exit(1);}
     writer.witness_changed |= strtoull(PQgetvalue(result,0,0),NULL,10) != 0;
     PQclear(result);
-    if(writer.series_changed || writer.witness_changed){
+    if(writer.series_changed || writer.witness_changed || writer.counts_unknown){
         /* New assertions already supplied their exact claim IDs in each
          * committed window. Only pruned files need their stored testimony
          * restored; never walk the newly ingested corpus down to text again. */
@@ -820,10 +836,30 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
     }
     return 0;
 }
-int merge(const char *conninfo,int npg){
+int merge(const char *conninfo,int npg,LoadStats *stats){
     (void)conninfo;(void)npg;if(!writer.series)return 0;
     if(PQtransactionStatus(writer.series)==PQTRANS_IDLE)statement(writer.series,"BEGIN ISOLATION LEVEL READ COMMITTED");
-    char sql[2400];
+    char sql[2400];uint64_t admitted=0;
+    if(lp_idmap_count(writer.registered) && (writer.series_changed || writer.witness_changed || writer.counts_unknown)){
+        Args roots={0};arg_ids(&roots,lp_idmap_keys(writer.registered),lp_idmap_count(writer.registered));
+        /* One complete source publishes one witness. Its affected set already
+         * contains every new claim and the claims restored from reused files.
+         * Count assertions here, once per claim, never games or source totals. */
+        if(lp_idmap_count(writer.registered)==1)
+            snprintf(sql,sizeof sql,"UPDATE @extschema@.witness SET attestations=(SELECT count(*) FROM %s)"
+                " WHERE id OPERATOR(@extschema@.=) ANY($1) RETURNING id,attestations",writer.affected);
+        else snprintf(sql,sizeof sql,"WITH counts AS (SELECT trunk,count(DISTINCT claim)::bigint n FROM"
+            " @extschema@.laplace_contained_series($1::@extschema@.blake3[]) GROUP BY trunk)"
+            " UPDATE @extschema@.witness w SET attestations=coalesce((SELECT n FROM counts c WHERE c.trunk OPERATOR(@extschema@.=) w.id),0)"
+            " WHERE w.id OPERATOR(@extschema@.=) ANY($1) RETURNING w.id,w.attestations");
+        PGresult *measured=ask(writer.series,sql,&roots);
+        for(int i=0;i<PQntuples(measured);i++)if(lp_idmap_find(writer.new_witnesses,col_id(measured,i,0))>=0){
+            uint64_t n=(uint64_t)col_int(measured,i,1);
+            if(n>UINT64_MAX-admitted){fprintf(stderr,"attestation counter overflow\n");return 1;}
+            admitted+=n;
+        }
+        PQclear(measured);args_free(&roots);
+    }
     /* Resolve only the affected claims through the indexed upward Native
      * provenance kernel, after the real trunk is registered. Private aliases
      * and event estimates never become independent public witnesses. */
@@ -840,8 +876,10 @@ int merge(const char *conninfo,int npg){
     }
     snprintf(sql,sizeof sql,"DROP TABLE %s,%s,%s,%s",writer.delta,writer.pending,writer.witnesses,writer.affected);
     statement(writer.series,sql);statement(writer.series,"COMMIT");
+    if(stats){stats->attestations+=admitted;stats->attestations_measured=1;}
     PQfinish(writer.series);for(int i=0;i<writer.ncopy;i++)PQfinish(writer.copy[i]);
-    free(writer.copy);free(writer.entity);free(writer.path);lp_idmap_free(writer.known);writer=(Loader){0};return 0;
+    free(writer.copy);free(writer.entity);free(writer.path);lp_idmap_free(writer.known);
+    lp_idmap_free(writer.registered);lp_idmap_free(writer.new_witnesses);writer=(Loader){0};return 0;
 }
 int cmd_merge(int argc,char **argv){
     const char *conninfo=laplace_db();

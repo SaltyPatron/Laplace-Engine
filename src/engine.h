@@ -266,7 +266,7 @@ void table_reset(void);                                                      /* 
 Ref  string_ref(const uint8_t *s, size_t n);                          /* text as its entity, remembered per thread */
 void ev_push(Events *, const Event *);
 
-typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, std_new, std_upd, known, publish_waves, publish_lanes; double t_prepare, t_transfer, t_publish, t_index, t_dedup, t_copy, t_sem, t_read, t_play, t_led; } LoadStats;
+typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, std_new, std_upd, known, publish_waves, publish_lanes, attestations; int attestations_measured; double t_prepare, t_transfer, t_publish, t_index, t_dedup, t_copy, t_sem, t_read, t_play, t_led; } LoadStats;
 typedef struct { uint64_t commands, copy_streams; } DbTraffic;
 DbTraffic db_traffic(void);
 PGresult *db_command(PGconn *, const char *sql);
@@ -294,7 +294,7 @@ Attested *attested(PGconn *pg, const lp_id *claims, int n, int *nout, uint64_t *
 lp_id *trunk_claims(PGconn *pg, const lp_id *trunk, size_t *n);            /* the claims a trunk's records say: a walk down */
 int standings_replay(PGconn *pg, const lp_id *claims, size_t n, uint64_t *played, uint64_t *orphaned);   /* their standings again, from the witnesses that hold them */
 int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers, uint64_t n);   /* every one of them recorded (in its tier's partition) */
-int merge(const char *conninfo, int npg);            /* what the runs staged, into the real tables at once (db.c) */
+int merge(const char *conninfo, int npg, LoadStats *stats); /* source publication and its measured assertions */
 uint8_t *db_recorded(const char *conninfo, const lp_id *ids, uint64_t n);   /* which are recorded, real tables or stage: nothing written */
 int cmd_merge(int argc, char **argv);
 int cmd_projection(int argc, char **argv);
