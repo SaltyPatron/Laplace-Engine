@@ -52,12 +52,16 @@ static void database_made(const char *conninfo){
     PQfreemem(id); PQfinish(pg); PQconninfoFree(o);
 }
 int cmd_deploy(int argc, char **argv){
-    int configure_cache=0;const char *schema=NULL;
+    int configure_cache=0,prepare_only=0;const char *schema=NULL;
     for(int i=1;i<argc;i++){
         if(!strcmp(argv[i],"-d") && i+1<argc){i++;continue;}
         if(!strcmp(argv[i],"--schema") && i+1<argc){schema=argv[++i];continue;}
         if(!strcmp(argv[i],"--configure-server-cache")){configure_cache=1;continue;}
-        fputs("usage: laplace deploy [-d conninfo] [--schema name] [--configure-server-cache]\n",stderr);return 2;
+        if(!strcmp(argv[i],"--prepare")){prepare_only=1;continue;}
+        fputs("usage: laplace deploy [-d conninfo] [--schema name] [--configure-server-cache | --prepare]\n",stderr);return 2;
+    }
+    if(prepare_only && configure_cache){
+        fputs("--prepare preserves server cache bindings; it cannot configure them\n",stderr);return 2;
     }
     database_made(conn_arg(argc, argv));
     PGconn *pg = db_connect(conn_arg(argc, argv)); tier0_open(NULL);
@@ -106,6 +110,10 @@ int cmd_deploy(int argc, char **argv){
     }
     if (!run(pg, "SELECT @extschema@.laplace_schema_indexes()", "every index, made where one is missing")) return 1;
     PQfinish(pg);
+    if(prepare_only){
+        puts("Database schema prepared; runtime activation and compatibility readback remain required.");
+        return 0;
+    }
     return cmd_status(argc, argv);
 }
 

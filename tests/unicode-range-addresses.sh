@@ -1,5 +1,5 @@
 #!/bin/bash
-# Unicode property ranges retain non-scalar addresses as content, not atoms.
+# Unicode property ranges retain every codepoint identity, including surrogates.
 set -euo pipefail
 L=${1:?usage: tests/unicode-range-addresses.sh path/to/laplace}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -40,8 +40,8 @@ DECLARE expected blake3[];
 BEGIN
     FOR expected IN SELECT parts FROM (VALUES
         (ARRAY[laplace_cp_id(0),laplace_cp_id(44)]),
-        (ARRAY[laplace_id('D800'),laplace_cp_id(64013)]),
-        (ARRAY[laplace_id('D800'),laplace_id('DFFF')])) AS ranges(parts)
+        (ARRAY[laplace_cp_id(55296),laplace_cp_id(64013)]),
+        (ARRAY[laplace_cp_id(55296),laplace_cp_id(57343)])) AS ranges(parts)
     LOOP
         IF NOT EXISTS (SELECT FROM public.physicality
             WHERE entity=laplace_compose(expected) AND ST_NPoints(path)=2
@@ -50,26 +50,27 @@ BEGIN
             RAISE EXCEPTION 'range endpoints lost their canonical identity or order: %',expected;
         END IF;
     END LOOP;
-    IF NOT EXISTS (SELECT FROM public.entity WHERE id=laplace_id('D800'))
-       OR EXISTS (SELECT FROM public.entity WHERE id=laplace_cp_id(55296))
+    IF EXISTS (SELECT FROM public.entity WHERE id=laplace_id('D800'))
        OR NOT EXISTS (SELECT FROM public.witness) THEN
-        RAISE EXCEPTION 'non-scalar address became an atom, or source publication failed';
+        RAISE EXCEPTION 'surrogate codepoint was replaced by its hex spelling, or source publication failed';
     END IF;
     IF NOT EXISTS (SELECT FROM public.consensus WHERE claim=laplace_compose(ARRAY[
-        laplace_id('High Surrogates'),laplace_id('Start Code'),laplace_id('D800')])) THEN
+        laplace_id('High Surrogates'),laplace_id('Start Code'),laplace_cp_id(55296)])) THEN
         RAISE EXCEPTION 'the surrogate block boundary was omitted instead of published as an address';
     END IF;
     IF NOT EXISTS (SELECT FROM public.physicality WHERE entity=laplace_compose(ARRAY[
-        laplace_id('High Surrogates'),laplace_id('D800')])) THEN
+        laplace_id('High Surrogates'),laplace_cp_id(55296)])) THEN
         RAISE EXCEPTION 'the index entry lost its non-scalar address';
     END IF;
 END $$;
 SQL
-# A sequence explicitly declared as scalar codepoints still rejects a surrogate.
-mkdir -p "$scratch/invalid"
-printf 'BAD SURROGATE; D800\n' > "$scratch/invalid/NamedSequences.txt"
-if "$L" ingest --no-load -s unicode "$scratch/invalid/NamedSequences.txt" > "$scratch/invalid.log" 2>&1; then
-    echo 'a surrogate was accepted as scalar sequence content' >&2; exit 1
-fi
-grep -q 'invalid scalar content' "$scratch/invalid.log"
-echo 'unicode-range-addresses: exact range endpoints, scalar floor and published witness passed'
+# A declared codepoint sequence preserves a surrogate through publication.
+mkdir -p "$scratch/surrogate"
+printf 'SURROGATE CODEPOINT; D800\n' > "$scratch/surrogate/NamedSequences.txt"
+"$L" ingest --claims-tsv -s unicode "$scratch/surrogate/NamedSequences.txt" > "$scratch/surrogate.log" 2>&1
+python3 - "$scratch/surrogate.log" <<'PY'
+from pathlib import Path
+import sys
+assert bytes.fromhex('eda080') in Path(sys.argv[1]).read_bytes(), 'surrogate codepoint bytes were lost'
+PY
+echo 'unicode-range-addresses: full codepoint floor, exact endpoints and published witness passed'
