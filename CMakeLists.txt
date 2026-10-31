@@ -7,11 +7,7 @@ project(LaplaceEngine VERSION 0.2.0 LANGUAGES C CXX ASM)
 # Laplace-Engine: Laplace itself, one program. Laplace-Native is built as part of it; recipes load tree-sitter grammars
 # at run time.
 set(CMAKE_C_STANDARD 17)
-if(DEFINED ENV{LAPLACE_NATIVE} AND NOT "$ENV{LAPLACE_NATIVE}" STREQUAL "")
-  set(LAPLACE_NATIVE "$ENV{LAPLACE_NATIVE}" CACHE PATH "Laplace-Native sources")
-else()
-  set(LAPLACE_NATIVE "${CMAKE_CURRENT_SOURCE_DIR}/../Laplace-Native" CACHE PATH "Laplace-Native sources")
-endif()
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LaplaceNative.cmake")
 if(NOT TARGET laplace_static)
   add_subdirectory(${LAPLACE_NATIVE} native EXCLUDE_FROM_ALL)
 endif()

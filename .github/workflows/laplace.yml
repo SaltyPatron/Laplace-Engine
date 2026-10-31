@@ -67,11 +67,14 @@ jobs:
       # by every run, so a job after this one reads the binary this job hands over, never the directory.
       - name: workflow contract
         run: python3 Laplace-Engine/tests/ci-own-binary.py Laplace-Engine/.github/workflows/laplace.yml
+      - name: Verify Native source selection across reconfiguration
+        run: cmake "-DSOURCE=$GITHUB_WORKSPACE/Laplace-Engine" "-DWORK=$RUNNER_TEMP/native-source-defaults" -P Laplace-Engine/tests/native-source-defaults.cmake
       - name: build
         run: |
           . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
           export LAPLACE_SRC=$GITHUB_WORKSPACE LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native OMP_NUM_THREADS=$(nproc) MKL_NUM_THREADS=$(nproc)
-          cmake -S Laplace-Engine -B "$LAPLACE_BUILD/Laplace-Engine/icx-release" -G Ninja -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake -S Laplace-Engine -B "$LAPLACE_BUILD/Laplace-Engine/icx-release" -G Ninja -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DLAPLACE_NATIVE:PATH="$LAPLACE_NATIVE" -DLAPLACE_OPERATIONS:PATH="$GITHUB_WORKSPACE/Laplace-Operations"
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target file_reference_local
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target presence_frontier

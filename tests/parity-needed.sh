@@ -9,6 +9,7 @@ expect true  recipes/iso-639/source
 expect true  firmware/translate
 expect true  tools/parity/parity.sh
 expect true  CMakeLists.txt
+expect true  cmake/LaplaceNative.cmake
 expect true  .github/workflows/laplace.yml
 expect true  '*'
 expect true  README.md src/forget.c
