@@ -161,6 +161,11 @@ jobs:
           . Laplace-Operations/laplace.env
           export LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native
           python3 Laplace-Engine/tests/staging-role.py "$RUNNER_TEMP/engine/laplace"
+      - name: Schema preparation preserves the running runtime cache selection
+        run: |
+          . Laplace-Operations/laplace.env
+          export TMPDIR=${RUNNER_TEMP:?} PSQL=$(dirname "$PG_CONFIG")/psql
+          bash Laplace-Engine/tests/deploy-prepare.sh "$RUNNER_TEMP/engine/laplace"
       - name: Prepared SQL follows connection lifetime and caller planner policy
         run: |
           . Laplace-Operations/laplace.env
