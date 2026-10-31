@@ -16,6 +16,10 @@ PGresult *db_command(PGconn *pg,const char *sql){
     atomic_fetch_add_explicit(&commands,1,memory_order_relaxed);
     return db_exec(pg,sql);
 }
+PGresult *db_command_binary(PGconn *pg,const char *sql){
+    atomic_fetch_add_explicit(&commands,1,memory_order_relaxed);
+    return db_exec_params(pg,sql,0,NULL,NULL,NULL,NULL,1);
+}
 
 static SqlArg *arg_next(Args *a){ if (a->n >= ARGS_MAX) { fprintf(stderr, "a statement of more than %d parameters\n", ARGS_MAX); exit(1); } SqlArg *x = &a->a[a->n++]; x->b.n = 0; return x; }
 void arg_ids(Args *a, const lp_id *ids, size_t n){ SqlArg *x = arg_next(a); lp_pg_ids(&x->b, 0, ids, n); x->binary = SQL_ID_ARRAY; }

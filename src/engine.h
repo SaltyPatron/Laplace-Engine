@@ -172,7 +172,7 @@ typedef int (*record_batch_fn)(void *, const Ref *, size_t, const Ref *, size_t,
 struct FileAssembly;
 
 /* A file decomposed: its trunk, and what its recipe's queries attested. */
-typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage, packaging; int has_packaging, has_lineage; uint64_t bytes, incomplete; int exact, skipped, known; RecipeCoverage coverage; Events ev;
+typedef struct { const char *path; Recipe *recipe; Ref trunk, witness, lineage, packaging; int has_packaging, has_lineage; uint64_t bytes, incomplete, invalid; int exact, skipped, known; RecipeCoverage coverage; Events ev;
                  const Source *source;                 /* the source it is a file of, or NULL for a file given by itself */
                  double trust;                         /* how far its witness is trusted */
                  Ref file; int has_file;               /* the file in the DAG: its trunk, over its metadata and its content */
@@ -249,6 +249,7 @@ void highway_file(Ctx *, File *, Hw *);                                         
 int  source_files(const Source *, Recipe *rec, int nrec, char ***paths, Recipe ***of);   /* a source's files its recipes read, in the order they are read (ingest.c) */
 void decompose_file(Ctx *, File *);
 const File *table_reading_file(const File *);                          /* thread-local input context for composition diagnostics; returns previous */
+void table_reading_invalid(void);                                    /* prevents a rejected reading becoming a cached file trunk */
 void decompose_bytes(Ctx *, File *, uint8_t *src, size_t n, int first);     /* a stretch of a file that is read a stretch at a time */
 /* ---- a grammar that is no tree-sitter grammar: a reading the engine holds of its own, found by the name a recipe's
  * grammar line gives (grammars.c lists them). The recipe names it as it names any grammar; recipe.c names none. */
@@ -265,10 +266,11 @@ void table_reset(void);                                                      /* 
 Ref  string_ref(const uint8_t *s, size_t n);                          /* text as its entity, remembered per thread */
 void ev_push(Events *, const Event *);
 
-typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, std_new, std_upd, known, publish_waves, publish_lanes; double t_prepare, t_transfer, t_publish, t_dedup, t_copy, t_sem, t_read, t_play, t_led; } LoadStats;
+typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, std_new, std_upd, known, publish_waves, publish_lanes; double t_prepare, t_transfer, t_publish, t_index, t_dedup, t_copy, t_sem, t_read, t_play, t_led; } LoadStats;
 typedef struct { uint64_t commands, copy_streams; } DbTraffic;
 DbTraffic db_traffic(void);
 PGresult *db_command(PGconn *, const char *sql);
+PGresult *db_command_binary(PGconn *, const char *sql);
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
 typedef struct { lp_id id, lineage; double trust; int has_lineage; } LoadWitness;
 void load_begin(const char *conninfo, int npg);

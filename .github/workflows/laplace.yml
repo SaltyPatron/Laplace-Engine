@@ -188,6 +188,7 @@ jobs:
           bash Laplace-Engine/tests/record-thing.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/stream-working-set.sh "$RUNNER_TEMP/engine/laplace"
           python3 Laplace-Engine/tests/publication-waves.py "$RUNNER_TEMP/engine/laplace"
+          python3 Laplace-Engine/tests/failed-file-replay.py "$RUNNER_TEMP/engine/laplace"
           python3 Laplace-Engine/tests/observation-windows.py "$RUNNER_TEMP/engine/laplace"
           python3 Laplace-Engine/tests/semantic-interpretation.py "$RUNNER_TEMP/engine/laplace" --database
           bash Laplace-Engine/tests/rich-text-db.sh "$RUNNER_TEMP/engine/laplace"
