@@ -3,6 +3,17 @@
 # platform link boilerplate.
 
 function(laplace_define_engine_reader engine_src)
+  if(NOT TARGET ts_runtime)
+    add_library(ts_runtime STATIC EXCLUDE_FROM_ALL "${LAPLACE_TREESITTER}/lib/src/lib.c")
+    target_include_directories(ts_runtime PUBLIC "${LAPLACE_TREESITTER}/lib/include"
+                               PRIVATE "${LAPLACE_TREESITTER}/lib/src" "${LAPLACE_TREESITTER}/lib/src/wasm")
+    if(WIN32)
+      target_compile_options(ts_runtime PRIVATE /w /O2)
+    else()
+      target_compile_options(ts_runtime PRIVATE -w -O3 -fPIC)
+    endif()
+  endif()
+
   foreach(f os.c os.h read.c read_ids.c read_text.c pg.c pg_plan.c pg_plan.h walk.c walk.h engine.h)
     if(NOT EXISTS "${engine_src}/${f}")
       message(FATAL_ERROR "laplace_define_engine_reader: missing ${f} at '${engine_src}'")
