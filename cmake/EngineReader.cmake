@@ -22,6 +22,7 @@ function(laplace_define_engine_reader engine_src)
 
   if(NOT TARGET laplace_engine_os)
     add_library(laplace_engine_os STATIC EXCLUDE_FROM_ALL "${engine_src}/os.c")
+    set_target_properties(laplace_engine_os PROPERTIES POSITION_INDEPENDENT_CODE ON)
     if(WIN32)
       target_include_directories(laplace_engine_os BEFORE PUBLIC "${engine_src}/win")
       target_compile_definitions(laplace_engine_os PUBLIC _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
@@ -41,6 +42,7 @@ function(laplace_define_engine_reader engine_src)
       "${engine_src}/pg.c"
       "${engine_src}/pg_plan.c"
       "${engine_src}/walk.c")
+    set_target_properties(laplace_engine_reader PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_include_directories(laplace_engine_reader PUBLIC
       "${engine_src}"
       "${LAPLACE_NATIVE}/include"
