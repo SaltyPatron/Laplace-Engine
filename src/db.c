@@ -522,6 +522,39 @@ static int hilbert_order(const void *a,const void *b){
  * without weakening validation or dumping the batch/content into the log.
  * This set query runs only after a failed merge, outside its rolled-back
  * statement; it never changes either the caller's staging or public rows. */
+static void coordinate_failure_chain(PGconn *pg,const Node *node,unsigned depth){
+    char id[33];id_text(&node->id,id);
+    fprintf(stderr,"    coordinate trace depth=%u id=%s tier=%u parts=%u vertices=%u\n",depth,id,node->tier,node->len,node->nv);
+                lp_id *ids=malloc((size_t)node->nv*sizeof *ids);
+                if(ids){
+                    for(uint32_t i=0;i<node->nv;i++)ids[i]=VTX[node->voff+i].id;
+                    Args input={0};arg_ids(&input,ids,node->nv);free(ids);
+                    PGresult *children=ask_once(pg,"SELECT ordinal,id,@postgis@.ST_AsEWKB(coord) FROM @extschema@.laplace_entities($1)",&input);
+                    const Node *next=NULL;unsigned changed=0;lp_coord_sum local_sum={{0},0},recorded_sum={{0},0};
+                    for(int i=0;i<PQntuples(children);i++){
+                        uint64_t ordinal=(uint64_t)col_int(children,i,0);if(!ordinal || ordinal>node->nv)continue;
+                        int known=0;Ref local=ref_of_id(col_id(children,i,1),&known);lp_coord recorded;lp_ewkb_info info;
+                        if(!known || PQgetisnull(children,i,2) || !lp_ewkb_visit((const uint8_t *)PQgetvalue(children,i,2),
+                            (size_t)PQgetlength(children,i,2),binding_point,&recorded,&info))continue;
+                        uint64_t run=VRUN(VTX[node->voff+ordinal-1].m);
+                        for(int d=0;d<4;d++){local_sum.s[d]+=(__int128)local.c.m[d]*run;recorded_sum.s[d]+=(__int128)recorded.m[d]*run;}
+                        local_sum.n+=run;recorded_sum.n+=run;
+                        if(memcmp(local.c.m,recorded.m,sizeof recorded.m) && changed++<8){
+                            if(!next)next=table_find(&local.id);
+                            char child[33];id_text(&local.id,child);
+                            fprintf(stderr,"    child coordinate conflict id=%s local_tier=%u local=(%.17g %.17g %.17g %.17g) recorded=(%.17g %.17g %.17g %.17g)\n",child,local.tier,
+                                local.c.m[0]/LP_FIXED_ONE,local.c.m[1]/LP_FIXED_ONE,local.c.m[2]/LP_FIXED_ONE,local.c.m[3]/LP_FIXED_ONE,
+                                recorded.m[0]/LP_FIXED_ONE,recorded.m[1]/LP_FIXED_ONE,recorded.m[2]/LP_FIXED_ONE,recorded.m[3]/LP_FIXED_ONE);
+                        }
+                    }
+                    lp_coord local,recorded;lp_coord_mean(&local_sum,&local);lp_coord_mean(&recorded_sum,&recorded);
+                    fprintf(stderr,"    child coordinate conflicts=%u measured_runs=%llu local_mean=(%.17g %.17g %.17g %.17g) recorded_mean=(%.17g %.17g %.17g %.17g)\n",changed,(unsigned long long)local_sum.n,
+                        local.m[0]/LP_FIXED_ONE,local.m[1]/LP_FIXED_ONE,local.m[2]/LP_FIXED_ONE,local.m[3]/LP_FIXED_ONE,
+                        recorded.m[0]/LP_FIXED_ONE,recorded.m[1]/LP_FIXED_ONE,recorded.m[2]/LP_FIXED_ONE,recorded.m[3]/LP_FIXED_ONE);
+                    PQclear(children);args_free(&input);
+                    if(next && depth<12)coordinate_failure_chain(pg,next,depth+1);
+                }
+}
 static void merge_failure(PGconn *pg, const char *entities, const char *paths, const char *error){
     fprintf(stderr,"stage merge: %s",error);
     char sql[8192];
@@ -536,7 +569,8 @@ static void merge_failure(PGconn *pg, const char *entities, const char *paths, c
         " UNION ALL SELECT 'entity identity conflict',s.id,"
         " 'coord_equal='||(@postgis@.ST_AsEWKB(s.coord)=@postgis@.ST_AsEWKB(d.coord))||' hilbert_equal='||(s.hilbert=d.hilbert)"
         " ||' staged='||@postgis@.ST_AsEWKT(s.coord)||' recorded='||@postgis@.ST_AsEWKT(d.coord)"
-        " FROM %s s JOIN @extschema@.entity d ON d.id OPERATOR(@extschema@.=) s.id"
+        " FROM (SELECT * FROM %s WHERE coord IS NOT NULL OR hilbert IS NOT NULL) s"
+        " CROSS JOIN LATERAL @extschema@.laplace_entities(ARRAY[s.id]) d"
         " WHERE @postgis@.ST_AsEWKB(s.coord)<>@postgis@.ST_AsEWKB(d.coord) OR s.hilbert<>d.hilbert"
         " UNION ALL SELECT 'path identity conflict',s.entity,"
         " 'ids_equal='||(@extschema@.laplace_vertex_ids(s.path)=@extschema@.laplace_vertex_ids(d.path))"
@@ -544,14 +578,15 @@ static void merge_failure(PGconn *pg, const char *entities, const char *paths, c
         " ||' staged_vertices='||@extschema@.laplace_path_length(s.path)||' recorded_vertices='||@extschema@.laplace_path_length(d.path)"
         " ||' staged_prefix='||encode(substring(@postgis@.ST_AsEWKB(s.path) from 1 for 160),'hex')"
         " ||' recorded_prefix='||encode(substring(@postgis@.ST_AsEWKB(d.path) from 1 for 160),'hex')"
-        " FROM %s s JOIN @extschema@.physicality d ON d.entity OPERATOR(@extschema@.=) s.entity"
+        " FROM (SELECT * FROM %s WHERE path IS NOT NULL OR hilbert IS NOT NULL) s"
+        " CROSS JOIN LATERAL @extschema@.laplace_physicalities(ARRAY[s.entity]) d"
         " WHERE (@postgis@.ST_AsEWKB(s.path)<>@postgis@.ST_AsEWKB(d.path) AND @extschema@.laplace_path_enrich(d.path,s.path) IS NULL) OR s.hilbert<>d.hilbert"
-        " UNION ALL SELECT 'entity without path',s.id,'' FROM %s s"
+        " UNION ALL SELECT 'entity without path',s.id,'' FROM (SELECT * FROM %s WHERE NOT present) s"
         " LEFT JOIN %s batch ON batch.entity OPERATOR(@extschema@.=) s.id LEFT JOIN @extschema@.physicality d ON d.entity OPERATOR(@extschema@.=) s.id"
-        " WHERE batch.entity IS NULL AND d.entity IS NULL"
-        " UNION ALL SELECT 'path without entity',s.entity,'' FROM %s s"
+        " WHERE NOT s.present AND batch.entity IS NULL AND d.entity IS NULL"
+        " UNION ALL SELECT 'path without entity',s.entity,'' FROM (SELECT * FROM %s WHERE NOT present) s"
         " LEFT JOIN %s batch ON batch.id OPERATOR(@extschema@.=) s.entity LEFT JOIN @extschema@.entity d ON d.id OPERATOR(@extschema@.=) s.entity"
-        " WHERE batch.id IS NULL AND d.id IS NULL)"
+        " WHERE NOT s.present AND batch.id IS NULL AND d.id IS NULL)"
         ",sample AS MATERIALIZED (SELECT reason,id,detail FROM rejected ORDER BY reason,id LIMIT 8)"
         " SELECT s.reason,s.id::text,s.detail,@postgis@.ST_AsEWKB(p.path) FROM sample s"
         " LEFT JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) s.id ORDER BY s.reason,s.id",
@@ -568,6 +603,7 @@ static void merge_failure(PGconn *pg, const char *entities, const char *paths, c
                 const Vtx *v=&VTX[node->voff+i]; char child[33]; id_text(&v->id,child);
                 fprintf(stderr,"    child=%s run=%u\n",child,VRUN(v->m));
             }
+            if(!strcmp(PQgetvalue(detail,row,0),"entity identity conflict") && node->nv)coordinate_failure_chain(pg,node,0);
             if(!PQgetisnull(detail,row,3))
                 fprintf(stderr,"    recorded path prefix=%.322s\n",PQgetvalue(detail,row,3));
         }
