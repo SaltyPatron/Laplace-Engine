@@ -1022,6 +1022,7 @@ int cmd_ingest(int argc, char **argv){
     if (do_load && stream_window_flush(&window)) return 1;
     if (do_load) printf("\n  streaming persistence: %'llu shared working windows, resident budget %'llu bytes\n",
         (unsigned long long)window.flushes, (unsigned long long)window.budget);
+    fflush(stdout);
     free(window.roots); free(window.events.e); free(window.complete);
     free(streams);
     #undef SHOW
@@ -1053,6 +1054,7 @@ int cmd_ingest(int argc, char **argv){
     printf("    %-42s %8.2f s   %llu closed dependency waves, up to %llu writers\n", "parallel paired publication", st.t_publish, (unsigned long long)st.publish_waves, (unsigned long long)st.publish_lanes);
     if(st.t_index)printf("      %-40s %8.2f s   included in paired publication\n", "GIN maintenance per working window", st.t_index);
     printf("  %-44s %8.2f s\n", "private observation windows", st.t_sem);
+    fflush(stdout);
     { const Source *one = NULL; int many = 0; Ref trunk;                    /* one source, every file of it recorded: its trunk, last of all */
       for (int i = 0; i < nfiles; i++) { if (files[i].skipped) continue; if (!files[i].source) { many = 1; break; } if (!one) one = files[i].source; else if (one != files[i].source) many = 1; }
       /* The witness is the source's trunk (Semantics: Attestations, Witnesses): its trust and lineage are the source's,
@@ -1074,9 +1076,10 @@ int cmd_ingest(int argc, char **argv){
                   sf.lineage=text_ref(CTX[0],(const uint8_t *)one->lineage,strlen(one->lineage));
                   sf.has_lineage=1;
               }
+              progress_phase("source-trunk", &trunk.id);
               LoadStats ss = { 0 }; double ts = now(); if (load(conninfo, threads, &sf, 1, &ss)) return 1;
               printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded");
-              st.ent_rows += ss.ent_rows; st.phy_rows += ss.phy_rows;
+              st.ent_rows += ss.ent_rows; st.phy_rows += ss.phy_rows;fflush(stdout); 
               { char hx[33]; id_text(&trunk.id, hx); printf("  %-44s %s\n", "its ID, the witness", hx); }
               witness_trunk = trunk.id; witness_trust = trust; has_witness_trunk = 1; witness_supersedes = one->supersede;
               witness_lineage=sf.lineage.id; has_witness_lineage=sf.has_lineage; }
@@ -1098,6 +1101,7 @@ int cmd_ingest(int argc, char **argv){
             lp_idmap_free(seen);
         }
         double publication_started=now();
+        progress_phase("source-publication", has_witness_trunk ? &witness_trunk : NULL);
         if (load_register(conninfo, threads, roots, nr, files, nfiles) || merge(conninfo, threads, &st)) { free(roots); return 1; }
         printf("  %-44s %8.2f s\n", "source publication", now()-publication_started);
         free(roots);

@@ -809,7 +809,14 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         if(row->lexical)seen->lexical=row->lexical;
         seen->kind|=row->node->kind;seen->metadata=1;
     }
-    lp_vec_free(&selected);TABLE_EACH(x)if(x->keep==1 || x->keep==2)lp_idmap_put(writer.known,&x->id,NULL);
+    TABLE_EACH(x)if(x->keep==1 || x->keep==2){
+        Published *seen=lp_idmap_get(writer.known,&x->id,NULL);
+        if(!seen->metadata || x->tier<seen->tier)seen->tier=x->tier;
+        lp_mask lexical=tuple_mask(x);
+        if(lexical)seen->lexical=lexical;
+        seen->kind|=x->kind;seen->metadata=1;
+    }
+    lp_vec_free(&selected);
     st->t_copy+=now()-persistence_begin;begin=now();flush_series(active_fold);st->t_sem+=now()-begin;
     DbTraffic after=db_traffic();
     fprintf(stderr,"batch database: %llu tier rounds, %llu SQL commands, %llu COPY streams; startup and source registration separate\n",

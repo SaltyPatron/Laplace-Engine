@@ -78,6 +78,11 @@ static void progress_file(const char *event, File *file) {
     }
 }
 
+static void progress_phase(const char *event, const lp_id *source_id) {
+    if (!ingest_progress.out) return;
+    progress_write(event, NULL, source_id);
+}
+
 static void progress_end(const char *event, const lp_id *source_id) {
     if (!ingest_progress.out) return;
     progress_write(event, NULL, source_id);

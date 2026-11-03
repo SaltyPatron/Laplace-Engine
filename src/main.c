@@ -65,6 +65,12 @@ PGconn *db_read(const char *conninfo){
     return pg;
 }
 int main(int argc, char **argv){
+    #ifndef _WIN32
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stderr, NULL, _IOLBF, 0);
+    #else
+    setvbuf(stderr, NULL, _IONBF, 0);
+    #endif
     if (argc > 1 && !strcmp(argv[1], "describe")) { op_describe(stdout); return 0; }          /* the catalog, for every other surface */
     if (argc > 2 && !strcmp(argv[1], "help") && op_named(argv[2])) { op_usage(stdout, op_named(argv[2])); return 0; }
     const Op *op = argc > 1 ? op_named(argv[1]) : NULL;
