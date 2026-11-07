@@ -313,9 +313,15 @@ void record_execute(RecordWorker *sink, const SemanticRecord *t, int32_t root, u
      * as another entity of it. Unnamed records retain their content tree. */
     Ref T; int whole=0;
     if (speaks) {
+        int32_t subject_root = root;
+        if (!t->n[subject_root].nlen) {
+            int32_t only = record_field_first(&t->n[subject_root]);
+            if (only >= 0 && record_field_next(&t->n[only]) < 0 && t->n[only].kind == S_GROUP)
+                subject_root = only;
+        }
         int named=0;
-        for (int i=0; i<s->nthing && !named; i++) named=record_field_named(&t->n[root],s->thing[i].tier,strlen(s->thing[i].tier));
-        whole=named ? record_thing(k,t,root,&T,0)>0 : record_entity(k,t,root,&T);
+        for (int i=0; i<s->nthing && !named; i++) named=record_field_named(&t->n[subject_root],s->thing[i].tier,strlen(s->thing[i].tier));
+        whole=named ? record_thing(k,t,subject_root,&T,0)>0 : record_entity(k,t,root,&T);
     }
     record_build_provenance(k, t, root, ev0, whole ? &T : NULL);
     k->binding_phase = binding_phase;

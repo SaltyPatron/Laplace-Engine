@@ -4,6 +4,7 @@ $sourceRoot=Split-Path $PSScriptRoot -Parent
 $recipes=Join-Path $Scratch 'recipes'
 New-Item -ItemType Directory -Path $recipes -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'recipes/formats') -Destination (Join-Path $recipes 'formats') -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $sourceRoot 'recipes/vocabularies') -Destination (Join-Path $recipes 'vocabularies') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $sourceRoot 'recipes/file.recipe') -Destination (Join-Path $recipes 'file.recipe') -Force
 $expected=@{cili='i46360';propbank='abandon.01';verbatlas='va:0001f'}
 $files=@{cili='ili.recipe';propbank='frames.recipe';verbatlas='frame-info.recipe'}

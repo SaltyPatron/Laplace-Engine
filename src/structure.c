@@ -2646,6 +2646,13 @@ static int scope_stream_next(SRecords *records, SRecord *record){
             for (uint32_t i = 0; i < length; i++) if (text[i] != ' ' && text[i] != '\t' && text[i] != '\n' && text[i] != '\r') { valid = 0; break; }
             scratch_restore(mark); if (!valid) return scope_stream_error(records, node);
         } else if (stream->top && stream->top->emit) {
+            if (role == 254) {
+                size_t mark = scratch_mark(); const uint8_t *text; uint32_t length; g_text(&worker, node, 0, &text, &length);
+                int space = 1;
+                for (uint32_t i = 0; i < length; i++) if (text[i] != ' ' && text[i] != '\t' && text[i] != '\n' && text[i] != '\r') { space = 0; break; }
+                scratch_restore(mark);
+                if (space) { advanced = ts_tree_cursor_goto_next_sibling(records->cursor); continue; }
+            }
             ScopeStreamFrame *frame = stream->top; ContextCapture capture = {&frame->header, frame->arena};
             size_t mark = scratch_mark();
             if (!cursor_project(layout, node, &input, capture_context, &capture, frame->opening.name, frame->opening.name_length, 0, 0)) {

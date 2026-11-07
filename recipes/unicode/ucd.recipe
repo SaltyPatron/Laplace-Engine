@@ -12,10 +12,11 @@ format xml
 # under "Catalog Properties", "Enumerated Properties" and "Binary Properties") are read from there, not attested again:
 # 52% of the file's attributes were those properties' defaults alone, a row each.
 perfcache
-split char reserved noncharacter surrogate named-sequence provisional-named-sequence normalization-correction standardized-variant cjk-radical emoji-source block do-not-emit instead
+split char reserved noncharacter surrogate named-sequence provisional-named-sequence normalization-correction standardized-variant cjk-radical emoji-source block instead
 # "#", in the flat XML, is "the code point itself": the default, where the file gives no value of its own (UAX #42);
 # "NaN" is the declared default of Numeric_Value (PropertyValueAliases.txt: "nv ; NaN ; NaN", Laplace-Engine#25)
 empty hash NaN
+itself-mark hash
 # Values the source writes as a set, a space between each (broken down as its notation says, as IdentifierType.txt's are):
 #   Script_Extensions, UAX #44: "Script_Extensions ... Enumerated ... the value is a set of Script values";
 #   StandardizedVariants.txt: "Field 2: ... If more than one is present, there are spaces between them."
@@ -156,6 +157,7 @@ thing cjk-radical radical
 thing block name
 thing emoji-source unicode
 thing normalization-correction cp
+thing instead of
 codepoints cp first-cp last-cp cps bmg bpb cf dm FC_NFKC lc NFKC_CF NFKC_SCF scf slc stc suc tc uc EqUIdeo ideograph radical radical-ideograph of use code unicode old new
 # Block boundaries retain their codepoint identities, including surrogate blocks.
 range block.first-cp block.last-cp
@@ -522,8 +524,10 @@ relation "SoftBank Shift-JIS code" emoji-source.softbank
 # "Field 3: Version of Unicode for which the correction was entered" is bookkeeping, omitted above
 relation "Original (erroneous) decomposition" normalization-correction.old
 relation "Corrected decomposition" normalization-correction.new
-# DoNotEmit.txt: "Field 2  DoNotEmit type of the original character sequence"; "These are the values used for Field 2:"
+# DoNotEmit.txt: "Field 1  A replacement sequence of Unicode code point values";
+# "Field 2  DoNotEmit type of the original character sequence"; "These are the values used for Field 2:"
 # (Indic_Atomic_Consonant, ..., Discouraged, Preferred_Spelling): said of the original sequence, the element's "of"
+relation "replacement sequence of Unicode code point values" instead.use
 value - because
 
 attest char *
@@ -540,4 +544,4 @@ attest cjk-radical ideograph
 attest block first-cp last-cp
 attest emoji-source docomo kddi softbank
 attest normalization-correction old new
-attest instead because of of
+attest instead use because
