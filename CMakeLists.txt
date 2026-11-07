@@ -31,6 +31,7 @@ set(ENGINE_QUERY_SOURCES
     src/pull.c
     src/firmware.c
     src/forward.c
+    src/program_couple.c
     src/program.c
     src/bench.c
     src/provenance.c
@@ -42,10 +43,17 @@ set(ENGINE_SOURCES
     src/chess.c
     src/table.c
     src/recipe.c
+    src/recipe_decompose.c
     src/input_frame.c
+    src/ingest_probe.c
     src/ingest.c
+    src/db_metadata.c
     src/db.c
     src/file.c
+    src/structure_arena.c
+    src/structure_compile.c
+    src/structure_decode.c
+    src/structure_records.c
     src/structure.c
     src/say.c
     src/deploy.c
@@ -57,6 +65,7 @@ set(ENGINE_SOURCES
     src/literal_sql.c
     src/file_metadata.c
     src/recipe_compile.c
+    src/recipe_says.c
     src/record_stream.c
     src/context_stream.c
     src/record_select.c
@@ -121,7 +130,7 @@ if(NOT WIN32)
     -ffunction-sections -fdata-sections -Wno-unused-function -Wno-missing-field-initializers)
   target_link_options(file_reference_local PRIVATE -Wl,--gc-sections)
   target_link_libraries(file_reference_local PRIVATE laplace_static lp_crmath BLAKE3::blake3 OpenMP::OpenMP_C)
-  add_executable(presence_frontier EXCLUDE_FROM_ALL tests/presence-frontier.c src/db.c)
+  add_executable(presence_frontier EXCLUDE_FROM_ALL tests/presence-frontier.c src/db_metadata.c src/db.c)
   target_include_directories(presence_frontier PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}
     ${LAPLACE_NATIVE}/include ${LAPLACE_NATIVE}/src ${LAPLACE_BLAKE3_DIR}
     ${LAPLACE_ICU_DIR}/include ${LAPLACE_PG_DIR}/include)
