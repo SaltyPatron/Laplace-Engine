@@ -50,6 +50,9 @@ typedef struct { lp_id sense, gloss, eq[4], usage; int np, lang, concept, has_gl
 int lexicalization_of(lp_text *, const Firmware *, Lexicalization *);
 void firmware_say(const Firmware *, int op);
 lp_ref entity_named(lp_text *, const char *text, lp_ref *parts, size_t cap, size_t *np);      /* a text's trunk, computed here */
+void   show_ref(const char *label, const lp_ref *r);
+const char *refuse_param(PGconn *pg, int *len);
+int    middle_refused(const lp_id *part, int np);
 /* Returned claims and all operands share one allocation; release with free(). */
 Claim *claim_block(size_t count,size_t operands);
 Claim *claims_from_holds(const Hold *,int count,double k,int *n);

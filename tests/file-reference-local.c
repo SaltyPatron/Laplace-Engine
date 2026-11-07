@@ -1,7 +1,7 @@
 /* Exercise the actual precheck helper against Native ROM atoms and canonical
  * higher references. The resolver fixture makes a cache miss observable. */
 #define ref_of_id file_reference_test_resolve
-#include "../src/ingest.c"
+#include "../src/ingest_probe.c"
 #undef ref_of_id
 #include <assert.h>
 

@@ -29,6 +29,7 @@ set(ENGINE_QUERY_SOURCES
     src/claim_read.c
     src/fills.c
     src/pull.c
+    src/pull_degrees.c
     src/firmware.c
     src/forward.c
     src/program_couple.c
@@ -41,6 +42,7 @@ set(ENGINE_SOURCES
     src/main.c
     src/op.c
     src/chess.c
+    src/chess_pgn.c
     src/table.c
     src/recipe.c
     src/recipe_decompose.c
@@ -66,12 +68,14 @@ set(ENGINE_SOURCES
     src/file_metadata.c
     src/recipe_compile.c
     src/recipe_says.c
+    src/record_journal.c
     src/record_stream.c
     src/context_stream.c
     src/record_select.c
     src/record_operands.c
     src/record_diagnostics.c
     src/record_values.c
+    src/record_things.c
     src/record_surface.c
     src/reference_html.c
     src/record_output.c
