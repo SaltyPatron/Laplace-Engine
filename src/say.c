@@ -314,7 +314,7 @@ void record_execute(RecordWorker *sink, const SemanticRecord *t, int32_t root, u
     Ref T; int whole=0;
     if (speaks) {
         int32_t subject_root = root;
-        if (!t->n[subject_root].nlen) {
+        if (!t->n[subject_root].nlen && !t->n[subject_root].capture) {
             int32_t only = record_field_first(&t->n[subject_root]);
             if (only >= 0 && record_field_next(&t->n[only]) < 0 && t->n[only].kind == S_GROUP)
                 subject_root = only;
