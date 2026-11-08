@@ -1,5 +1,5 @@
 /* laplace flags: the flags that go with tier 0, generated natively from the Unicode data.
- *   laplace flags [-u UCD_ROOT] [-o tier0.flags]
+ *   laplace flags [-u UCD_ROOT] [-o tier0.flags] [--shards]
  * The standard lists its own properties (PropertyAliases.txt) and, for each enumerated property, its own values
  * (PropertyValueAliases.txt). Those lists are the enums: a property is a field, a value is its place in the standard's
  * list. Every codepoint gets one 256-bit record: a bit for each binary property in the order the standard lists them,
@@ -8,6 +8,7 @@
  * so an install knows which flags it has. */
 #define _GNU_SOURCE
 #include "engine.h"
+#include "laplace/tier0.h"
 #include "blake3.h"
 #include <locale.h>
 #include <stdio.h>
@@ -39,7 +40,22 @@ int cmd_flags(int argc, char **argv){
     char dflt[4096], out_dflt[4096]; snprintf(dflt, sizeof dflt, "%s/Public/UCD/latest", laplace_ucd());
     snprintf(out_dflt, sizeof out_dflt, "%s", lp_tier0_path()); { char *d = strrchr(out_dflt, '.'); if (d) *d = 0; strcat(out_dflt, ".flags"); }
     const char *root = dflt, *outp = out_dflt;
-    if (opts(argc, argv, (const Opt[]){ { .flag = "-u", .kind = 's', .at = &root }, { .flag = "-o", .kind = 's', .at = &outp }, { 0 } }) < argc) { fprintf(stderr, "usage: laplace flags [-u UCD_ROOT] [-o tier0.flags]\n"); return 2; }
+    int split_only = 0;
+    if (opts(argc, argv, (const Opt[]){
+        { .flag = "-u", .kind = 's', .at = &root },
+        { .flag = "-o", .kind = 's', .at = &outp },
+        { .flag = "--shards", .kind = 'b', .at = &split_only },
+        { .flag = "-s", .kind = 'b', .at = &split_only },
+        { 0 } }) < argc) { fprintf(stderr, "usage: laplace flags [-u UCD_ROOT] [-o tier0.flags] [--shards]\n"); return 2; }
+    if (split_only) {
+        if (!lp_flags_split_file(outp)) { fprintf(stderr, "laplace flags: failed to split %s into shards\n", outp); return 1; }
+        for (unsigned s = 0; s < LP_TIER0_SHARD_COUNT; s++) {
+            char sp[4096];
+            if (lp_flags_shard_path(outp, (lp_tier0_shard)s, sp, sizeof sp))
+                printf("%s: %u records (%s flags shard)\n", sp, lp_tier0_shard_count((lp_tier0_shard)s), lp_tier0_shard_name((lp_tier0_shard)s));
+        }
+        return 0;
+    }
     setlocale(LC_NUMERIC, "en_US.UTF-8"); double T = now(); char line[1 << 16];
 
     /* the properties the standard lists, binary and enumerated, in its order */
@@ -103,8 +119,9 @@ int cmd_flags(int argc, char **argv){
         prop[i].count[v < (uint32_t)prop[i].nv ? v : (uint32_t)prop[i].nv]++;
     }
 
-    /* the records, their layout, their fingerprint */
+    /* the records, their shards, their layout, their fingerprint */
     FILE *o = fopen(outp, "wb"); if (!o || fwrite(rec, 32, LP_NCP, o) != LP_NCP) { perror(outp); return 1; } fclose(o);
+    if (!lp_flags_write_shards(outp, (const lp_flags *)rec)) { fprintf(stderr, "failed to write flags shards for %s\n", outp); return 1; }
     char lay[4096]; snprintf(lay, sizeof lay, "%s.layout", outp); o = fopen(lay, "w"); if (!o) { perror(lay); return 1; }
     fprintf(o, "# The flags that go with tier 0: one 256-bit record per codepoint, little-endian bit order.\n# bit\twidth\tproperty\tas it is said\tvalues, in the standard's order (a field holds a value's place in this list)\n");
     for (int i = 0; i < nprop; i++) {
@@ -124,7 +141,7 @@ int cmd_flags(int argc, char **argv){
     int unseen = 0; for (int i = 0; i < nprop; i++) unseen += !prop[i].seen;
     printf("  bits 0 to %d: the binary properties, in the standard's order\n", nbin - 1);
     if (unseen) { printf("  properties the XML gives no value for:"); for (int i = 0; i < nprop; i++) if (!prop[i].seen) printf(" %s", prop[i].name); printf("\n"); }
-    printf("\n%s: %u records x 32 bytes\n%s\nfingerprint (BLAKE3-256 of the records) ", outp, LP_NCP, lay);
+    printf("\n%s: %u records x 32 bytes (+ 4 shards)\n%s\nfingerprint (BLAKE3-256 of the records) ", outp, LP_NCP, lay);
     for (int i = 0; i < 32; i++) printf("%02x", fp[i]);
     printf("\n== total %.2f s\n", now() - T);
     return 0;
