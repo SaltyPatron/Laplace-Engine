@@ -32,7 +32,14 @@ Firmware firmware_for(const char *path, int op){
     fw.walks = 64; fw.steps = 4; fw.walk_fan = 512; fw.nearest = 512; fw.rounds = 2; fw.breadth = 64; fw.restart = 0.25; fw.sure = 2.0; fw.lift = 2.0; fw.tie = FW_TIE_FIRST;
     { static const int E[] = { FW_E_GROUNDS, FW_E_CONTINUITY, FW_E_AGREE, FW_E_HEADS, FW_E_COOCCUR, FW_E_WALKS, FW_E_SHAPE, FW_E_CONFIDENCE, FW_E_SHARED }; memcpy(fw.elect, E, sizeof E); fw.nelect = FW_E_KEYS; }
     snprintf(fw.path, sizeof fw.path, "%s", path && *path ? path : firmware_path());
-    FILE *f = fopen(fw.path, "r"); if (!f) { perror(fw.path); fprintf(stderr, "LAPLACE_FIRMWARE names the firmware a pull runs under\n"); exit(1); }
+    FILE *f = fopen(fw.path, "r");
+    if (!f) {
+        char alt[4200];
+        snprintf(alt, sizeof alt, "%s/program.firmware", fw.path);
+        f = fopen(alt, "r");
+        if (f) snprintf(fw.path, sizeof fw.path, "%s", alt);
+    }
+    if (!f) { perror(fw.path); fprintf(stderr, "LAPLACE_FIRMWARE names the firmware a pull runs under\n"); exit(1); }
     char buf[1024]; int line = 0, in = -1;                                  /* in: the operation whose instruction set is being read */
     while (fgets(buf, sizeof buf, f)) {
         line++; char *c = buf; while (*c == ' ' || *c == '\t') c++;
