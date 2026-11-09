@@ -14,17 +14,25 @@ static void candidates_open(PGconn *pg){
         " INSERT INTO forget_stats VALUES(0)");
 }
 static uint64_t sweep_candidates(PGconn *pg){
-    exec(pg,"DO $sweep$ DECLARE n bigint; BEGIN LOOP"
+    exec(pg,"DO $sweep$ DECLARE n bigint; c_cnt bigint; BEGIN LOOP"
         " TRUNCATE forget_round;"
-        /* Decode every path once per round. A correlated geometry predicate
-         * became a materialized nested-loop anti join over every candidate and
-         * every physicality; shared source replacement made that quadratic. */
-        " WITH referenced AS MATERIALIZED (SELECT DISTINCT v.id FROM @extschema@.physicality p"
-        " CROSS JOIN LATERAL unnest(@extschema@.laplace_vertex_ids(p.path)) v(id)"
-        " JOIN forget_candidates c ON c.id OPERATOR(@extschema@.=) v.id WHERE p.entity OPERATOR(@extschema@.<>) v.id)"
-        " INSERT INTO forget_round SELECT c.id FROM forget_candidates c"
-        " WHERE NOT EXISTS(SELECT FROM @extschema@.witness w WHERE w.id OPERATOR(@extschema@.=) c.id OR w.lineage OPERATOR(@extschema@.=) c.id)"
-        " AND NOT EXISTS(SELECT FROM referenced r WHERE r.id OPERATOR(@extschema@.=) c.id);"
+        " SELECT count(*) INTO c_cnt FROM forget_candidates;"
+        " IF c_cnt = 0 THEN EXIT; END IF;"
+        " IF c_cnt <= 4096 THEN"
+        "   WITH ord AS MATERIALIZED (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM forget_candidates),"
+        "        h AS MATERIALIZED (SELECT ordinal, entity, hub FROM @extschema@.laplace_holders(ARRAY(SELECT id FROM ord ORDER BY rn), '{}'::@extschema@.blake3[], true, -1::smallint, 2::bigint, 3::smallint)),"
+        "        referenced AS MATERIALIZED (SELECT DISTINCT o.id FROM ord o JOIN h ON h.ordinal = o.rn WHERE h.hub OR h.entity OPERATOR(@extschema@.<>) o.id)"
+        "   INSERT INTO forget_round SELECT c.id FROM forget_candidates c"
+        "   WHERE NOT EXISTS(SELECT FROM @extschema@.witness w WHERE w.id OPERATOR(@extschema@.=) c.id OR w.lineage OPERATOR(@extschema@.=) c.id)"
+        "   AND NOT EXISTS(SELECT FROM referenced r WHERE r.id OPERATOR(@extschema@.=) c.id);"
+        " ELSE"
+        "   WITH referenced AS MATERIALIZED (SELECT DISTINCT v.id FROM @extschema@.physicality p"
+        "   CROSS JOIN LATERAL unnest(@extschema@.laplace_vertex_ids(p.path)) v(id)"
+        "   JOIN forget_candidates c ON c.id OPERATOR(@extschema@.=) v.id WHERE p.entity OPERATOR(@extschema@.<>) v.id)"
+        "   INSERT INTO forget_round SELECT c.id FROM forget_candidates c"
+        "   WHERE NOT EXISTS(SELECT FROM @extschema@.witness w WHERE w.id OPERATOR(@extschema@.=) c.id OR w.lineage OPERATOR(@extschema@.=) c.id)"
+        "   AND NOT EXISTS(SELECT FROM referenced r WHERE r.id OPERATOR(@extschema@.=) c.id);"
+        " END IF;"
         " GET DIAGNOSTICS n=ROW_COUNT; EXIT WHEN n=0;"
         " DELETE FROM @extschema@.consensus c USING forget_round d WHERE c.claim OPERATOR(@extschema@.=) d.id;"
         " DELETE FROM @extschema@.physicality p USING forget_round d WHERE p.entity OPERATOR(@extschema@.=) d.id;"

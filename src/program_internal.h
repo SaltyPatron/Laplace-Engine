@@ -38,6 +38,7 @@ typedef struct {
     Bits open;
     uint64_t trips;
     uint64_t admitted;
+    uint64_t refused;
     uint8_t seed[32];
     int npos;
     lp_id pass[4096]; int npass;

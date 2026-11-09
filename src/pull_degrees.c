@@ -169,38 +169,69 @@ int cmd_degrees(int argc, char **argv){
 }
 
 /* ---- what the forward pass reads through the firmware, one way for every command */
-/* How hard a word pulls (its role): what is attested of it under the firmware's role kind ([word, role_by, x], read
- * in the claims' order), the weight the firmware gives the first x it names. -1 when nothing it names is attested. */
-double role_of(PGconn *pg, Firmware *fw, const lp_id *word){
-    if (!fw->role_by[0]) return -1;
+/* How hard each word in a set pulls (its role): what is attested of it under the firmware's role kind ([word, value]
+ * for a highway bank, or [word, role_by, x] in the claims' order), the weight the firmware gives the strongest x it
+ * names. -1 when nothing it names is attested. All words in the batch are resolved together in at most two round trips. */
+void roles_of(PGconn *pg, Firmware *fw, const lp_id *words, int n, double *out, uint64_t *trips){
+    for (int i = 0; i < n; i++) out[i] = -1.0;
+    if (!n || !fw->role_by[0]) return;
     firmware_ids(fw);
-    /* A highway feature is a typed value claim [word, value], not a fabricated
-     * [word, bank-name, value] relation. Probe all configured values together. */
+    if (!fw->nrole) return;
     char bank_name[96]; size_t b = 0;
     for (; fw->role_by[b] && b + 1 < sizeof bank_name; b++) {
         unsigned char ch = (unsigned char)fw->role_by[b]; bank_name[b] = ch >= 'A' && ch <= 'Z' ? (char)(ch + 'a' - 'A') : (char)ch;
     }
     bank_name[b] = 0; const lp_highway *highway = lp_highway_map(NULL);
     const lp_bank *bank = highway ? lp_highway_bank(highway, bank_name) : NULL;
-    if (bank && fw->nrole) {
-        int nh = 0; Hold *h = holds_both(pg,fw->id.role, fw->nrole, word, &nh);
-        double best = -INFINITY, weight = -1;
-        for (int q = 0; q < nh; q++) {
-            lp_id pair[3]; size_t np = lp_path_ids(h[q].path, (size_t)h[q].path_len, pair, 3);
-            if (!h[q].claim || !h[q].stood || np != 2 || !lp_id_eq(&pair[0], word)
-                || lp_highway_slot(highway, bank->list, &pair[1]) < 0) continue;
-            double conf = lp_confidence(&h[q].r, fw->k);
-            for (int z = 0; z < fw->nrole; z++) if (lp_id_eq(&pair[1], &fw->id.role[z])
-                    && (conf > best || (conf == best && (weight < 0 || fw->role[z] < weight)))) {
-                best = conf; weight = fw->role[z];
+    if (bank) {
+        uint8_t *wb = malloc(20 + 20 * (size_t)n), *rb = malloc(20 + 20 * (size_t)fw->nrole);
+        size_t wl = ids_param(pg, wb, words, (uint32_t)n), rl_role = ids_param(pg, rb, fw->id.role, (uint32_t)fw->nrole);
+        int rl_ref = 0; const char *ref_p = refuse_param(pg, &rl_ref);
+        const char *v[4] = { (const char *)wb, CLAIM_BITS, ref_p, (const char *)rb };
+        int l[4] = { (int)wl, 0, rl_ref, (int)rl_role }, f[4] = { 1, 0, 1, 1 };
+        PGresult *q = db_ask(pg,
+            "SELECT i, path, rating, deviation, volatility FROM @extschema@.laplace_claims_each("
+            "$1::@extschema@.blake3[], NULL::bigint, $2::smallint[], $3::@extschema@.blake3[], "
+            "1::smallint, NULL::@extschema@.blake3[], 2::bigint, $4::@extschema@.blake3[])", 4, v, l, f);
+        if (trips) (*trips)++;
+        if (PQresultStatus(q) == PGRES_TUPLES_OK) {
+            double *best = malloc(sizeof(double) * (size_t)n);
+            int *best_z = malloc(sizeof(int) * (size_t)n);
+            for (int i = 0; i < n; i++) { best[i] = -INFINITY; best_z[i] = fw->nrole; }
+            int rows = PQntuples(q);
+            for (int r = 0; r < rows; r++) {
+                uint64_t o; memcpy(&o, PQgetvalue(q, r, 0), 8);
+                int idx = (int)(__builtin_bswap64(o) - 1);
+                if (idx < 0 || idx >= n) continue;
+                lp_id pair[3]; size_t np = lp_path_ids((const uint8_t *)PQgetvalue(q, r, 1), (size_t)PQgetlength(q, r, 1), pair, 3);
+                if (np != 2 || !lp_id_eq(&pair[0], &words[idx]) || lp_highway_slot(highway, bank->list, &pair[1]) < 0) continue;
+                lp_rating rt = { lp_be_f64(PQgetvalue(q, r, 2)), lp_be_f64(PQgetvalue(q, r, 3)), lp_be_f64(PQgetvalue(q, r, 4)) };
+                double conf = lp_confidence(&rt, fw->k);
+                for (int z = 0; z < fw->nrole; z++) if (lp_id_eq(&pair[1], &fw->id.role[z])
+                        && (conf > best[idx] || (conf == best[idx] && z < best_z[idx]))) {
+                    best[idx] = conf; best_z[idx] = z; out[idx] = fw->role[z];
+                }
             }
+            free(best); free(best_z);
         }
-        holds_free(h, nh); if (weight >= 0) return weight;
+        PQclear(q); free(wb); free(rb);
     }
-    firmware_ids(fw); lp_id part[3] = { *word, fw->id.role_by, fw->id.role_by }; int have[3] = { 2, 2, 0 }, n, capped; double w = -1;
-    Claim *cl = claims_like(pg, part, have, fw->fan, fw->k, &n, &capped);
-    for (int q = 0; q < n && w < 0; q++) for (int z = 0; z < fw->nrole; z++) if (lp_id_eq(&cl[q].part[cl[q].np - 1], &fw->id.role[z])) { w = fw->role[z]; break; }
-    free(cl); return w;
+    lp_id *rem = malloc(sizeof(lp_id) * (size_t)n); int *rem_idx = malloc(sizeof(int) * (size_t)n), nrem = 0;
+    for (int i = 0; i < n; i++) if (out[i] < 0) { rem[nrem] = words[i]; rem_idx[nrem++] = i; }
+    if (nrem) {
+        int nc = 0, *src = NULL;
+        Claim *cl = claims_each(pg, rem, nrem, &fw->id.role_by, CLAIM_FIRST, fw->fan, fw->k, &nc, &src);
+        if (trips) (*trips)++;
+        for (int q = 0; q < nc; q++) {
+            int i = rem_idx[src[q]]; if (out[i] >= 0) continue;
+            for (int z = 0; z < fw->nrole; z++) if (lp_id_eq(&cl[q].part[cl[q].np - 1], &fw->id.role[z])) { out[i] = fw->role[z]; break; }
+        }
+        free(cl); free(src);
+    }
+    free(rem); free(rem_idx);
+}
+double role_of(PGconn *pg, Firmware *fw, const lp_id *word){
+    double w = -1.0; roles_of(pg, fw, word, 1, &w, NULL); return w;
 }
 /* The strands of a set a firmware takes: the top n, or, when the firmware says how near a tie has to be, any strand
  * that near the one above it may be taken in its place. */

@@ -47,25 +47,57 @@
 static const double *ROLE;
 static int owed(const Bits *support, const Bits *open){ double s = 0; for (int w = 0; w < MAXOCC / 64; w++) { uint64_t m = support->w[w] & open->w[w]; while (m) { int b = __builtin_ctzll(m); s += ROLE ? ROLE[w * 64 + b] : 1; m &= m - 1; } } return (int)(s * 1000 + 0.5); }
 static const char *RK[R_KINDS] = { "strand", "follows", "discourse", "reached", "containment", "a later layer" };
-/* ---- SCAN: best-first from the centres, across rated strands */
+static int reading_of(const lp_highway *h, const lp_id *id, int *list, uint32_t *slot){
+    for (size_t l = 0; l < h->nlists; l++) { int bank = 0; for (size_t k = 0; k < h->nbanks; k++) bank |= h->bank[k].list == &h->list[l];
+        if (bank) continue;                                                  /* a bank's value (a part of speech, a relation): a feature, not a reading */
+        int64_t s = lp_highway_slot(h, &h->list[l], id); if (s >= 0) { *list = (int)l; *slot = (uint32_t)s; return 1; } }
+    return 0;
+}
+/* ---- SCAN: best-first from the centres, across rated strands and highway crosswalk edges */
 static void scan(State *st, Field *fd, const lp_id *centre, int nc){
-    const Firmware *fw = st->fw; lp_frontier *fr = lp_frontier_new(); Ids rn = { 0 }; Args a = { 0 };
+    const Firmware *fw = st->fw; const lp_highway *hw = lp_highway_map(NULL);
+    lp_frontier *fr = lp_frontier_new(); Ids rn = { 0 }; Args a = { 0 };
     for (int i = 0; i < nc; i++) lp_frontier_reach(fr, &centre[i], NULL, NULL, 0, 0, 0);
     int rounds = 0; const lp_reached *x;
     while (rounds++ < fw->hops) {
         lp_reached batch[16]; int n = 0; while (n < 16 && (x = lp_frontier_next(fr))) batch[n++] = *x; if (!n) break;      /* the nearest sixteen a round */
         lp_id ids[64]; int m = 0, who[64]; for (int i = 0; i < n; i++) if ((int)batch[i].hops < fw->hops) { ids[m] = batch[i].id; who[m++] = i; }
         if (!m) break;
+        if (hw) {
+            for (int e = 0; e < m; e++) {
+                const lp_reached *at = &batch[who[e]]; int list; uint32_t slot;
+                if (!reading_of(hw, &at->id, &list, &slot)) continue;
+                for (size_t b = 0; b < hw->nlists; b++) {
+                    if ((int)b == list) continue;
+                    int bank = 0; for (size_t k = 0; k < hw->nbanks; k++) bank |= hw->bank[k].list == &hw->list[b];
+                    if (bank) continue;
+                    const lp_edge *edges; size_t ne = lp_highway_edges(hw, hw->list[list].name, slot, hw->list[b].name, &edges);
+                    for (size_t k = 0; k < ne; k++) {
+                        const lp_tier0_record *rec = lp_highway_at(hw, &hw->list[b], edges[k].to); if (!rec) continue;
+                        double cost = at->cost + fw->lambda;
+                        lp_frontier_reach(fr, &rec->id, &at->id, &at->id, cost, 0, at->hops + 1);
+                        const Cell *ca = cell_find(fd, &at->id); Bits sup = ca ? ca->support : (Bits){ 0 };
+                        int had_r = ca ? ca->has_r : 0; lp_rating cr = ca ? ca->r : (lp_rating){ 1500, 350, 0.06 };
+                        Cell *cx = cell(fd, &rec->id); cx->routes[R_SCAN]++;
+                        for (int w = 0; w < MAXOCC / 64; w++) cx->support.w[w] |= sup.w[w];
+                        if (cost < cx->cost) { cx->cost = cost; if (!cx->has_r && had_r) { cx->r = cr; cx->has_r = 1; cx->via = at->id; cx->rel = at->id; } }
+                    }
+                }
+            }
+        }
         int hub[128], nh = 0; Hold *hh = holds_capped(st->pg,ids, m, fw->fan, 1, 1, hub, &nh); st->trips++;      /* one Native frontier, in content order, a hub's never read */
         for (int r = 0; r < nh; r++) { int e = hh[r].src; if (e < 0 || e >= m || hub[2 * e] || !hh[r].claim || !hh[r].stood) continue;
             const lp_reached *at = &batch[who[e]]; path_into(&rn, lp_path_of(hh[r].path, (size_t)hh[r].path_len));
-            if (!head_read(fw, rn.v, rn.n)) continue;
+            if (!head_read(fw, rn.v, rn.n)) { st->refused++; continue; }
             int other = lp_tuple_other(rn.v, rn.n, &at->id); if (other < 0) continue;
             lp_rating rt = hh[r].r;
             double sw = strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n); if (sw <= 0) continue;
             double cost = at->cost + lp_cost(&rt, fw->k, fw->lambda) - log(sw);
             lp_frontier_reach(fr, &rn.v[other], &at->id, &hh[r].entity, cost, 0, at->hops + 1);
-            Cell *cx = cell(fd, &rn.v[other]); cx->routes[R_SCAN]++; if (cost < cx->cost) { cx->cost = cost; if (!cx->has_r) { cx->r = rt; cx->has_r = 1; cx->via = at->id; cx->rel = rn.n >= 3 ? rn.v[1] : at->id; } }
+            const Cell *ca = cell_find(fd, &at->id); Bits sup = ca ? ca->support : (Bits){ 0 };
+            Cell *cx = cell(fd, &rn.v[other]); cx->routes[R_SCAN]++;
+            for (int w = 0; w < MAXOCC / 64; w++) cx->support.w[w] |= sup.w[w];
+            if (cost < cx->cost) { cx->cost = cost; if (!cx->has_r) { cx->r = rt; cx->has_r = 1; cx->via = at->id; cx->rel = rn.n >= 3 ? rn.v[1] : at->id; } }
         }
         holds_free(hh, nh);
     }
@@ -134,12 +166,6 @@ static int cannot_tell(const Prop *x, const Prop *y, const Firmware *fw){
  * ambiguous; one whose readings nothing else holds together with binds nothing. All of it is the perf-cache: no read. */
 typedef struct { int cell, occ, list; uint32_t slot; } Cand;
 typedef struct { int ncand, choice, level, capped; double score; } Bind;      /* per occurrence */
-static int reading_of(const lp_highway *h, const lp_id *id, int *list, uint32_t *slot){
-    for (size_t l = 0; l < h->nlists; l++) { int bank = 0; for (size_t k = 0; k < h->nbanks; k++) bank |= h->bank[k].list == &h->list[l];
-        if (bank) continue;                                                  /* a bank's value (a part of speech, a relation): a feature, not a reading */
-        int64_t s = lp_highway_slot(h, &h->list[l], id); if (s >= 0) { *list = (int)l; *slot = (uint32_t)s; return 1; } }
-    return 0;
-}
 static int mapped(const lp_highway *h, const Cand *a, const Cand *b){        /* the highway maps a to b */
     const lp_edge *e; size_t n = lp_highway_edges(h, h->list[a->list].name, a->slot, h->list[b->list].name, &e);
     for (size_t k = 0; k < n; k++) if (e[k].to == b->slot) return 1;
@@ -240,7 +266,7 @@ int cmd_turn(int argc, char **argv){
     if (!read_only) {                                                         /* the prompt, admitted as content (Forward 20.1, Sessions 21.3): what follows reads a substrate that holds it */
         const lp_trust_class *pc = lp_trust_class_named("UserPromptContent"); File pf; memset(&pf, 0, sizeof pf);
         pf.path = "the prompt"; pf.witness = who; pf.trust = pc ? pc->prior : 0.3; pf.trunk = pr;
-        LoadStats ls = { 0 }; if (load(conninfo, 2, &pf, 1, &ls)) return 1; st->admitted = ls.ent_rows;
+        LoadStats ls = { 0 }; if (load(conninfo, 2, &pf, 1, &ls) || merge(conninfo, 2, &ls)) return 1; st->admitted = ls.ent_rows;
         TABLE_EACH(x) x->keep = 0;                                            /* recorded now: the turn's witnessing finds it, and writes it again nowhere */
     }
     /* the seed: BLAKE3 of the observation and the firmware's text (and, when the firmware says so, the session and the
@@ -297,8 +323,19 @@ int cmd_turn(int argc, char **argv){
      * predicted it (what follows the longest observed run ending just before it), its reading against the readings
      * chosen before it, and the earlier positions it makes read otherwise (reanalysis). */
     Bind *bind = calloc((size_t)st->nocc + 1, sizeof(Bind)); Readings R; readings_build(st, &fd, bind, &R);
+    for (int i = 0; i < R.nc; i++) reader_want(st->rd, &fd.c[R.cand[i].cell].id);
+    for (int i = 0; i < nnear && i < 5; i++) reader_want(st->rd, &near[i].id);
+    Next nx0[64]; int nn0 = 0;
     { double t = now(); Args ra = { 0 }; arg_ids(&ra, st->occ, (size_t)st->nocc); arg_int(&ra, fw.fan);
       PGresult *fq = ask_st(st, "SELECT i, j, paths, next, times FROM @extschema@.laplace_forward($1::@extschema@.blake3[], $2::bigint) ORDER BY j, i, times DESC, next", &ra);
+      { lp_idmap *seen0 = lp_idmap_new();
+        for (int r = 0; r < PQntuples(fq) && nn0 < 64; r++) {
+            if ((int)col_int(fq, r, 1) != st->nocc || PQgetisnull(fq, r, 3)) continue;
+            bool fresh; lp_idmap_put(seen0, col_id(fq, r, 3), &fresh); if (!fresh) continue;
+            nx0[nn0].id = *col_id(fq, r, 3); nx0[nn0].times = (long)col_int(fq, r, 4);
+            nx0[nn0].len = (int)(col_int(fq, r, 1) - col_int(fq, r, 0) + 1); nn0++;
+        }
+        lp_idmap_free(seen0); }
       int expected = 0, surprised = 0, revised = 0;
       for (int p = 0; p < st->nocc; p++) {
           char *w = reader_text(st->rd, &st->occ[p], 24); printf("READ %-3d   %-12s", p + 1, w); free(w);
@@ -349,7 +386,7 @@ int cmd_turn(int argc, char **argv){
     { double t = now(); nbound = orient(st, &fd, bind, &R, &nambig); free(R.cand); free(R.first);
       for (int i = 0; i < st->nocc; i++) { capped |= bind[i].capped; if (bind[i].choice >= 0 && !bind[i].level && ((st->open.w[i >> 6] >> (i & 63)) & 1)) centre[ncentre++] = fd.c[bind[i].choice].id;    /* the program routes from what is owed (Sequence 20.4) */ }
       int ambiguous_ = nambig > 0;
-      printf("ORIENT     %s", !nbound ? (capped ? "resource-bounded: no joint binding among the candidates weighed" : "inconsistent: no reading of one word is compatible with a reading of another")
+      printf("ORIENT     %s", !nbound ? (st->refused && !fd.n ? "refused: blocked by active firmware policy" : capped ? "resource-bounded: no joint binding among the candidates weighed" : "inconsistent: no reading of one word is compatible with a reading of another")
                                     : ambiguous_ ? "ambiguous" : "unique enough to execute");
       printf("   (%.1f ms)\n", (now() - t) * 1000);
       for (int i = 0; i < st->nocc; i++) { if (!st->composed[i] || st->role[i] <= 0) continue; char *w = reader_text(st->rd, &st->occ[i], 32);
@@ -368,11 +405,14 @@ int cmd_turn(int argc, char **argv){
     Prop chains[8]; int nchains = 0;
     { int byrole[MAXOCC], nb = 0; for (int i = 0; i < st->nocc; i++) if ((st->open.w[i >> 6] >> (i & 63)) & 1) byrole[nb++] = i;
       for (int x = 1; x < nb; x++) { int v = byrole[x], y = x; while (y > 0 && st->role[byrole[y - 1]] < st->role[v]) { byrole[y] = byrole[y - 1]; y--; } byrole[y] = v; }
-      for (int x = 0; x < nb && nchains < 8 && fw.nalt; x++) { lp_id ans; lp_rating rt; int o_ = byrole[x]; if (bind[o_].choice < 0 || bind[o_].level) continue; if (!chain_from(st, &st->occ[o_], &fd.c[bind[o_].choice].id, &ans, &rt)) continue;
+      for (int x = 0; x < nb && nchains < 8 && fw.nalt; x++) { lp_id ans; lp_rating rt; int o_ = byrole[x]; if (bind[o_].level) continue;
+          const lp_id *rdg = bind[o_].choice >= 0 ? &fd.c[bind[o_].choice].id : NULL;
+          if (!chain_from(st, &st->occ[o_], rdg, &ans, &rt)) continue;
+          if (bind[o_].choice < 0) nbound++;
           chains[nchains] = (Prop){ .id = ans, .kind = P_CHAIN, .grounds = (int)(st->role[byrole[x]] * 1000 + 0.5), .conf = lp_confidence(&rt, fw.k), .occ = byrole[x] }; chains[nchains++].shape = INFINITY;
           reader_want(st->rd, &ans); char *w = reader_text(st->rd, &st->occ[byrole[x]], 32), *t = reader_text(st->rd, &ans, 80); printf("           chain from %s: %s\n", w, t); free(w); free(t); }
       printf("           %d chain%s of the firmware answer a word still owed\n", nchains, nchains == 1 ? "" : "s"); }
-    disposition = ambiguous ? "ambiguous: more than one reading survives, and an ambiguous orientation emits nothing" : nbound ? "unresolved" : capped ? "resource-bounded: no joint binding among the candidates weighed" : "inconsistent: no word's reading holds together with another's";
+    disposition = ambiguous ? "ambiguous: more than one reading survives, and an ambiguous orientation emits nothing" : nbound ? "unresolved" : (st->refused && !fd.n) ? "refused: blocked by active firmware policy" : capped ? "resource-bounded: no joint binding among the candidates weighed" : "inconsistent: no word's reading holds together with another's";
     int budget = ambiguous ? 0 : fw.emit;                                   /* an ambiguous orientation finalizes and emits nothing (Sequence 18.12) */
     int owed0 = owed(&st->open, &st->open);                                 /* what the obligations owe at the start of the turn */
 
@@ -381,7 +421,8 @@ int cmd_turn(int argc, char **argv){
          * result-bearing relations (its chains) give a word still owed. An entity the coupling merely reaches is routing
          * state: it orients and is scanned from, and is not output for being renderable. */
         Prop *pp = malloc(sizeof(Prop) * (size_t)(80)); int np = 0;
-        Next nx[64]; int nn = follows(st, nx, 64);
+        Next nx[64]; int nn = step == 0 ? nn0 : follows(st, nx, 64);
+        if (step == 0 && nn0) memcpy(nx, nx0, sizeof(Next) * (size_t)nn0);
         const lp_highway *hw = lp_highway_map(NULL);
         for (int i = 0; i < nn; i++) { if (hw && lp_highway_bank_of(hw, &nx[i].id, NULL)) continue;   /* a bank's value (a part of speech, a relation) is a feature, never what is said */
             Prop p; memset(&p, 0, sizeof p); p.id = nx[i].id; p.kind = P_FOLLOW; p.cont = nx[i].len; p.times = nx[i].times; p.occ = -1; p.shape = INFINITY;
@@ -408,7 +449,8 @@ int cmd_turn(int argc, char **argv){
         if (!pp[0].grounds && bit_count_and(&st->open, &st->open)) {            /* while obligations are open, what grounds none of them is not emitted (Sequence 20.8) */
             free(pp); if (!nemit) disposition = "unresolved: what follows grounds nothing that is owed"; break; }
         /* the evidence for the head of the election, as the trace's attention: each channel, the words it grounds */
-        for (int z = 0; z < np && z < 3; z++) { reader_want(st->rd, &pp[z].id); char *tz = reader_text(st->rd, &pp[z].id, 40);
+        for (int z = 0; z < np && z < 3; z++) reader_want(st->rd, &pp[z].id);
+        for (int z = 0; z < np && z < 3; z++) { char *tz = reader_text(st->rd, &pp[z].id, 40);
             printf("           %s \"%s\": grounds %.2f by %d channel%s (strand %d, walks %d, beside %d words), continuity %d, beside %ld, walks %ld, shape %.4f, confidence %.3f\n", z ? "  then" : "elect", tz,
                    pp[z].grounds / 1000.0, pp[z].agree, pp[z].agree == 1 ? "" : "s", bit_count_and(&pp[z].by[CH_STRAND], &pp[z].by[CH_STRAND]), bit_count_and(&pp[z].by[CH_WALK], &pp[z].by[CH_WALK]),
                    bit_count_and(&pp[z].by[CH_BESIDE], &pp[z].by[CH_BESIDE]), pp[z].cont, pp[z].cooc, pp[z].walk, isfinite(pp[z].shape) ? pp[z].shape : -1.0, pp[z].conf); free(tz); }
@@ -442,17 +484,25 @@ int cmd_turn(int argc, char **argv){
 
     /* ---- WITNESS: the turn, recorded */
     if (!read_only && outn) {
-        Ref resp = text_ref(CTX[0], (const uint8_t *)out, outn); Ref tp[2] = { pr, resp }; tp[0].said = tp[1].said = 0; Ref turn = compose(tp, 2, (uint8_t)((pr.tier > resp.tier ? pr.tier : resp.tier) + 1));
+        Ref resp = text_ref(CTX[0], (const uint8_t *)out, outn); Ref tp[2] = { pr, resp }; tp[0].said = tp[1].said = 0; Ref turn = compose(tp, 2, ref_above(tp, 2));
         const lp_trust_class *uc = lp_trust_class_named("UserPromptContent"), *rc = lp_trust_class_named("ResponseContent");
         File f[2]; memset(f, 0, sizeof f);
-        Ref p1[2] = { handle, turn }; p1[0].said = LP_SAID_TUPLE; p1[1].said = 0; Ref c1 = said_claim(compose(p1, 2, (uint8_t)((handle.tier > turn.tier ? handle.tier : turn.tier) + 1)));
-        Ref p2[2] = { resp, pr }; p2[0].said = p2[1].said = 0; Ref c2 = said_claim(compose(p2, 2, (uint8_t)((resp.tier > pr.tier ? resp.tier : pr.tier) + 1)));
+        Ref p1[2] = { handle, turn }; p1[0].said = LP_SAID_TUPLE; p1[1].said = 0; Ref c1 = said_claim(compose(p1, 2, ref_above(p1, 2)));
+        c1.outcome = (uint8_t)lp_outcome_of(1.0, &c1.spare); c1.position = (uint32_t)ordinal;
+        Ref p2[2] = { resp, pr }; p2[0].said = p2[1].said = 0; Ref c2 = said_claim(compose(p2, 2, ref_above(p2, 2)));
+        c2.outcome = (uint8_t)lp_outcome_of(1.0, &c2.spare);
         Ref lap = text_ref(CTX[0], (const uint8_t *)"Laplace", 7);
-        f[0].path = "the prompt"; f[0].witness = who; f[0].trust = uc ? uc->prior : 0.3; f[0].trunk = turn;
+        Ref u_tr[2] = { said_metadata(who), c1 }; Ref u_trunk = compose(u_tr, 2, ref_above(u_tr, 2));
+        Ref r_tr[2] = { said_metadata(lap), c2 }; Ref r_trunk = compose(r_tr, 2, ref_above(r_tr, 2));
+        f[0].path = "the prompt"; f[0].witness = who; f[0].trust = uc ? uc->prior : 0.3; f[0].trunk = u_trunk; f[0].file = u_trunk; f[0].has_file = 1;
         Event e1 = { .claim = c1.id, .witnessed = c1.id, .score = 1.0f, .enter_rating = 1500.0f, .position = (uint32_t)ordinal, .kind = EV_CLAIM }; ev_push(&f[0].ev, &e1);
-        f[1].path = "the response"; f[1].witness = lap; f[1].trust = rc ? rc->prior : 0.2; f[1].trunk = resp;
+        f[1].path = "the response"; f[1].witness = lap; f[1].trust = rc ? rc->prior : 0.2; f[1].trunk = r_trunk; f[1].file = r_trunk; f[1].has_file = 1;
         Event e2 = { .claim = c2.id, .witnessed = c2.id, .score = 1.0f, .enter_rating = 1500.0f, .kind = EV_CLAIM }; ev_push(&f[1].ev, &e2);
-        LoadStats ls = { 0 }; if (load(conninfo, 2, f, 2, &ls)) return 1;
+        Fold *fold = fold_new(); fold_events(fold, f, 2);
+        LoadStats ls = { 0 };
+        LoadWitness lw[2] = { { .id = u_trunk.id, .trust = f[0].trust }, { .id = r_trunk.id, .trust = f[1].trust } };
+        int rc_ = load(conninfo, 2, f, 2, &ls); fold_free(fold);
+        if (rc_ || load_register(conninfo, 2, lw, 2, f, 2) || merge(conninfo, 2, &ls)) return 1;
         char ti[33]; lp_id_hex(&turn.id, ti);
         printf("WITNESS    turn %s, at %d in the session: %llu entities new, the user's [session, turn] and Laplace's [response, prompt]\n", ti, ordinal, (unsigned long long)ls.ent_rows);
         free(f[0].ev.e); free(f[1].ev.e);

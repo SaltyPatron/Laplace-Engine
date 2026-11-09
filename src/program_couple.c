@@ -17,12 +17,16 @@ static int *rows_in_order(const PGresult *q, const int *cols, int ncols){
 void resolve_roles(State *st){
     Firmware *fw = (Firmware *)st->fw;
     const lp_layout *fl = lp_flags_map(NULL); const lp_field *alpha = fl ? lp_flags_field(fl, "Alphabetic") : NULL, *gc = fl ? lp_flags_field(fl, "General_Category") : NULL; int32_t nd = gc ? lp_flags_value(fl, gc, "Nd") : -1;
-    for (int i = 0; i < st->nocc; i++) { st->role[i] = 1.0; st->composed[i] = table_find(&st->occ[i]) != NULL;
+    lp_id wids[MAXOCC]; int wat[MAXOCC], nw = 0;
+    for (int i = 0; i < st->nocc; i++) { st->role[i] = fw->role_by[0] ? 0.5 : 1.0; st->composed[i] = table_find(&st->occ[i]) != NULL;
         if (!st->composed[i]) { int64_t cp = lp_tier0_codepoint(T0, &st->occ[i]);      /* a word of one letter is a word: by its Unicode properties, Alphabetic or a decimal number */
             if (cp >= 0 && ((alpha && lp_flags_get(fl, (uint32_t)cp, alpha)) || (gc && nd >= 0 && lp_flags_get(fl, (uint32_t)cp, gc) == (uint32_t)nd))) st->composed[i] = 1; }
         if (!st->composed[i]) { st->role[i] = 0; continue; }                                   /* a space, a mark: no pull of its own, no obligation */
-        if (!fw->role_by[0]) continue;
-        double w = role_of(st->pg, fw, &st->occ[i]); st->trips++; if (w >= 0) st->role[i] = w; }
+        if (fw->role_by[0]) { wids[nw] = st->occ[i]; wat[nw++] = i; } }
+    if (nw) {
+        double rw[MAXOCC]; roles_of(st->pg, fw, wids, nw, rw, &st->trips);
+        for (int k = 0; k < nw; k++) if (rw[k] >= 0) st->role[wat[k]] = rw[k];
+    }
     memset(&st->open, 0, sizeof st->open);
     for (int i = 0; i < st->nocc; i++) if (st->composed[i] && st->role[i] > 0) bit_set(&st->open, i);   /* an obligation until what is attested of it says it pulls nothing */
 }
@@ -126,18 +130,22 @@ void heads_say(State *st, lp_idmap *hm, const char *label){
 /* COUPLE through the shared Native containment reader (holds_capped, one Native frontier): for each entity, the claims
  * that hold it (its strands, the other end answering with the strand's standing) and the observations that hold it
  * (containment), a hub's never read; and the shape, measured here. */
+static void context_fill(State *st, int from, int to, const int *at, int nk, const Hold *h, int nh, const int *hub, const lp_id *keys);
 int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_of, int kind, Curve *near, int keep){
     if (!n) return 0; const Firmware *fw = st->fw;
     if (!getenv("LAPLACE_COUPLE_SQL")) {
         lp_id *keys = malloc(sizeof(lp_id) * (size_t)n); int *of = malloc(sizeof(int) * (size_t)n), nk = 0;
-        for (int o = 0; o < n; o++) { keys[nk] = ids[o]; of[nk++] = o; }
-        int *hub = malloc(sizeof(int) * 2 * (size_t)(nk ? nk : 1)), nh = 0; Hold *h = holds_capped(st->pg,keys, nk, fw->fan, 1, 3, hub, &nh); st->trips++;
+        for (int o = 0; o < n; o++) {
+            if (occ_of && occ_of[o] >= 0 && occ_of[o] < st->nocc && !st->composed[occ_of[o]]) continue;
+            keys[nk] = ids[o]; of[nk++] = o;
+        }
+        int *hub = malloc(sizeof(int) * 2 * (size_t)(nk ? nk : 1)), nh = 0; Hold *h = nk ? holds_capped(st->pg,keys, nk, fw->fan, 1, 3, hub, &nh) : NULL; if (nk) st->trips++;
         Ids rn = { 0 };
         for (int i = 0; i < nh; i++) { int s = h[i].src; if (s < 0 || s >= nk) continue; int o = of[s];
             int occ = occ_of ? occ_of[o] : -1; double pull = occ >= 0 && occ < st->nocc ? st->role[occ] : kind == R_CLAIM ? 1.0 : 0.5;
             if (lp_id_eq(&h[i].entity, &st->prompt)) continue;
             if (h[i].claim) { if (!h[i].stood) continue; path_into(&rn, lp_path_of(h[i].path, (size_t)h[i].path_len)); if (rn.n < 2) continue;
-                if (!head_read(fw, rn.v, rn.n)) continue;
+                if (!head_read(fw, rn.v, rn.n)) { st->refused++; continue; }
                 int other = lp_tuple_other(rn.v, rn.n, &ids[o]); if (other < 0 || lp_id_eq(&rn.v[other], &st->prompt)) continue;
                 lp_id p3[3] = { ids[o], rn.n >= 3 ? rn.v[1] : ids[o], rn.v[other] };
                 double conf = lp_confidence(&h[i].r, fw->k) * strand_weight(fw, fw->id.weigh, p3, 3);
@@ -157,6 +165,14 @@ int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_of, int
                     if (!x->has_r) { x->r = rt; x->has_r = 1; x->via = p3[0]; x->rel = p3[1]; } read_++; }
                 holds_free(h2, n2); (void)read_; } }
         lp_vec_free(&rn);
+        if (occ_of && nk > 0) {
+            int at[MAXOCC]; for (int i = 0; i < st->nocc; i++) at[i] = -1;
+            for (int i = 0; i < st->nocc; i++) {
+                if (!st->composed[i] || st->role[i] <= 0) continue;
+                for (int k = 0; k < nk; k++) if (lp_id_eq(&keys[k], &st->occ[i])) { at[i] = k; break; }
+            }
+            context_fill(st, 0, st->nocc, at, nk, h, nh, hub, keys);
+        }
         int nn = keep > 0 ? shape_measured(st, ids, n, h, nh, near, keep) : 0;
         holds_free(h, nh); free(hub); free(keys); free(of); return nn;
     }
@@ -200,8 +216,12 @@ static int curve_order(const void *a, const void *b){ const Curve *x = a, *y = b
  * realized and measured natively); only the shape is read here. In content order: distance, then ID. */
 int shape_near(State *st, const lp_id *ids, int n, Curve *near, int keep){
     if (n < 2 || keep <= 0) return 0; const Firmware *fw = st->fw;
-    if (!getenv("LAPLACE_COUPLE_SQL")) { int *hub = malloc(sizeof(int) * 2 * (size_t)n), nh = 0; Hold *h = holds_capped(st->pg,ids, n, fw->fan, 0, 2, hub, &nh); st->trips++;
-        int k = shape_measured(st, ids, n, h, nh, near, keep); holds_free(h, nh); free(hub); return k; }
+    if (!getenv("LAPLACE_COUPLE_SQL")) {
+        lp_id *keys = malloc(sizeof(lp_id) * (size_t)n); int nk = 0;
+        for (int i = 0; i < n; i++) if (lp_tier0_codepoint(T0, &ids[i]) < 0) keys[nk++] = ids[i];
+        int *hub = malloc(sizeof(int) * 2 * (size_t)(nk ? nk : 1)), nh = 0;
+        Hold *h = nk ? holds_capped(st->pg,keys, nk, fw->fan, 0, 2, hub, &nh) : NULL; if (nk) st->trips++;
+        int k = shape_measured(st, ids, n, h, nh, near, keep); holds_free(h, nh); free(hub); free(keys); return k; }
     Args a = { 0 }; arg_ids(&a, ids, (size_t)n); arg_int(&a, fw->fan); arg_refused(&a); arg_int(&a, fw->shape); arg_f64(&a, fw->shape_n); arg_int(&a, keep + 4);
     PGresult *q = ask_st(st, "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices FROM @extschema@.laplace_couple($1::@extschema@.blake3[], $2::bigint, $3::@extschema@.blake3[], $4::smallint, $5::float8, $6::integer) WHERE route = 2", &a);
     int m = PQntuples(q), nn = 0; Curve *all = malloc(sizeof(Curve) * (size_t)(m ? m : 1));
@@ -265,21 +285,13 @@ void walk(State *st, int from, int to){                                 /* the w
  * observation. A word held by more than the fan is a hub and has none: reached, not crossed. ctx_all counts each
  * observation once however many of the words it holds: the base rate a word is observed at, in this context. */
 static lp_idmap *CTX_OBS;                                                     /* every observation counted into ctx_all, once */
-void context(State *st, int from, int to){                              /* the context of positions [from, to) */
+static void context_fill(State *st, int from, int to, const int *at, int nk, const Hold *h, int nh, const int *hub, const lp_id *keys){
     if (!CTX_OBS) CTX_OBS = lp_idmap_new(); if (!st->ctx_all) st->ctx_all = lp_idmap_new(); lp_idmap *obs = CTX_OBS; Ids ids = { 0 };
-    /* every position's observations in one set, one Native frontier; a position more than the fan holds is a hub, its
-     * observations never read. The same word again shares its context. */
-    lp_id keys[MAXOCC]; int at[MAXOCC], nk = 0;
-    for (int i = from; i < to; i++) { st->ctx[i] = NULL; st->ctx_n[i] = 0; st->ctx_hub[i] = 0; at[i - from] = -1;
-        if (!st->composed[i] || st->role[i] <= 0) continue;
-        int dup = -1; for (int j = 0; j < from && dup < 0; j++) if (lp_id_eq(&st->occ[j], &st->occ[i]) && (st->ctx[j] || st->ctx_hub[j])) dup = j;
-        if (dup >= 0) { st->ctx[i] = st->ctx[dup]; st->ctx_n[i] = st->ctx_n[dup]; st->ctx_hub[i] = st->ctx_hub[dup]; continue; }
-        int k = -1; for (int z = 0; z < nk; z++) if (lp_id_eq(&keys[z], &st->occ[i])) k = z;
-        if (k < 0) { keys[nk] = st->occ[i]; k = nk++; } at[i - from] = k; }
-    if (!nk) { lp_vec_free(&ids); return; }
-    int *hub = malloc(sizeof(int) * 2 * (size_t)nk), nh = 0; Hold *h = holds_capped(st->pg,keys, nk, st->fw->fan, 0, 2, hub, &nh); st->trips++;
-    lp_idmap **km = calloc((size_t)nk, sizeof *km); int *kn = calloc((size_t)nk, sizeof(int));
-    for (int k = 0; k < nk; k++) if (!hub[2 * k + 1]) km[k] = lp_idmap_new();
+    lp_idmap **km = calloc((size_t)(nk ? nk : 1), sizeof *km); int *kn = calloc((size_t)(nk ? nk : 1), sizeof(int));
+    for (int k = 0; k < nk; k++) {
+        int active = 0; for (int i = from; i < to && !active; i++) active = (at[i - from] == k);
+        if (active && !hub[2 * k + 1]) km[k] = lp_idmap_new();
+    }
     for (int z = 0; z < nh; z++) { int k = h[z].src; if (k < 0 || k >= nk || !km[k] || h[z].claim) continue; kn[k]++;
         bool once; lp_idmap_put(obs, &h[z].entity, &once);
         size_t nv = lp_path_ids(h[z].path, (size_t)h[z].path_len, NULL, 0); lp_vec_reserve(&ids, nv ? nv : 1); nv = lp_path_ids(h[z].path, (size_t)h[z].path_len, ids.v, nv);
@@ -289,7 +301,22 @@ void context(State *st, int from, int to){                              /* the c
             if (once) (*lp_idmap_value(st->ctx_all, lp_idmap_put(st->ctx_all, &ids.v[v], &f)))++; }
         lp_idmap_free(here); if (once) st->ctx_total++; }
     for (int i = from; i < to; i++) { int k = at[i - from]; if (k < 0) continue; if (hub[2 * k + 1]) { st->ctx_hub[i] = 1; continue; } st->ctx[i] = km[k]; st->ctx_n[i] = kn[k]; }
-    holds_free(h, nh); free(hub); free(km); free(kn); lp_vec_free(&ids);
+    free(km); free(kn); lp_vec_free(&ids); (void)keys;
+}
+void context(State *st, int from, int to){                              /* the context of positions [from, to) */
+    lp_id keys[MAXOCC]; int at[MAXOCC], nk = 0;
+    for (int i = from; i < to; i++) {
+        if (st->ctx[i] || st->ctx_hub[i]) continue;
+        st->ctx[i] = NULL; st->ctx_n[i] = 0; st->ctx_hub[i] = 0; at[i - from] = -1;
+        if (!st->composed[i] || st->role[i] <= 0) continue;
+        int dup = -1; for (int j = 0; j < from && dup < 0; j++) if (lp_id_eq(&st->occ[j], &st->occ[i]) && (st->ctx[j] || st->ctx_hub[j])) dup = j;
+        if (dup >= 0) { st->ctx[i] = st->ctx[dup]; st->ctx_n[i] = st->ctx_n[dup]; st->ctx_hub[i] = st->ctx_hub[dup]; continue; }
+        int k = -1; for (int z = 0; z < nk; z++) if (lp_id_eq(&keys[z], &st->occ[i])) k = z;
+        if (k < 0) { keys[nk] = st->occ[i]; k = nk++; } at[i - from] = k; }
+    if (!nk) return;
+    int *hub = malloc(sizeof(int) * 2 * (size_t)nk), nh = 0; Hold *h = holds_capped(st->pg,keys, nk, st->fw->fan, 0, 2, hub, &nh); st->trips++;
+    context_fill(st, from, to, at, nk, h, nh, hub, keys);
+    holds_free(h, nh); free(hub);
 }
 int beside_grounds(const State *st, int i, const lp_id *id){
     int c = beside(st, i, id); if (c < 2 || !st->ctx_n[i] || !st->ctx_total) return 0;
@@ -367,12 +394,15 @@ static int fork_choice(void *vc, const Claim *cl, int n){
      * within their standard error. */
     /* how much each context word informs: how many observations hold it, counted by the index (a hub is counted, never
      * read), against the commonest of the prompt's words */
-    if (!st->df_ready) { st->df_max = 0; for (int j = 0; j < st->npos; j++) { st->df[j] = 0; if (!st->composed[j]) continue; int seen = -1; for (int i = 0; i < j && seen < 0; i++) if (lp_id_eq(&st->occ[i], &st->occ[j])) seen = i;
-            st->df[j] = seen >= 0 ? st->df[seen] : holds_count(st->pg,&st->occ[j], 1, 0); if (seen < 0) st->trips++; if (st->df[j] > st->df_max) st->df_max = st->df[j]; }
+    if (!st->df_ready) { st->df_max = 0;
+        for (int j = 0; j < st->npos; j++) {
+            st->df[j] = !st->composed[j] ? 0 : st->ctx_hub[j] ? st->fw->fan + 1 : st->ctx_n[j];
+            if (st->df[j] > st->df_max) st->df_max = st->df[j];
+        }
         st->df_ready = st->npos; }
     double *hold = calloc((size_t)n, sizeof(double)), *walks = calloc((size_t)n, sizeof(double)), *score = calloc((size_t)n, sizeof(double));
     for (int k = 0; k < n; k++) { size_t cnt = lp_idmap_count(rec[k]); double norm = sqrt((double)(cnt ? cnt : 1));
-        for (int j = 0; j < st->npos; j++) { if (!st->composed[j] || st->role[j] <= 0 || lp_id_eq(&st->occ[j], fc->word)) continue;
+        for (int j = 0; j < st->npos; j++) { if (!st->composed[j] || st->ctx_hub[j] || st->role[j] <= 0 || lp_id_eq(&st->occ[j], fc->word)) continue;
             int seen = 0; for (int i = 0; i < j && !seen; i++) seen = lp_id_eq(&st->occ[i], &st->occ[j]); if (seen) continue;
             double info = log((1.0 + st->df_max) / (1.0 + st->df[j]));          /* against the prompt's commonest word: rare informs, common does not */
             if (info > 0 && lp_idmap_find(rec[k], &st->occ[j]) >= 0) hold[k] += st->role[j] * info;

@@ -207,22 +207,31 @@ int cmd_pull(int argc, char **argv){
               for (int i = 0; i < np; i++) { if (!table_find(&ph[i]) || (np > 1 && !memcmp(&ph[i], &pr.id, 16))) continue;
                   bool fresh; lp_idmap_put(sm, &ph[i], &fresh); if (fresh) pl[npl++] = (Puller){ ph[i], fw.role_by[0] ? 0.5 : 1.0, i }; }     /* a word nothing says the role of pulls half */
               lp_idmap_free(sm); }
-            for (int i = 0; i < npl; i++) {
-                double weight = role_of(pg, &fw, &pl[i].id); if (weight >= 0) pl[i].w = weight;
+            if (npl) {
+                lp_id *wids = malloc(sizeof(lp_id) * (size_t)npl); double *rw = malloc(sizeof(double) * (size_t)npl);
+                for (int i = 0; i < npl; i++) wids[i] = pl[i].id;
+                roles_of(pg, &fw, wids, npl, rw, NULL);
+                for (int i = 0; i < npl; i++) if (rw[i] >= 0) pl[i].w = rw[i];
+                free(wids); free(rw);
             }
             for (int a_ = 1; a_ < npl; a_++) { Puller x = pl[a_]; int b_ = a_; while (b_ > 0 && pl[b_ - 1].w < x.w) { pl[b_] = pl[b_ - 1]; b_--; } pl[b_] = x; }
-            for (int u = 0; u < npl && u < fw.take[s].n; u++) {
+            int answered = 0, nk0 = 0, alt0 = fw.nalt - 1;
+            for (int u = 0; u < npl && answered < fw.take[s].n; u++) {
                 if (pl[u].w <= 0) break;
                 lp_id cur = pl[u].id; ClaimStanding last = { 0 }; int alt;
                 int nk = chain_follow(pg, rd, &fw, &pl[u].id, NULL, &seed, NULL, NULL, &cur, &last, &alt);
-                int complete = alt >= 0;
-                if (!complete) alt = fw.nalt - 1;
-                char *who = reader_text(rd, &pl[u].id, 64);
-                if (complete) { char *tx = reader_text(rd, &cur, 600);
+                if (!u) { nk0 = nk; alt0 = alt >= 0 ? alt : fw.nalt - 1; }
+                if (alt >= 0) {
+                    char *who = reader_text(rd, &pl[u].id, 64), *tx = reader_text(rd, &cur, 600);
                     printf("\nanswer     %s: %s\n", who, tx); free(tx);
                     printf("           through"); for (int z = 0; z < nk; z++) printf(" %s", fw.chain[alt][z]); printf(", %s pulling at %.2f", who, pl[u].w);
-                    printf("; standing of the last strand %.0f +/- %.0f, %" PRId64 " matches   (%.1f ms)\n", last.r.rating, last.r.deviation, last.matches, (now() - t) * 1000); took++; }
-                else printf("\nanswer     %s: the chain stops after %d of %d relations: nothing is attested there   (%.1f ms)\n", who, nk, fw.nchain[alt], (now() - t) * 1000);
+                    printf("; standing of the last strand %.0f +/- %.0f, %" PRId64 " matches   (%.1f ms)\n", last.r.rating, last.r.deviation, last.matches, (now() - t) * 1000);
+                    free(who); took++; answered++;
+                }
+            }
+            if (!answered && npl && pl[0].w > 0) {
+                char *who = reader_text(rd, &pl[0].id, 64);
+                printf("\nanswer     %s: the chain stops after %d of %d relations: nothing is attested there   (%.1f ms)\n", who, nk0, fw.nchain[alt0], (now() - t) * 1000);
                 free(who);
             }
             free(pl);
