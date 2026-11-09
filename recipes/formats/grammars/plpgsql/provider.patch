@@ -15,9 +15,16 @@
 @@ -579 +579 @@
 -    _sql_statement_expr: $ => alias($._sql_statement, $.sql_expression),
 +    _sql_statement_expr: $ => alias($._sql_statement, $.sql_statement),
-@@ -838 +838 @@
+@@ -599,2 +599,3 @@
+-      $.identifier,
+-      $.unreserved_keyword
++      $.identifier,
++      $.unreserved_keyword,
++      $.psql_identifier_variable
+@@ -838 +839,2 @@
 -    string_literal: _ => token(/'([^']|'')*'/),
 +    string_literal: _ => token(/'([^']|'')*'(([ \t\f\v]|--[^\n\r]*)*[\n\r]([ \t\n\r\f\v]+|--[^\n\r]*[\n\r])*'([^']|'')*')*/),
++    psql_identifier_variable: _ => token(/@extschema(?::[a-zA-Z_][a-zA-Z0-9_]*)?@/),
 --- a/plpgsql/src/scanner.c
 +++ b/plpgsql/src/scanner.c
 @@ -700 +700,28 @@

@@ -1,6 +1,10 @@
 --- a/postgres/grammar.js
 +++ b/postgres/grammar.js
-@@ -617,6 +617,6 @@
+@@ -52,0 +53 @@
++    psql_identifier_variable: _ => token(/@extschema(?::[a-zA-Z_][a-zA-Z0-9_]*)?@/),
+@@ -530,0 +532 @@
++        $.psql_identifier_variable,
+@@ -617,6 +619,6 @@
 -        prec.left(20, prec.dynamic(20, seq($.kw_create, optional($.OptTemp), $.kw_table, $.qualified_name, '(', optional($.OptTableElementList), ')', optional($.OptInherit), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
 -        prec.right(5, prec.dynamic(5, seq($.kw_create, optional($.OptTemp), $.kw_table, $.kw_if, $.kw_not, $.kw_exists, $.qualified_name, '(', optional($.OptTableElementList), ')', optional($.OptInherit), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
 -        seq($.kw_create, optional($.OptTemp), $.kw_table, $.qualified_name, $.kw_of, $.any_name, optional($.OptTypedTableElementList), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)),
@@ -16,6 +20,9 @@
 @@ -1599 +1599 @@
 -        seq($.kw_language, $.NonReservedWord_or_Sconst),
 +        seq($.kw_language, field('language', $.NonReservedWord_or_Sconst)),
-@@ -1676 +1676 @@
+@@ -1676 +1678 @@
 -        seq($.kw_language, $.NonReservedWord_or_Sconst)
 +        seq($.kw_language, field('language', $.NonReservedWord_or_Sconst))
+@@ -4790 +4792 @@
+-    _ident: $ => choice($.identifier, $.quoted_identifier),
++    _ident: $ => choice($.identifier, $.quoted_identifier, $.psql_identifier_variable),

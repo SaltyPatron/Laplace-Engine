@@ -271,7 +271,8 @@ int cmd_hop(int argc, char **argv){
     }
     double t_claims = (now() - t) * 1000;
     n = refused(pg, c, &fw, cl, n); weighed(c, &fw, cl, n);
-    positions_of(pg, cl, n); if (!whole && fw.order_witness) qsort(cl, (size_t)n, sizeof(Claim), claim_by_position);
+    if (!whole && fw.order_witness) { positions_of(pg, cl, n); qsort(cl, (size_t)n, sizeof(Claim), claim_by_position); }
+    else positions_of(pg, cl, n < limit ? n : limit);
     Reader *rd = reader_new(pg);
     lp_vec(lp_id) display={0};
     for (int i = 0; i < n && i < limit; i++) for (int p = 0; p < cl[i].np; p++) lp_push(&display,cl[i].part[p]);

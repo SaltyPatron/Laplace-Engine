@@ -13,7 +13,7 @@
 @@ -52,0 +55,4 @@
 +    psql_command: $ => token(seq('\\', /[^\r\n]*/)),
 +    psql_query_command: $ => token(prec(2, seq('\\', /(?:g(?:set|exec|desc)?|watch)(?:[ \t][^\r\n]*)?/))),
-+    psql_identifier_variable: _ => token(/:(?:[a-zA-Z_][a-zA-Z0-9_]*|"[^"\r\n]+")/),
++    psql_identifier_variable: _ => token(choice(/:(?:[a-zA-Z_][a-zA-Z0-9_]*|"[^"\r\n]+")/, /@extschema(?::[a-zA-Z_][a-zA-Z0-9_]*)?@/)),
 +    psql_string_variable: _ => token(/:'[^'\r\n]+'/),
 @@ -530,0 +537 @@
 +        $.psql_identifier_variable,

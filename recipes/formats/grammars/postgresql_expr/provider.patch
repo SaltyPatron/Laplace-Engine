@@ -5,13 +5,16 @@
 +  name: 'postgresql_expr',
 @@ -35,0 +36 @@
 +    [$.a_expr],
-@@ -49,4 +50 @@
+@@ -49,4 +50,2 @@
 -    source_file: $ => seq(
 -      repeat(seq(optional($.toplevel_stmt), ';')),
 -      optional($.toplevel_stmt)
 -    ),
 +    source_file: $ => $.PLpgSQL_Expr,
-@@ -617,6 +615,6 @@
++    psql_identifier_variable: _ => token(/@extschema(?::[a-zA-Z_][a-zA-Z0-9_]*)?@/),
+@@ -530,0 +530 @@
++        $.psql_identifier_variable,
+@@ -617,6 +617,6 @@
 -        prec.left(20, prec.dynamic(20, seq($.kw_create, optional($.OptTemp), $.kw_table, $.qualified_name, '(', optional($.OptTableElementList), ')', optional($.OptInherit), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
 -        prec.right(5, prec.dynamic(5, seq($.kw_create, optional($.OptTemp), $.kw_table, $.kw_if, $.kw_not, $.kw_exists, $.qualified_name, '(', optional($.OptTableElementList), ')', optional($.OptInherit), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)))),
 -        seq($.kw_create, optional($.OptTemp), $.kw_table, $.qualified_name, $.kw_of, $.any_name, optional($.OptTypedTableElementList), optional($.OptPartitionSpec), optional($.table_access_method_clause), optional($.OptWith), optional($.OnCommitOption), optional($.OptTableSpace)),
@@ -48,9 +51,12 @@
 @@ -2721 +2719 @@
 -        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_not, $.kw_similar, $.kw_to, $.a_expr, $.kw_escape, $.a_expr))),
 +        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_not, $.kw_similar, $.kw_to, $.a_expr, $.kw_escape, $.a_expr))),
-@@ -3066 +3064 @@
+@@ -3066 +3065 @@
 -        prec.left(8, prec.dynamic(8, seq($.a_expr, $.kw_similar, $.a_expr, $.kw_escape, $.a_expr)))
 +        prec.left(9, prec.dynamic(9, seq($.a_expr, $.kw_similar, $.a_expr, $.kw_escape, $.a_expr)))
+@@ -4790 +4789 @@
+-    _ident: $ => choice($.identifier, $.quoted_identifier),
++    _ident: $ => choice($.identifier, $.quoted_identifier, $.psql_identifier_variable),
 --- a/postgres/src/scanner.c
 +++ b/postgres/src/scanner.c
 @@ -20,3 +20,3 @@
