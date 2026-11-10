@@ -1,0 +1,13 @@
+name sloane-electrical-dictionary
+# The Standard Electrical Dictionary (Sloane, 1892). An entry is a term on a line of its own, then its definition and
+# the book's references. What an entry attests of its term: the terms it refers to ("See X", "(see X)") and the synonyms
+# its foot lists ("Synonyms--A--B."). Its definition is the entry's content, a usage of the term, not a claim.
+match standard-electrical-dictionary-sloane.txt
+format sloane
+
+thing entry term
+# A reference is "See"/"see" and the term it names: parted so that only the name is said.
+part crossref by | is space
+content term qualifier text other synonym See see
+value - synonym See see
+attest entry synonym crossref

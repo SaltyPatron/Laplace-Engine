@@ -1,0 +1,9 @@
+name britannica-1911
+# Encyclopaedia Britannica, 11th Edition (1911), Project Gutenberg's slices of it: articles, each a headword and its
+# body, with cross-references to other articles.
+witness Encyclopaedia Britannica, 11th Edition
+lineage Project Gutenberg
+class StructuredCorpus
+root $LAPLACE_DATA/ProjectGutenberg/text
+files $LAPLACE_DATA/ProjectGutenberg/text/britannica-1911-*.txt
+after unicode

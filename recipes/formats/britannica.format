@@ -1,0 +1,13 @@
+grammar britannica
+records article
+node article group as article
+node headword text as headword trim
+node lead text as lead trim
+node text text as text trim
+node crossref text as crossref
+node other text as other
+node paragraph skip
+node front skip
+node start skip
+node end skip
+node back skip

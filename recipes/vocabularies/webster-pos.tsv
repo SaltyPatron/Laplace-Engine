@@ -1,0 +1,36 @@
+# The parts of speech Webster's Unabridged Dictionary (1913) writes after a headword's spelling, each as the dictionary
+# writes it (n., v. t., a.). A noun, adjective, verb (transitive, intransitive or both), adverb, preposition, pronoun,
+# conjunction or interjection is the part of speech of the shared vocabulary it names; every other category the
+# dictionary writes (a participle, an inflected form, a plural, a prefix) is its own, kept as written and equivalent
+# to nothing.
+list upos
+a. ADJ
+adj. ADJ
+adv. ADV
+conj. CCONJ
+imp. -
+interj. INTJ
+n. NOUN
+"p. a." -
+"p. p." -
+"p. pr." -
+p.a. -
+p.p. -
+p.pr. -
+pl. -
+pref. -
+prefix. -
+prep. ADP
+pron. PRON
+prop. -
+v. VERB
+"v. i." VERB
+"v. i. & i." VERB
+"v. i. & t." VERB
+"v. i.&t." VERB
+"v. t." VERB
+"v. t. & i." VERB
+"v. t.& i." VERB
+v.i. VERB
+v.t. VERB
+"vb. n." -

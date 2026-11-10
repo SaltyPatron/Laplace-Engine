@@ -1,10 +1,10 @@
 name project-gutenberg
-witness Project Gutenberg
-called Project Gutenberg
-class UserCuratedResource
-# Books and reference works from Project Gutenberg. Reference works (dictionary, thesaurus, encyclopedia) attest
-# curated entries and definitions; ordinary books are observed as plain text.
+# Ordinary books from Project Gutenberg, plain text, observed as content: they attest nothing and have no witness
+# (Wiki, Corpora: Project Gutenberg). The reference works among its files (Webster's dictionary, Roget's thesaurus, the
+# Britannica, Sloane's electrical dictionary) are sources of their own with a recipe for their structure: webster-1913,
+# roget-thesaurus, britannica-1911, sloane-electrical.
 root $LAPLACE_DATA/ProjectGutenberg/text
+except webster-unabridged-dictionary-1913.txt rogets-thesaurus-of-english-words-and-phrases.txt britannica-1911-*.txt standard-electrical-dictionary-sloane.txt
 # Measured when it was loaded: 2,791,039 compositions from 208 MB, at 750 bytes each with their indexes and standings.
 room 11
 after unicode

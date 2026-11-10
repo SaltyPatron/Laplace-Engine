@@ -1,0 +1,18 @@
+grammar webster
+records entry
+node entry group as entry
+node headword text as headword trim
+node form text as form
+node pos text as pos
+node domain text as domain
+node etymology_text text as etymology_text trim
+node etymology_fragment text as etymology_fragment
+node note text as note
+node usage text as usage
+node text text as text trim
+node crossref text as crossref
+node other text as other
+node synonym text as synonym trim
+node syn_mark skip
+node blank skip
+node preface skip

@@ -1,0 +1,13 @@
+name britannica-1911-articles
+# Encyclopaedia Britannica, 11th Edition (1911). An article is its headword, in capitals, and its paragraphs. What an
+# article attests of its headword is the articles it refers to ("see CATACOMB", "See BIBLIOGRAPHY AND BIBLIOLOGY").
+# The text of the article is its content, a usage of the headword, not a claim keyed by its whole text.
+match britannica-1911-*.txt
+format britannica
+
+thing article headword
+# A reference is "See"/"see" and the headword it names: parted so that only the name is said.
+part crossref by | is space
+content headword lead text other See see
+value - See see
+attest article crossref
