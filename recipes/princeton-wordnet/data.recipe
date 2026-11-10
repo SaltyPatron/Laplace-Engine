@@ -42,7 +42,7 @@ holds row sense
 # lexicographer file": a part of WordNet's pointer to the sense (its sense key), recorded nowhere.
 omit lex_id
 # "ss_type: One character code indicating the synset type": n NOUN, v VERB, a ADJECTIVE, s ADJECTIVE SATELLITE, r ADVERB
-type ss_type upos vocabulary wordnet-pos
+type ss_type upos crosswalk wordnet-pos
 value upos ss_type
 attest row ss_type
 # "lex_filenum: Two digit decimal integer corresponding to the lexicographer file name containing the synset": the
