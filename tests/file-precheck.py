@@ -46,11 +46,16 @@ def main():
             stock = recipes / "file.recipe"
             stock.write_text(stock.read_text(encoding="utf-8").replace("metadata pathname filename ", "metadata ")
                              + "\nomit pathname filename\n", encoding="utf-8", newline="\n")
+            # A file is a witness when it has attestations: the fixture files are tables whose rows attest.
+            (recipes / "tsv.recipe").write_text(
+                "name tsv\nmatch *.tsv *.tab\nclass UserCuratedResource\ntier row by \\n\nnames thing value\n"
+                "tier field by \\t\nthing row thing\ncontent thing value\nrelation \"has value\" value\n"
+                "attest row value\n", encoding="utf-8", newline="\n")
             inputs = root / "inputs"
             inputs.mkdir()
-            (inputs / "a.txt").write_text("Shared recorded words.\n", encoding="utf-8", newline="\n")
-            os.link(inputs / "a.txt", inputs / "b.txt")
-            (inputs / "c.txt").write_text("A distinct file follows both occurrences.\n", encoding="utf-8", newline="\n")
+            (inputs / "a.tsv").write_text("shared\trecorded\n", encoding="utf-8", newline="\n")
+            os.link(inputs / "a.tsv", inputs / "b.tsv")
+            (inputs / "c.tsv").write_text("distinct\tfollows\n", encoding="utf-8", newline="\n")
             env = os.environ.copy()
             env.update(LAPLACE_RECIPES=str(recipes), LAPLACE_INGEST_ONE="1",
                        LAPLACE_WORKING_SET_BYTES=str(1 << 28))
