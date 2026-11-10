@@ -46,13 +46,18 @@ def main():
             stock = recipes / "file.recipe"
             stock.write_text(stock.read_text(encoding="utf-8").replace("metadata pathname filename ", "metadata ")
                              + "\nomit pathname filename\n", encoding="utf-8", newline="\n")
-            # A file is a witness when it has attestations: the fixture files are tables whose rows attest.
-            (recipes / "tsv.recipe").write_text(
-                "name tsv\nmatch *.tsv *.tab\nclass UserCuratedResource\ntier row by \\n\nnames thing value\n"
-                "tier field by \\t\nthing row thing\ncontent thing value\nrelation \"has value\" value\n"
-                "attest row value\n", encoding="utf-8", newline="\n")
+            # The witness is the source trunk [source record, its files' trunks], known when it has attestations: the
+            # fixture is one source whose tables attest. The hard link is one canonical file trunk under it.
+            fixture = recipes / "file-precheck"
+            fixture.mkdir()
             inputs = root / "inputs"
             inputs.mkdir()
+            (fixture / "source").write_text(f"name file-precheck\nwitness File precheck\nclass AcademicCurated\nroot {inputs}\n",
+                                            encoding="utf-8", newline="\n")
+            (fixture / "claims.recipe").write_text(
+                "name claims\nmatch *.tsv\ntier row by \\n\nnames thing value\n"
+                "tier field by \\t\nthing row thing\ncontent thing value\nrelation \"has value\" value\n"
+                "attest row value\n", encoding="utf-8", newline="\n")
             (inputs / "a.tsv").write_text("shared\trecorded\n", encoding="utf-8", newline="\n")
             os.link(inputs / "a.tsv", inputs / "b.tsv")
             (inputs / "c.tsv").write_text("distinct\tfollows\n", encoding="utf-8", newline="\n")
@@ -67,7 +72,7 @@ def main():
                 work.mkdir()
                 env["LAPLACE_WORK"] = str(work)
                 result = subprocess.run([str(engine), "ingest", "-r", str(recipes), "-d", conn,
-                                         "-j", "2", str(inputs)], env=env, capture_output=True,
+                                         "-j", "2", "file-precheck"], env=env, capture_output=True,
                                         text=True, encoding="utf-8", timeout=180)
                 report = result.stdout + result.stderr
                 (root / (name + ".log")).write_text(report, encoding="utf-8")
@@ -78,12 +83,10 @@ def main():
             sql("postgres", 'CREATE DATABASE "' + db + '"')
             created = True
             sql(db, "CREATE EXTENSION laplace CASCADE")
-            first_report = ingest("initial")
-            witnesses = sql(db, "SELECT count(DISTINCT witness) FROM public.attestation")
-            assert witnesses == "2", ("hard-link fixture did not share its canonical file", witnesses,
-                                      sql(db, "SELECT string_agg(witness::text||' '||claim::text||' '||games||' '||trust||' '||coalesce(lineage::text,'-'),E'; ') FROM public.attestation"),
-                                      sql(db, "SELECT string_agg(entity::text||' '||tier||' '||public.ST_NPoints(path),E'; ') FROM public.physicality WHERE public.ST_NPoints(path)=2"),
-                                      first_report[-400:])
+            ingest("initial")
+            assert sql(db, "SELECT count(DISTINCT witness) FROM public.attestation") == "1", "the source is not the one witness"
+            files = sql(db, "SELECT count(*) FROM (SELECT DISTINCT u.child AS id FROM public.physicality p CROSS JOIN LATERAL unnest(public.laplace_vertex_ids(p.path)) WITH ORDINALITY u(child,n) WHERE p.entity IN (SELECT DISTINCT witness FROM public.attestation) AND u.n>1) f")
+            assert files == "2", ("hard-link fixture did not share its canonical file", files)
 
             before = sql(db, """
                 SELECT md5(string_agg(to_jsonb(e)::text,E'\n' ORDER BY id)) FROM public.entity e;
@@ -108,7 +111,7 @@ def main():
                 CREATE TEMP TABLE old_files AS
                   SELECT p.entity,(public.laplace_vertex_ids(public.ST_PointN(p.path,1)))[1] AS metadata,
                          (public.laplace_vertex_ids(public.ST_PointN(p.path,2)))[1] AS content
-                  FROM (SELECT DISTINCT witness AS id FROM public.attestation) w JOIN public.physicality p ON p.entity=w.id;
+                  FROM (SELECT DISTINCT u.child AS id FROM public.physicality p CROSS JOIN LATERAL unnest(public.laplace_vertex_ids(p.path)) WITH ORDINALITY u(child,n) WHERE p.entity IN (SELECT DISTINCT witness FROM public.attestation) AND u.n>1) w JOIN public.physicality p ON p.entity=w.id;
                 CREATE TEMP TABLE removed(id public.blake3 PRIMARY KEY);
                 INSERT INTO removed SELECT entity FROM old_files;
                 DO $walk$ DECLARE added bigint; BEGIN LOOP
@@ -154,7 +157,7 @@ def main():
             """))
             deep = ingest("deep")
             assert re.search(r"3 files recorded already", deep), deep
-            observed = json.loads(sql(db, "SELECT jsonb_agg(id::text ORDER BY id) FROM (SELECT DISTINCT witness AS id FROM public.attestation) w"))
+            observed = json.loads(sql(db, "SELECT jsonb_agg(id::text ORDER BY id) FROM (SELECT DISTINCT u.child AS id FROM public.physicality p CROSS JOIN LATERAL unnest(public.laplace_vertex_ids(p.path)) WITH ORDINALITY u(child,n) WHERE p.entity IN (SELECT DISTINCT witness FROM public.attestation) AND u.n>1) w"))
             assert observed == expected, "deep replay selected different file trunks"
             assert sql(db, """
                 SELECT count(*) FROM public.physicality p
