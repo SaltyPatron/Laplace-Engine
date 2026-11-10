@@ -102,7 +102,7 @@ def main():
             report=run(*command)
             assert 'mismatched 0' in report,report
             def recorded():
-                return sql(database,'SELECT count(*) FROM "native a".entity; SELECT count(*) FROM "native a".physicality; SELECT count(*) FROM "native a".witness; SELECT count(*) FROM "native a".consensus')
+                return sql(database,'SELECT count(*) FROM "native a".entity; SELECT count(*) FROM "native a".physicality; SELECT count(DISTINCT witness) FROM "native a".attestation; SELECT count(*) FROM "native a".consensus')
             counts=recorded();assert all(int(value)>0 for value in counts.splitlines()),counts
             run(*command);assert recorded()==counts
             run('hop','-d',connections[0],'dog')
@@ -110,7 +110,7 @@ def main():
             run('index','-d',connections[0])
             witness=re.search(r'its ID, the witness\s+([a-f0-9]{32})',report);assert witness,report
             run('forget','-d',connections[0],'--trunk',witness[1])
-            assert sql(database,'SELECT count(*) FROM "native a".witness')=='0'
+            assert sql(database,'SELECT count(DISTINCT witness) FROM "native a".attestation')=='0'
             assert sql(database,'SELECT id FROM public.entity')=='17'
             run('deploy','--configure-server-cache','-d',connections[1])
             assert sql(databases[1],"SELECT current_setting('laplace.tier0')")==os.environ['LAPLACE_TIER0']

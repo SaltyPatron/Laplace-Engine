@@ -66,11 +66,11 @@ def main():
                 for attempt in range(2):
                     output = ingest(name, 1)
                     assert diagnostic in output, (name, attempt, output)
-                    assert sql('SELECT count(*) FROM public.witness') == str(ordinal), 'Rejected replay published a source'
+                    assert sql('SELECT count(DISTINCT witness) FROM public.attestation') == str(ordinal), 'Rejected replay published a source'
                 path.write_text(corrected, encoding='utf-8')
                 ingest(name, 0)
-                assert sql('SELECT count(*) FROM public.witness') == str(ordinal + 1)
-                query = "SELECT jsonb_agg(to_jsonb(s) ORDER BY claim,dependence_root) FROM public.laplace_contained_series(ARRAY(SELECT id FROM public.witness)) s"
+                assert sql('SELECT count(DISTINCT witness) FROM public.attestation') == str(ordinal + 1)
+                query = "SELECT jsonb_agg(to_jsonb(s) ORDER BY claim,dependence_root) FROM public.laplace_contained_series(ARRAY(SELECT DISTINCT witness FROM public.attestation)) s"
                 before = sql(query)
                 assert before != 'null', 'Corrected reading published no testimony'
                 replay = ingest(name, 0)

@@ -51,7 +51,7 @@ BEGIN
         END IF;
     END LOOP;
     IF EXISTS (SELECT FROM public.entity WHERE id=laplace_id('D800'))
-       OR NOT EXISTS (SELECT FROM public.witness) THEN
+       OR NOT EXISTS (SELECT FROM public.attestation) THEN
         RAISE EXCEPTION 'surrogate codepoint was replaced by its hex spelling, or source publication failed';
     END IF;
     IF NOT EXISTS (SELECT FROM public.consensus WHERE claim=laplace_compose(ARRAY[

@@ -43,7 +43,7 @@ printf 'def removed_since():\n    return 9\n' > "$tree/gone.py"
 for ((i=0; i<2800; i++)); do printf 'def shared_symbol_%04d():\n    return 0\n' "$i"; done > "$tree/wide.pyi"
 ingest first
 [ "$(held alpha_version_one)" = yes ] && [ "$(held removed_since)" = yes ] || fail "the first reading is not held"
-witness_id(){ "${PSQL:-psql}" -XwAt -v ON_ERROR_STOP=1 -d "$conn" -c 'SELECT id::text FROM public.witness ORDER BY id'; }
+witness_id(){ "${PSQL:-psql}" -XwAt -v ON_ERROR_STOP=1 -d "$conn" -c 'SELECT DISTINCT witness::text FROM public.attestation ORDER BY 1'; }
 first=$(witness_id)
 claims=$("${PSQL:-psql}" -XwAt -v ON_ERROR_STOP=1 -d "$conn" -c 'SELECT count(*) FROM public.consensus')
 [[ "$claims" -ge 8200 ]] || fail "wide source lost claims across registration windows: $claims"

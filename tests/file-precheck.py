@@ -74,12 +74,12 @@ def main():
             created = True
             sql(db, "CREATE EXTENSION laplace CASCADE")
             ingest("initial")
-            assert sql(db, "SELECT count(*) FROM public.witness") == "2", "hard-link fixture did not share its canonical file"
+            assert sql(db, "SELECT count(DISTINCT witness) FROM public.attestation") == "2", "hard-link fixture did not share its canonical file"
 
             before = sql(db, """
                 SELECT md5(string_agg(to_jsonb(e)::text,E'\n' ORDER BY id)) FROM public.entity e;
                 SELECT md5(string_agg(to_jsonb(p)::text,E'\n' ORDER BY entity)) FROM public.physicality p;
-                SELECT md5(string_agg(to_jsonb(w)::text,E'\n' ORDER BY id)) FROM public.witness w;
+                SELECT md5(string_agg(to_jsonb(a)::text,E'\n' ORDER BY claim,witness,lineage)) FROM public.attestation a;
                 SELECT md5(string_agg(to_jsonb(c)::text,E'\n' ORDER BY claim)) FROM public.consensus c;
             """)
             replay = ingest("shared")
@@ -87,7 +87,7 @@ def main():
             after = sql(db, """
                 SELECT md5(string_agg(to_jsonb(e)::text,E'\n' ORDER BY id)) FROM public.entity e;
                 SELECT md5(string_agg(to_jsonb(p)::text,E'\n' ORDER BY entity)) FROM public.physicality p;
-                SELECT md5(string_agg(to_jsonb(w)::text,E'\n' ORDER BY id)) FROM public.witness w;
+                SELECT md5(string_agg(to_jsonb(a)::text,E'\n' ORDER BY claim,witness,lineage)) FROM public.attestation a;
                 SELECT md5(string_agg(to_jsonb(c)::text,E'\n' ORDER BY claim)) FROM public.consensus c;
             """)
             assert before == after, "shared metadata replay changed canonical state"
@@ -99,7 +99,7 @@ def main():
                 CREATE TEMP TABLE old_files AS
                   SELECT p.entity,(public.laplace_vertex_ids(public.ST_PointN(p.path,1)))[1] AS metadata,
                          (public.laplace_vertex_ids(public.ST_PointN(p.path,2)))[1] AS content
-                  FROM public.witness w JOIN public.physicality p ON p.entity=w.id;
+                  FROM (SELECT DISTINCT witness AS id FROM public.attestation) w JOIN public.physicality p ON p.entity=w.id;
                 CREATE TEMP TABLE removed(id public.blake3 PRIMARY KEY);
                 INSERT INTO removed SELECT entity FROM old_files;
                 DO $walk$ DECLARE added bigint; BEGIN LOOP
@@ -107,7 +107,7 @@ def main():
                     JOIN public.physicality p ON p.path @> ARRAY[r.id] ON CONFLICT DO NOTHING;
                   GET DIAGNOSTICS added=ROW_COUNT; EXIT WHEN added=0;
                 END LOOP; END $walk$;
-                DELETE FROM public.witness w USING removed r WHERE w.id=r.id;
+                DELETE FROM public.attestation a USING removed r WHERE a.witness=r.id;
                 DELETE FROM public.consensus c USING removed r WHERE c.claim=r.id;
                 DELETE FROM public.physicality p USING removed r WHERE p.entity=r.id;
                 DELETE FROM public.entity e USING removed r WHERE e.id=r.id;
@@ -145,7 +145,7 @@ def main():
             """))
             deep = ingest("deep")
             assert re.search(r"3 files recorded already", deep), deep
-            observed = json.loads(sql(db, "SELECT jsonb_agg(id::text ORDER BY id) FROM public.witness"))
+            observed = json.loads(sql(db, "SELECT jsonb_agg(id::text ORDER BY id) FROM (SELECT DISTINCT witness AS id FROM public.attestation) w"))
             assert observed == expected, "deep replay selected different file trunks"
             assert sql(db, """
                 SELECT count(*) FROM public.physicality p
