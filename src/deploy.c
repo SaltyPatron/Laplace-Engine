@@ -121,7 +121,7 @@ int cmd_index(int argc, char **argv){
     PGconn *pg = db_connect(conn_arg(argc, argv));
     printf("laplace index   %s\n", PQdb(pg));
     int ok = run(pg,"SELECT @extschema@.laplace_schema_indexes()","every index, made where one is missing") &&
-        run(pg,"ANALYZE @extschema@.entity; ANALYZE @extschema@.physicality; ANALYZE @extschema@.witness; ANALYZE @extschema@.consensus","Native statistics");
+        run(pg,"ANALYZE @extschema@.entity; ANALYZE @extschema@.physicality; ANALYZE @extschema@.attestation; ANALYZE @extschema@.consensus","Native statistics");
     PQfinish(pg); return !ok;
 }
 
@@ -160,7 +160,7 @@ int cmd_status(int argc, char **argv){
     /* the witnesses (each a source's trunk) and the standings, the partitions of a table summed: a partition the planner
      * has not counted yet (reltuples -1) makes the sum not counted */
     r = status_query(pg, "SELECT regexp_replace(c.relname, '_[0-9a-f]$', ''), CASE WHEN min(c.reltuples) < 0 THEN -1 ELSE sum(c.reltuples) END::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))::bigint) "
-                   "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.oid=(SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname='laplace') AND c.relkind = 'r' AND (c.relname = 'witness' OR c.relname ~ '^consensus_[0-9a-f]$') GROUP BY 1 ORDER BY 1");
+                   "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.oid=(SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname='laplace') AND c.relkind = 'r' AND c.relname ~ '^(attestation|consensus)_[0-9a-f]$' GROUP BY 1 ORDER BY 1");
     printf("\nsemantics\n");
     for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) {
         if (atoll(PQgetvalue(r, i, 1)) < 0) printf("  %-24s %16s   %s\n", PQgetvalue(r, i, 0), "not counted yet", PQgetvalue(r, i, 2));
@@ -183,7 +183,7 @@ int cmd_sources(int argc, char **argv){
     printf("%-4s %-28s %-8s %-9s %s\n", "", "source", "recipes", "in", "kept at");
     /* a source is in when a witness is its trunk: [its record, its files' trunks], its record the source's name */
     lp_idmap *records = lp_idmap_new();
-    { PGresult *r = ask_try(pg, "SELECT id FROM @extschema@.witness", NULL); Reader *rd = reader_new(pg);
+    { PGresult *r = ask_try(pg, "SELECT DISTINCT witness FROM @extschema@.attestation", NULL); Reader *rd = reader_new(pg);
       for (int j = 0; r && j < PQntuples(r); j++) { lp_id first[2]; if (reader_parts(rd, col_id(r, j, 0), first, 2)) lp_idmap_put(records, &first[0], NULL); }
       PQclear(r); reader_free(rd); }
     for (int i = 0; i < n; i++) {

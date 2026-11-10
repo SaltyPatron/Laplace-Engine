@@ -524,6 +524,7 @@ int cmd_ingest(int argc, char **argv){
             lp_idmap *seen = lp_idmap_new();
             for (int i=0; i<nfiles; i++) {
                 if (files[i].skipped || files[i].source || !files[i].has_file) continue;
+                if (files[i].trust == 0.0) continue;   /* no class declared: content, not a witness */
                 bool fresh; lp_idmap_put(seen, &files[i].file.id, &fresh); if (!fresh) continue;
                 roots[nr++] = (LoadWitness){.id=files[i].file.id, .lineage=files[i].lineage.id,
                     .trust=files[i].trust, .has_lineage=files[i].has_lineage};

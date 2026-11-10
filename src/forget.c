@@ -23,14 +23,14 @@ static uint64_t sweep_candidates(PGconn *pg){
         "        h AS MATERIALIZED (SELECT ordinal, entity, hub FROM @extschema@.laplace_holders(ARRAY(SELECT id FROM ord ORDER BY rn), '{}'::@extschema@.blake3[], true, -1::smallint, 2::bigint, 3::smallint)),"
         "        referenced AS MATERIALIZED (SELECT DISTINCT o.id FROM ord o JOIN h ON h.ordinal = o.rn WHERE h.hub OR h.entity OPERATOR(@extschema@.<>) o.id)"
         "   INSERT INTO forget_round SELECT c.id FROM forget_candidates c"
-        "   WHERE NOT EXISTS(SELECT FROM @extschema@.witness w WHERE w.id OPERATOR(@extschema@.=) c.id OR w.lineage OPERATOR(@extschema@.=) c.id)"
+        "   WHERE NOT EXISTS(SELECT FROM @extschema@.attestation w WHERE w.witness OPERATOR(@extschema@.=) c.id OR w.lineage OPERATOR(@extschema@.=) c.id)"
         "   AND NOT EXISTS(SELECT FROM referenced r WHERE r.id OPERATOR(@extschema@.=) c.id);"
         " ELSE"
         "   WITH referenced AS MATERIALIZED (SELECT DISTINCT v.id FROM @extschema@.physicality p"
         "   CROSS JOIN LATERAL unnest(@extschema@.laplace_vertex_ids(p.path)) v(id)"
         "   JOIN forget_candidates c ON c.id OPERATOR(@extschema@.=) v.id WHERE p.entity OPERATOR(@extschema@.<>) v.id)"
         "   INSERT INTO forget_round SELECT c.id FROM forget_candidates c"
-        "   WHERE NOT EXISTS(SELECT FROM @extschema@.witness w WHERE w.id OPERATOR(@extschema@.=) c.id OR w.lineage OPERATOR(@extschema@.=) c.id)"
+        "   WHERE NOT EXISTS(SELECT FROM @extschema@.attestation w WHERE w.witness OPERATOR(@extschema@.=) c.id OR w.lineage OPERATOR(@extschema@.=) c.id)"
         "   AND NOT EXISTS(SELECT FROM referenced r WHERE r.id OPERATOR(@extschema@.=) c.id);"
         " END IF;"
         " GET DIAGNOSTICS n=ROW_COUNT; EXIT WHEN n=0;"
@@ -55,7 +55,7 @@ static int forget_ids(PGconn *pg,const lp_id *roots,size_t n){
     size_t nc=(size_t)PQntuples(q);lp_id *claims=malloc((nc?nc:1)*sizeof *claims);
     if(!claims){perror("affected claim IDs");exit(1);}
     for(size_t i=0;i<nc;i++)claims[i]=*col_id(q,(int)i,0);PQclear(q);
-    PQclear(ask_once(pg,"DELETE FROM @extschema@.witness WHERE id OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[])",&args));args_free(&args);
+    PQclear(ask_once(pg,"DELETE FROM @extschema@.attestation WHERE witness OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[])",&args));args_free(&args);
     /* The Native solver validates claim paths. Remove witness authority and
      * recompute while that closure is still present, then sweep its orphans. */
     uint64_t standing=0,orphaned=0;
@@ -68,7 +68,7 @@ static int forget_ids(PGconn *pg,const lp_id *roots,size_t n){
 static void begin_maintenance(PGconn *pg){
     exec(pg,"BEGIN ISOLATION LEVEL REPEATABLE READ;"
         " SELECT pg_advisory_xact_lock(1279348803,-2);"
-        " LOCK TABLE @extschema@.witness IN SHARE ROW EXCLUSIVE MODE");
+        " LOCK TABLE @extschema@.attestation IN SHARE ROW EXCLUSIVE MODE");
 }
 int cmd_sweep(int argc,char **argv){
     const char *conninfo=laplace_db();int limit=0,dry=0;
@@ -83,7 +83,7 @@ int cmd_sweep(int argc,char **argv){
 }
 static lp_id *selected_roots(PGconn *pg,const lp_id *ids,const lp_id *records,size_t n,int except,size_t *count){
     Args args={0};arg_ids(&args,ids,n);arg_ids(&args,records,n);uint8_t invert=except!=0;arg_raw(&args,&invert,1);
-    PGresult *q=ask_once(pg,"SELECT w.id FROM @extschema@.witness w JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) w.id"
+    PGresult *q=ask_once(pg,"SELECT w.id FROM (SELECT DISTINCT witness AS id FROM @extschema@.attestation) w JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) w.id"
         " WHERE (w.id OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[]) OR EXISTS(SELECT FROM unnest($2::@extschema@.blake3[]) r(id)"
         " WHERE @extschema@.laplace_path_starts(p.path,r.id)))<>$3::boolean ORDER BY w.id",&args);
     size_t nr=(size_t)PQntuples(q);lp_id *roots=malloc((nr?nr:1)*sizeof *roots);if(!roots){perror("witness IDs");exit(1);}

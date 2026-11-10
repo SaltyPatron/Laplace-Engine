@@ -64,7 +64,7 @@ void start_loader(const char *conninfo, int requested){
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, wins double precision NOT NULL,"
         " CHECK(games>0 AND games<=9007199254740992 AND wins>=0 AND wins<=games));"
         "CREATE UNIQUE INDEX ON %s (claim,witness,lineage) NULLS NOT DISTINCT;"
-        "CREATE UNLOGGED TABLE %s (LIKE @extschema@.witness INCLUDING DEFAULTS);"
+        "CREATE UNLOGGED TABLE %s (id @extschema@.blake3 PRIMARY KEY, lineage @extschema@.blake3, trust double precision NOT NULL);"
         "CREATE UNLOGGED TABLE %s (claim @extschema@.blake3 PRIMARY KEY)",
         writer.delta,writer.pending,writer.pending,writer.witnesses,writer.affected);
     statement(control, sql);
@@ -300,6 +300,8 @@ uint64_t fold_count(const Fold *f){ return f ? (uint64_t)lp_strmap_count(f->seri
 void fold_events(Fold *f, const File *files, int nfiles){
     for (int fi = 0; fi < nfiles; fi++) {
         const File *file = &files[fi]; if (file->known || file->skipped) continue;
+        /* A file of no source whose recipe names no class is content, not a witness: it attests nothing. */
+        if (!file->source && file->trust == 0.0) continue;
         Ref source = file->has_file ? file->file : file->witness;
         double trust = file->trust;
         if (file->source) {
@@ -323,20 +325,26 @@ void fold_events(Fold *f, const File *files, int nfiles){
             /* Map slots are stable while a window grows. The database retains
              * totals; the client releases this map after every committed window. */
             if(!s->dirty)lp_push(&f->dirty,index);
-            s->games++; s->sum+=lp_score_carried(event->score); s->dirty=1;
+            s->games++; s->tokens += event->run ? event->run : 1;
+            s->sum+=lp_score_carried(event->score);
+            if(event->position && (!s->position || event->position < s->position)) s->position = event->position;
+            s->dirty=1;
         }
     }
 }
 void flush_series(Fold *f){
     if (!f || !f->dirty.n) return;
     lp_copy copy={0}; char sql[512];
-    snprintf(sql,sizeof sql,"BEGIN;COPY %s (claim,witness,lineage,games,score,trust,wins) FROM STDIN (FORMAT binary)",writer.delta);
+    snprintf(sql,sizeof sql,"BEGIN;COPY %s (claim,witness,lineage,games,tokens,score,\"position\",trust,wins) FROM STDIN (FORMAT binary)",writer.delta);
     copy_open(&copy,writer.series,sql);
     for (size_t i=0;i<f->dirty.n;i++) {
         Series *s=lp_strmap_at(f->series,f->dirty.v[i]);
-        lp_copy_row(&copy,7); lp_copy_id(&copy,&s->claim); lp_copy_id(&copy,&s->witness);
+        lp_copy_row(&copy,9); lp_copy_id(&copy,&s->claim); lp_copy_id(&copy,&s->witness);
         if(s->has_lineage) lp_copy_id(&copy,&s->lineage); else lp_copy_null(&copy);
-        lp_copy_i64(&copy,(int64_t)s->games); lp_copy_f64(&copy,s->sum/(double)s->games); lp_copy_f64(&copy,s->trust);
+        lp_copy_i64(&copy,(int64_t)s->games); lp_copy_i64(&copy,(int64_t)(s->tokens >= s->games ? s->tokens : s->games));
+        lp_copy_f64(&copy,s->sum/(double)s->games);
+        if(s->position) lp_copy_i32(&copy,(int32_t)s->position); else lp_copy_null(&copy);
+        lp_copy_f64(&copy,s->trust);
         lp_copy_f64(&copy,s->sum);
     }
     copy_close(&copy); lp_buf_free(&copy.buf);

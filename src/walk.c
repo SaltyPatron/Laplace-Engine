@@ -68,10 +68,10 @@ int walk_up(PGconn *pg,Dag *d, const lp_id *claims, size_t n, uint64_t *rows){
     lp_vec_free(&vx); lp_idmap_free(front); return level;
 }
 
-/* ---- the witnesses: a trunk in the witness table, and its trust */
+/* ---- the witnesses: a trunk in the attestation table, and its trust */
 void witnesses_known(PGconn *pg, Root *r, size_t n){
     lp_id *ids = malloc(sizeof(lp_id) * (n + 1)); for (size_t i = 0; i < n; i++) ids[i] = r[i].id;
-    Args q = { 0 }; arg_ids(&q, ids, n); PGresult *w = ask_once(pg, "SELECT id, trust FROM @extschema@.witness WHERE id OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[])", &q);
+    Args q = { 0 }; arg_ids(&q, ids, n); PGresult *w = ask_once(pg, "SELECT DISTINCT ON (witness) witness, trust FROM @extschema@.attestation WHERE witness OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[]) ORDER BY witness, lineage NULLS FIRST", &q);
     for (int j = 0; j < PQntuples(w); j++) for (size_t k = 0; k < n; k++) if (!memcmp(col_id(w, j, 0), &r[k].id, 16)) { r[k].witness = 1; r[k].trust = col_f64(w, j, 1); }
     PQclear(w); args_free(&q); free(ids);
 }

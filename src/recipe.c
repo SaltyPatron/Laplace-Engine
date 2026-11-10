@@ -426,7 +426,8 @@ static int recipes_load_mode(const char *dir, Recipe **out, int metadata){
         snprintf(r[i].name, sizeof r[i].name, "%s", me.name); memcpy(r[i].match, me.match, sizeof me.match); r[i].nmatch = me.nmatch; r[i].source = me.source;
         memcpy(r[i].witness, me.witness, sizeof me.witness); memcpy(r[i].lineage, me.lineage, sizeof me.lineage); r[i].trust = me.trust; r[i].like[0] = 0;
     }
-    for (int i = 0; i < n; i++) if (r[i].source < 0 && r[i].trust == 0.0) r[i].trust = 0.60;
+    /* A recipe outside any source that names no class stays at 0: no witness, content only (Sequence 9.4, 6.5).
+     * A witness's trust is its class's prior, never a default figure. */
     for (int i = 0; i < nsources; i++) for (int a = -1; a < sources[i].naliases; a++) {
         const char *name = a < 0 ? sources[i].name : sources[i].aliases[a];
         for (const char *p = name; *p; p++) if (!(*p >= 'a' && *p <= 'z') && !isdigit((unsigned char)*p) && *p != '-') {
@@ -533,9 +534,15 @@ Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, Reci
             next=of->prefer[j].preferred;
         }
     }
+    /* Pass 0: a source's own recipes and the generic ones it reads (outside any source: the generic ones).
+     * Pass 1: a file of a source none of those take is still the source's content; the generic recipes are the
+     * pipeline every format goes through, so it falls to them and then to sniffing, as a file of no source does.
+     * Only an except leaves a file out, so the trunk holds every file of the source whatever recipes exist. */
+    for (int pass = 0; pass < (of ? 2 : 1) && !best; pass++)
     for (int i = 0; i < n; i++) {
         if (r[i].broken) continue;
-        if (of) { if (!(r[i].source >= 0 && &sources[r[i].source] == of) && !(r[i].source < 0 && reads(of, &r[i]))) continue; }
+        if (pass) { if (r[i].source >= 0) continue; }
+        else if (of) { if (!(r[i].source >= 0 && &sources[r[i].source] == of) && !(r[i].source < 0 && reads(of, &r[i]))) continue; }
         else if (r[i].source >= 0) continue;                               /* user file outside any seeded corpus root: generic recipes only */
         for (int j = 0; j < r[i].nmatch; j++) {
             if (strchr(r[i].match[j], '/')) {                               /* a pattern with a directory in it: matched against the end of the path */
@@ -547,7 +554,7 @@ Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, Reci
             if (!best || lit > best_lit) { best = &r[i]; best_lit = lit; }
         }
     }
-    if (!best && !of) best = sniff_generic_recipe(r, n, path);
+    if (!best) best = sniff_generic_recipe(r, n, path);
     if (best && !best->curated && best->grammar[0] && strcmp(best->grammar, "text") != 0 && !best->lang) {
         best->lang = grammar_load(best->grammar);
         if (!best->lang) { fprintf(stderr, "recipe %s: required grammar %s is unavailable for %s\n", best->name, best->grammar, path); exit(2); }
