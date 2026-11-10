@@ -17,8 +17,9 @@ thing entry headword
 part crossref by | is space
 content form note usage text other etymology_text etymology_fragment headword domain synonym See see
 # The dictionary's abbreviations of the parts of speech (n., v. t., a.), read as the shared category each denotes
-# where webster-pos says so; the others (p. p., imp., pl.) stay the dictionary's own.
-type pos upos vocabulary webster-pos
+# where the highway's webster-pos tagset has a crosswalk edge to upos; the others (p. p., imp., pl.) have none and stay
+# the dictionary's own.
+type pos upos crosswalk webster-pos
 value upos pos
 # A domain label is the dictionary's own, (Gram.), (Med.), (Zoöl.), as written with its brackets.
 value - domain
