@@ -85,7 +85,7 @@ def main():
             sql(db, "CREATE EXTENSION laplace CASCADE")
             ingest("initial")
             assert sql(db, "SELECT count(DISTINCT witness) FROM public.attestation") == "1", "the source is not the one witness"
-            files = sql(db, "SELECT count(*) FROM (SELECT DISTINCT u.child AS id FROM public.physicality p CROSS JOIN LATERAL unnest(public.laplace_vertex_ids(p.path)) WITH ORDINALITY u(child,n) WHERE p.entity IN (SELECT DISTINCT witness FROM public.attestation) AND u.n>1) f")
+            files = sql(db, "SELECT count(*) FROM (SELECT DISTINCT u.child AS id FROM public.physicality c CROSS JOIN LATERAL unnest(public.laplace_vertex_ids(c.path)) u(child) WHERE c.entity IN (SELECT (public.laplace_vertex_ids(public.ST_PointN(p.path,2)))[1] FROM public.physicality p WHERE p.entity IN (SELECT DISTINCT witness FROM public.attestation))) f")
             assert files == "2", ("hard-link fixture did not share its canonical file", files)
 
             before = sql(db, """
@@ -111,7 +111,7 @@ def main():
                 CREATE TEMP TABLE old_files AS
                   SELECT p.entity,(public.laplace_vertex_ids(public.ST_PointN(p.path,1)))[1] AS metadata,
                          (public.laplace_vertex_ids(public.ST_PointN(p.path,2)))[1] AS content
-                  FROM (SELECT DISTINCT u.child AS id FROM public.physicality p CROSS JOIN LATERAL unnest(public.laplace_vertex_ids(p.path)) WITH ORDINALITY u(child,n) WHERE p.entity IN (SELECT DISTINCT witness FROM public.attestation) AND u.n>1) w JOIN public.physicality p ON p.entity=w.id;
+                  FROM (SELECT DISTINCT u.child AS id FROM public.physicality c CROSS JOIN LATERAL unnest(public.laplace_vertex_ids(c.path)) u(child) WHERE c.entity IN (SELECT (public.laplace_vertex_ids(public.ST_PointN(p.path,2)))[1] FROM public.physicality p WHERE p.entity IN (SELECT DISTINCT witness FROM public.attestation))) w JOIN public.physicality p ON p.entity=w.id;
                 CREATE TEMP TABLE removed(id public.blake3 PRIMARY KEY);
                 INSERT INTO removed SELECT entity FROM old_files;
                 DO $walk$ DECLARE added bigint; BEGIN LOOP
@@ -157,7 +157,7 @@ def main():
             """))
             deep = ingest("deep")
             assert re.search(r"3 files recorded already", deep), deep
-            observed = json.loads(sql(db, "SELECT jsonb_agg(id::text ORDER BY id) FROM (SELECT DISTINCT u.child AS id FROM public.physicality p CROSS JOIN LATERAL unnest(public.laplace_vertex_ids(p.path)) WITH ORDINALITY u(child,n) WHERE p.entity IN (SELECT DISTINCT witness FROM public.attestation) AND u.n>1) w"))
+            observed = json.loads(sql(db, "SELECT jsonb_agg(id::text ORDER BY id) FROM (SELECT DISTINCT u.child AS id FROM public.physicality c CROSS JOIN LATERAL unnest(public.laplace_vertex_ids(c.path)) u(child) WHERE c.entity IN (SELECT (public.laplace_vertex_ids(public.ST_PointN(p.path,2)))[1] FROM public.physicality p WHERE p.entity IN (SELECT DISTINCT witness FROM public.attestation))) w"))
             assert observed == expected, "deep replay selected different file trunks"
             assert sql(db, """
                 SELECT count(*) FROM public.physicality p
