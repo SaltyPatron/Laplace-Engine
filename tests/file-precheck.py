@@ -78,8 +78,10 @@ def main():
             sql("postgres", 'CREATE DATABASE "' + db + '"')
             created = True
             sql(db, "CREATE EXTENSION laplace CASCADE")
-            ingest("initial")
-            assert sql(db, "SELECT count(DISTINCT witness) FROM public.attestation") == "2", "hard-link fixture did not share its canonical file"
+            first_report = ingest("initial")
+            witnesses = sql(db, "SELECT count(DISTINCT witness) FROM public.attestation")
+            assert witnesses == "2", ("hard-link fixture did not share its canonical file", witnesses,
+                                      sql(db, "SELECT count(*) FROM public.attestation"), first_report[-3000:])
 
             before = sql(db, """
                 SELECT md5(string_agg(to_jsonb(e)::text,E'\n' ORDER BY id)) FROM public.entity e;
