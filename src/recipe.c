@@ -534,15 +534,11 @@ Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, Reci
             next=of->prefer[j].preferred;
         }
     }
-    /* Pass 0: a source's own recipes and the generic ones it reads (outside any source: the generic ones).
-     * Pass 1: a file of a source none of those take is still the source's content; the generic recipes are the
-     * pipeline every format goes through, so it falls to them and then to sniffing, as a file of no source does.
-     * Only an except leaves a file out, so the trunk holds every file of the source whatever recipes exist. */
-    for (int pass = 0; pass < (of ? 2 : 1) && !best; pass++)
+    /* A source reads what its recipes target: its own recipes and the generic ones it names in reads. Nothing else
+     * in its download (renderings, packaging, documentation) is part of it. */
     for (int i = 0; i < n; i++) {
         if (r[i].broken) continue;
-        if (pass) { if (r[i].source >= 0) continue; }
-        else if (of) { if (!(r[i].source >= 0 && &sources[r[i].source] == of) && !(r[i].source < 0 && reads(of, &r[i]))) continue; }
+        if (of) { if (!(r[i].source >= 0 && &sources[r[i].source] == of) && !(r[i].source < 0 && reads(of, &r[i]))) continue; }
         else if (r[i].source >= 0) continue;                               /* user file outside any seeded corpus root: generic recipes only */
         for (int j = 0; j < r[i].nmatch; j++) {
             if (strchr(r[i].match[j], '/')) {                               /* a pattern with a directory in it: matched against the end of the path */
@@ -554,7 +550,7 @@ Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, Reci
             if (!best || lit > best_lit) { best = &r[i]; best_lit = lit; }
         }
     }
-    if (!best) best = sniff_generic_recipe(r, n, path);
+    if (!best && !of) best = sniff_generic_recipe(r, n, path);
     if (best && !best->curated && best->grammar[0] && strcmp(best->grammar, "text") != 0 && !best->lang) {
         best->lang = grammar_load(best->grammar);
         if (!best->lang) { fprintf(stderr, "recipe %s: required grammar %s is unavailable for %s\n", best->name, best->grammar, path); exit(2); }
