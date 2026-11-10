@@ -123,7 +123,6 @@ static void weigh_prop(const State *st, const Field *fd, Prop *p){
         if (beside_grounds(st, j, &p->id)) bit_set(&p->by[CH_BESIDE], j); }
     Bits u; memset(&u, 0, sizeof u); p->agree = 0;
     for (int c = 0; c < 3; c++) { int any = 0; for (int w = 0; w < MAXOCC / 64; w++) { u.w[w] |= p->by[c].w[w]; any |= p->by[c].w[w] != 0; } p->agree += any; }
-    if (p->kind == P_CHAIN && p->occ >= 0) bit_set(&u, p->occ);              /* a chain's answer grounds the word it answers */
     p->grounds = owed(&u, &st->open);
 }
 static const Firmware *ELECT;
@@ -400,27 +399,14 @@ int cmd_turn(int argc, char **argv){
     /* SCAN, COMPOSE */
     { double t = now(); int before = fd.n; scan(st, &fd, centre, ncentre); printf("SCAN       %d reached beyond the field   (%.1f ms)\n", fd.n - before, (now() - t) * 1000); }
     printf("COMPOSE    a frontier of %d\n", fd.n);
-    /* the chains the firmware names, followed from each word still owed, the hardest pulling first: an answer a
-     * result-bearing relation establishes (a word's gloss through its sense), proposed while the word is owed */
-    Prop chains[8]; int nchains = 0;
-    { int byrole[MAXOCC], nb = 0; for (int i = 0; i < st->nocc; i++) if ((st->open.w[i >> 6] >> (i & 63)) & 1) byrole[nb++] = i;
-      for (int x = 1; x < nb; x++) { int v = byrole[x], y = x; while (y > 0 && st->role[byrole[y - 1]] < st->role[v]) { byrole[y] = byrole[y - 1]; y--; } byrole[y] = v; }
-      for (int x = 0; x < nb && nchains < 8 && fw.nalt; x++) { lp_id ans; lp_rating rt; int o_ = byrole[x]; if (bind[o_].level) continue;
-          const lp_id *rdg = bind[o_].choice >= 0 ? &fd.c[bind[o_].choice].id : NULL;
-          if (!chain_from(st, &st->occ[o_], rdg, &ans, &rt)) continue;
-          if (bind[o_].choice < 0) nbound++;
-          chains[nchains] = (Prop){ .id = ans, .kind = P_CHAIN, .grounds = (int)(st->role[byrole[x]] * 1000 + 0.5), .conf = lp_confidence(&rt, fw.k), .occ = byrole[x] }; chains[nchains++].shape = INFINITY;
-          reader_want(st->rd, &ans); char *w = reader_text(st->rd, &st->occ[byrole[x]], 32), *t = reader_text(st->rd, &ans, 80); printf("           chain from %s: %s\n", w, t); free(w); free(t); }
-      printf("           %d chain%s of the firmware answer a word still owed\n", nchains, nchains == 1 ? "" : "s"); }
-    disposition = ambiguous ? "ambiguous: more than one reading survives, and an ambiguous orientation emits nothing" : nbound ? "unresolved" : (st->refused && !fd.n) ? "refused: blocked by active firmware policy" : capped ? "resource-bounded: no joint binding among the candidates weighed" : "inconsistent: no word's reading holds together with another's";
+    disposition = ambiguous ? "ambiguous: more than one reading survives, and an ambiguous orientation emits nothing" : (nbound || fd.n) ? "unresolved" : (st->refused && !fd.n) ? "refused: blocked by active firmware policy" : capped ? "resource-bounded: no joint binding among the candidates weighed" : "inconsistent: no word's reading holds together with another's";
     int budget = ambiguous ? 0 : fw.emit;                                   /* an ambiguous orientation finalizes and emits nothing (Sequence 18.12) */
     int owed0 = owed(&st->open, &st->open);                                 /* what the obligations owe at the start of the turn */
 
     for (int step = 0; step < budget; step++) {
-        /* PROPOSE: what follows the active trajectory as a run in what was observed, and the answers the firmware's
-         * result-bearing relations (its chains) give a word still owed. An entity the coupling merely reaches is routing
-         * state: it orients and is scanned from, and is not output for being renderable. */
-        Prop *pp = malloc(sizeof(Prop) * (size_t)(80)); int np = 0;
+        /* PROPOSE: what follows the active trajectory as a run in what was observed, what the coupled field
+         * responds with across strands/layers/scans, and what the nearest analogous curves do next. */
+        Prop *pp = malloc(sizeof(Prop) * (size_t)(160)); int np = 0;
         Next nx[64]; int nn = step == 0 ? nn0 : follows(st, nx, 64);
         if (step == 0 && nn0) memcpy(nx, nx0, sizeof(Next) * (size_t)nn0);
         const lp_highway *hw = lp_highway_map(NULL);
@@ -428,7 +414,23 @@ int cmd_turn(int argc, char **argv){
             Prop p; memset(&p, 0, sizeof p); p.id = nx[i].id; p.kind = P_FOLLOW; p.cont = nx[i].len; p.times = nx[i].times; p.occ = -1; p.shape = INFINITY;
             { const Cell *x = cell_find(&fd, &nx[i].id); if (x) { p.conf = x->has_r ? lp_confidence(&x->r, fw.k) : 0; p.hub = x->hub; } }
             weigh_prop(st, &fd, &p); pp[np++] = p; }
-        for (int q = 0; q < nchains; q++) { int o = chains[q].occ; if (!((st->open.w[o >> 6] >> (o & 63)) & 1)) continue; Prop p = chains[q]; weigh_prop(st, &fd, &p); pp[np++] = p; }     /* a chain's answer, while its word is owed */
+        /* Propose from the coupled field (strands, layers, scan) for entities that ground open obligations. */
+        for (int z = 0; z < fd.n && np < 128; z++) {
+            const Cell *x = &fd.c[z];
+            if (x->hub || !bit_count_and(&x->support, &st->open)) continue;
+            if (hw && lp_highway_bank_of(hw, &x->id, NULL)) continue;
+            int list; uint32_t slot;
+            if (hw && reading_of(hw, &x->id, &list, &slot)) continue;
+            int already = 0;
+            for (int k = 0; k < nemit && !already; k++) already = lp_id_eq(&emitted[k], &x->id);
+            for (int k = 0; k < st->nocc && !already; k++) already = lp_id_eq(&st->occ[k], &x->id);
+            for (int k = 0; k < np && !already; k++) already = lp_id_eq(&pp[k].id, &x->id);
+            if (already) continue;
+            Prop fp; memset(&fp, 0, sizeof fp); fp.id = x->id; fp.kind = P_CHAIN; fp.occ = -1; fp.shape = INFINITY;
+            fp.conf = x->has_r ? lp_confidence(&x->r, fw.k) : 0; fp.hub = x->hub;
+            weigh_prop(st, &fd, &fp);
+            if (fp.grounds > 0) pp[np++] = fp;
+        }
         /* the pass's own shape: the observed curves nearest its recent window, and what each does next after the last
          * place it meets the window; a constituent proposed this way that a run also proposes takes the nearer shape */
         { int wn = st->npass < 8 ? st->npass : 8; const lp_id *win = st->pass + st->npass - wn; Curve an[8]; int na = shape_near(st, win, wn, an, 8);
@@ -438,7 +440,7 @@ int cmd_turn(int argc, char **argv){
               if (c < 2) { reader_want(st->rd, &an[c].id); char *tc = reader_text(st->rd, &an[c].id, 70); printf("           like the pass: %.4f \"%s\"%s\n", an[c].d, tc, nxt < 0 ? ", nothing after where it meets the pass" : ""); free(tc); }
               if (nxt < 0) continue; const lp_id *id = &an[c].v[nxt]; int have = -1; for (int z = 0; z < np; z++) if (lp_id_eq(&pp[z].id, id)) have = z;
               if (have >= 0) { if (an[c].d < pp[have].shape) pp[have].shape = an[c].d; continue; }
-              if (np >= 80 || (hw && lp_highway_bank_of(hw, id, NULL))) continue;
+              if (np >= 160 || (hw && lp_highway_bank_of(hw, id, NULL))) continue;
               Prop sp; memset(&sp, 0, sizeof sp); sp.id = *id; sp.kind = P_SHAPE; sp.occ = -1; sp.shape = an[c].d;
               { const Cell *x = cell_find(&fd, id); if (x) { sp.conf = x->has_r ? lp_confidence(&x->r, fw.k) : 0; sp.hub = x->hub; } }
               weigh_prop(st, &fd, &sp); pp[np++] = sp; }
@@ -454,7 +456,7 @@ int cmd_turn(int argc, char **argv){
             printf("           %s \"%s\": grounds %.2f by %d channel%s (strand %d, walks %d, beside %d words), continuity %d, beside %ld, walks %ld, shape %.4f, confidence %.3f\n", z ? "  then" : "elect", tz,
                    pp[z].grounds / 1000.0, pp[z].agree, pp[z].agree == 1 ? "" : "s", bit_count_and(&pp[z].by[CH_STRAND], &pp[z].by[CH_STRAND]), bit_count_and(&pp[z].by[CH_WALK], &pp[z].by[CH_WALK]),
                    bit_count_and(&pp[z].by[CH_BESIDE], &pp[z].by[CH_BESIDE]), pp[z].cont, pp[z].cooc, pp[z].walk, isfinite(pp[z].shape) ? pp[z].shape : -1.0, pp[z].conf); free(tz); }
-        int tied[80], nt = 0; for (int z = 0; z < np && nt < 80; z++) if (!z || cannot_tell(&pp[0], &pp[z], &fw)) tied[nt++] = z;
+        int tied[160], nt = 0; for (int z = 0; z < np && nt < 160; z++) if (!z || cannot_tell(&pp[0], &pp[z], &fw)) tied[nt++] = z;
         int pick = 0;
         if (nt > 1) {                                                         /* nothing in the evidence tells these apart: the firmware's tie */
             printf("           a tie: %d proposals the evidence cannot tell apart; the firmware %s\n", nt, fw.tie == FW_TIE_DRAW ? "draws" : fw.tie == FW_TIE_ASK ? "asks" : "takes the first by ID");
@@ -470,7 +472,7 @@ int cmd_turn(int argc, char **argv){
         /* WITNESS, within the pass: the constituent joins the trajectory; what it grounds closes; the next coupling sees it */
         if (nemit < 512) emitted[nemit++] = sel.id; if (st->ntraj < 4096) st->traj[st->ntraj++] = sel.id; pass_add(st, &sel.id);
         { const Cell *x = cell_find(&fd, &sel.id); if (x) bit_clear(&st->open, &x->support); }
-        if (sel.kind == P_CHAIN && sel.occ >= 0) st->open.w[sel.occ >> 6] &= ~(1ull << (sel.occ & 63));        /* the word the chain answers is owed no longer */
+        for (int c = 0; c < 3; c++) bit_clear(&st->open, &sel.by[c]);
         couple(st, &fd, &sel.id, 1, NULL, R_DISCOURSE, NULL, 0);
         if (st->npos < MAXOCC && lp_tier0_codepoint(T0, &sel.id) < 0) {        /* a composition emitted: a position the next step attends to, its walkers and its context */
             int q = st->npos++; st->occ[q] = sel.id; st->composed[q] = 1; st->role[q] = 1.0; double tw = now(); uint64_t before = st->walk_steps;
