@@ -710,7 +710,7 @@ def main():
             sql('CREATE EXTENSION laplace CASCADE')
             run('ingest', '-d', connection, '-j', 4, 'semantic-alignment')
             run('ingest', '-d', connection, '-j', 4, 'propbank')
-            before = sql('SELECT count(*) FROM public.witness')
+            before = sql('SELECT count(DISTINCT witness) FROM public.attestation')
             assert before == '2', before
             ud_data = root / 'data/ud'
             ud_data.mkdir()
@@ -721,7 +721,7 @@ def main():
                 'root $LAPLACE_DATA/ud\n', encoding='utf-8')
             publication = run('ingest', '-d', connection, '-j', 4, 'universal-dependencies')
             preserved = sql("""SELECT sum(games) FROM public.laplace_contained_series(
-                (SELECT array_agg(id) FROM public.witness))
+                (SELECT array_agg(DISTINCT witness) FROM public.attestation))
                 WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('see  a.'),
                     public.laplace_text_id('the fluent translation of the sentence to English'),
                     public.laplace_text_id('Translated.')])""")
@@ -735,20 +735,20 @@ def main():
                     operands += "public.laplace_text_id('%s')," % relation
                 operands += 'public.laplace_compose(ARRAY[' + pair_ids + '])'
                 observed = sql("SELECT sum(games) FROM public.laplace_contained_series("
-                    "(SELECT array_agg(id) FROM public.witness)) WHERE claim=public.laplace_compose(ARRAY[" + operands + '])')
+                    "(SELECT array_agg(DISTINCT witness) FROM public.attestation)) WHERE claim=public.laplace_compose(ARRAY[" + operands + '])')
                 assert observed == '1', ('Structured bindings or parent association changed in PostgreSQL', relation, observed, publication)
             detailed.rmdir()
             detailed.write_text(rich_sentences, encoding='utf-8')
             run('ingest', '-d', connection, '-j', 4, 'tatoeba')
             language_games = sql("""SELECT sum(games) FROM public.laplace_contained_series(
-                (SELECT array_agg(id) FROM public.witness))
+                (SELECT array_agg(DISTINCT witness) FROM public.attestation))
                 WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('Preferred cat.'),
                     public.laplace_text_id('ISO 639-3 language code'),public.laplace_text_id('eng')])""")
             assert language_games == '1', ('Mirrored sentence exports manufactured observations', language_games)
             assert 'Fallback dog.' in run('hop', '-d', connection, 'Preferred cat.')
             run('ingest','-d',connection,'wiktionary-kaikki')
             dictionary_games=sql("""SELECT sum(games) FROM public.laplace_contained_series(
-                ARRAY(SELECT id FROM public.witness WHERE lineage=public.laplace_text_id('Wiktionary')))
+                ARRAY(SELECT witness FROM (SELECT DISTINCT ON (witness) witness,lineage FROM public.attestation ORDER BY witness,lineage NULLS FIRST) w WHERE lineage=public.laplace_text_id('Wiktionary')))
                 WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('domestic'),
                     public.laplace_text_id('qualifier of this form or sense'),public.laplace_text_id('domestic')])""")
             assert dictionary_games=='1',('Dictionary homograph qualifier was lost or duplicated',dictionary_games)
@@ -760,7 +760,7 @@ def main():
             # Two declarations describe one reference in one source record.
             # Replaying actual containment must still recover one observation.
             games = sql("""SELECT sum(games) FROM public.laplace_contained_series(
-                (SELECT array_agg(id) FROM public.witness))
+                (SELECT array_agg(DISTINCT witness) FROM public.attestation))
                 WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('single-unlisted.01'),
                     public.laplace_text_id('identifier vocabulary'),public.laplace_text_id('pbroleset')])""")
             assert games == '1', ('Duplicate declarations manufactured observations', games)
@@ -789,7 +789,7 @@ def main():
             subset_events = [json.loads(line) for line in subset_progress.read_text(encoding='utf-8').splitlines()]
             subset_id = next(event['source_id'] for event in subset_events if event['event'] == 'complete')
             assert subset_id != witness, 'A derived subset impersonated the complete publisher source'
-            subset_lineage = sql(f"SELECT public.laplace_text(lineage) FROM public.witness WHERE id='{subset_id}'::public.blake3")
+            subset_lineage = sql(f"SELECT public.laplace_text(lineage) FROM (SELECT lineage FROM public.attestation WHERE witness='{subset_id}'::public.blake3 ORDER BY lineage NULLS FIRST LIMIT 1) a")
             assert subset_lineage == 'Social-Chem-101 Dataset', subset_lineage
             subset_query = f"SELECT jsonb_agg(to_jsonb(s) ORDER BY claim,dependence_root) FROM public.laplace_contained_series(ARRAY['{subset_id}'::public.blake3]) s"
             subset_before = sql(subset_query)
@@ -800,7 +800,7 @@ def main():
             run('ingest', '-d', connection, '-j', 4, 'twic-validated', extra=chess_environment)
             chess_events = [json.loads(line) for line in chess_progress.read_text(encoding='utf-8').splitlines()]
             chess_id = next(event['source_id'] for event in chess_events if event['event'] == 'complete')
-            assert sql(f"SELECT public.laplace_text(lineage) FROM public.witness WHERE id='{chess_id}'::public.blake3") == 'The Week in Chess'
+            assert sql(f"SELECT public.laplace_text(lineage) FROM (SELECT lineage FROM public.attestation WHERE witness='{chess_id}'::public.blake3 ORDER BY lineage NULLS FIRST LIMIT 1) a") == 'The Week in Chess'
             chess_query = f"SELECT jsonb_agg(to_jsonb(s) ORDER BY claim,dependence_root) FROM public.laplace_contained_series(ARRAY['{chess_id}'::public.blake3]) s"
             chess_before = sql(chess_query)
             assert chess_before != 'null', 'Validated games published no Native testimony'
@@ -827,7 +827,7 @@ def main():
             events = [json.loads(line) for line in rereading.read_text(encoding='utf-8').splitlines()]
             assert any(e['event'] == 'file-composed' and e['file'].endswith('letters.tsv') for e in events), events
             assert 'ADV' in run('hop', '-d', connection, 'duck')
-            before = sql('SELECT count(*) FROM public.witness')
+            before = sql('SELECT count(DISTINCT witness) FROM public.attestation')
             progress = root / 'failed.jsonl'
             (data / 'canonical.tsv').write_text('bad\tNOT_A_POS\tnew.03\tnew.03\tnew-99\n', encoding='utf-8')
             rejected = run('ingest', '-d', connection, 'semantic-alignment', expected=1,
@@ -835,7 +835,7 @@ def main():
             assert 'semantic_omissions=1' in rejected, rejected
             events = [json.loads(line) for line in progress.read_text(encoding='utf-8').splitlines()]
             assert events[-1]['event'] == 'failed' and not any(e['event'] == 'complete' for e in events), events
-            assert sql('SELECT count(*) FROM public.witness') == before
+            assert sql('SELECT count(DISTINCT witness) FROM public.attestation') == before
             print('PASS committed CLI readback and failed-source publication/progress boundary')
         finally:
             if created:

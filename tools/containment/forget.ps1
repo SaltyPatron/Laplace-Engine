@@ -8,7 +8,7 @@ param([string]$Out = 'D:\Temp\containment-proof\run', [string]$Source = 'univers
 . (Join-Path $PSScriptRoot 'lib.ps1')
 $o = $Out -replace '\\', '/'; $env:LAPLACE_RECIPES = "$o/recipes"; $env:LAPLACE_WORK = "$o/work-b"; $db = 'laplace_proto_b'
 function Stamp([string]$what) { "[{0:HH:mm:ss}] {1}" -f (Get-Date), $what }
-function Counts { Sql $db "SELECT (SELECT count(*) FROM entity) || ' entities, ' || (SELECT count(*) FROM consensus) || ' standings, ' || (SELECT count(*) FROM witness) || ' witnesses'" }
+function Counts { Sql $db "SELECT (SELECT count(*) FROM entity) || ' entities, ' || (SELECT count(*) FROM consensus) || ' standings, ' || (SELECT count(DISTINCT witness) FROM attestation) || ' witnesses'" }
 function Dump([string]$f) { Sql $db "\copy (SELECT claim, rating, deviation, volatility, matches FROM consensus ORDER BY 1) TO '$o/$f'" | Out-Null; (Get-FileHash "$Out\$f").Hash }
 Stamp "before: $(Counts)"; $h1 = Dump 'forget-before.tsv'
 Stamp "forget $Called"; Laplace $BuildB $db @('forget', $Called) | Select-String 'witness|claims their records|entities nothing held|standings they touched|== total'

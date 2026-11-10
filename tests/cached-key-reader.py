@@ -87,10 +87,10 @@ def main():
                 deltas.append(after - before)
                 cold = database('cold')
                 run(cold, 'cold')
-                witness = sql(cold, 'SELECT id::text FROM public.witness')
+                witness = sql(cold, 'SELECT DISTINCT witness::text FROM public.attestation')
                 assert re.fullmatch('[a-f0-9]{32}', witness), witness
                 query = ("SELECT w.id::text,e.tier,e.hilbert,encode(ST_AsEWKB(e.coord),'hex') "
-                         "FROM public.witness w JOIN public.entity e ON e.id=w.id "
+                         "FROM (SELECT DISTINCT witness AS id FROM public.attestation) w JOIN public.entity e ON e.id=w.id "
                          f"WHERE w.id='{witness}'::blake3")
                 expected = sql(cold, query)
                 actual = sql(warm, query)

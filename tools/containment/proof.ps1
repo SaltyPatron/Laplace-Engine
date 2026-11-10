@@ -27,7 +27,7 @@ function Seed([string]$side) {
     foreach ($s in $Sources) {
         $t = Get-Date; Laplace $build $db @('ingest', $s) | ForEach-Object { ($_ -split "`r")[-1] } | Set-Content "$Out\$side-ingest-$s.log"
         $sec = ((Get-Date) - $t).TotalSeconds
-        $new = Sql $db 'SELECT id FROM witness ORDER BY 1' | Where-Object { $_ -and -not $seen.ContainsKey($_) }
+        $new = Sql $db 'SELECT DISTINCT witness FROM attestation ORDER BY 1' | Where-Object { $_ -and -not $seen.ContainsKey($_) }
         foreach ($w in $new) { $seen[$w] = $s; Add-Content $tsv "$s`t$w" }
         Stamp ("{0,-28} {1,7:N1} s   {2} witnesses new" -f $s, $sec, @($new).Count)
         Select-String -Path "$Out\$side-ingest-$s.log" -Pattern 'the series, played|witnesses, attestations|a batch at a time|its ID|records met again|could be put in no record|merged .* rows|== total|error|refused' | ForEach-Object { "    " + $_.Line.Trim() }
@@ -38,9 +38,9 @@ function Seed([string]$side) {
     else { Laplace $build $db @('replay', '--tsv', "$Out\b-replay.tsv", '--voices', '--files') | Select-Object -Last 4 | Set-Content "$Out\b-replay.log"; Get-Content "$Out\b-replay.log" }
     Stamp "sizes"; $q = @"
 SET maintenance_work_mem = '2GB';
-SELECT 'rows', (SELECT count(*) FROM entity), (SELECT count(*) FROM physicality), (SELECT count(*) FROM consensus), (SELECT count(*) FROM witness);
+SELECT 'rows', (SELECT count(*) FROM entity), (SELECT count(*) FROM physicality), (SELECT count(*) FROM consensus), (SELECT count(DISTINCT witness) FROM attestation);
 SELECT 'attestation rows', CASE WHEN to_regclass('attestation') IS NULL THEN -1 ELSE (SELECT count(*) FROM attestation) END;
-SELECT relname_group, sum(pg_table_size(oid)), sum(pg_indexes_size(oid)) FROM (SELECT regexp_replace(c.relname, '_[0-9a-f]+$', '') AS relname_group, c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r') x WHERE relname_group IN ('entity', 'physicality', 'attestation', 'consensus', 'witness') GROUP BY 1 ORDER BY 1;
+SELECT relname_group, sum(pg_table_size(oid)), sum(pg_indexes_size(oid)) FROM (SELECT regexp_replace(c.relname, '_[0-9a-f]+$', '') AS relname_group, c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r') x WHERE relname_group IN ('entity', 'physicality', 'attestation', 'consensus') GROUP BY 1 ORDER BY 1;
 SELECT 'database bytes', pg_database_size(current_database());
 "@
     Set-Content "$Out\sizes.sql" $q; SqlFile $db "$Out\sizes.sql" | Set-Content "$Out\$side-sizes.tsv"; Get-Content "$Out\$side-sizes.tsv"

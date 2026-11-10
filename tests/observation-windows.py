@@ -73,7 +73,7 @@ def main():
 
             # A real second connection holds only this fixture's publication
             # barrier. Parsing and all observation windows must finish before
-            # the witness insert waits here.
+            # the first attestation insert waits here.
             gate = subprocess.Popen([*arguments, '-d', db], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True, encoding='utf-8')
             processes.append(gate)
@@ -85,7 +85,7 @@ def main():
             sql("""
               CREATE FUNCTION public.window_barrier() RETURNS trigger LANGUAGE plpgsql AS $$
               BEGIN PERFORM pg_advisory_xact_lock(18579,1); RETURN NEW; END $$;
-              CREATE TRIGGER window_barrier BEFORE INSERT ON public.witness FOR EACH ROW
+              CREATE TRIGGER window_barrier BEFORE INSERT ON public.attestation FOR EACH ROW
                 WHEN (NEW.trust=0.85) EXECUTE FUNCTION public.window_barrier();
               ALTER FUNCTION public.laplace_contained_series(public.blake3[]) RENAME TO window_reference_series;
               CREATE FUNCTION public.laplace_contained_series(trunks public.blake3[],
@@ -109,7 +109,7 @@ def main():
                               "WHERE n.nspname='stage' AND c.relkind='r' AND c.relname LIKE 'lp_pending_%'")
                 assert re.fullmatch(r'lp_pending_[0-9]+', pending), pending
                 assert int(sql(f'SELECT count(*) FROM stage."{pending}"')) > 0, 'window observations were not committed'
-                assert sql('SELECT count(*) FROM public.witness') == '0', 'witness escaped atomic publication'
+                assert sql('SELECT count(DISTINCT witness) FROM public.attestation') == '0', 'witness escaped atomic publication'
                 assert sql('SELECT count(*) FROM public.consensus') == '0', 'unregistered source published standings'
                 assert sql('SELECT bool_and(pg_try_advisory_xact_lock(1279348803,h)) FROM generate_series(0,15) h') == 't', \
                     'streaming retained public consensus bucket locks'
@@ -118,7 +118,8 @@ def main():
                 assert re.fullmatch(r'[0-9a-f]{32}', file_id)
                 # A concurrent independent witness must be included by final
                 # Native publication, rather than overwritten by an old snapshot.
-                sql(f"INSERT INTO public.witness(id,trust) VALUES ('{file_id}'::public.blake3,0.4)")
+                sql(f"INSERT INTO public.attestation(claim,witness,lineage,games,tokens,score,\"position\",trust) "
+                    f"VALUES (pg_catalog.md5('window-witness-{file_id}')::public.blake3,'{file_id}'::public.blake3,NULL,1,1,1,NULL,0.4)")
                 gate.communicate("SELECT pg_advisory_unlock(18579,1);\n\\q\n", timeout=30)
                 if process.wait(timeout=180):
                     raise RuntimeError((root / 'initial.log').read_text(encoding='utf-8'))
@@ -128,7 +129,7 @@ def main():
             def exact_standings():
                 sql('CREATE UNLOGGED TABLE stage.window_empty (LIKE stage.attestation INCLUDING DEFAULTS); '
                     'CREATE UNLOGGED TABLE stage.window_claims AS SELECT DISTINCT claim FROM '
-                    'public.laplace_contained_series(ARRAY(SELECT id FROM public.witness))')
+                    'public.laplace_contained_series(ARRAY(SELECT DISTINCT witness FROM public.attestation))')
                 assert int(sql('SELECT count(*) FROM stage.window_claims')) > 0, 'fixture emitted no testimony'
                 assert sql("""SELECT NOT EXISTS (
                   (SELECT claim,rating,deviation,volatility,matches FROM public.consensus

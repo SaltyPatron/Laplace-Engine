@@ -42,7 +42,7 @@ def main():
         return sql(db, """
           SELECT 'entity',count(*),md5(string_agg(to_jsonb(e)::text,E'\n' ORDER BY id)) FROM public.entity e;
           SELECT 'path',count(*),md5(string_agg(to_jsonb(p)::text,E'\n' ORDER BY entity)) FROM public.physicality p;
-          SELECT 'witness',count(*),md5(string_agg(to_jsonb(w)::text,E'\n' ORDER BY id)) FROM public.witness w;
+          SELECT 'attestation',count(*),md5(string_agg(to_jsonb(a)::text,E'\n' ORDER BY claim,witness,lineage)) FROM public.attestation a;
           SELECT 'standing',count(*),md5(string_agg(to_jsonb(c)::text,E'\n' ORDER BY claim)) FROM public.consensus c;
         """)
 
@@ -90,15 +90,15 @@ def main():
                 witness = found[1]
                 return sql(db, f"""
                   SELECT to_jsonb(e)::text FROM public.entity e WHERE id='{witness}'::public.blake3;
-                  SELECT to_jsonb(w)::text FROM public.witness w WHERE id='{witness}'::public.blake3;
+                  SELECT md5(string_agg(to_jsonb(a)::text,E'\n' ORDER BY claim,lineage)) FROM public.attestation a WHERE witness='{witness}'::public.blake3;
                   SELECT md5(string_agg(to_jsonb(s)::text,E'\n' ORDER BY to_jsonb(s)::text))
                   FROM public.laplace_contained_series(ARRAY['{witness}'::public.blake3]) s;
                 """)
 
             warm = database("warm")
             initial = ingest(warm, "initial", explicit_root=True)
-            assert sql(warm, 'SELECT count(*) FROM public.witness') == '1', 'explicit registered root lost its corpus witness'
-            assert sql(warm, "SELECT bool_and(lineage=public.laplace_text_id('Fixture common lineage')) FROM public.witness") == 't', 'source declaration lost its lineage'
+            assert sql(warm, 'SELECT count(DISTINCT witness) FROM public.attestation') == '1', 'explicit registered root lost its corpus witness'
+            assert sql(warm, "SELECT bool_and(lineage=public.laplace_text_id('Fixture common lineage')) FROM public.attestation") == 't', 'source declaration lost its lineage'
             before = fingerprint(warm)
             replay = ingest(warm, "unchanged")
             assert source_reference(warm, initial) == source_reference(warm, replay), 'explicit root and named source disagree'

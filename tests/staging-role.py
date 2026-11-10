@@ -69,7 +69,7 @@ GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO "{identifier}";''')
             result.check_returncode()
             return result.stdout + result.stderr
 
-        counts_sql = "SELECT (SELECT count(*) FROM public.entity) || '|' || (SELECT count(*) FROM public.physicality) || '|' || (SELECT count(*) FROM public.witness);"
+        counts_sql = "SELECT (SELECT count(*) FROM public.entity) || '|' || (SELECT count(*) FROM public.physicality) || '|' || (SELECT count(DISTINCT witness) FROM public.attestation);"
         run('ingest', '-d', scoped, '-j', '2', 'scoped-loader')
         counts = sql(identifier, counts_sql)
         assert all(int(count) > 0 for count in counts.split('|')), counts
