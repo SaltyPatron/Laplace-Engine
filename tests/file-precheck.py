@@ -82,7 +82,7 @@ def main():
             witnesses = sql(db, "SELECT count(DISTINCT witness) FROM public.attestation")
             assert witnesses == "2", ("hard-link fixture did not share its canonical file", witnesses,
                                       sql(db, "SELECT string_agg(witness::text||' '||claim::text||' '||games||' '||trust||' '||coalesce(lineage::text,'-'),E'; ') FROM public.attestation"),
-                                      sql(db, "SELECT string_agg(entity::text||' '||tier||' '||st_npoints(path),E'; ') FROM public.physicality WHERE st_npoints(path)=2"),
+                                      sql(db, "SELECT string_agg(entity::text||' '||tier||' '||public.ST_NPoints(path),E'; ') FROM public.physicality WHERE public.ST_NPoints(path)=2"),
                                       first_report[-400:])
 
             before = sql(db, """
