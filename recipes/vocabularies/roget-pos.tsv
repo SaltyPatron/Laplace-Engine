@@ -1,0 +1,10 @@
+# The labels Roget's Thesaurus gives the groups of a head's synonyms, as it writes them: N. (noun), V. (verb), Adj.
+# (adjective), Adv. (adverb). Phr. (phrases) and Int. (interjections) are the thesaurus's own groups and are kept as
+# written, equivalent to nothing.
+list upos
+N. NOUN
+V. VERB
+Adj. ADJ
+Adv. ADV
+Phr. -
+Int. -

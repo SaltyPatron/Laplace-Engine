@@ -1,0 +1,10 @@
+name roget-thesaurus
+match rogets-thesaurus-of-english-words-and-phrases.txt
+format roget
+trim
+
+thing head title
+thing item word
+content number title label word bracket reference other
+value - item
+holds head item

@@ -1,0 +1,9 @@
+name sloane-electrical
+# The Standard Electrical Dictionary by T. O'Conor Sloane (1892), Project Gutenberg eBook #36776: terms of electrical
+# engineering, each with its definition, synonyms and cross-references.
+witness The Standard Electrical Dictionary
+lineage Project Gutenberg
+class StructuredCorpus
+root $LAPLACE_DATA/ProjectGutenberg/text
+files $LAPLACE_DATA/ProjectGutenberg/text/standard-electrical-dictionary-sloane.txt
+after unicode

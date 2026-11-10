@@ -1,0 +1,29 @@
+name webster-1913-entries
+# Webster's Unabridged Dictionary (1913), Project Gutenberg eBook #29765. An entry is a headword written in capitals, a
+# signature line (the word as syllabified and accented, its parts of speech, an inflection, an Etym: [...], a domain
+# label such as (Gram.)), and its senses, Defn: paragraphs, quotations, usage labels ([Obs.]), "See X" references and
+# Syn. lists. The grammar (formats/grammars/webster) gives each of these its node; the recipe says what the entry
+# attests of its headword. Only a claim that other sources can make as well is attested: [headword, part of speech],
+# [headword, domain label], [headword, a synonym its Syn. list names], [headword, the entry a "See" names]. A
+# definition, a quotation, an etymology, a usage label or a sense number is the entry's content, a usage of the
+# headword and not a claim keyed by its whole text.
+match webster-unabridged-dictionary-1913.txt
+format webster
+
+# The entry is its headword, as the dictionary writes it (capitals: "ABLE").
+thing entry headword
+# A reference is "See" and the entry's name: the two parts are "See"/"see" and the name, and the name is what is said.
+# ("|" does not occur in a reference, so the whole of it is one piece, "See Name".)
+part crossref by | is space
+content form note usage text other etymology_text etymology_fragment headword domain synonym See see
+# The dictionary's abbreviations of the parts of speech (n., v. t., a.), read as the shared category each denotes
+# where webster-pos says so; the others (p. p., imp., pl.) stay the dictionary's own.
+type pos upos vocabulary webster-pos
+value upos pos
+# A domain label is the dictionary's own, (Gram.), (Med.), (Zoöl.), as written with its brackets.
+value - domain
+# The list a Syn. gives, a synonym each.
+value - synonym
+# What "See X" names is an entry of the dictionary.
+value - See see
+attest entry pos domain synonym crossref

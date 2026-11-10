@@ -1,0 +1,10 @@
+name webster-1913
+# Webster's Unabridged Dictionary (1913 edition), Project Gutenberg eBook #29765: a dictionary's entries, each a headword
+# with its pronunciation, part of speech, etymology, domain labels, senses and definitions. The eBook's own title:
+# "Webster's Unabridged Dictionary".
+witness Webster's Unabridged Dictionary
+lineage Project Gutenberg
+class StructuredCorpus
+root $LAPLACE_DATA/ProjectGutenberg/text
+files $LAPLACE_DATA/ProjectGutenberg/text/webster-unabridged-dictionary-1913.txt
+after unicode

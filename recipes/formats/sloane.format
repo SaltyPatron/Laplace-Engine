@@ -1,0 +1,14 @@
+grammar sloane
+records entry
+node entry group as entry
+node term text as term trim
+node qualifier text as qualifier
+node text text as text trim
+node crossref text as crossref
+node synonym text as synonym trim
+node other text as other
+node syn_mark skip
+node front skip
+node start skip
+node end skip
+node back skip
