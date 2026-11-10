@@ -35,14 +35,14 @@ def main():
             'root $LAPLACE_DATA/alignment\n', encoding='utf-8')
         data = root / 'data/alignment'
         data.mkdir(parents=True)
-        for spelling, vocabulary, pos in [('letters', 'wordnet-pos', 'n'),
-                                           ('names', 'english-pos', 'noun'),
-                                           ('canonical', None, 'NOUN')]:
+        for spelling, how, vocabulary, pos in [('letters', 'crosswalk', 'wordnet-pos', 'n'),
+                                                ('names', 'vocabulary', 'english-pos', 'noun'),
+                                                ('canonical', None, None, 'NOUN')]:
             (source / f'{spelling}.recipe').write_text(
                 f'name align-{spelling}\nmatch {spelling}.tsv\n'
                 'tier row by \\n\nnames word pos pointer from to\ntier field by \\t\n'
                 'thing row word\ncontent word from to\n'
-                'type pos upos' + (f' vocabulary {vocabulary}' if vocabulary else '') + '\n'
+                'type pos upos' + (f' {how} {vocabulary}' if vocabulary else '') + '\n'
                 'type pointer pbroleset\nvalue upos pos\nvalue pbroleset pointer\n'
                 'attest row pos pointer\nmaps row from pbroleset to to vnclass\n', encoding='utf-8')
             (data / f'{spelling}.tsv').write_text(
@@ -311,21 +311,27 @@ def main():
         print('PASS both FrameNet alignments, complete valence patterns, absent GF slots and all release annotation layers')
 
         brown=root/'ca01'
-        brown.write_text('\n\nCount/nn //in minute/nn ./.\nUse/vb and/or/cc !/!\n'
-                         '/l//nn AAb//nn /r//nn ///nn\n\n',encoding='utf-8')
+        brown.write_text('\n\nCount/nn //in minute/nn ./.\nUse/vb and/or/cc !/.\n'
+                         '/l//nn AAb//nn /r//nn ///nn Fulton/np-tl\n\n',encoding='utf-8')
         readings=[]
         for workers in (1,4):
             text=run('ingest','--claims-tsv','-j',workers,'-s','brown',brown)
             claims=[tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
-            assert len(claims)==14,(claims,text)
-            assert ('/','part of speech annotation','in') in claims,claims
-            assert ('and/or','part of speech annotation','cc') in claims,claims
-            assert all((word,'part of speech annotation','nn') in claims
-                       for word in ('/l/', 'AAb/', '/r/', '//')),claims
+            # The tags reach UD's parts of speech through the highway's brown tagset and its crosswalk edges; the
+            # tag as the corpus writes it is the notation that denotes each.
+            assert len(claims)==21,(claims,text)
+            assert ('/','ADP') in claims and ('and/or','CCONJ') in claims,claims
+            assert ('!','PUNCT') in claims and ('Fulton','NOUN') in claims,claims
+            assert all((word,'NOUN') in claims for word in ('/l/', 'AAb/', '/r/', '//')),claims
+            assert ('[brown, np-tl]','denotes','NOUN') in claims and ('[brown, cc]','denotes','CCONJ') in claims,claims
             assert 'mismatched 0' in text,text
             readings.append(sorted(claims))
         assert readings[0]==readings[1],readings
-        print('PASS Brown leading, embedded, trailing and repeated slashes retain the final word/tag separator')
+        unknown=root/'cb01'
+        unknown.write_text('\n\nCount/nn minute/zz\n\n',encoding='utf-8')
+        text=run('ingest','--claims-tsv','-j',1,'-s','brown',unknown,expected=1)
+        assert '[tag zz]' in text and 'semantic_omissions=1' in text,text
+        print('PASS Brown leading, embedded, trailing and repeated slashes retain the final word/tag separator; tags cross to UD by the highway')
 
         # Real CLDR excerpts cover every field class which rejected the ISO639
         # foundation rung. Check the claims as well as the omission counter:
@@ -819,13 +825,13 @@ def main():
             assert 'PersonY' in usage, usage
             # Vocabulary edits invalidate the OS/file precheck even when all
             # corpus bytes, timestamps and the .recipe itself are unchanged.
-            vocabulary = recipes / 'vocabularies/wordnet-pos.tsv'
-            vocabulary.write_text(vocabulary.read_text(encoding='utf-8').replace('n NOUN', 'n ADV'), encoding='utf-8')
+            vocabulary = recipes / 'vocabularies/english-pos.tsv'
+            vocabulary.write_text(vocabulary.read_text(encoding='utf-8').replace('noun NOUN', 'noun ADV'), encoding='utf-8')
             rereading = root / 'rereading.jsonl'
             run('ingest', '-d', connection, 'semantic-alignment',
                 extra={'LAPLACE_INGEST_PROGRESS_PATH': str(rereading)})
             events = [json.loads(line) for line in rereading.read_text(encoding='utf-8').splitlines()]
-            assert any(e['event'] == 'file-composed' and e['file'].endswith('letters.tsv') for e in events), events
+            assert any(e['event'] == 'file-composed' and e['file'].endswith('names.tsv') for e in events), events
             assert 'ADV' in run('hop', '-d', connection, 'duck')
             before = sql('SELECT count(DISTINCT witness) FROM public.attestation')
             progress = root / 'failed.jsonl'

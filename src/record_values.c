@@ -2,6 +2,7 @@
  * Source scheduling, SQL, statement emission and provenance layout are separate. */
 #define _GNU_SOURCE
 #include "record_values_internal.h"
+#include "laplace/highway.h"
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -224,12 +225,32 @@ int compose_values(RecordWorker *k,const SemanticRecord *t,int32_t c,int depth,i
     scratch_restore(mark);return count!=0;
 }
 
+/* A tagset's spelling, by way of the highway: the type of the tagset its key names, then that type's one edge to the
+ * target list (manifest/slots: the tagset's list and its edges). A type with no edge there is the tagset's own category,
+ * equivalent to nothing, and is kept as written; a type with several names no one type, and is kept as written too. */
+static int crosswalk_value(RecordWorker *k, const SemanticRecord *t, int32_t c, const SemanticValue *x, const Dis *d,
+    const uint8_t *kp, size_t kn, Ref *out){
+    const lp_list *tagset = HW ? lp_highway_list(HW, d->k.crosswalk) : NULL, *target = HW && d->ntargets == 1 ? lp_highway_list(HW, d->targets[0].name) : NULL;
+    if (!tagset || !target || !kn || kn > 1000) { record_unknown_key(k, t, c, x); return 0; }
+    char key[1001]; memcpy(key, kp, kn); key[kn] = 0;
+    int64_t slot = lp_highway_key(HW, tagset, key);
+    if (slot < 0) { record_unknown_key(k, t, c, x); return 0; }
+    const lp_edge *edge; size_t n = lp_highway_edges(HW, tagset->name, (uint32_t)slot, target->name, &edge);
+    const lp_tier0_record *record = n == 1 ? lp_highway_at(HW, target, edge[0].to) : NULL;
+    if (!record) { *out = record_text(kp, kn); return 1; }
+    /* The type's own text, composed here as a vocabulary's canonical spelling is, so the claim names content. */
+    const char *const *parts; const char *name = lp_highway_identifier_parts(HW, target, edge[0].to, &parts) == 1 ? parts[0] : NULL;
+    if (name) { Ref text = string_ref((const uint8_t *)name, strlen(name)); if (lp_id_eq(&text.id, &record->id)) { *out = text; return 1; } }
+    memset(out, 0, sizeof *out); out->id = record->id; memcpy(out->c.m, record->m, sizeof out->c.m); out->tier = (uint8_t)record->pad;
+    return 1;
+}
 static int type_value(RecordWorker *k, const SemanticRecord *t, int32_t c, const SemanticValue *x, const Dis *d, Ref *out){
         const uint8_t *kp = x->val; size_t kn = x->vlen;
         for (int more = 1; more; ) { more = 0;                                /* white space around it, a no-break space (U+00A0) among it */
             if (kn && (*kp == ' ' || *kp == '\t')) { kp++; kn--; more = 1; } else if (kn >= 2 && kp[0] == 0xC2 && kp[1] == 0xA0) { kp += 2; kn -= 2; more = 1; }
             if (kn && (kp[kn - 1] == ' ' || kp[kn - 1] == '\t' || kp[kn - 1] == '\r')) { kn--; more = 1; } else if (kn >= 2 && kp[kn - 2] == 0xC2 && kp[kn - 1] == 0xA0) { kn -= 2; more = 1; } }
         Keys kf; kf.n = 0; if (d->k.has_re || d->k.nas) { record_key_forms(&d->k, kp, kn, &kf, t, c); if (!kf.n) { record_unknown_key(k,t,c,x); return 0; } }
+        if (d->k.crosswalk[0]) return crosswalk_value(k, t, c, x, d, kp, kn, out);
         if (d->k.vocabulary) {
             const VocabularyValue *value=lp_strmap_lookup(d->k.vocabulary,kp,kn);
             if (!value) { record_unknown_key(k,t,c,x); return 0; }

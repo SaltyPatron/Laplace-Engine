@@ -53,7 +53,7 @@ always
 type ili ili
 type lexfile lexfile
 type language language
-type partOfSpeech upos vocabulary wordnet-pos
+type partOfSpeech upos crosswalk wordnet-pos
 content label writtenForm relType subcategorizationFrame Definition ILIDefinition Example Pronunciation variety script Tag category Count ref lexicalized
 # a file's bookkeeping, read by nothing: who made it, under what licence, at what version, how confident
 # n (a sense's place among its entry's senses) and index (an entry's place among its homographs) number what the file
