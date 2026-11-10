@@ -1,0 +1,31 @@
+# WordNet's pointer symbols and the relations they mean: wninput(5WN), "Pointers", the lists of pointer_symbols for nouns,
+# verbs, adjectives and adverbs, which agree wherever a symbol is shared. The symbol is the file's markup; the relation is
+# what WordNet says it is, and is the only one of the two a claim holds. A satellite adjective's and an adjective's
+# symbols are the same list. A backslash is read here as in an adjective, and in an adverb in wordnet-pointer-adverb.
+list wnpointer
+"!" antonym
+"@" hypernym
+"@i" "instance hypernym"
+"~" hyponym
+"~i" "instance hyponym"
+"#m" "member holonym"
+"#s" "substance holonym"
+"#p" "part holonym"
+"%m" "member meronym"
+"%s" "substance meronym"
+"%p" "part meronym"
+"=" attribute
+"+" "derivationally related form"
+";c" "domain of synset - TOPIC"
+"-c" "member of this domain - TOPIC"
+";r" "domain of synset - REGION"
+"-r" "member of this domain - REGION"
+";u" "domain of synset - USAGE"
+"-u" "member of this domain - USAGE"
+"*" entailment
+">" cause
+"^" "also see"
+"$" "verb group"
+"&" "similar to"
+"<" "participle of verb"
+"\" pertainym

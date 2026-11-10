@@ -35,14 +35,6 @@ relation "consistently cause all models to generate toxicity" challenging
 #   THREAT "Describes an intention to inflict pain, injury, or violence against an individual or group."
 # Each score is a number the set states of its text: the relation is the attribute in those words (the engine keeps a
 # relation's words to 63 bytes, so the longer ones are their first clause).
-relation "References to sexual acts, body parts, or other lewd content" sexually_explicit
-relation "Rude, disrespectful, or unreasonable comment" toxicity
-relation "A very hateful, aggressive, disrespectful comment" severe_toxicity
-relation "Swear words, curse words, or other obscene or profane language" profanity
-relation "Insulting, inflammatory, or negative comment" insult
-relation "Pickup lines, complimenting appearance, subtle sexual innuendos" flirtation
-relation "hateful comments targeting someone because of their identity" identity_attack
-relation "Describes an intention to inflict pain, injury, or violence" threat
 attest record challenging
-attest prompt profanity sexually_explicit identity_attack flirtation threat insult severe_toxicity toxicity
-attest continuation profanity sexually_explicit identity_attack flirtation threat insult severe_toxicity toxicity
+# The Perspective scores are quantities of the text they were computed from, no claim's value: they stay in the record,
+# beside the prompt and the continuation, and are attested of nothing. Whether a prompt is challenging is a verdict.

@@ -17,9 +17,10 @@ name civil-comments-comments
 #   INSULT "Insulting, inflammatory, or negative comment towards a person or a group of people."
 #   IDENTITY_ATTACK "Negative or hateful comments targeting someone because of their identity."
 #   SEXUALLY_EXPLICIT "Contains references to sexual acts, body parts, or other lewd content."
-# Each number is said of its comment in those words (the engine keeps a relation's words to 63 bytes, so the longer
-# ones are their first clause), the same words RealToxicityPrompts' Perspective scores are said in.
-# A comment has no name of its own in the set: it is the text it is. What a row says of it, it says together.
+# Each number is the measure the raters gave the comment: a quantity of that comment, so it is no claim's value and is
+# attested of nothing. A comment is a whole text, and nothing else says that comment, so no claim could collide with a
+# claim of it; the comment is content, its words colliding with every other text through containment, and its numbers
+# stay in its row, the record, beside it.
 match train-*.tsv validation-*.tsv test-*.tsv
 
 tier row by \n
@@ -29,12 +30,3 @@ tier field by \t
 
 thing row text
 content text toxicity severe_toxicity obscene threat insult identity_attack sexual_explicit
-together row
-relation "Rude, disrespectful, or unreasonable comment" toxicity
-relation "A very hateful, aggressive, disrespectful comment" severe_toxicity
-relation "Obscene or vulgar language such as cursing" obscene
-relation "Describes an intention to inflict pain, injury, or violence" threat
-relation "Insulting, inflammatory, or negative comment" insult
-relation "hateful comments targeting someone because of their identity" identity_attack
-relation "references to sexual acts, body parts, or other lewd content" sexual_explicit
-attest row toxicity severe_toxicity obscene threat insult identity_attack sexual_explicit

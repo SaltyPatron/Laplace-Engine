@@ -1,10 +1,11 @@
 name chess-com-games
 match *.pgn
 # PGN packaging uses formats/pgn.format; chess.c applies the legal board rules.
-# Every game is a record [line, tags, layer]; its
-# line the trajectory of positions and moves, replayed under firmware/chess.firmware by the Variant it names; every
-# tag a statement [name, value] as written; its clock comments ([%clk]) its layer. chess.com's archive is of games
-# played: a record with variations or NAGs would be an annotator's study and is said as one.
+# Every game is a record [line, tags, layer]: its line the trajectory of positions and moves, replayed under
+# firmware/chess.firmware by the Variant it names; its tags (the players, their ratings, the clocks, the date, the result)
+# as written; its clock comments ([%clk]) its layer. All of that is the game's content, and none of it is claimed of the
+# game: a game is a whole record no other record is, so a claim of it could collide with none. chess.com's archive is of
+# games played: a record with variations or NAGs would be an annotator's study and is said as one.
 grammar pgn
 records played
 # Completed played games attest [position_before, canonical_move, position_after]

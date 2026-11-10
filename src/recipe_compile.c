@@ -16,6 +16,8 @@
  *   pair TIER NAME...          of a TIER's thing, a part the file writes beside it with nothing between: [thing, value]
  *   score TIER NAME [from A to B]
  *                              the score the TIER gives what it attests, on the scale the source writes it on
+ *   games TIER NAME            the number of games the TIER gives what it attests: the part is a count of times the source observed it, a
+ *                              whole number of one or more, and is no claim's value
  *   dependence TIER CLASS      observations in this TIER use the named native trust class's canonical dependence
  *                              root and prior; the corpus trunk remains the witness. Applies under when/always.
  *   where NAME is VALUE | is-not VALUE | matches PATTERN
@@ -489,6 +491,7 @@ static void compile_semantic_paths(Say *say, const char *recipe){
     for (int i = 0; i < say->nwhere; i++) path_register(say, say->where[i].name);
     for (int i = 0; i < say->nadmission; i++) path_register(say, say->admission[i].field);
     for (int i = 0; i < say->nscore; i++) { path_register(say, say->score[i].tier); path_register(say, say->score[i].name); }
+    for (int i = 0; i < say->ngames; i++) { path_register(say, say->games[i].tier); path_register(say, say->games[i].name); }
     for (int i = 0; i < say->nhw; i++) { path_register(say, say->hw[i].tier); path_register(say, say->hw[i].a.path); path_register(say, say->hw[i].b.path); compile_key_forms(&say->hw[i].a); compile_key_forms(&say->hw[i].b); }
     for (int i = 0; i < say->ndis; i++) { compile_key_forms(&say->dis[i].k); path_register(say,say->dis[i].under);
         if (say->dis[i].what==D_INDEX) path_register(say,say->dis[i].arg); }

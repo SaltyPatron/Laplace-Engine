@@ -46,7 +46,6 @@ relation "domain" area
 #   characters '"|" separated list of characters that appeared'
 relation "characters that appeared" characters
 #   rot-agree: Worker answer to question "What portion of people probably agree that ${rot}?" (buckets 0 to 4)
-relation "What portion of people probably agree that ${rot}?" rot-agree
 #   rot-judgment: "Worker-written string representing the judgment portion of the RoT."
 relation "the judgment portion of the RoT" rot-judgment
 #   action: "The action (conjugated / tweaked substring of RoT), written by the worker."
@@ -56,10 +55,8 @@ relation "The action (conjugated / tweaked substring of RoT)" action
 relation "best matches the RoT's original judgment" action-moral-judgment
 #   action-agree: Worker answer to the question, "What portion of people probably agree that ${action} is
 #   ${judgment}?" (buckets 0 to 4)
-relation "probably agree that ${action} is ${judgment}" action-agree
 #   action-pressure: Worker answer to question "How much cultural pressure do you (or those you know) feel about
 #   ${action}?" (buckets -2 to 2)
-relation "How much cultural pressure do you (or those you know) feel" action-pressure
 # The worker's labels from the README's choice lists, values of the set's own vocabularies: rot-categorization
 # {morality-ethics, social-norms, advice, description}; rot-moral-foundations {care-harm, fairness-cheating,
 # loyalty-betrayal, authority-subversion, sanctity-degradation}; action-agency {agency, experience}; action-legal
@@ -69,5 +66,7 @@ value - rot-categorization rot-moral-foundations action-agency action-legal acti
 relation "Who is the RoT most likely targeting" rot-char-targeting
 relation "who is most likely to do the action or its opposite" action-char-involved
 attest row situation with rot-worker-id
-attest row rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical with breakdown-worker-id
+attest row rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-legal action-char-involved action-hypothetical with breakdown-worker-id
 attest row area characters
+# What portion of people agree and how much cultural pressure the action carries are quantities, no claim's value: they stay in
+# the row, the record, and are attested of nothing.

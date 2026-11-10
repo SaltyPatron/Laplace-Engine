@@ -60,10 +60,22 @@ static void field_qualifier(RecordWorker *k, const SemanticValue *field, int fil
 }
 static float score_of(const Say *s, const SemanticRecord *t, int32_t g){
     const SemanticValue *x = &t->n[g];
-    for (int i = 0; i < s->nscore; i++) if (record_field_named(x, s->score[i].tier, strlen(s->score[i].tier))) { int32_t c = record_field_child(t, g, s->score[i].name, -1); if (c < 0 || !t->n[c].vlen || t->n[c].vlen > 31) return 1.0f;
+    for (int i = 0; i < s->nscore; i++) if (record_field_named(x, s->score[i].tier, strlen(s->score[i].tier))) { int32_t c = record_select_first(t, g, s->score[i].name); if (c < 0 || !t->n[c].vlen || t->n[c].vlen > 31) return 1.0f;
         char z[32]; memcpy(z, t->n[c].val, t->n[c].vlen); z[t->n[c].vlen] = 0; char *e; double v = strtod(z, &e); if (e == z) return 1.0f;
         v = (v - s->score[i].from) / (s->score[i].to - s->score[i].from); return (float)(v < 0 ? 0 : v > 1 ? 1 : v); }
     return 1.0f;
+}
+
+/* The games a part gives what its tier attests (games TIER NAME): the whole number of times the source observed it, one or
+ * more, the run its claims are said. A part that is not a whole number gives none: the claims are said once. */
+static uint32_t games_of(const Say *s, const SemanticRecord *t, int32_t g){
+    const SemanticValue *x = &t->n[g];
+    for (int i = 0; i < s->ngames; i++) if (record_field_named(x, s->games[i].tier, strlen(s->games[i].tier))) { int32_t c = record_select_first(t, g, s->games[i].name);
+        if (c < 0 || !t->n[c].vlen || t->n[c].vlen > 31) return 1;
+        char z[32]; memcpy(z, t->n[c].val, t->n[c].vlen); z[t->n[c].vlen] = 0; char *e; unsigned long long v = strtoull(z, &e, 10);
+        if (e == z || *e || v < 1) return 1;
+        return v < (1u << LP_M_RUN_BITS) ? (uint32_t)v : (1u << LP_M_RUN_BITS) - 1; }
+    return 1;
 }
 
 typedef struct { int32_t end; uint64_t e0; Ref about; int has; } Pend;
@@ -226,6 +238,8 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                 else if (s->rel[a].alone && oc >= 0) { Ref p[2] = { subject, rel }; record_emit_claim(k, p, 2); } }      /* to what names nothing (a treebank's root): the relation alone, where the recipe says so; otherwise no claim */
             }
             k->qualified = was; k->qualifier = wv; }
+        if (s->ngames) { uint32_t games = games_of(s, t, (int32_t)g);                 /* a count the source states of what it attests: the run its claims are said, never a part of them */
+            if (games > 1) for (uint64_t i = e0; i < k->ev.n; i++) if (k->ev.e[i].kind == EV_CLAIM) k->ev.e[i].run = games; }
         for (int a = 0; a < s->ntogether; a++) if (record_field_named(x, s->together[a].tier, strlen(s->together[a].tier)) && record_conditions_match(s, t, (int32_t)g, s->together[a].when)) {
             if (np_ < 64) { pend[np_].end = record_scope_end(t, (int32_t)g); pend[np_].e0 = e0; pend[np_].has = record_thing(k, t, (int32_t)g, &pend[np_].about, 0); np_++; } break; }      /* closed when the reading passes the last node inside it */
     }

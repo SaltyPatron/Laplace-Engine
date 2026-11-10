@@ -28,8 +28,12 @@ thing concept resolved lexicalization/lemma required lexicalization/language req
 thing edge preserve start rel/2 end
 itself edge with json/sources/contributor
 
-# Edges.md: strength and the original natural-language statement are claims
-# about the edge, not JSON member names used as relation vertices.
-relation "the strength with which this edge expresses this assertion" json.weight
+# Edges.md: the original natural-language statement is a claim about the edge, not a JSON member name used as a relation
+# vertex. The strength is not a claim's value: "weight: the strength with which this edge expresses this assertion" is a
+# measure of the edge, so it is the score of the edge's attestation. "A typical weight is 1, but weights can be higher or
+# lower. All weights are positive": on a scale from 0 to 2 the typical weight is a draw, a stronger one wins and a weaker
+# one loses.
+omit json.weight
+score edge json/weight from 0 to 2
 relation "the original natural language text" json.surfaceText
 attest edge json
