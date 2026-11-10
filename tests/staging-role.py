@@ -57,12 +57,13 @@ GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO "{identifier}";''')
         (source / 'source').write_text(
             'name scoped-loader\nwitness Scoped Loader Integration\nclass UserCuratedResource\n'
             f'root {data}\nreads python\n', encoding='utf-8')
-        # A witness is known when it has attestations, and plain python content attests nothing: a pyi declaration file read by
-        # the workspace-code recipe gives the source claims, so the closure below has a witness to count.
+        # A witness is known when it has attestations, and python content attests nothing: a table whose rows attest
+        # gives the source a witness, so the closure below has one to count.
         (source / 'claims.recipe').write_text(
-            re.sub(r'(?m)^match .*$', 'match *.pyi', (ROOT / 'recipes/workspace-code/python.recipe').read_text(encoding='utf-8')),
+            'name scoped-claims\nmatch *.tsv\ntier row by \\n\nnames thing value\ntier field by \\t\n'
+            'thing row thing\ncontent thing value\nrelation "has value" value\nattest row value\n',
             encoding='utf-8', newline='\n')
-        (data / 'claims.pyi').write_text('def scoped_claim_declaration() -> int: ...\n', encoding='utf-8')
+        (data / 'claims.tsv').write_text('dog\twarm\ncat\tcold\n', encoding='utf-8', newline='\n')
         (data / 'probe.py').write_text('def scoped_ingestion_probe():\n    return "scoped ingestion"\n', encoding='utf-8')
         env = dict(environment, LAPLACE_RECIPES=str(recipes), LAPLACE_WORK=str(scratch / 'work'),
                    OMP_NUM_THREADS='2', LAPLACE_DB_POOL_SIZE='2', LAPLACE_TIMES='1')
