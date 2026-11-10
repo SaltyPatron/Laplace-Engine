@@ -13,7 +13,7 @@
 #include <errno.h>
 #include <limits.h>
 
-typedef struct { lp_id claim, witness, lineage; uint64_t games; double sum, trust; uint8_t has_lineage, dirty; } Series;
+typedef struct { lp_id claim, witness, lineage; uint64_t games, tokens; double sum, trust; uint32_t position; uint8_t has_lineage, dirty; } Series;
 struct Fold { lp_strmap *series; lp_vec(size_t) dirty; };
 typedef struct { lp_mask lexical; uint8_t tier,kind,metadata; } Published;
 typedef struct {

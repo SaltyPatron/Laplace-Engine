@@ -451,15 +451,15 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
     if(!ids){perror("witness measurement roots");return 1;}
     for(size_t i=0;i<count;i++){ids[i]=roots[i].id;lp_idmap_put(writer.registered,ids+i,NULL);}
     Args existing_args={0};arg_ids(&existing_args,ids,count);free(ids);
-    PGresult *existing=ask(writer.series,"SELECT id,attestations FROM @extschema@.witness WHERE id OPERATOR(@extschema@.=) ANY($1)",&existing_args);
+    PGresult *existing=ask(writer.series,"SELECT DISTINCT witness FROM @extschema@.attestation WHERE witness OPERATOR(@extschema@.=) ANY($1)",&existing_args);
     lp_idmap *known_witnesses=lp_idmap_new();
-    for(int i=0;i<PQntuples(existing);i++){
-        lp_idmap_put(known_witnesses,col_id(existing,i,0),NULL);
-        if(PQgetisnull(existing,i,1))writer.counts_unknown=1;
+    for(int i=0;i<PQntuples(existing);i++)lp_idmap_put(known_witnesses,col_id(existing,i,0),NULL);
+    for(size_t i=0;i<count;i++)if(lp_idmap_find(known_witnesses,&roots[i].id)<0){
+        lp_idmap_put(writer.new_witnesses,&roots[i].id,NULL);
+        writer.witness_changed=1;
     }
-    for(size_t i=0;i<count;i++)if(lp_idmap_find(known_witnesses,&roots[i].id)<0)lp_idmap_put(writer.new_witnesses,&roots[i].id,NULL);
     lp_idmap_free(known_witnesses);PQclear(existing);args_free(&existing_args);
-    lp_copy copy={0};char sql[1600];snprintf(sql,sizeof sql,"COPY %s (id,lineage,trust) FROM STDIN (FORMAT binary)",writer.witnesses);
+    lp_copy copy={0};char sql[2400];snprintf(sql,sizeof sql,"COPY %s (id,lineage,trust) FROM STDIN (FORMAT binary)",writer.witnesses);
     copy_open(&copy,writer.series,sql);
     for(size_t i=0;i<count;i++){
         if(!isfinite(roots[i].trust) || roots[i].trust < -1 || roots[i].trust > 1){fprintf(stderr,"invalid witness trust\n");exit(1);}
@@ -468,17 +468,13 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
         lp_copy_f64(&copy,roots[i].trust);
     }
     copy_close(&copy);lp_buf_free(&copy.buf);
-    snprintf(sql,sizeof sql,
-        "WITH updated AS (UPDATE @extschema@.witness w SET lineage=s.lineage,trust=s.trust FROM %s s WHERE w.id OPERATOR(@extschema@.=) s.id"
-        " AND (NOT coalesce(w.lineage OPERATOR(@extschema@.=) s.lineage,w.lineage IS NULL AND s.lineage IS NULL)"
-        " OR w.trust IS DISTINCT FROM s.trust) RETURNING w.id),"
-        " inserted AS (INSERT INTO @extschema@.witness (id,lineage,trust) SELECT DISTINCT s.id,s.lineage,s.trust FROM %s s"
-        " WHERE NOT EXISTS(SELECT FROM @extschema@.witness w WHERE w.id OPERATOR(@extschema@.=) s.id) RETURNING id)"
-        " SELECT (SELECT count(*) FROM updated)+(SELECT count(*) FROM inserted)",writer.witnesses,writer.witnesses);
-    PGresult *result=db_exec(writer.series,sql);
-    if(PQresultStatus(result)!=PGRES_TUPLES_OK){fprintf(stderr,"witness registration: %s",PQerrorMessage(writer.series));exit(1);}
-    writer.witness_changed |= strtoull(PQgetvalue(result,0,0),NULL,10) != 0;
-    PQclear(result);
+    if(count==1){
+        /* Rewrite provisional source/model witness ID in writer.pending to the final trunk ID. */
+        snprintf(sql,sizeof sql,
+            "UPDATE %s SET witness=$1::@extschema@.blake3 WHERE witness OPERATOR(@extschema@.<>) $1::@extschema@.blake3",
+            writer.pending);
+        Args rw={0};arg_raw(&rw,roots[0].id.b,16);PQclear(ask_once(writer.series,sql,&rw));args_free(&rw);
+    }
     if(writer.series_changed || writer.witness_changed || writer.counts_unknown){
         /* New assertions already supplied their exact claim IDs in each
          * committed window. Only pruned files need their stored testimony
@@ -487,9 +483,61 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
         for(int i=0;i<nfiles;i++)if(files[i].known && !files[i].skipped && files[i].has_file)
             lp_idmap_put(reused,&files[i].file.id,NULL);
         if(lp_idmap_count(reused)){
-            snprintf(sql,sizeof sql,"INSERT INTO %s SELECT DISTINCT claim FROM @extschema@.laplace_contained_series($1::@extschema@.blake3[]) ON CONFLICT DO NOTHING",writer.affected);
-            Args args={0};arg_ids(&args,lp_idmap_keys(reused),lp_idmap_count(reused));
-            PQclear(ask_once(writer.series,sql,&args));args_free(&args);
+            if(count==1){
+                snprintf(sql,sizeof sql,
+                    "WITH restored AS ("
+                    "  SELECT c.claim, $2::@extschema@.blake3 AS witness,"
+                    "         coalesce(c.dependence_root, w.lineage) AS lineage,"
+                    "         sum(c.games)::bigint AS games, greatest(sum(c.tokens)::bigint, sum(c.games)::bigint) AS tokens,"
+                    "         sum(c.score) AS wins, min(nullif(c.\"position\",0)) AS \"position\","
+                    "         coalesce(max(c.dependence_trust), w.trust) AS trust"
+                    "  FROM @extschema@.laplace_contained_series($1::@extschema@.blake3[]) c"
+                    "  CROSS JOIN %s w"
+                    "  WHERE c.games > 0"
+                    "  GROUP BY c.claim, coalesce(c.dependence_root, w.lineage), w.trust"
+                    "), applied AS ("
+                    "  INSERT INTO %s AS p (claim,witness,lineage,games,tokens,score,\"position\",trust,wins)"
+                    "  SELECT claim,witness,lineage,games,tokens,least(1.0,greatest(0.0,wins/games)),\"position\",trust,wins FROM restored"
+                    "  ON CONFLICT (claim,witness,lineage) DO UPDATE"
+                    "    SET games=p.games+excluded.games, tokens=p.tokens+excluded.tokens, wins=p.wins+excluded.wins,"
+                    "        score=least(1.0,greatest(0.0,(p.wins+excluded.wins)/(p.games+excluded.games))),"
+                    "        \"position\"=CASE WHEN p.\"position\" IS NULL OR p.\"position\"<=0 THEN excluded.\"position\""
+                    "                          WHEN excluded.\"position\" IS NULL OR excluded.\"position\"<=0 THEN p.\"position\""
+                    "                          ELSE least(p.\"position\",excluded.\"position\") END,"
+                    "        trust=excluded.trust"
+                    "  RETURNING claim"
+                    ") INSERT INTO %s SELECT DISTINCT claim FROM applied ON CONFLICT DO NOTHING",
+                    writer.witnesses,writer.pending,writer.affected);
+                Args args={0};arg_ids(&args,lp_idmap_keys(reused),lp_idmap_count(reused));arg_raw(&args,roots[0].id.b,16);
+                PQclear(ask_once(writer.series,sql,&args));args_free(&args);
+            }else{
+                snprintf(sql,sizeof sql,
+                    "WITH restored AS ("
+                    "  SELECT c.claim, c.trunk AS witness,"
+                    "         coalesce(c.dependence_root, w.lineage) AS lineage,"
+                    "         c.games::bigint AS games, greatest(c.tokens::bigint, c.games::bigint) AS tokens,"
+                    "         c.score AS wins, nullif(c.\"position\",0) AS \"position\","
+                    "         coalesce(c.dependence_trust, w.trust) AS trust"
+                    "  FROM @extschema@.laplace_contained_series($1::@extschema@.blake3[]) c"
+                    "  JOIN %s w ON w.id OPERATOR(@extschema@.=) c.trunk"
+                    "  WHERE c.games > 0"
+                    "), applied AS ("
+                    "  INSERT INTO %s AS p (claim,witness,lineage,games,tokens,score,\"position\",trust,wins)"
+                    "  SELECT claim,witness,lineage,games,tokens,least(1.0,greatest(0.0,wins/games)),\"position\",trust,wins FROM restored"
+                    "  ON CONFLICT (claim,witness,lineage) DO UPDATE"
+                    "    SET games=p.games+excluded.games, tokens=p.tokens+excluded.tokens, wins=p.wins+excluded.wins,"
+                    "        score=least(1.0,greatest(0.0,(p.wins+excluded.wins)/(p.games+excluded.games))),"
+                    "        \"position\"=CASE WHEN p.\"position\" IS NULL OR p.\"position\"<=0 THEN excluded.\"position\""
+                    "                          WHEN excluded.\"position\" IS NULL OR excluded.\"position\"<=0 THEN p.\"position\""
+                    "                          ELSE least(p.\"position\",excluded.\"position\") END,"
+                    "        trust=excluded.trust"
+                    "  RETURNING claim"
+                    ") INSERT INTO %s SELECT DISTINCT claim FROM applied ON CONFLICT DO NOTHING",
+                    writer.witnesses,writer.pending,writer.affected);
+                Args args={0};arg_ids(&args,lp_idmap_keys(reused),lp_idmap_count(reused));
+                PQclear(ask_once(writer.series,sql,&args));args_free(&args);
+            }
+            writer.series_changed=1;
         }
         lp_idmap_free(reused);
     }
@@ -500,17 +548,18 @@ int merge(const char *conninfo,int npg,LoadStats *stats){
     if(PQtransactionStatus(writer.series)==PQTRANS_IDLE)statement(writer.series,"BEGIN ISOLATION LEVEL READ COMMITTED");
     char sql[2400];uint64_t admitted=0;
     if(lp_idmap_count(writer.registered) && (writer.series_changed || writer.witness_changed || writer.counts_unknown)){
+        snprintf(sql,sizeof sql,
+            "INSERT INTO @extschema@.attestation (claim,witness,lineage,games,tokens,score,\"position\",trust)"
+            " SELECT claim,witness,lineage,games,greatest(tokens,games),score,\"position\",trust FROM %s"
+            " ON CONFLICT (claim,witness,lineage) DO UPDATE"
+            "   SET games=excluded.games,tokens=excluded.tokens,score=excluded.score,"
+            "       \"position\"=excluded.\"position\",trust=excluded.trust",
+            writer.pending);
+        statement(writer.series,sql);
         Args roots={0};arg_ids(&roots,lp_idmap_keys(writer.registered),lp_idmap_count(writer.registered));
-        /* One complete source publishes one witness. Its affected set already
-         * contains every new claim and the claims restored from reused files.
-         * Count assertions here, once per claim, never games or source totals. */
-        if(lp_idmap_count(writer.registered)==1)
-            snprintf(sql,sizeof sql,"UPDATE @extschema@.witness SET attestations=(SELECT count(*) FROM %s)"
-                " WHERE id OPERATOR(@extschema@.=) ANY($1) RETURNING id,attestations",writer.affected);
-        else snprintf(sql,sizeof sql,"WITH counts AS (SELECT trunk,count(DISTINCT claim)::bigint n FROM"
-            " @extschema@.laplace_contained_series($1::@extschema@.blake3[]) GROUP BY trunk)"
-            " UPDATE @extschema@.witness w SET attestations=coalesce((SELECT n FROM counts c WHERE c.trunk OPERATOR(@extschema@.=) w.id),0)"
-            " WHERE w.id OPERATOR(@extschema@.=) ANY($1) RETURNING w.id,w.attestations");
+        snprintf(sql,sizeof sql,
+            "SELECT witness,count(DISTINCT claim)::bigint FROM @extschema@.attestation"
+            " WHERE witness OPERATOR(@extschema@.=) ANY($1) GROUP BY witness");
         PGresult *measured=ask(writer.series,sql,&roots);
         for(int i=0;i<PQntuples(measured);i++)if(lp_idmap_find(writer.new_witnesses,col_id(measured,i,0))>=0){
             uint64_t n=(uint64_t)col_int(measured,i,1);
@@ -519,13 +568,11 @@ int merge(const char *conninfo,int npg,LoadStats *stats){
         }
         PQclear(measured);args_free(&roots);
     }
-    /* Resolve only the affected claims through the indexed upward Native
-     * provenance kernel, after the real trunk is registered. Private aliases
-     * and event estimates never become independent public witnesses. */
+    /* Resolve only the affected claims through the indexed Native series
+     * snapshot after the real trunk is registered in @extschema@.attestation. */
     snprintf(sql,sizeof sql,
-        "DELETE FROM %s;"
         "SELECT @extschema@.laplace_attest_stage('%s'::regclass,'%s'::regclass)",
-        writer.pending,writer.pending,writer.affected);
+        writer.pending,writer.affected);
     /* An unchanged registered source contributes no new evidence on replay.
      * Recompute only for new series or changed witness trust/containment. */
     if(writer.series_changed || writer.witness_changed) statement(writer.series,sql);
