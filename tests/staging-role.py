@@ -57,6 +57,12 @@ GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO "{identifier}";''')
         (source / 'source').write_text(
             'name scoped-loader\nwitness Scoped Loader Integration\nclass UserCuratedResource\n'
             f'root {data}\nreads python\n', encoding='utf-8')
+        # A witness is known when it has attestations, and plain python content attests nothing: a pyi declaration file read by
+        # the workspace-code recipe gives the source claims, so the closure below has a witness to count.
+        (source / 'claims.recipe').write_text(
+            re.sub(r'(?m)^match .*$', 'match *.pyi', (ROOT / 'recipes/workspace-code/python.recipe').read_text(encoding='utf-8')),
+            encoding='utf-8', newline='\n')
+        (data / 'claims.pyi').write_text('def scoped_claim_declaration() -> int: ...\n', encoding='utf-8')
         (data / 'probe.py').write_text('def scoped_ingestion_probe():\n    return "scoped ingestion"\n', encoding='utf-8')
         env = dict(environment, LAPLACE_RECIPES=str(recipes), LAPLACE_WORK=str(scratch / 'work'),
                    OMP_NUM_THREADS='2', LAPLACE_DB_POOL_SIZE='2', LAPLACE_TIMES='1')
