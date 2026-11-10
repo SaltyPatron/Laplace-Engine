@@ -60,7 +60,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: "${{ github.repository_owner }}/Laplace-postgres"
-          ref: a78be9c31fc4a7600779f45b413c79c6b3681295
+          ref: 8cd1feb13154af5a3f56cc3d88f2c15d849119db
           path: Laplace-postgres
           token: "${{ secrets.LAPLACE_CHECKOUT }}"
       # Every job runs the binary its own run built (tests/ci-own-binary.py): the build directory is the runner's, shared
@@ -139,7 +139,7 @@ jobs:
           python3 Laplace-Engine/tests/semantic-interpretation.py "$L"
           cmake -DWORK="$RUNNER_TEMP/reader-contract" -P Laplace-Engine/tests/reader-contract.cmake
           failed=0
-          for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing input-frame rich-text; do
+          for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing input-frame rich-text chess-identity; do
             if ! bash "Laplace-Engine/tests/$suite.sh" "$L"; then
               echo "::error::Engine check failed: $suite"
               failed=1

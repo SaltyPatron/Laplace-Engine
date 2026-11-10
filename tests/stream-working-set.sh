@@ -35,10 +35,10 @@ fingerprint(){
   "$psql" -XwAt -v ON_ERROR_STOP=1 -d "$1" <<'SQL'
 SELECT 'entity',count(*),md5(string_agg(to_jsonb(e)::text,E'\n' ORDER BY id)) FROM public.entity e;
 SELECT 'physicality',count(*),md5(string_agg(to_jsonb(p)::text,E'\n' ORDER BY entity)) FROM public.physicality p;
-SELECT 'witness',count(*),md5(string_agg(to_jsonb(w)::text,E'\n' ORDER BY id)) FROM public.witness w;
+SELECT 'attestation',count(*),md5(string_agg(to_jsonb(a)::text,E'\n' ORDER BY claim,witness,lineage)) FROM public.attestation a;
 SELECT 'consensus',count(*),md5(string_agg(to_jsonb(c)::text,E'\n' ORDER BY claim)) FROM public.consensus c;
 SELECT 'series',count(*),md5(string_agg(to_jsonb(s)::text,E'\n' ORDER BY to_jsonb(s)::text))
-  FROM laplace_contained_series(ARRAY(SELECT id FROM public.witness)) s;
+  FROM laplace_contained_series(ARRAY(SELECT DISTINCT witness FROM public.attestation)) s;
 SQL
 }
 for lane in small shared; do

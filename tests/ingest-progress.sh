@@ -41,7 +41,7 @@ BEGIN
   IF (last_frame->>'entities')::bigint <> (SELECT count(*) FROM public.entity)
      OR (last_frame->>'physicalities')::bigint <> (SELECT count(*) FROM public.physicality)
      OR last_frame->>'files_total' <> '2' OR last_frame->>'files_done' <> '2'
-     OR NOT EXISTS (SELECT FROM public.witness WHERE id::text=last_frame->>'source_id')
+     OR NOT EXISTS (SELECT FROM public.attestation WHERE witness::text=last_frame->>'source_id')
      OR NOT EXISTS (SELECT FROM progress WHERE j->>'event'='file-start')
      OR NOT EXISTS (SELECT FROM progress WHERE j->>'event'='file-composed'
          AND j->>'file' LIKE '%/NamedSequencesProv.txt' AND NOT j ? 'file_id')
@@ -50,7 +50,7 @@ BEGIN
   END IF;
   IF last_frame->>'attestations_measured' <> 'true'
      OR (last_frame->>'attestations')::bigint <> 2
-     OR (SELECT attestations FROM public.witness WHERE id::text=last_frame->>'source_id') <> 2 THEN
+     OR (SELECT count(DISTINCT claim) FROM public.attestation WHERE witness::text=last_frame->>'source_id') <> 2 THEN
     RAISE EXCEPTION 'two distinct assertions became sources, repeated games, or unmeasured counters: %',last_frame;
   END IF;
   IF NOT EXISTS (SELECT FROM laplace_contained_series(ARRAY[(last_frame->>'source_id')::blake3])
@@ -68,7 +68,7 @@ root_reference(){
   fi
   "$psql" -XwAt -v ON_ERROR_STOP=1 -d "$1" -c \
     "SELECT jsonb_agg(jsonb_build_array(w.id::text,e.tier,e.hilbert,encode(ST_AsEWKB(e.coord),'hex')) ORDER BY w.id)
-       FROM public.witness w JOIN public.entity e ON e.id=w.id $selected;"
+       FROM (SELECT DISTINCT witness AS id FROM public.attestation) w JOIN public.entity e ON e.id=w.id $selected;"
 }
 before=$(root_reference "$conn")
 standing_before=$("$psql" -XwAt -v ON_ERROR_STOP=1 -d "$conn" -c 'SELECT jsonb_agg(to_jsonb(c) ORDER BY claim) FROM public.consensus c')
@@ -78,10 +78,16 @@ grep -q 'files recorded already' "$LAPLACE_WORK/logs/ingest/unicode.log"
 # A missing operational measurement is recovered from retained testimony. It
 # does not replay the source or invoke the standing solver.
 "$psql" -Xw -v ON_ERROR_STOP=1 -d "$conn" <<'SQL'
-UPDATE public.witness SET attestations=NULL;
+CREATE TEMP TABLE measured AS SELECT claim,witness,games FROM public.attestation;
+-- Drop every measurement but one per source, so the source stays known by its remaining attestation.
+DELETE FROM public.attestation a USING (
+  SELECT DISTINCT ON (witness) claim,witness,lineage FROM public.attestation ORDER BY witness,claim,lineage NULLS FIRST) k
+ WHERE a.witness=k.witness AND NOT (a.claim=k.claim AND a.lineage IS NOT DISTINCT FROM k.lineage);
 CALL public.laplace_measure_attestations();
 DO $$BEGIN
-  IF EXISTS(SELECT FROM public.witness WHERE attestations IS DISTINCT FROM 2::bigint) THEN
+  IF EXISTS(SELECT FROM (SELECT claim,witness,games FROM public.attestation EXCEPT SELECT * FROM measured) x)
+     OR EXISTS(SELECT FROM (SELECT * FROM measured EXCEPT SELECT claim,witness,games FROM public.attestation) y)
+     OR (SELECT count(DISTINCT claim) FROM public.attestation) <> 2 THEN
     RAISE EXCEPTION 'attestation recovery counted games or failed to measure the source';
   END IF;
 END$$;
@@ -96,7 +102,7 @@ grep -q 'files recorded already' "$LAPLACE_WORK/logs/ingest/unicode.log"
 cold_conn="host=${PGHOST:-/tmp} port=${PGPORT:-5432} user=${PGUSER:-laplace} dbname=$cold"
 "$L" deploy -d "$cold_conn" > "$scratch/cold-deploy.log" 2>&1 || { cat "$scratch/cold-deploy.log"; exit 1; }
 "$L" ingest -d "$cold_conn" -j 2 unicode > "$scratch/cold.log" 2>&1 || { cat "$scratch/cold.log"; exit 1; }
-cold_id=$("$psql" -XwAt -v ON_ERROR_STOP=1 -d "$cold_conn" -c 'SELECT id::text FROM public.witness')
+cold_id=$("$psql" -XwAt -v ON_ERROR_STOP=1 -d "$cold_conn" -c 'SELECT DISTINCT witness::text FROM public.attestation')
 # Earlier release witnesses may legitimately remain. Compare the new release,
 # rather than requiring the warm database to discard its admitted history.
 [[ "$(root_reference "$conn" "$cold_id")" == "$(root_reference "$cold_conn" "$cold_id")" ]] || { echo 'partial replay disagrees with cold source ID/coordinates/tier/Hilbert'; exit 1; }

@@ -41,7 +41,7 @@ SQL
 )
 expected=$(printf '1\n4\n0\n<b>mississippi</b>\n<script>not visible</script>\nmi<b>ss</b>issippi\nmis&#115;issippi')
 [[ $result == "$expected" ]] || { printf 'rich-text-db: unexpected readback\n%s\n' "$result"; exit 1; }
-fingerprint(){ sql -c "SELECT md5(string_agg(to_jsonb(e)::text,E'\n' ORDER BY id)) FROM entity e WHERE tier>0; SELECT md5(string_agg(to_jsonb(p)::text,E'\n' ORDER BY entity)) FROM physicality p WHERE tier>0; SELECT md5(string_agg(to_jsonb(w)::text,E'\n' ORDER BY id)) FROM witness w;"; }
+fingerprint(){ sql -c "SELECT md5(string_agg(to_jsonb(e)::text,E'\n' ORDER BY id)) FROM entity e WHERE tier>0; SELECT md5(string_agg(to_jsonb(p)::text,E'\n' ORDER BY entity)) FROM physicality p WHERE tier>0; SELECT md5(string_agg(to_jsonb(a)::text,E'\n' ORDER BY claim,witness,lineage)) FROM attestation a;"; }
 before=$(fingerprint)
 "$L" ingest -d "$conn" -j 2 "$scratch/inputs" > "$scratch/again.log" 2>&1 || { cat "$scratch/again.log"; exit 1; }
 [[ $(fingerprint) == "$before" ]] || { echo 'rich-text-db: unchanged source changed stored canonical state'; exit 1; }
