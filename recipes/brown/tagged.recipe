@@ -1,12 +1,11 @@
 name brown-tagged
 match c[a-z][0-9][0-9]
 format brown_tagged
-content word
-# Words share canonical content; sentence records contain their annotations.
+content word tag
+# Words share canonical content; the sentence is its words, and the tags laid along it are no claim of its own.
 thing token word
 thing sentence of token
 thing paragraph of sentence
-layers sentence token word tag
 # A tag is the Brown Corpus's (nn-tl, as the corpus writes it in lower case), a key of the highway's brown tagset. Its
 # crosswalk edge (NLTK's en-brown.map, carried to UD) reaches the universal part of speech the word is said to be, a
 # value of upos as UD's treebanks say theirs: [County, NOUN]. The tag as written stays in the file and in

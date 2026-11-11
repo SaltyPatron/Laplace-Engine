@@ -319,7 +319,7 @@ def main():
             claims=[tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
             # The tags reach UD's parts of speech through the highway's brown tagset and its crosswalk edges; the
             # tag as the corpus writes it is the notation that denotes each.
-            assert len(claims)==21,(claims,text)
+            assert len(claims)==18,(claims,text)                  # a claim a token and a denotes a tag: no sentence-wide layer claim
             assert ('/','ADP') in claims and ('and/or','CCONJ') in claims,claims
             assert ('!','PUNCT') in claims and ('Fulton','NOUN') in claims,claims
             assert all((word,'NOUN') in claims for word in ('/l/', 'AAb/', '/r/', '//')),claims
@@ -446,9 +446,7 @@ def main():
             ('demographic group targeted', 'group, one'), ('demographic group targeted', 'group two'),
             ('high-level category of the demographic group(s) targeted', 'category'),
             ('implied statement', 'A quoted "word".'), ('implied statement', 'Ω text'),
-            ('group vs. individual target', '0.5'), ('was the intent behind the statement to offend', '1'),
-            ('is the post a sexual or lewd reference', '0'), ('could the post be offensive to anyone', '0.5'),
-            ('source of the post', 'fixture')]]
+            ('source of the post', 'fixture')]]      # the aggregated ratings (their mean, a fraction of annotators) are the record's, not claims
         for workers in (1, 4):
             text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'social-bias-frames', bias_frames)
             claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
@@ -476,7 +474,7 @@ def main():
             assert sorted(claims) == sorted(expected_checklist), (workers, claims, text)
             assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
         unknown = root / 'train-mhs-unknown.tsv'
-        unknown.write_text('text\tstd_err\nComment.\t0.2\n', encoding='utf-8')
+        unknown.write_text('text\tannotator_id\ttarget_undocumented\nComment.\tworker-A\ttrue\n', encoding='utf-8')
         rejected = run('ingest', '--no-load', '-s', 'measuring-hate-speech', unknown, expected=1)
         assert 'semantic_omissions=1' in rejected, rejected
         print('PASS target checklists retain false answers and annotator demographics; unknown statistics remain blocked')
@@ -488,7 +486,7 @@ def main():
                 text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'chess-com', chess,
                            extra={'LAPLACE_RECORD_WINDOW_BYTES': str(window)})
                 claims = sorted(line for line in text.splitlines() if line.startswith('claim\t'))
-                assert len(claims) == 94, (workers, window, text)
+                assert len(claims) == 37, (workers, window, text)      # the moves alone: a record is never the subject of a claim
                 chess_readings.append(claims)
         assert all(reading == chess_readings[0] for reading in chess_readings), 'PGN read windows changed claims'
         incomplete = root / 'missing-result.pgn'
@@ -522,7 +520,7 @@ def main():
         for workers in (1, 4):
             text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'twic-validated', twic_subset)
             claims = [line for line in text.splitlines() if line.startswith('claim\t')]
-            assert len(claims) == 94 and all('Missing move fixture' not in claim for claim in claims), text
+            assert len(claims) == 37 and all('Missing move fixture' not in claim for claim in claims), text
             assert 'mismatched 0' in text and '1 kept as text' not in text, text
         print('PASS validated TWIC source preserves quarantined bytes without inventing legal transitions')
 

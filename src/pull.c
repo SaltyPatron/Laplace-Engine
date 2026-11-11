@@ -358,11 +358,11 @@ int lexicalization_of(Ctx *c, const Firmware *fw, Lexicalization *x){
     Recipe *R; int nr = recipes_load(laplace_recipes(), &R); const Recipe *w = NULL, *g = NULL, *e = NULL, *u = NULL;
     for (int i = 0; i < nr; i++) if (!R[i].broken) { if (!strcmp(R[i].name, fw->lexical[0])) w = &R[i]; if (fw->gloss[0][0] && !strcmp(R[i].name, fw->gloss[0])) g = &R[i];
         if (fw->nequiv && !strcmp(R[i].name, fw->equiv[0])) e = &R[i]; if (fw->usages[0][0] && !strcmp(R[i].name, fw->usages[0])) u = &R[i]; }
-    /* how often a sense is observed: the relation the recipe that reads a usage count declares of it (cntlist's
+    /* how often a sense is observed: the games the recipe that reads a usage count gives the sense it attests (cntlist's
      * tag_cnt), read from it so it cannot drift; a recipe that renames it fails here */
-    if (fw->usages[0][0]) { const char *ur = u ? say_relation(u, fw->usages[1]) : NULL;
-        if (!ur) { fprintf(stderr, "%s: for translate, usages: the recipe %s %s\n", fw->path, fw->usages[0], u ? "declares no relation of that name" : "is not a recipe that loads"); return 0; }
-        x->usage = entity_named(c, ur, NULL, 0, NULL).id; x->has_usage = 1; }
+    if (fw->usages[0][0]) { int ur = u && say_games(u, fw->usages[1]);
+        if (!ur) { fprintf(stderr, "%s: for translate, usages: the recipe %s %s\n", fw->path, fw->usages[0], u ? "declares no games of that name" : "is not a recipe that loads"); return 0; }
+        x->has_usage = 1; }
     /* the codes of one language: the relations the recipe that reads a code table declares between a code and its
      * equivalents in the other code sets (ISO 639-3's Part1, Part2b, Part2t), read from it so they cannot drift */
     if (fw->nequiv && !e) { fprintf(stderr, "%s: for translate, equivalent names the recipe %s, which is not a recipe of %s that loads\n", fw->path, fw->equiv[0], laplace_recipes()); return 0; }
@@ -396,16 +396,15 @@ static void codes_of(PGconn *pg, const Lexicalization *lx, const lp_id *code, Co
 }
 typedef struct { lp_id *id; int *of, n, cap; } Found;                      /* entities found, each with what it is found for */
 int lexicalization_counts(PGconn *pg, Reader *rd, const Lexicalization *lx, const lp_id *ids, int n, int fan, double k, long long *uses){
+    (void)rd; (void)fan; (void)k;
     if (!lx->has_usage || !n) return 0;
-    int count = 0, *src = NULL; Claim *claims = claims_each(pg, ids, n, &lx->usage, CLAIM_FIRST, fan, k, &count, &src);
-    lp_vec(lp_id) display={0};
-    for (int row = 0; row < count; row++) lp_push(&display,claims[row].part[claims[row].np - 1]);
-    reader_prefetch(rd,display.v,display.n,32);lp_vec_free(&display);
-    for (int row = 0; row < count; row++) { int entry = src[row]; if (entry < 0 || entry >= n) continue;
-        char *text = reader_text(rd, &claims[row].part[claims[row].np - 1], 32), *end;
-        long long value = strtoll(text, &end, 10); if (end != text && !*end && value > uses[entry]) uses[entry] = value; free(text);
-    }
-    free(claims); free(src); return 1;
+    /* the games of each lexicalization: the times a source observed it (a count the source states is the games of the sense
+     * it attests, never a claim's value), one set */
+    uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(pg, ab, ids, (uint32_t)n); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
+    PGresult *q = db_ask(pg, "SELECT u.i, sum(a.games)::bigint FROM unnest($1::@extschema@.blake3[]) WITH ORDINALITY AS u(id, i) JOIN @extschema@.attestation a ON a.claim OPERATOR(@extschema@.=) u.id GROUP BY u.i", 1, v, l, f);
+    if (PQresultStatus(q) == PGRES_TUPLES_OK) for (int j = 0; j < PQntuples(q); j++) { uint64_t o, g; memcpy(&o, PQgetvalue(q, j, 0), 8); memcpy(&g, PQgetvalue(q, j, 1), 8);
+        int entry = (int)__builtin_bswap64(o) - 1; long long value = (long long)__builtin_bswap64(g); if (entry >= 0 && entry < n && value > uses[entry]) uses[entry] = value; }
+    PQclear(q); free(ab); return 1;
 }
 static void found_put(Found *f, const lp_id *id, int of){
     if (f->n == f->cap) { f->cap = f->cap ? f->cap * 2 : 64; f->id = xrealloc(f->id, sizeof(lp_id) * (size_t)f->cap); f->of = xrealloc(f->of, sizeof(int) * (size_t)f->cap); }

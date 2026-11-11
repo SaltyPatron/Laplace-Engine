@@ -27,7 +27,7 @@ thing row sense_key matching ^([^%]+)% space _ literal eng sense_key
 type sense_key ili
 omit sense_number
 content tag_cnt
-# cntlist.5: "tag_cnt is the decimal number of times the sense is tagged in the corresponding semantic concordance": a
-# number the file states of the sense, an observation, said of the lexicalization.
-relation "number of times the sense is tagged" tag_cnt
-attest row tag_cnt
+# cntlist.5: "tag_cnt is the decimal number of times the sense is tagged in the corresponding semantic concordance": the
+# same counts cntlist states, in the order of the sense keys. They are a count the concordance measures of the sense, so
+# they are no claim's value; cntlist gives them as the games of the sense (a repeat is games, recipes/BRIEF.md), and
+# this file, which says the same of the same senses, is their content again and is not counted a second time.

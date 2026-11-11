@@ -199,9 +199,9 @@ rc=0; err=$(LAPLACE_RECIPES=$r "$L" translate -d "$conn" --firmware "$fwf" dog e
 [[ $rc == 2 ]] && grep -q 'declares no relation of Sense' <<<"$err" || fail "a recipe that declares no relation of Sense did not fail translate (rc $rc): $err"
 echo "translate: a recipe that renames what translate reads fails it at once (rc 2)"
 r2=$scratch/recipes2; cp -r "$LAPLACE_RECIPES" "$r2"
-sed -i 's/^relation "number of times the sense is tagged" tag_cnt$/relation "number of times the sense is tagged" tag_count/' "$r2/princeton-wordnet/cntlist.recipe"
+sed -i 's/^games row tag_cnt$/games row tag_count/' "$r2/princeton-wordnet/cntlist.recipe"
 rc=0; err=$(LAPLACE_RECIPES=$r2 "$L" translate -d "$conn" --firmware "$fwf" game en en 2>&1) || rc=$?
-[[ $rc == 2 ]] && grep -q 'usages: the recipe wordnet-cntlist declares no relation' <<<"$err" || fail "a cntlist recipe that declares no relation of tag_cnt did not fail translate (rc $rc): $err"
+[[ $rc == 2 ]] && grep -q 'usages: the recipe wordnet-cntlist declares no games' <<<"$err" || fail "a cntlist recipe that declares no games of tag_cnt did not fail translate (rc $rc): $err"
 echo "translate: a usage recipe that renames what translate reads fails it at once (rc 2)"
 
 # Salience reads the same typed value claims the general UD recipe writes.

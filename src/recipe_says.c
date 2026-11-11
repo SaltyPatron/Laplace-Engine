@@ -16,6 +16,8 @@
  *   pair TIER NAME...          of a TIER's thing, a part the file writes beside it with nothing between: [thing, value]
  *   score TIER NAME [from A to B]
  *                              the score the TIER gives what it attests, on the scale the source writes it on
+ *   games TIER NAME            the number of games the TIER gives what it attests: the part is a count of times the source observed it, a
+ *                              whole number of one or more, and is no claim's value
  *   dependence TIER CLASS      observations in this TIER use the named native trust class's canonical dependence
  *                              root and prior; the corpus trunk remains the witness. Applies under when/always.
  *   where NAME is VALUE | is-not VALUE | matches PATTERN
@@ -300,6 +302,10 @@ int say_says(Recipe *r, const char *path, char *tok){
         if (name_next(&at, w1, sizeof w1)) { if (strcmp(w1, "from") || !name_next(&at, lo, sizeof lo) || !name_next(&at, w2, sizeof w2) || strcmp(w2, "to") || !name_next(&at, hi, sizeof hi) || atof(hi) <= atof(lo)) { fprintf(stderr, "%s: score TIER NAME from A to B\n", path); return -1; }
             x->from = atof(lo); x->to = atof(hi); x->mapped = 1; }
         return 1; }                                                          /* the part is still what its own disposition says (content, usually) */
+    if (!strcmp(tok, "games") && LAID) { char extra[16]; at = strtok(NULL, "\r\n");
+        if (!name_next(&at, a2, sizeof a2) || !name_next(&at, nm, sizeof nm) || name_next(&at, extra, sizeof extra) || s->ngames == 4) { fprintf(stderr, "%s: games TIER NAME\n", path); return -1; }
+        Score *x = &s->games[s->ngames++]; snprintf(x->tier, sizeof x->tier, "%s", a2); snprintf(x->name, sizeof x->name, "%s", nm); x->from = 0; x->to = 1; x->mapped = 0;
+        return 1; }                                                          /* the count is a number the source states of what it attests, not a claim's part */
     if (!strcmp(tok, "always") && LAID) { s->now = 0; return 1; }
     /* Every part the recipe speaks of whole (the outermost tier) is a record: a path in the file's content tree over its
      * thing and the claims it says (record_of). Where the recipe gives them, the record holds its rows' layers and tree too:
@@ -602,3 +608,9 @@ int say_thing_parts(const Recipe *r, const char *tier, const char *a, const char
     return -1;
 }
 
+
+int say_games(const Recipe *r, const char *name){
+    const Say *s = r ? r->say : NULL; if (!s) return 0;
+    for (int i = 0; i < s->ngames; i++) if (!strcmp(s->games[i].name, name)) return 1;
+    return 0;
+}
