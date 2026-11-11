@@ -1,0 +1,16 @@
+name agent-transcripts
+aliases agents
+# The coding agents' own transcripts kept on this machine, as each agent writes them: Claude Code's sessions
+# (~/.claude/projects/<project>/<session>.jsonl), the Codex CLI's rollouts (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl)
+# and the Gemini CLI's chats (~/.gemini/tmp/<project>/chats/session-*.json). Each is a JSON document or a JSON line a
+# turn, recorded as its syntax tree byte for byte; it attests nothing. Stores that are not JSON (Cursor's SQLite) are
+# not read.
+witness Agent transcripts
+class AgentTranscript
+files $HOME/.claude/projects/*/*.jsonl
+files $HOME/.codex/sessions/*/*/*/*.jsonl
+files $HOME/.gemini/tmp/*/chats/*.json
+# a session grows, and each reading is what the transcripts say now: it supersedes the readings before it
+supersede
+after unicode
+reads json

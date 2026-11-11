@@ -1,0 +1,5 @@
+name laplace-operational-annotations
+# The authored CoNLL-U annotations are kept as the text they are, byte for byte: they are the contracts' content, and
+# what they annotate is said by the treebanks the estate ingests, not by these examples.
+match *.conllu
+grammar text

@@ -1,0 +1,11 @@
+name laplace-operational
+aliases operational
+# Laplace's own operational contracts, kept in the monorepo's seeds/operational: the task shapes it declares (JSON) and
+# the annotations its authors wrote (CoNLL-U), admitted unchanged as the substrate's mandated structure. Ordinary
+# content, recorded as its syntax tree or its text byte for byte; it attests nothing.
+witness Laplace operational contracts
+class SubstrateMandate
+files $LAPLACE_SRC/Laplace/seeds/operational
+supersede
+after unicode
+reads json text
