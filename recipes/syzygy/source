@@ -1,0 +1,13 @@
+name syzygy
+# Syzygy endgame tablebases (Ronald de Man; syzygy-tables.info, the lichess mirror tablebase.lichess.ovh/tables/standard):
+# every position of 3 to 5 pieces, its win/draw/loss under the 50-move rule (.rtbw) and its distance to zeroing (.rtbz),
+# a table a material (KQvK holds KvKQ too). A table is an index over its material's placements, not a list of positions:
+# the engine decodes it (input decode syzygy, src/chess_syzygy.c) to a line a position, its FEN and its verdict, and the
+# recipes say the FEN is the position (grammar fen), the same position any game or opening that stands there holds.
+witness Syzygy Endgame Tablebases
+# StandardsDerived: the class trust_classes.toml gives tablebases
+class StandardsDerived
+root $LAPLACE_DATA/Games/Chess/syzygy
+files $LAPLACE_DATA/Games/Chess/syzygy/*/*.rtbw
+files $LAPLACE_DATA/Games/Chess/syzygy/*/*.rtbz
+after unicode

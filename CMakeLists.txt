@@ -43,6 +43,7 @@ set(ENGINE_SOURCES
     src/op.c
     src/chess.c
     src/chess_pgn.c
+    src/chess_syzygy.c
     src/table.c
     src/recipe.c
     src/recipe_decompose.c

@@ -32,11 +32,20 @@ unsigned lp_chess_castle_mask(const Bd *b, int c);
 int lp_chess_ep_square(const Bd *b);
 void lp_chess_id_position(const Bd *b, lp_id *out);
 void lp_chess_id_move(const Bd *b, const Mv *m, lp_id *out);
+/* Whether colour c's king is attacked where it stands. */
+int lp_chess_in_check(const Bd *b, int c);
+/* A position's FEN, its first four fields (board, side, castling, the en passant square only where a legal capture
+ * takes on it, as a position's ID has it): what board_fen reads back to the same position. out: at least 96 bytes. */
+size_t lp_chess_fen_of(const Bd *b, char *out);
 
 /* ---- for readers: a position named by a FEN, and the positions a game plays */
 /* The ID of the position a FEN's first four fields give (Standard castling: KQkq the a and h rooks of a king on e).
  * 1, or 0 when it is no FEN. */
 int lp_chess_fen_position(const char *fen, size_t n, lp_id *out);
+/* Every legal move of the position a FEN gives, in gen's order: its SAN (check and mate marked) and the ID of the
+ * position it makes. The moves written (at most cap), or -1 when it is no FEN; 0 is a position with no legal move. */
+typedef struct { char san[16]; lp_id position; uint8_t zeroing; } LpChessSuccessor;      /* zeroing: a capture or a pawn move (the 50-move rule starts again) */
+int lp_chess_successors(const char *fen, size_t n, lp_id *position, LpChessSuccessor *out, int cap);
 /* A game as PGN (tag pairs, movetext, a result) or movetext alone (an opening book's line), parsed by the tree-sitter
  * language given (the engine's grammars pgn or pgn_moves: LAPLACE_GRAMMARS), its main line replayed under Standard
  * rules from its FEN tag's position or the standard start: positions[i] the position after ply i (positions[0] the
@@ -55,5 +64,6 @@ size_t lp_chess_pgn_positions(const void *ts_language, const char *text, size_t 
 #define ep_square lp_chess_ep_square
 #define id_position lp_chess_id_position
 #define id_move lp_chess_id_move
+#define in_check lp_chess_in_check
 
 #endif

@@ -217,8 +217,15 @@ int say_says(Recipe *r, const char *path, char *tok){
     if (!strcmp(tok, "input")) {
         char *kind = strtok(NULL, " \t\r\n"), *encoding = strtok(NULL, " \t\r\n");
         InputFrame frame;
+        if (kind && !strcmp(kind, "decode")) {                                /* input decode NAME: an input decoder of the engine's own */
+            const InputDecoder *decoder = encoding ? input_decoder(encoding) : NULL;
+            if (!decoder || strtok(NULL, " \t\r\n") || r->decoder || r->input_frame.width) {
+                fprintf(stderr, "%s: input decode NAME (once; a decoder the engine holds: grammars.c)\n", path); return -1;
+            }
+            r->decoder = decoder; s->laid_line = 1; return 1;
+        }
         if (!kind || strcmp(kind, "length-prefix") || !encoding || strtok(NULL, " \t\r\n") ||
-            r->input_frame.width || !input_frame_encoding(&frame, encoding)) {
+            r->input_frame.width || r->decoder || !input_frame_encoding(&frame, encoding)) {
             fprintf(stderr, "%s: input length-prefix u8|u16le|u16be|u32le|u32be|u64le|u64be (once)\n", path); return -1;
         }
         r->input_frame = frame; s->laid_line = 1; return 1;

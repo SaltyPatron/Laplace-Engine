@@ -114,6 +114,7 @@ typedef struct {
     const struct NativeGrammar *native;               /* the grammar the recipe names, when it is a reading of the engine's own, not tree-sitter's */
     void *native_recipe;                              /* what that grammar's own lines said */
     InputFrame input_frame;                           /* recipe-declared byte section before grammar interpretation */
+    const struct InputDecoder *decoder;               /* input decode NAME: the file is a format the engine writes out as text first */
     size_t dependency_level;                          /* compiled logical reference group, providers before consumers */
     uint8_t program_hash[32]; void *program_state;     /* effective recipe/format source; state exists only while compiling */
 } Recipe;
@@ -262,6 +263,17 @@ typedef struct NativeGrammar {
     int  (*field)(const uint8_t *text, size_t n, unsigned product, Ref *out);
     const char *const *products;                                             /* NULL-terminated; NULL: the content alone */
 } NativeGrammar;
+/* ---- an input the engine decodes before a recipe's layout reads it (input decode NAME): a format that is not text, whose
+ * content the decoder writes out as the text the recipe's tiers part, as zlib inflates a .gz. Found by name, as a
+ * native grammar is (grammars.c); the decoder knows its format and nothing of what the recipe says of the parts. */
+typedef struct InputDecoder {
+    const char *name;
+    void  *(*open)(const char *path);                        /* NULL: the file cannot be decoded (said on stderr) */
+    size_t (*read)(void *, uint8_t *out, size_t capacity);   /* the text, in order, at most capacity bytes; 0 at its end */
+    int    (*error)(void *);                                 /* nonzero: decoding failed (said on stderr) */
+    void   (*close)(void *);
+} InputDecoder;
+const InputDecoder *input_decoder(const char *name);                         /* the decoder of that name, or NULL */
 unsigned native_product(const NativeGrammar *, const char *name);            /* a product's number (field's product), or 0: none of that name */
 const NativeGrammar *native_grammar(const char *name);                       /* the native grammar of that name, or NULL */
 int  reads_in_stretches(const Recipe *, char *boundary);                    /* whether a file of this recipe can be: 1 at a line's end, 2 at an empty line */

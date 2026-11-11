@@ -412,3 +412,17 @@ static int chess_field(const uint8_t *text, size_t n, unsigned product, Ref *out
 
 /* PGN packaging uses the shared compiled grammar/framer; C owns chess rules. */
 const NativeGrammar chess_pgn = { "pgn", chess_says, chess_recipe, chess_read, chess_input, chess_field, chess_products };
+
+/* ---- a field that is a FEN (part NAME grammar fen): the position its first four fields give, the content a game that
+ * stands there holds (its clocks and move number are no part of a position). A tablebase's rows name their positions
+ * so (recipes/syzygy). A text that is no FEN, or a board without both kings, is no position: 0. Fields alone. */
+static __thread RefCache fen_cache;
+static int fen_field(const uint8_t *text, size_t n, unsigned product, Ref *out){
+    if (!text) return 1;
+    Bd b; if (product || !board_fen(&b, (const char *)text, n, 0) || king_sq(&b, 0) < 0 || king_sq(&b, 1) < 0) return 0;
+    memset(fen_cache.has, 0, sizeof fen_cache.has); memset(fen_cache.hsq, 0, sizeof fen_cache.hsq);
+    *out = r_position(&fen_cache, &b); return 1;
+}
+static int fen_says(Recipe *r, const char *path, char *tok){ (void)r; fprintf(stderr, "%s: \"%s\": grammar fen reads a field (part NAME grammar fen), not a file\n", path, tok); return -1; }
+static int fen_done(Recipe *r, const char *path){ (void)r; fprintf(stderr, "%s: grammar fen reads a field, not a file\n", path); return 0; }
+const NativeGrammar chess_fen = { "fen", fen_says, fen_done, NULL, NULL, fen_field, NULL };

@@ -21,7 +21,7 @@ static int attacked(const Bd *b, int s, int by){
     for (int i = 0; i < 4; i++) for (int ff = f + ORTH[i][0], rr = r + ORTH[i][1]; on(ff, rr); ff += ORTH[i][0], rr += ORTH[i][1]) { int8_t p = b->sq[rr * 8 + ff]; if (!p) continue; if (p == sg * ROOK || p == sg * QUEEN) return 1; break; }
     return 0;
 }
-static int in_check(const Bd *b, int c){ int k = king_sq(b, c); return k >= 0 && attacked(b, k, !c); }
+int in_check(const Bd *b, int c){ int k = king_sq(b, c); return k >= 0 && attacked(b, k, !c); }
 void make(Bd *b, const Mv *m){
     int c = b->side, back = c ? 56 : 0; int8_t p = b->sq[m->from];
     if (m->castle) {
@@ -172,7 +172,30 @@ void id_move(const Bd *b, const Mv *m, lp_id *out){
     lp_id_compose(k, (size_t)n, out);
 }
 
+size_t lp_chess_fen_of(const Bd *b, char *out){
+    char *o = out;
+    for (int r = 7; r >= 0; r--) { int empty = 0;
+        for (int f = 0; f < 8; f++) { int8_t p = b->sq[r * 8 + f]; if (!p) { empty++; continue; } if (empty) *o++ = (char)('0' + empty); empty = 0; *o++ = (char)piece_cp(p); }
+        if (empty) *o++ = (char)('0' + empty); if (r) *o++ = '/'; }
+    *o++ = ' '; *o++ = b->side ? 'b' : 'w'; *o++ = ' '; char *rights = o;
+    for (int c = 0; c < 2; c++) { int ks = king_sq(b, c);                     /* K Q where Standard's rooks castle, else the rook's file (Shredder-FEN) */
+        for (int f = 7; f >= 0; f--) { if (!(b->rights[c] & (1u << f))) continue;
+            char letter = ks >= 0 && (ks & 7) == 4 && (f == 7 || f == 0) ? (f == 7 ? 'K' : 'Q') : (char)('A' + f);
+            *o++ = c ? (char)tolower((unsigned char)letter) : letter; } }
+    if (o == rights) *o++ = '-';
+    *o++ = ' '; int ep = ep_square(b);
+    if (ep >= 0) { *o++ = (char)('a' + (ep & 7)); *o++ = (char)('1' + (ep >> 3)); } else *o++ = '-';
+    *o = 0; return (size_t)(o - out);
+}
+
 /* ---- for readers */
+int lp_chess_successors(const char *fen, size_t n, lp_id *position, LpChessSuccessor *out, int cap){
+    Bd b; if (!fen || !board_fen(&b, fen, n, 0) || king_sq(&b, 0) < 0 || king_sq(&b, 1) < 0) return -1;
+    if (position) id_position(&b, position);
+    Mv all[256]; int na = gen(&b, all), k = 0;
+    for (int i = 0; i < na && k < cap; i++, k++) { san_of(&b, &all[i], all, na, 1, out[k].san); out[k].zeroing = (uint8_t)(!all[i].castle && (b.sq[all[i].to] || all[i].ep || abs(b.sq[all[i].from]) == PAWN)); Bd t = b; make(&t, &all[i]); id_position(&t, &out[k].position); }
+    return k;
+}
 int lp_chess_fen_position(const char *fen, size_t n, lp_id *out){
     Bd b; if (!fen || !board_fen(&b, fen, n, 0) || king_sq(&b, 0) < 0 || king_sq(&b, 1) < 0) return 0;
     id_position(&b, out); return 1;

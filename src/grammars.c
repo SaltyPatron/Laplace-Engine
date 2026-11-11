@@ -13,11 +13,18 @@
 #include <windows.h>
 #endif
 
-extern const NativeGrammar chess_pgn;
-static const NativeGrammar *const NATIVE[] = { &chess_pgn };
+extern const NativeGrammar chess_pgn, chess_fen;
+static const NativeGrammar *const NATIVE[] = { &chess_pgn, &chess_fen };
 
 const NativeGrammar *native_grammar(const char *name){
     for (size_t i = 0; i < sizeof NATIVE / sizeof NATIVE[0]; i++) if (!strcmp(NATIVE[i]->name, name)) return NATIVE[i];
+    return NULL;
+}
+
+extern const InputDecoder syzygy_decoder;
+static const InputDecoder *const DECODERS[] = { &syzygy_decoder };
+const InputDecoder *input_decoder(const char *name){
+    for (size_t i = 0; i < sizeof DECODERS / sizeof DECODERS[0]; i++) if (!strcmp(DECODERS[i]->name, name)) return DECODERS[i];
     return NULL;
 }
 
