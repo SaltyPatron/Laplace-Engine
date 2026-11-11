@@ -483,6 +483,8 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
         for(int i=0;i<nfiles;i++)if(files[i].known && !files[i].skipped && files[i].has_file)
             lp_idmap_put(reused,&files[i].file.id,NULL);
         if(lp_idmap_count(reused)){
+            /* a recorded file's testimony, restored into the delta and folded by the one accumulation (series_delta_apply) */
+            int own=PQtransactionStatus(writer.series)==PQTRANS_IDLE; if(own)statement(writer.series,"BEGIN");
             if(count==1){
                 snprintf(sql,sizeof sql,
                     "WITH restored AS ("
@@ -495,19 +497,9 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
                     "  CROSS JOIN %s w"
                     "  WHERE c.games > 0"
                     "  GROUP BY c.claim, coalesce(c.dependence_root, w.lineage), w.trust"
-                    "), applied AS ("
-                    "  INSERT INTO %s AS p (claim,witness,lineage,games,tokens,score,\"position\",trust,wins)"
-                    "  SELECT claim,witness,lineage,games,tokens,least(1.0,greatest(0.0,wins/games)),\"position\",trust,wins FROM restored"
-                    "  ON CONFLICT (claim,witness,lineage) DO UPDATE"
-                    "    SET games=p.games+excluded.games, tokens=p.tokens+excluded.tokens, wins=p.wins+excluded.wins,"
-                    "        score=least(1.0,greatest(0.0,(p.wins+excluded.wins)/(p.games+excluded.games))),"
-                    "        \"position\"=CASE WHEN p.\"position\" IS NULL OR p.\"position\"<=0 THEN excluded.\"position\""
-                    "                          WHEN excluded.\"position\" IS NULL OR excluded.\"position\"<=0 THEN p.\"position\""
-                    "                          ELSE least(p.\"position\",excluded.\"position\") END,"
-                    "        trust=excluded.trust"
-                    "  RETURNING claim"
-                    ") INSERT INTO %s SELECT DISTINCT claim FROM applied ON CONFLICT DO NOTHING",
-                    writer.witnesses,writer.pending,writer.affected);
+                    ") INSERT INTO %s (claim,witness,lineage,games,tokens,score,\"position\",trust,wins)"
+                    " SELECT claim,witness,lineage,games,tokens,least(1.0,greatest(0.0,wins/games)),\"position\",trust,wins FROM restored",
+                    writer.witnesses,writer.delta);
                 Args args={0};arg_ids(&args,lp_idmap_keys(reused),lp_idmap_count(reused));arg_raw(&args,roots[0].id.b,16);
                 PQclear(ask_once(writer.series,sql,&args));args_free(&args);
             }else{
@@ -521,22 +513,13 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
                     "  FROM @extschema@.laplace_contained_series($1::@extschema@.blake3[]) c"
                     "  JOIN %s w ON w.id OPERATOR(@extschema@.=) c.trunk"
                     "  WHERE c.games > 0"
-                    "), applied AS ("
-                    "  INSERT INTO %s AS p (claim,witness,lineage,games,tokens,score,\"position\",trust,wins)"
-                    "  SELECT claim,witness,lineage,games,tokens,least(1.0,greatest(0.0,wins/games)),\"position\",trust,wins FROM restored"
-                    "  ON CONFLICT (claim,witness,lineage) DO UPDATE"
-                    "    SET games=p.games+excluded.games, tokens=p.tokens+excluded.tokens, wins=p.wins+excluded.wins,"
-                    "        score=least(1.0,greatest(0.0,(p.wins+excluded.wins)/(p.games+excluded.games))),"
-                    "        \"position\"=CASE WHEN p.\"position\" IS NULL OR p.\"position\"<=0 THEN excluded.\"position\""
-                    "                          WHEN excluded.\"position\" IS NULL OR excluded.\"position\"<=0 THEN p.\"position\""
-                    "                          ELSE least(p.\"position\",excluded.\"position\") END,"
-                    "        trust=excluded.trust"
-                    "  RETURNING claim"
-                    ") INSERT INTO %s SELECT DISTINCT claim FROM applied ON CONFLICT DO NOTHING",
-                    writer.witnesses,writer.pending,writer.affected);
+                    ") INSERT INTO %s (claim,witness,lineage,games,tokens,score,\"position\",trust,wins)"
+                    " SELECT claim,witness,lineage,games,tokens,least(1.0,greatest(0.0,wins/games)),\"position\",trust,wins FROM restored",
+                    writer.witnesses,writer.delta);
                 Args args={0};arg_ids(&args,lp_idmap_keys(reused),lp_idmap_count(reused));
                 PQclear(ask_once(writer.series,sql,&args));args_free(&args);
             }
+            series_delta_apply(); if(own)statement(writer.series,"COMMIT");
             writer.series_changed=1;
         }
         lp_idmap_free(reused);

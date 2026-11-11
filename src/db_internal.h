@@ -49,5 +49,6 @@ extern int load_whole;
 void start_loader(const char *conninfo, int requested);
 uint8_t *recorded(PGconn **pg, int npg, const lp_id *ids, uint64_t n);
 void flush_series(Fold *f);
+void series_delta_apply(void);                 /* fold writer.delta into writer.pending (laplace_accumulate_series) */
 
 #endif

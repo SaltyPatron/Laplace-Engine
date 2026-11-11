@@ -182,8 +182,18 @@ void fold_events(Fold *f, const File *files, int nfiles){
         }
     }
 }
-void flush_series(Fold *f){
-    if (!f || !f->dirty.n) return;
+/* The one accumulation of observations into the pending series: whatever is staged in writer.delta (a window's
+ * events, or a recorded file's restored testimony) is folded by laplace_accumulate_series, its claims marked affected,
+ * and the delta emptied. Runs inside the caller's transaction. */
+void series_delta_apply(void){
+    char sql[512]; Args a={0}; arg_text(&a,writer.pending); arg_text(&a,writer.delta);
+    PGresult *q=ask(writer.series,"SELECT @extschema@.laplace_accumulate_series($1::regclass,$2::regclass)",&a);
+    writer.series_changed |= lp_be(PQgetvalue(q,0,0),8)!=0; PQclear(q); args_free(&a);
+    snprintf(sql,sizeof sql,"INSERT INTO %s SELECT DISTINCT claim FROM %s ON CONFLICT DO NOTHING;TRUNCATE %s",
+        writer.affected,writer.delta,writer.delta);
+    statement(writer.series,sql);
+}
+void flush_series(Fold *f){    if (!f || !f->dirty.n) return;
     lp_copy copy={0}; char sql[512];
     snprintf(sql,sizeof sql,"BEGIN;COPY %s (claim,witness,lineage,games,tokens,score,\"position\",trust,wins) FROM STDIN (FORMAT binary)",writer.delta);
     copy_open(&copy,writer.series,sql);
@@ -198,12 +208,7 @@ void flush_series(Fold *f){
         lp_copy_f64(&copy,s->sum);
     }
     copy_close(&copy); lp_buf_free(&copy.buf);
-    Args a={0}; arg_text(&a,writer.pending); arg_text(&a,writer.delta);
-    PGresult *q=ask(writer.series,"SELECT @extschema@.laplace_accumulate_series($1::regclass,$2::regclass)",&a);
-    writer.series_changed |= lp_be(PQgetvalue(q,0,0),8)!=0; PQclear(q); args_free(&a);
-    snprintf(sql,sizeof sql,"INSERT INTO %s SELECT DISTINCT claim FROM %s ON CONFLICT DO NOTHING;TRUNCATE %s;COMMIT",
-        writer.affected,writer.delta,writer.delta);
-    statement(writer.series,sql);
+    series_delta_apply(); statement(writer.series,"COMMIT");
     lp_strmap_free(f->series);f->series=lp_strmap_sized(sizeof(Series));
     f->dirty.n=0;
 }
