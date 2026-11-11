@@ -95,7 +95,6 @@ int scope_equal(const Layout *layout, uint8_t kind, TSNode open, TSNode close, c
 void scope_push(SRecords *records, TSNode node, uint8_t kind);
 int scope_validate(const Layout *layout, TSNode root, const GInput *input);
 int scope_extent(const GMap *grammar, TSNode start, TSRange *range);
-const SPart *part_at(const Layout *layout, const uint8_t *name, uint32_t length);
 int cursor_injection(GW *worker, TSNode payload, const Layout *inner, const SPart *part, int raw, SField field,
                      s_visit_fn visit, void *sink);
 int cursor_parts(GW *worker, TSNode payload, const SPart *part, int raw, SField field,

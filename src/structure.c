@@ -214,6 +214,8 @@ int cursor_project(const Layout *layout, TSNode root, const GInput *input, s_vis
                  * They are already products of its injection, not another
                  * encoded container. Explicit inner member names still chain. */
                 if (inherited_name && part==input->active_part) part=NULL;
+                /* A field a native grammar reads is one value: the record VM reads its text by that grammar. */
+                if (part && part->native) part=NULL;
                 if (part && !s_empty(layout, field.value, field.value_length)) {
                     if (!cursor_parts(&worker, payload, part, text_mode, field, visit, sink)) { valid = 0; break; }
                 } else if (!visit(sink, S_FIELD, &field)) { valid = 0; break; }

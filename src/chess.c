@@ -372,6 +372,33 @@ static int replay(Rd *r, const Line *L, const Bd *b0, Ref *line, Ref *layer, int
     *line = comp(traj.c, traj.n); *has_layer = annotated; if (annotated) *layer = comp(lay.c, lay.n);
     return 1;
 }
+/* A game's content, however it is read (a file of games, or a field that holds one): where it replays under its rules,
+ * [line, tags, layer], its tags only where it has any and its layer only where it is annotated, so a game of neither is
+ * its line; where it does not, [tags, movetext] as written. 0: it holds nothing. */
+typedef struct { const char *variant, *fen, *result; size_t vl, fl, rl; const Rules *rules; Bd b0; Ref line; int ok; } Start;
+static int game_content(Rd *rd, const Game *g, Start *st, Ref *rec){
+    memset(st, 0, sizeof *st);
+    for (int i = 0; i < g->ntag; i++) { const Tag *t = &g->tag[i];
+        if (t->nl == 7 && !memcmp(t->name, "Variant", 7)) { st->variant = t->val; st->vl = t->vl; }
+        else if (t->nl == 3 && !memcmp(t->name, "FEN", 3)) { st->fen = t->val; st->fl = t->vl; }
+        else if (t->nl == 6 && !memcmp(t->name, "Result", 6)) { st->result = t->val; st->rl = t->vl; } }
+    /* the tags: each [name, value] as written; an empty value, the name alone */
+    RV tags = { 0 };
+    for (int i = 0; i < g->ntag; i++) { const Tag *t = &g->tag[i]; Ref nm = r_text((const uint8_t *)t->name, t->nl);
+        if (!t->vl) { rv(&tags, nm); continue; }
+        Ref two[2] = { nm, r_text((const uint8_t *)t->val, t->vl) }; Ref pr = compose(two, 2, ref_above(two, 2)); pr.said = LP_SAID_TUPLE; rv(&tags, pr); }
+    Ref T = tags.n ? (tags.n == 1 ? tags.c[0] : compose(tags.c, (uint32_t)tags.n, ref_above(tags.c, tags.n))) : atom('-'); T.said = 0;
+    st->rules = rules_named(st->variant, st->vl); st->ok = st->rules != NULL;
+    if (st->ok) { if (st->fen) st->ok = board_fen(&st->b0, st->fen, st->fl, st->rules->c960); else board_start(&st->b0); }
+    Ref layer; int has_layer = 0; rd->nags.n = rd->transitions.n = 0;
+    if (st->ok && !g->bad) st->ok = replay(rd, &g->main, &st->b0, &st->line, &layer, &has_layer); else if (st->ok) { st->ok = 0; snprintf(rd->err, sizeof rd->err, "its variations are not closed"); }
+    else if (!st->rules) snprintf(rd->err, sizeof rd->err, "its variant %.*s is in no rules (firmware/chess.firmware)", (int)st->vl, st->variant); else snprintf(rd->err, sizeof rd->err, "its FEN is no position");
+    RV part = { 0 };
+    if (st->ok) { rv(&part, st->line); if (tags.n) rv(&part, T); if (has_layer) rv(&part, layer); }
+    else { if (tags.n) rv(&part, T); if (g->mtn) rv(&part, r_text((const uint8_t *)g->mt, g->mtn)); }
+    if (!part.n) return 0;
+    *rec = comp(part.c, part.n); return 1;
+}
 static int has_study_marks(const Line *L){
     for (int i = 0; i < L->n; i++) for (int j = 0; j < L->p[i].nann; j++) if (L->p[i].ann[j].kind != 1) return 1;
     for (int j = 0; j < L->nlead; j++) if (L->lead[j].kind != 1) return 1;
@@ -430,33 +457,15 @@ static void chess_records(const Recipe *rcp, File *f, const uint8_t *src, SRecor
     while (s_record_next(records,&record)) {
         pgn_game(cr,record.node,(const char *)src,&g);
         games++; ordinal++;
-        const char *variant = NULL, *fen = NULL, *result = NULL; size_t vl = 0, fl = 0, rl = 0;
-        for (int i = 0; i < g.ntag; i++) { const Tag *t = &g.tag[i];
-            if (t->nl == 7 && !memcmp(t->name, "Variant", 7)) { variant = t->val; vl = t->vl; }
-            else if (t->nl == 3 && !memcmp(t->name, "FEN", 3)) { fen = t->val; fl = t->vl; }
-            else if (t->nl == 6 && !memcmp(t->name, "Result", 6)) { result = t->val; rl = t->vl; } }
+        Start st; Ref rec; int held_any = game_content(&rd, &g, &st, &rec);
+        const char *result = st.result; size_t rl = st.rl; int ok = st.ok; const Bd b0 = st.b0; Ref line = st.line;
         int result_mismatch=g.has_result && result && (rl!=strlen(g.result) || memcmp(result,g.result,rl));
         if (!g.has_result) nomarker++;else if(result_mismatch)mismatch++;
         if(!result && g.has_result){result=g.result;rl=strlen(g.result);}
-        /* the tags: each [name, value] as written; an empty value, the name alone */
-        RV tags = { 0 };
-        for (int i = 0; i < g.ntag; i++) { const Tag *t = &g.tag[i]; Ref nm = r_text((const uint8_t *)t->name, t->nl);
-            if (!t->vl) { rv(&tags, nm); continue; }
-            Ref two[2] = { nm, r_text((const uint8_t *)t->val, t->vl) }; Ref pr = compose(two, 2, ref_above(two, 2)); pr.said = LP_SAID_TUPLE; rv(&tags, pr); }
-        Ref T = tags.n ? (tags.n == 1 ? tags.c[0] : compose(tags.c, (uint32_t)tags.n, ref_above(tags.c, tags.n))) : atom('-'); T.said = 0;
-        const Rules *rules = rules_named(variant, vl);
-        Bd b0; int ok = rules != NULL, kind = cr->records == K_PLAYED && has_study_marks(&g.main) ? K_STUDY : cr->records;
-        if (ok) { if (fen) ok = board_fen(&b0, fen, fl, rules->c960); else board_start(&b0); }
-        if (variant && rules && rules->c960) c960++;
-        Ref line, layer; int has_layer = 0; rd.nags.n = rd.transitions.n = 0;
-        if (ok && !g.bad) ok = replay(&rd, &g.main, &b0, &line, &layer, &has_layer); else if (ok) { ok = 0; snprintf(rd.err, sizeof rd.err, "its variations are not closed"); }
-        else if (!rules) snprintf(rd.err, sizeof rd.err, "its variant %.*s is in no rules (firmware/chess.firmware)", (int)vl, variant); else snprintf(rd.err, sizeof rd.err, "its FEN is no position");
-        RV part = { 0 }; Ref rec;
-        if (ok) { rv(&part, line); if (tags.n) rv(&part, T); if (has_layer) rv(&part, layer); }
-        else { if (tags.n) rv(&part, T); if (g.mtn) rv(&part, r_text((const uint8_t *)g.mt, g.mtn));
-               unread++; if (unread <= 5) fprintf(stderr, "\n  %s: game %u is kept as its text and not replayed: %s", f->path, ordinal, rd.err); }
-        if (!part.n) continue;
-        rec = comp(part.c, part.n);
+        int kind = cr->records == K_PLAYED && has_study_marks(&g.main) ? K_STUDY : cr->records;
+        if (st.variant && st.rules && st.rules->c960) c960++;
+        if (!ok) { unread++; if (unread <= 5) fprintf(stderr, "\n  %s: game %u is kept as its text and not replayed: %s", f->path, ordinal, rd.err); }
+        if (!held_any) continue;
         uint64_t event_begin=f->ev.n;
         Event e = { .claim = rec.id, .witnessed = rec.id, .score = 1.0f, .enter_rating = 1500.0f, .position = ordinal, .kind = EV_RECORD }; ev_push(&f->ev, &e);
         uint32_t pos = 0; int outcome = result && !result_mismatch &&
@@ -522,5 +531,44 @@ static void chess_input(const Recipe *recipe,File *file,const SInput *input){
     if(file->emit)file_stream_finish(file);
 }
 
+/* ---- a field of another file read as chess (part NAME grammar pgn): its text is movetext, the PGN standard's 8.2 with
+ * no tag pairs and no termination marker (an opening book's line), parsed by the movetext grammar (formats/pgn_moves:
+ * PGN's own rules, a document of elements) and composed by game_content as a game of a file is: under the default rules
+ * from the standard start position. So a game of no tags and no annotations that plays the same moves is the same
+ * content, its line; a field that does not replay is its text as written, said, as a game's would be. */
+static ChessRecipe movetext; static int movetext_state;            /* 0 not compiled yet, 1 ready, -1 unavailable */
+static pthread_mutex_t movetext_mu = PTHREAD_MUTEX_INITIALIZER;
+static int movetext_ready(void){
+    pthread_mutex_lock(&movetext_mu);
+    if (!movetext_state) {
+        movetext_state = -1; const Layout *layout = layout_format("pgn_moves");
+        const TSLanguage *language = layout ? grammar_lang(layout->g.grammar_id) : NULL;
+        if (language) {
+            movetext.layout = layout; movetext.symbols = ts_language_symbol_count(language); movetext.dispatch = calloc(movetext.symbols, 1);
+            const char *names[] = {"tag_pair","san","nag","annotation","variation","comment","line_comment","result"};    /* the roles of chess_recipe's dispatch */
+            int san = 0;
+            for (uint8_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+                TSSymbol symbol = ts_language_symbol_for_name(language, names[i], (uint32_t)strlen(names[i]), true);
+                if (symbol && symbol < movetext.symbols) { movetext.dispatch[symbol] = (uint8_t)(i + 1); san |= i == 1; } }      /* movetext has no tag pairs and no result */
+            if (san) movetext_state = 1; }
+        if (movetext_state < 0) fputs("chess: the movetext grammar (formats/pgn_moves.format) is unavailable\n", stderr); }
+    int ready = movetext_state > 0; pthread_mutex_unlock(&movetext_mu); return ready;
+}
+static int chess_field(const uint8_t *text, size_t n, Ref *out){
+    if (!text) return movetext_ready();                                       /* at the recipe's load */
+    if (__atomic_load_n(&movetext_state, __ATOMIC_ACQUIRE) <= 0 || n > UINT32_MAX) return 0;
+    TSParser *parser = lp_tls_parser(movetext.layout->g.grammar_id); if (!parser) return 0;
+    TSTree *tree = ts_parser_parse_string(parser, NULL, (const char *)text, (uint32_t)n); if (!tree) return 0;
+    TSNode root = ts_tree_root_node(tree); static int told; int held = 0;
+    if (ts_node_has_error(root)) { if (__atomic_fetch_add(&told, 1, __ATOMIC_RELAXED) < 5) fprintf(stderr, "\n  chess: \"%.*s\" is no movetext\n", (int)(n < 80 ? n : 80), (const char *)text); }
+    else {
+        size_t mark = chess_arena.used; Game g; pgn_game(&movetext, root, (const char *)text, &g);
+        RefCache *rc = arena_alloc(&chess_arena, sizeof *rc); memset(rc, 0, sizeof *rc); Rd rd = { .rc = rc }; Start st;
+        held = game_content(&rd, &g, &st, out);
+        if (held && !st.ok && __atomic_fetch_add(&told, 1, __ATOMIC_RELAXED) < 5) fprintf(stderr, "\n  chess: \"%.*s\" is kept as its text and not replayed: %s\n", (int)(n < 80 ? n : 80), (const char *)text, rd.err);
+        chess_arena.used = mark; }
+    ts_tree_delete(tree); return held;
+}
+
 /* PGN packaging uses the shared compiled grammar/framer; C owns chess rules. */
-const NativeGrammar chess_pgn = { "pgn", chess_says, chess_recipe, chess_read, chess_input };
+const NativeGrammar chess_pgn = { "pgn", chess_says, chess_recipe, chess_read, chess_input, chess_field };

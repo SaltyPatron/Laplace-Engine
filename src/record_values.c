@@ -279,7 +279,7 @@ static int type_value(RecordWorker *k, const SemanticRecord *t, int32_t c, const
 }
 
 int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, int depth){
-    const SemanticValue *x = &t->n[c]; const Say *s = k->s; const Dis *d = record_field_disposition(s, x);
+    const SemanticValue *x = &t->n[c], *named = x; const Say *s = k->s; const Dis *d = record_field_disposition(s, x);
     int typed_payload=x->kind==S_GROUP && x->scalar && d &&
         (d->what==D_CONTENT || d->what==D_TYPE || d->what==D_REFER || d->what==D_CODEPOINTS || d->what==D_RANGE);
     SemanticValue payload;
@@ -302,6 +302,9 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
     if (record_value_empty(s, x)) return 0;
     if (!d) { if (x->kind == S_TEXT) { *out = record_text(x->val, x->vlen); return 1; } if (x->nlen) record_note_unhandled(k, x); return 0; }
     if (d->what == D_CONTENT) {
+        if (s->lay.native_parts && named->nlen) {                            /* parted by a grammar of the engine's own: its text read as that grammar's content */
+            const SPart *part = part_at(&s->lay, named->name, named->nlen);
+            if (part && part->native) return part->native->field(x->val, x->vlen, out); }
         if (s->selfmark && k->selfcp >= 0 && memchr(x->val, s->selfmark, x->vlen)) {    /* the code point itself, written out where the source writes its mark */
             char hex[16]; size_t hl = hex_upper((unsigned long)k->selfcp, hex);
             size_t mark = scratch_mark();

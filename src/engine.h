@@ -254,6 +254,10 @@ typedef struct NativeGrammar {
     int  (*done)(Recipe *, const char *path);                                /* the recipe, read to its end: 1 it loads */
     void (*read)(const Recipe *, File *, const uint8_t *src, size_t n);    /* a file: its records, what they attest, its trunk */
     void (*input)(const Recipe *, File *, const struct SInput *);          /* grammar-bounded windows from a single input stream */
+    /* A field of another grammar's file that a recipe parts by this one (part NAME grammar GRAMMAR): the field's text read
+     * as this grammar's content, the same content a file of it would hold for that text. 1 read; 0 not this grammar's.
+     * Called with no text and no out when the recipe loads: 1 when fields can be read. NULL: it reads files alone. */
+    int  (*field)(const uint8_t *text, size_t n, Ref *out);
 } NativeGrammar;
 const NativeGrammar *native_grammar(const char *name);                       /* the native grammar of that name, or NULL */
 int  reads_in_stretches(const Recipe *, char *boundary);                    /* whether a file of this recipe can be: 1 at a line's end, 2 at an empty line */

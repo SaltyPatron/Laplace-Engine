@@ -107,7 +107,14 @@ int layout_compile_parts(Layout *layout){
     for (int i = 0; i < layout->npart; i++) {
         SPart *part = &layout->part[i]; const char *name = part->grammar;
         if (!*name && ((part->seplen == 6 && !memcmp(part->sep, "object", 6)) || (part->seplen == 4 && !memcmp(part->sep, "json", 4)))) name = "json";
-        if (*name) { part->inner = inner_layout(name); if (!part->inner) valid = 0; else part->child_grammar_id = part->inner->g.grammar_id; }
+        /* A grammar of the engine's own, found by name before any tree-sitter format, as a recipe's grammar line finds
+         * one (recipe.c): the field is one value, its text read by that grammar as its content (NativeGrammar.field). */
+        const NativeGrammar *native = *name ? native_grammar(name) : NULL;
+        if (native) {
+            if (!native->field || !native->field(NULL, 0, NULL)) { fprintf(stderr, "part %s: grammar %s reads files, not fields\n", part->path, name); valid = 0; }
+            else { part->native = native; layout->native_parts = 1; }
+        }
+        else if (*name) { part->inner = inner_layout(name); if (!part->inner) valid = 0; else part->child_grammar_id = part->inner->g.grammar_id; }
         else {
             part->syntax = inner_layout("lp_parts");
             if (!part->syntax) valid = 0;

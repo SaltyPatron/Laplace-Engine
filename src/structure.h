@@ -82,7 +82,7 @@ typedef struct {
 } STier;
 typedef struct { char path[64], sep[8], is[8]; int seplen, islen, pieces, padded; char space; char grammar[64];
                  uint16_t child_grammar_id, separator, assignment, name_length, next; uint8_t wildcard;
-                 uint64_t name_hash; const Layout *inner, *syntax; } SPart;     /* pieces: at most so many, the last the rest as written; space: the character the file writes for a space in it; padded: each piece without the white space around it; grammar: chained inner grammar */
+                 uint64_t name_hash; const Layout *inner, *syntax; const struct NativeGrammar *native; } SPart;     /* pieces: at most so many, the last the rest as written; space: the character the file writes for a space in it; padded: each piece without the white space around it; grammar: chained inner grammar; native: the grammar is the engine's own (grammars.c), which reads the field's text as its content (NativeGrammar.field) */
 /* A file whose tree a grammar gives (the recipe names it: grammar NAME, loaded at run time): what each kind of the
  * grammar's nodes is in the file's tree, as the recipe (or the format file it names) writes it:
  *   node TYPE group [name PATH...] [list] [grammar NAME]
@@ -172,7 +172,7 @@ typedef struct {
     char layout_prefix[4][8][64]; uint8_t prefix_length[4], prefix_count;
     GCountProgram counts[4]; uint8_t count_count, count_by_column[S_NAMES];
 } GMap;                 /* trim: the white space a text begins and ends with is how the file is laid out, not the text's */
-struct Layout { STier tier[S_TIERS]; int ntier; SPart part[32]; int npart; uint16_t part_buckets[64]; uint64_t part_prefix_lengths; uint8_t parts_compiled, part_errors;
+struct Layout { STier tier[S_TIERS]; int ntier; SPart part[32]; int npart; uint16_t part_buckets[64]; uint64_t part_prefix_lengths; uint8_t parts_compiled, part_errors, native_parts;
                 char empty[16][32]; int emptylen[16], nempty; char levels[8][32]; uint8_t level_lengths[8]; int nlevels; GMap g;
                 s_compile_name_fn compile_name; const void *name_program; Layout *record_inner;
                 uint64_t source_row; };    /* source_row: the file's physical row at a packaging window's start */
@@ -182,6 +182,7 @@ static inline int s_empty(const Layout *l, const uint8_t *v, uint32_t n){ if (!n
 int layout_compile_grammar(Layout *l, const char *grammar_name);
 const Layout *layout_format(const char *name);
 int layout_compile_parts(Layout *l);
+const SPart *part_at(const Layout *layout, const uint8_t *name, uint32_t length);   /* the part line a field of that name is parted by, or NULL */
 /* Compile declarative tier syntax into an owned outer grammar and the same
  * integer dispatch used by explicit .format files. No input bytes are read. */
 int layout_compile_tiers(Layout *layout, char *grammar, size_t capacity);
