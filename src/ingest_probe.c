@@ -322,20 +322,52 @@ static void room_keep(const char *path, const char *source, double times){
     while (f && fgets(line, sizeof line, f)) if (strncmp(line, source, n) || line[n] != '\t') fputs(line, o);
     if (f) fclose(f); fprintf(o, "%s\t%.3f\n", source, times); fclose(o); os_rename(tmp, path);
 }
+/* `after X` orders a run and asks that X be in: it is no request to read X again. Of the sources wanted only as what
+ * another comes after (want 2), which are recorded already: a source is recorded when a witness's trunk begins with its
+ * declared name, said as metadata (source_trunk: [its name, its files' trunks]), the same selector laplace forget uses.
+ * The trunk's ID is its files' content and cannot be known without reading them; its first vertex can. One query for
+ * them all, through the extension's witness skip scan and path reader; no file of any of them is opened. A source
+ * that names no record (witness or called) has no trunk and so is never known recorded here: it is ingested. */
+static void after_recorded(const char *conninfo, const char *t0p, const Source *src, int nsrc, const int *want, int *recorded){
+    int n = 0; for (int i = 0; i < nsrc; i++) n += want[i] == 2 && source_called(&src[i]) != NULL;
+    if (!n) return;
+    tier0_open(t0p); Ctx *ctx = lp_text_new(T0); lp_id *names = calloc((size_t)n, sizeof *names); int *of = calloc((size_t)n, sizeof *of); n = 0;
+    for (int i = 0; i < nsrc; i++) if (want[i] == 2 && source_called(&src[i])) { const char *c = source_called(&src[i]); of[n] = i; names[n++] = lp_text_decompose(ctx, (const uint8_t *)c, strlen(c), NULL, NULL).id; }
+    lp_text_free(ctx);
+    PGconn *pg = PQconnectdb(conninfo);
+    if (PQstatus(pg) == CONNECTION_OK) {
+        Args q = { 0 }; arg_ids(&q, names, (size_t)n);
+        PGresult *r = ask_try(pg, "SELECT DISTINCT n.id FROM @extschema@.laplace_paths(ARRAY(SELECT w.witness FROM @extschema@.laplace_witness_trust() w)) p"
+                                  " JOIN unnest($1::@extschema@.blake3[]) n(id) ON @extschema@.laplace_path_starts(p.path, n.id)", &q);
+        if (r) { for (int k = 0; k < PQntuples(r); k++) for (int j = 0; j < n; j++) if (lp_id_eq(col_id(r, k, 0), &names[j])) recorded[of[j]] = 1; PQclear(r); }
+        else fprintf(stderr, "whether what the sources named come after is recorded could not be read: %s; it is ingested\n", PQerrorMessage(pg));
+        args_free(&q);
+    }
+    PQfinish(pg); free(names); free(of);
+}
 int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int nrec, const int *want){
     char self[4096]; ssize_t sl = readlink("/proc/self/exe", self, sizeof self - 1); if (sl <= 0) { perror("/proc/self/exe"); return 1; } self[sl] = 0;
     const char *work = getenv("LAPLACE_WORK"); char dir[4096]; snprintf(dir, sizeof dir, "%s/logs/ingest", work && *work ? work : "."); 
     { char cmd[4200]; snprintf(cmd, sizeof cmd, "%s", dir); for (char *c = cmd + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(cmd, 0775); *c = '/'; } mkdir(cmd, 0775); }
     setlocale(LC_NUMERIC, "en_US.UTF-8");
-    const char *conninfo = laplace_db(); int loads = 1, plans = 0;
-    for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[a + 1]; if (!strcmp(argv[a], "--no-load") || !strcmp(argv[a], "--plan") || !strcmp(argv[a], "--claims") || !strcmp(argv[a], "--claims-tsv")) loads = 0; if (!strcmp(argv[a], "--plan")) plans = 1; }
+    const char *conninfo = laplace_db(), *t0p = NULL; int loads = 1, plans = 0;
+    for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[a + 1]; if (!strcmp(argv[a], "-t") && a + 1 < argc) t0p = argv[a + 1]; if (!strcmp(argv[a], "--no-load") || !strcmp(argv[a], "--plan") || !strcmp(argv[a], "--claims") || !strcmp(argv[a], "--claims-tsv")) loads = 0; if (!strcmp(argv[a], "--plan")) plans = 1; }
     /* What a source takes is not its bytes times a ratio: content is recorded once, so what an earlier source measured
      * (bytes the database grew over bytes its files hold, room.tsv) falls as what is recorded covers more of what is read.
      * A source is not begun only when the volume is already left with less than a tenth of itself, and that is said. */
     int short_of_room = 0, short_of_order = 0;
     char roomf[4200]; snprintf(roomf, sizeof roomf, "%s/room.tsv", work && *work ? work : ".");
+    /* What the sources named come after, recorded already, is passed over unread; and so is what only it comes after.
+     * need: 1 for a source this run ingests. A source named, or every source when none is named, is ingested as asked. */
+    int *recorded = calloc((size_t)nsrc, sizeof(int)), *need = calloc((size_t)nsrc, sizeof(int));
+    for (int i = 0; i < nsrc; i++) need[i] = !want || want[i] == 1;
+    if (want && loads) {
+        after_recorded(conninfo, t0p, src, nsrc, want, recorded);
+        for (int k = nsrc - 1; k >= 0; k--) if (need[k]) for (int x = 0; x < src[k].nafter; x++) for (int j = 0; j < k; j++)
+            if (!strcmp(src[j].name, src[k].after[x]) && !recorded[j]) need[j] = 1;
+    } else if (want) for (int i = 0; i < nsrc; i++) need[i] = want[i] != 0;
     { int unset = 0;                                                        /* where a source is kept is the environment's to say: nothing begins until it says it */
-      for (int i = 0; i < nsrc; i++) if ((!want || want[i]) && src[i].unset[0]) { fprintf(stderr, "source %s: its root names $%s, which the environment does not set (Laplace-Operations laplace.env)\n", src[i].name, src[i].unset); unset++; }
+      for (int i = 0; i < nsrc; i++) if (need[i] && src[i].unset[0]) { fprintf(stderr, "source %s: its root names $%s, which the environment does not set (Laplace-Operations laplace.env)\n", src[i].name, src[i].unset); unset++; }
       if (unset) { return 2; } }
     int *wentin = calloc((size_t)nsrc, sizeof(int));                       /* 1: it went in in this run, or has nothing to go in */
     printf("laplace ingest   %s, in order   logs in %s\n\n", want ? "the sources named" : "every source", dir);
@@ -343,7 +375,8 @@ int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int 
     double T = now(); int failed = 0, absent = 0, held = 0, empty = 0, went = 0;
     for (int i = 0; i < nsrc && !failed; i++) {
         if (want && !want[i]) continue;
-        { const char *b = NULL;                                              /* recipes/order: what it comes after went in first, in this run */
+        if (!need[i]) { printf("%-4d %-38s %-10s %10s   %s\n", i + 1, src[i].name, "recorded", "", recorded[i] ? "what the sources named come after: in already, its files not read" : "only what is in already comes after it: not read"); wentin[i] = 1; continue; }
+        { const char *b = NULL;                                             /* recipes/order: what it comes after went in first, in this run */
           for (int a = 0; a < src[i].nafter && !b; a++) for (int j = 0; j < i; j++) if (!strcmp(src[j].name, src[i].after[a]) && wentin[j] != 1) b = src[j].name;
           if (b) { printf("%-4d %-38s %-10s %10s   it comes after %s, which did not go in\n", i + 1, src[i].name, "not begun", "", b); short_of_order++; continue; } }
         int mine = 0; for (int k = 0; k < nrec; k++) mine += rec[k].source == i; mine += src[i].nreads;
@@ -405,5 +438,5 @@ int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int 
     /* each source that went in merged its own stage as it ended (cmd_ingest); one that failed left its stage, and its
      * next run takes up from it (what is staged is looked for as what is recorded is) */
     /* a plan is the check that every source is where its recipe says (Laplace-Engine#60): one that is not fails it */
-    free(wentin); return failed || short_of_order || (plans && absent);
+    free(wentin); free(recorded); free(need); return failed || short_of_order || (plans && absent);
 }

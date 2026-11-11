@@ -187,6 +187,7 @@ jobs:
           export LAPLACE_RECIPES="$GITHUB_WORKSPACE/Laplace-Engine/recipes"
           export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
           bash Laplace-Engine/tests/ingest-progress.sh "$RUNNER_TEMP/engine/laplace"
+          bash Laplace-Engine/tests/after-recorded.sh "$RUNNER_TEMP/engine/laplace"
           bash Laplace-Engine/tests/cached-key-reader.sh "$RUNNER_TEMP/engine/laplace"
           python3 Laplace-Engine/tests/reader-depth.py "$RUNNER_TEMP/engine/reader-depth"
           python3 Laplace-Engine/tests/claim-width.py "$RUNNER_TEMP/engine/laplace"

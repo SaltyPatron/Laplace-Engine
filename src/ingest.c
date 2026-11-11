@@ -219,7 +219,7 @@ int cmd_ingest(int argc, char **argv){
     { int named = 0; for (int i = a; i < argc; i++) { int k = 0; while (k < nsrc && !source_named(&src[k], argv[i])) k++; named += k < nsrc; }
       if (named && named == argc - a && !of && !getenv("LAPLACE_INGEST_ONE")) {   /* sources by name: each its own run, in recipes/order, after everything it comes after */
           int *want = calloc((size_t)nsrc, sizeof(int)); for (int i = a; i < argc; i++) for (int k = 0; k < nsrc; k++) if (source_named(&src[k], argv[i])) want[k] = 1;
-          for (int k = nsrc - 1; k >= 0; k--) if (want[k]) for (int x = 0; x < src[k].nafter; x++) for (int j = 0; j < k; j++) if (!strcmp(src[j].name, src[k].after[x])) want[j] = 1;   /* sources is in order: what one comes after is before it */
+          for (int k = nsrc - 1; k >= 0; k--) if (want[k]) for (int x = 0; x < src[k].nafter; x++) for (int j = 0; j < k; j++) if (!strcmp(src[j].name, src[k].after[x]) && !want[j]) want[j] = 2;   /* sources is in order: what one comes after is before it; 2: wanted only as what another comes after (ingest_every passes it over when it is recorded) */
           int rc = ingest_every(a, argv, src, nsrc, rec, nrec, want); free(want); return rc; } }
     for (int i = a; i < argc; i++) {                                         /* a source by its name, or files and directories */
         struct stat st; int k = 0; while (k < nsrc && !source_named(&src[k], argv[i])) k++;
