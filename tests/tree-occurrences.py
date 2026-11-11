@@ -48,17 +48,19 @@ with tempfile.TemporaryDirectory(prefix="laplace-tree-occurrences-") as scratch:
         "Distinct occurrence-reference graphs collapsed to one record: "
         + str(identities))
 
-    # Real Lichess opening rows: the PGN capture is packaging, not a second
-    # copy of the moves in the opening's semantic subject. A longer opening
-    # must retain every move, not collapse to its first move.
+    # Real Lichess opening rows: an opening names the position its line ends in
+    # (the line is the route, recorded as the record). A longer opening is
+    # the position after every one of its moves, not after its first.
     opening = root / 'a.tsv'
     opening.write_text('eco\tname\tpgn\nA00\tAmar Opening\t1. Nh3\n'
                        'A00\tAmar Opening: Paris Gambit\t1. Nh3 d5 2. g3 e5 3. f4\n', encoding='utf-8')
+    after_nh3 = 'Ra1Nb1Bc1Qd1Ke1Bf1Rh1Pa2Pb2Pc2Pd2Pe2Pf2Pg2Ph2Nh3pa7pb7pc7pd7pe7pf7pg7ph7ra8nb8bc8qd8ke8bf8ng8rh8b137137-'
+    after_f4 = 'Ra1Nb1Bc1Qd1Ke1Bf1Rh1Pa2Pb2Pc2Pd2Pe2Ph2Pg3Nh3Pf4pd5pe5pa7pb7pc7pf7pg7ph7ra8nb8bc8qd8ke8bf8ng8rh8b137137-'
     expected = [
-        ['Nh3', 'opening name', 'Amar Opening'],
-        ['Nh3', 'Encyclopaedia of Chess Openings code', 'A00'],
-        ['[Nh3, d5, g3, e5, f4]', 'opening name', 'Amar Opening: Paris Gambit'],
-        ['[Nh3, d5, g3, e5, f4]', 'Encyclopaedia of Chess Openings code', 'A00'],
+        [after_nh3, 'opening name', 'Amar Opening'],
+        [after_nh3, 'Encyclopaedia of Chess Openings code', 'A00'],
+        [after_f4, 'opening name', 'Amar Opening: Paris Gambit'],
+        [after_f4, 'Encyclopaedia of Chess Openings code', 'A00'],
     ]
     for workers in (1, 4):
         result = subprocess.run([str(engine), 'ingest', '--claims-tsv', '-j', str(workers),
