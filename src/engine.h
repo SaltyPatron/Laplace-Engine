@@ -358,9 +358,12 @@ typedef struct { Held *node; size_t n; HeldEdge *edge; size_t ne; uint64_t hub; 
 void held_up(PGconn *pg,const lp_id *keys,int nkeys,int by,int cap,size_t max_nodes,HeldUp *out);
 void held_up_free(HeldUp *);
 /* The same walk by content, read inside PostgreSQL in one call (laplace_held_files): the files that hold the keys,
- * each with the keys below it (bit k: keys[k], k < 64), under trunk when it is given (NULL: any file). cap and
- * max_nodes as held_up's; *hubs, *levels and *cut as it reports them. The caller frees the files. */
-typedef struct { lp_id file; uint64_t keys; } HeldFile;
+ * each with the keys below it (bit k: keys[k], k < 64), under trunk when it is given (NULL: any file); and each file's
+ * unit, the lowest node of its content holding all of them, with its path length (constituents, runs counted), its tier
+ * (height: a whole file's path is only its record and its content) and how many times each key stands below it
+ * (count[k], k < 64). cap and max_nodes as held_up's; *hubs, *levels and *cut as
+ * it reports them. The caller frees the files. */
+typedef struct { lp_id file, unit; uint64_t keys; int64_t length; int tier; uint64_t count[64]; } HeldFile;
 HeldFile *held_in(PGconn *pg,const lp_id *trunk,const lp_id *keys,int nkeys,long cap,long max_nodes,
                   uint64_t *hubs,int *levels,int *cut,size_t *nout);
 int tier_max(PGconn *pg,const lp_id *ids,int n);
