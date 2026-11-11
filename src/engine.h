@@ -166,7 +166,8 @@ int     recipes_broken(const Recipe *r, int n, const Source *of);             /*
 enum { EV_CLAIM = 0, EV_RECORD = 1, EV_MEMBER = 2 };      /* a claim that is its own record; a record; a claim within the record before it */
 typedef struct { lp_id claim, witnessed; float score, enter_rating, enter_deviation; uint32_t position; uint8_t kind, own_witness; lp_id witness; uint32_t run; int32_t rec;
                  lp_id dependence; double dependence_trust; uint8_t has_dependence;
-                 lp_id qualifier; uint8_t has_qualifier; } Event;
+                 lp_id qualifier; uint8_t has_qualifier;
+                 uint8_t games; } Event;     /* games: the run is a count the source states (games TIER NAME), so many records; else one record saying it run times */
 typedef struct { Event *e; uint64_t n, cap; } Events;
 typedef int (*record_batch_fn)(void *, const Ref *, size_t, const Ref *, size_t, const Events *);
 struct FileAssembly;

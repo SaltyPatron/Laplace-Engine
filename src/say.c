@@ -239,7 +239,7 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
             }
             k->qualified = was; k->qualifier = wv; }
         if (s->ngames) { uint32_t games = games_of(s, t, (int32_t)g);                 /* a count the source states of what it attests: the run its claims are said, never a part of them */
-            if (games > 1) for (uint64_t i = e0; i < k->ev.n; i++) if (k->ev.e[i].kind == EV_CLAIM) k->ev.e[i].run = games; }
+            if (games > 1) for (uint64_t i = e0; i < k->ev.n; i++) if (k->ev.e[i].kind == EV_CLAIM) { k->ev.e[i].run = games; k->ev.e[i].games = 1; } }
         for (int a = 0; a < s->ntogether; a++) if (record_field_named(x, s->together[a].tier, strlen(s->together[a].tier)) && record_conditions_match(s, t, (int32_t)g, s->together[a].when)) {
             if (np_ < 64) { pend[np_].end = record_scope_end(t, (int32_t)g); pend[np_].e0 = e0; pend[np_].has = record_thing(k, t, (int32_t)g, &pend[np_].about, 0); np_++; } break; }      /* closed when the reading passes the last node inside it */
     }

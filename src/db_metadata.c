@@ -321,12 +321,13 @@ void fold_events(Fold *f, const File *files, int nfiles){
             Series *s=lp_strmap_at(f->series,index);
             if (fresh) *s=(Series){.claim=event->claim,.witness=source.id,.lineage=lineage,
                 .trust=observation_trust,.has_lineage=has_lineage};
-            if (s->games==UINT64_C(9007199254740992)) { fprintf(stderr,"series exceeds exact Native game range\n"); exit(1); }
+            uint64_t run = event->run ? event->run : 1, played = event->games ? run : 1;   /* a stated count is games; a record's repeat, tokens */
+            if (s->games > UINT64_C(9007199254740992) - played) { fprintf(stderr,"series exceeds exact Native game range\n"); exit(1); }
             /* Map slots are stable while a window grows. The database retains
              * totals; the client releases this map after every committed window. */
             if(!s->dirty)lp_push(&f->dirty,index);
-            s->games++; s->tokens += event->run ? event->run : 1;
-            s->sum+=lp_score_carried(event->score);
+            s->games += played; s->tokens += run;
+            s->sum+=lp_score_carried(event->score)*(double)played;
             if(event->position && (!s->position || event->position < s->position)) s->position = event->position;
             s->dirty=1;
         }

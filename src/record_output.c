@@ -236,6 +236,7 @@ void record_build_provenance(RecordWorker *k, const SemanticRecord *t, int32_t r
         uint32_t nclaims = 0, ones = 0;
         for (uint64_t j = at[ri]; j < at[ri + 1]; j++) { const Event *x = &k->ev.e[ord[j]]; if (x->kind != EV_CLAIM) continue;
             Ref c; if (!record_claim_vertex(x, &c)) continue;
+            if (x->games) c.said = LP_SAID_RECORD;     /* a count the source states: each repeat another of its records, so games (provenance.c, walk.c), not one record's tokens */
             uint32_t first=np;
             if (x->has_qualifier) {
                 int ok; Ref v=ref_of_id(&x->qualifier,&ok);
