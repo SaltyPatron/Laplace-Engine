@@ -46,7 +46,7 @@ typedef struct { lp_rating r; int64_t matches; } ClaimStanding;
 const char *firmware_path(void);                     /* LAPLACE_FIRMWARE, or firmware/program.firmware beside the recipes */
 Firmware firmware_for(const char *path, int op);
 const Firmware *firmware_ids(Firmware *);            /* the firmware's names as entities: computed the first time they are asked, once a pass */
-typedef struct { lp_id sense, gloss, eq[4], usage; int np, lang, concept, has_gloss, neq, has_usage; } Lexicalization;
+typedef struct { lp_id sense, gloss, eq[4]; int np, lang, concept, has_gloss, neq, has_usage; } Lexicalization;
 int lexicalization_of(lp_text *, const Firmware *, Lexicalization *);
 void firmware_say(const Firmware *, int op);
 lp_ref entity_named(lp_text *, const char *text, lp_ref *parts, size_t cap, size_t *np);      /* a text's trunk, computed here */

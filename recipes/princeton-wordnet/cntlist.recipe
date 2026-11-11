@@ -28,7 +28,8 @@ type sense_key ili
 omit sense_number
 content tag_cnt
 # cntlist.5: "tag_cnt is the decimal number of times the sense is tagged in the corresponding semantic concordance": a
-# number the file states of the sense, an observation, said of the lexicalization (translate orders a word's senses by
-# it: Laplace-Wiki Sequence/Web.md 15.6, "ordered by observed usages").
-relation "number of times the sense is tagged" tag_cnt
-attest row tag_cnt
+# count the concordance measures of the sense, so it is no claim's value. The claim is the sense itself, observed, and
+# the count is the number of games it is observed in (a repeat is games, recipes/BRIEF.md). The sense is shared content,
+# the strand a wordnet's sense of the same word and concept is, so the games land where those senses are claimed.
+itself row
+games row tag_cnt

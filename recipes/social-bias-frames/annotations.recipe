@@ -29,10 +29,7 @@ content WorkerId
 content post whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype annotator* dataSource
 
 relation "group vs. individual target" whoTarget
-relation "was the intent behind the statement to offend" intentYN
-relation "is the post a sexual or lewd reference" sexYN
 relation "free text explanations of what is sexual" sexReason
-relation "could the post be offensive to anyone" offensiveYN
 relation "part of the post that references something sexual" sexPhrase
 relation "whether the speaker was part of the same minority group" speakerMinorityYN
 relation "demographic group targeted" targetMinority
@@ -44,7 +41,9 @@ relation "political leaning of the MTurk worker" annotatorPolitics
 relation "race of the MTurk worker" annotatorRace
 relation "age of the MTurk worker" annotatorAge
 relation "source of the post" dataSource
-attest row whoTarget intentYN sexYN sexReason offensiveYN sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype with WorkerId
+attest row whoTarget sexReason sexPhrase speakerMinorityYN targetMinority targetCategory targetStereotype with WorkerId
 attest row annotator* of WorkerId
 # where the post was said ("source of the post (t/...: means Twitter, r/...: means a subreddit)"), the set says
 attest row dataSource
+# The post's offence, intent and sexual-reference responses are ratings (the aggregate their mean, a fraction of annotators):
+# quantities, no claim's value. They stay in the row, the record, beside the post, and are attested of nothing.

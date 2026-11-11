@@ -26,12 +26,10 @@ together row
 # sexYN: is the post a sexual or lewd reference;  offensiveYN: could the post be offensive to anyone;
 # targetMinority: demographic group targeted;  targetCategory: high-level category of the demographic group(s)
 # targeted;  targetStereotype: implied statement;  dataSource: source of the post
-relation "group vs. individual target" whoTarget
-relation "was the intent behind the statement to offend" intentYN
-relation "is the post a sexual or lewd reference" sexYN
-relation "could the post be offensive to anyone" offensiveYN
 relation "demographic group targeted" targetMinority
 relation "high-level category of the demographic group(s) targeted" targetCategory
 relation "implied statement" targetStereotype
 relation "source of the post" dataSource
-attest row targetMinority targetCategory targetStereotype whoTarget intentYN sexYN offensiveYN dataSource
+attest row targetMinority targetCategory targetStereotype dataSource
+# The post's offence, intent and sexual-reference responses are ratings (the aggregate their mean, a fraction of annotators):
+# quantities, no claim's value. They stay in the row, the record, beside the post, and are attested of nothing.

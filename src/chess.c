@@ -40,13 +40,16 @@
  *
  * What the file attests, its witness being the source's: each record, once (its attestation, position its place in
  * the file); within it, by the kind of record it is:
- *   played    [record, line] and [record, [tag, value]] for each tag, and [record, layer]; a result of * (the game
- *             not finished) claims no outcome
+ *   played    [P, M, P'] for each move, the position before it, the move and the position after: shared content, the same
+ *             wherever any game plays it. The result is the score of the side that made the move (1 a win, 0 a loss, 1/2 a
+ *             draw), outside the claim; a result of * (the game not finished) claims no outcome and so no move
  *   study     a record whose movetext has variations or NAGs, or every record of a recipe that says "records study":
- *             the annotator's testimony, not a game anyone played: [record, [tag, value]], and each NAG as the
- *             annotator's judgment of a move in its position, [position, move, NAG]; no [record, line]
- *   puzzle    every record of a recipe that says "records puzzle": the composer's claimed solution, the line itself,
- *             with [record, [tag, value]] and the NAGs as a study's
+ *             the annotator's testimony, not a game anyone played: each NAG as the annotator's judgment of a move in its
+ *             position, [position, move, NAG]
+ *   puzzle    every record of a recipe that says "records puzzle": the composer's claimed solution, the line itself, and
+ *             the NAGs as a study's
+ * A record is never the subject of a claim: its line, its tags (the players, their ratings, the clocks, the date, the
+ * event, the result) and its layer are its content, the trajectory of the game, and are not claimed again as [record, field].
  * The rules a record is replayed under are firmware (Sequence 28, Games): firmware/chess.firmware names each variant
  * a Variant tag can name and how it castles; the variant governs which moves are legal and is in no position's ID.
  *
@@ -460,7 +463,7 @@ static void chess_records(const Recipe *rcp, File *f, const uint8_t *src, SRecor
             ((rl==3 && (!memcmp(result,"1-0",3) || !memcmp(result,"0-1",3))) || (rl==7 && !memcmp(result,"1/2-1/2",7)));
         if (ok && (!g.main.n)) zero++;
         if (!outcome) unfinished++;
-        if (ok && kind == K_PLAYED) { Ref p2[2] = { rec, line }; member(f, rec, p2, 2, &pos); played++; }
+        if (ok && kind == K_PLAYED) played++;                                  /* the record is its line and its tags: its content, not a claim of itself (the moves below are the claims) */
         if(ok && kind==K_PLAYED && outcome)for(size_t i=0;i+2<rd.transitions.n;i+=3){
             int side=(b0.side+(int)(i/3))&1;
             float score=rl==7?0.5f:((result[0]=='1')==(side==0)?1.0f:0.0f);
@@ -468,11 +471,6 @@ static void chess_records(const Recipe *rcp, File *f, const uint8_t *src, SRecor
         }
         if (ok && kind == K_PUZZLE) { Ref p1[1] = { line }; member(f, rec, p1, 1, &pos); puzzle++; }
         if (ok && kind == K_STUDY) study++;
-        for (size_t i = 0; i < tags.n; i++) { const Tag *t = &g.tag[i];
-            if (!t->vl) continue;                                               /* what a source leaves empty attests nothing */
-            if (t->nl == 6 && !memcmp(t->name, "Result", 6) && !outcome) continue;      /* *: no outcome is claimed */
-            Ref p2[2] = { rec, tags.c[i] }; member(f, rec, p2, 2, &pos); }
-        if (ok && has_layer && kind == K_PLAYED) { Ref p2[2] = { rec, layer }; member(f, rec, p2, 2, &pos); }
         if (ok && kind != K_PLAYED) for (size_t i = 0; i + 2 < rd.nags.n; i += 3) member(f, rec, &rd.nags.c[i], 3, &pos);
         RV provenance={0};rv(&provenance,rec);
         for(uint64_t i=event_begin;i<f->ev.n;i++)if(f->ev.e[i].kind==EV_CLAIM){

@@ -1,9 +1,9 @@
 #!/bin/bash
 # A chess position, move and line are content (src/chess.c): the same ids on every machine and in every repo that
 # composes them, with nothing salted into a hash. This pins them. A PGN game of no tags and no result holds its line
-# [P0, M0, P1, ...] as its record (a line of no moves is its start position), attests the one claim [record, line],
-# and the record the Engine holds is [record, [record, line]]; so each id printed below fixes every position and move
-# on its line. The monorepo's Laplace.Chess.Tests ChessEngineIdentityTests pins the same ids.
+# [P0, M0, P1, ...] as its record (a line of no moves is its start position). A record is never the subject of a
+# claim and a game of no result claims no move, so the record the Engine holds is the line itself: each id printed
+# below is a line's own content id and fixes every position and move on it.
 #   tests/chess-identity.sh path/to/laplace
 set -euo pipefail
 L=${1:?usage: tests/chess-identity.sh path/to/laplace}; here=$(cd "$(dirname "$0")" && pwd)
@@ -14,13 +14,13 @@ fail(){ echo "chess-identity: $*" >&2; exit 1; }
 
 out=$(LAPLACE_DATA=$scratch "$L" ingest --claims-tsv -s chess-com "$here/chess/identity.pgn" 2>&1 | tr -d '\r') || fail "chess-com's recipe did not read identity.pgn: $out"
 got=$(awk -F'\t' '$1 == "record" && $2 > 0 { print $4 }' <<<"$out")
-want='98522a8a1f8931ba76d1992a94e7dbcd
-bab7041d3051e91c3f361ec0124aff8e
-9a2ace38a08cddfc0ffcb944e6efcf44
-48858d05244b68465d2c0f1e7bac323f
-dead9d5c40c1fa81fed0b5f6f5dd254c
-df5e2f9cf8fb64057b0d3328e1a90d84
-da3caadfc3f2c4dc833aa46b44419add'
+want='6546b7964667fe459eead69e9ef46c87
+b17034a030605a7b729131993c5ca42d
+2559928d51a3fa236734fbb1a71ac18b
+eda2a5d7bf07835788bac9def6f122f5
+0597f55a22171c49d3c144ed95e019c3
+bd4dc4877779bb570ebebe65c5b474dc
+78b2c74d8df5a0d64473fe5f79f6cc5f'
 [ "$got" = "$want" ] || fail "a position, move or line has another id (start, 1.e4, two transposing lines, en passant, castlings):
 got:
 $got

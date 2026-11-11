@@ -24,7 +24,8 @@ if grep -Eq 'weight|surfaceText|/r/|/c/' <<< "$records"; then
 fi
 grep -q $'^claim\t.*Antonym' <<< "$output"
 grep -q $'^claim\t.*IsA' <<< "$output"
-grep -q 'the strength with which this edge expresses this assertion' <<< "$output"
+! grep -q 'the strength with which this edge expresses this assertion' <<< "$output"      # the weight is the edge's score, never a claim's value
+grep -Eq $'^claim\t[0-9]+\t1\t.*IsA' <<< "$output"      # weight 2 on a scale of 0 to 2: a win
 # A reachable database without Laplace is still irrelevant to a local preview.
 # CI supplies a real PostgreSQL server; this also works when none is running.
 preview_conn="host='${PGHOST:-/tmp}' port=${PGPORT:-5432} user=${PGUSER:-laplace} dbname=postgres connect_timeout=1"
