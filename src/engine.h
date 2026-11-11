@@ -357,6 +357,12 @@ typedef struct { uint32_t parent, child; uint8_t said; } HeldEdge;   /* said: th
 typedef struct { Held *node; size_t n; HeldEdge *edge; size_t ne; uint64_t hub; int levels, cut; } HeldUp;
 void held_up(PGconn *pg,const lp_id *keys,int nkeys,int by,int cap,size_t max_nodes,HeldUp *out);
 void held_up_free(HeldUp *);
+/* The same walk by content, read inside PostgreSQL in one call (laplace_held_files): the files that hold the keys,
+ * each with the keys below it (bit k: keys[k], k < 64), under trunk when it is given (NULL: any file). cap and
+ * max_nodes as held_up's; *hubs, *levels and *cut as it reports them. The caller frees the files. */
+typedef struct { lp_id file; uint64_t keys; } HeldFile;
+HeldFile *held_in(PGconn *pg,const lp_id *trunk,const lp_id *keys,int nkeys,long cap,long max_nodes,
+                  uint64_t *hubs,int *levels,int *cut,size_t *nout);
 int tier_max(PGconn *pg,const lp_id *ids,int n);
 #define ARGS_MAX 8
 enum { SQL_ID_ARRAY=2 }; /* binary payload whose element OID binds at execution */

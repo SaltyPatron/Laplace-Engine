@@ -162,3 +162,18 @@ void held_up(PGconn *pg,const lp_id *keys,int nkeys,int by,int cap,size_t max_no
     lp_vec_free(&vx);lp_idmap_free(front);lp_idmap_free(at);lp_strmap_free(pairs);
 }
 void held_up_free(HeldUp *u){free(u->node);free(u->edge);memset(u,0,sizeof *u);}
+HeldFile *held_in(PGconn *pg,const lp_id *trunk,const lp_id *keys,int nkeys,long cap,long max_nodes,
+                  uint64_t *hubs,int *levels,int *cut,size_t *nout){
+    *nout=0;*hubs=0;*levels=0;*cut=0;
+    if(nkeys<=0)return NULL;
+    Args args={0};arg_ids(&args,keys,(size_t)nkeys);arg_ids(&args,trunk,trunk?1:0);arg_int(&args,cap);arg_int(&args,max_nodes);
+    PGresult *rows=ask(pg,"SELECT file,keys,hubs,levels,cut FROM @extschema@.laplace_held_files("
+        "$1::@extschema@.blake3[],($2::@extschema@.blake3[])[1],$3::bigint,$4::bigint)",&args);
+    lp_vec(HeldFile) out={0};
+    for(int row=0;row<PQntuples(rows);row++){
+        *hubs=(uint64_t)col_int(rows,row,2);*levels=(int)col_int(rows,row,3);*cut=PQgetvalue(rows,row,4)[0]!=0;
+        if(PQgetisnull(rows,row,0))continue;
+        lp_push(&out,((HeldFile){*col_id(rows,row,0),(uint64_t)col_int(rows,row,1)}));
+    }
+    PQclear(rows);args_free(&args);*nout=out.n;return out.v;
+}
