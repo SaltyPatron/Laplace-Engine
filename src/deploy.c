@@ -88,7 +88,17 @@ int cmd_deploy(int argc, char **argv){
     if(!quoted){PQfinish(pg);return 1;}
     snprintf(sql,sizeof sql,"CREATE EXTENSION IF NOT EXISTS laplace SCHEMA %s",quoted);PQfreemem(quoted);
     if(!run(pg,sql,"extension laplace")){PQfinish(pg);return 1;}
-    if (!run(pg, "ALTER EXTENSION laplace UPDATE", "laplace extension at its newest version")) return 1;
+    {   /* Greenfield until something is deployed: no update path. A database holding another version is recreated. */
+        PGresult *v = PQexec(pg, "SELECT e.extversion, a.default_version FROM pg_extension e"
+                                 " JOIN pg_available_extensions a ON a.name = e.extname WHERE e.extname = 'laplace'");
+        if (PQresultStatus(v) != PGRES_TUPLES_OK || PQntuples(v) != 1) { fprintf(stderr, "laplace extension version: %s", PQerrorMessage(pg)); PQclear(v); PQfinish(pg); return 1; }
+        if (strcmp(PQgetvalue(v, 0, 0), PQgetvalue(v, 0, 1))) {
+            fprintf(stderr, "%s holds laplace %s and the installed extension is %s: recreate the database (there is no upgrade path before release)\n",
+                    PQdb(pg), PQgetvalue(v, 0, 0), PQgetvalue(v, 0, 1));
+            PQclear(v); PQfinish(pg); return 1;
+        }
+        PQclear(v);
+    }
     if (!run(pg, "SELECT @extschema@.laplace_restore_function_bindings()", "matching Native implementation bindings")) return 1;
     /* Only a host installer may select server-local cache paths. A remote
      * extension install/upgrade preserves the server's existing configuration. */
