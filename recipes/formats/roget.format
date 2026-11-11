@@ -1,0 +1,19 @@
+grammar roget
+records head
+node head group as head
+node number text as number
+node title text as title trim
+node group group as group
+node label text as label trim
+node item group as item
+node word text as word trim
+node bracket text as bracket
+node reference text as reference
+node other text as other
+node subsection skip
+node heading skip
+node blank skip
+node front skip
+node start skip
+node end skip
+node back skip
