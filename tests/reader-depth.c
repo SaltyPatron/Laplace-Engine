@@ -45,9 +45,11 @@ int main(int argc,char **argv){
         lp_id_codepoint(65,&a);lp_id_codepoint(66,&b);lp_id_codepoint(67,&c);
         lp_id pair[2]={a,b};lp_id_compose(pair,2,&root_id);pair[1]=c;lp_id_compose(pair,2,&missing);
         Reader *r=reader_new(NULL);Ent *root=ent(r,&root_id,1);root->state=1;root->nv=2;
-        lp_push(&r->children,((ReadChild){missing,1}));lp_push(&r->children,((ReadChild){b,1}));
+        lp_push(&r->children,((lp_realize_child){missing,1,0}));lp_push(&r->children,((lp_realize_child){b,1,0}));
         Out out={.limit=100};expand(r,&root_id,&out);
-        assert(!r->e[0].active && out.wants==1);lp_free(out.b);reader_free(r);puts("reader lazy frontier stack passed");return 0;
+        assert(out.wants==1 && out.n==1 && out.b[0]=='B' && r->n==2);
+        out.n=out.wants=0;expand(r,&root_id,&out); /* the same DAG walked again: no active path left behind */
+        assert(out.wants==1 && out.n==1);lp_free(out.b);reader_free(r);puts("reader lazy frontier stack passed");return 0;
     }
     assert(argc==6 || argc==7);T0=lp_tier0_map(argv[2]);assert(T0);
     PGconn *pg=PQconnectdb(argv[1]);assert(PQstatus(pg)==CONNECTION_OK);
