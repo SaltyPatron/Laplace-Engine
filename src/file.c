@@ -83,20 +83,11 @@ static void file_block_free(FileBlock *block){
     free(block->part);
 }
 static void binding_part(void *context, const Ref *part){ file_block_push(context, *part); }
-Ref file_context_value(const File *file){
-    static const char hex[]="0123456789abcdef"; uint8_t text[64];
-    for (unsigned i=0;i<32;i++) { text[2*i]=hex[file->reading_context[i]>>4]; text[2*i+1]=hex[file->reading_context[i]&15]; }
-    return text_ref(CTX[0],text,sizeof text);
-}
 static int file_binding_metadata(File *file, Ref *out){
     if (file->bindings_attached) return 0;
     file->bindings_attached = 1;
     FileBlock block = {0};
     size_t count=say_has_keys(file->recipe)?keys_file_export(file->order,binding_part,&block):0;
-    if (keys_file_reads(file->order)) {
-        Ref parts[2]={text_ref(CTX[0],(const uint8_t *)KEY_CONTEXT_TAG,sizeof KEY_CONTEXT_TAG-1),file_context_value(file)};
-        Ref context=compose(parts,2,ref_above(parts,2)); context.said=0; file_block_push(&block,context); count++;
-    }
     if (!count) { file_block_free(&block); return 0; }
     *out = file_block_finish(&block); out->said = 0; file_block_free(&block); return 1;
 }

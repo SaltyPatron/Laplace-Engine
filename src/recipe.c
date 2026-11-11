@@ -107,22 +107,7 @@ void recipe_program_line(Recipe *recipe, const char *path, const char *line){
     blake3_hasher *hash = recipe->program_state; program_text(hash, name);
     program_size(hash, used); blake3_hasher_update(hash, canonical, used);
 }
-void recipe_reading_hash(const Recipe *recipe, uint8_t out[32]){
-    blake3_hasher hash; blake3_hasher_init(&hash);
-    if (recipe) {
-        blake3_hasher_update(&hash, recipe->program_hash, sizeof recipe->program_hash);
-        program_text(&hash, recipe->name); program_text(&hash, recipe->grammar);
-        program_text(&hash, recipe->witness); program_text(&hash, recipe->lineage);
-        uint64_t trust; memcpy(&trust, &recipe->trust, sizeof trust); program_size(&hash, trust);
-        program_size(&hash, recipe->curated != 0); program_size(&hash, recipe->native != NULL);
-        program_size(&hash, recipe->input_frame.width); program_size(&hash, recipe->input_frame.big_endian);
-        uint8_t semantic[32]; say_program_hash(recipe, semantic); blake3_hasher_update(&hash, semantic, sizeof semantic);
-        if (recipe->lang) {
-            grammar_program_hash(grammar_id_for_language(recipe->lang), semantic); blake3_hasher_update(&hash, semantic, sizeof semantic);
-        }
-    }
-    blake3_hasher_finalize(&hash, out, 32);
-}
+
 
 /* A witness's trust is its class's prior (Sequence 6.5): the class is the only statement of it. A label the registry
  * does not declare, or a trust written as a number, stops the load: nothing is trusted by a figure someone typed. */

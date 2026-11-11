@@ -59,37 +59,7 @@ static KeyTable keys;
 static uint8_t *key_readers;
 static __thread uint64_t key_reader = UINT64_MAX;
 void keys_reader_file(uint64_t file){ key_reader = file; }
-int keys_file_reads(uint64_t file){ return file<=UINT32_MAX && __atomic_load_n(&key_readers[file],__ATOMIC_ACQUIRE); }
 
-/* Reader-source/perf-cache provenance for a reading. This fingerprint is
- * file metadata, not content identity. Compute it once without opening any
- * corpus file; changing the reader must invalidate an OS-only pre-check.
- * Executable bytes are not a reading contract: identical source built into the
- * standalone and embedded runtimes must produce identical provenance trunks. */
-static pthread_mutex_t program_mutex = PTHREAD_MUTEX_INITIALIZER;
-static uint8_t program_environment[32]; static int program_ready;
-void program_environment_hash(uint8_t out[32]){
-    if (!__atomic_load_n(&program_ready, __ATOMIC_ACQUIRE)) {
-        pthread_mutex_lock(&program_mutex);
-        if (!program_ready) {
-            if (!T0) { fputs("reading contract requires the mapped Tier-0 cache\n", stderr); exit(1); }
-            uint8_t artifact[32]; blake3_hasher hash; blake3_hasher_init(&hash);
-            static const char source[] = LAPLACE_READER_SOURCE_ID;
-            blake3_hasher_update(&hash, source, sizeof source - 1);
-            blake3_hasher cache; blake3_hasher_init(&cache);
-            blake3_hasher_update(&cache, T0, (size_t)LP_TIER0_COUNT * sizeof *T0);
-            blake3_hasher_finalize(&cache, artifact, sizeof artifact); blake3_hasher_update(&hash, artifact, sizeof artifact);
-            int available = program_file_hash(lp_highway_path(), artifact);
-            if (!available && errno != ENOENT) { perror(lp_highway_path()); exit(1); }
-            uint8_t present = (uint8_t)available; blake3_hasher_update(&hash, &present, sizeof present);
-            if (available) blake3_hasher_update(&hash, artifact, sizeof artifact);
-            blake3_hasher_finalize(&hash, program_environment, sizeof program_environment);
-            __atomic_store_n(&program_ready, 1, __ATOMIC_RELEASE);
-        }
-        pthread_mutex_unlock(&program_mutex);
-    }
-    memcpy(out, program_environment, sizeof program_environment);
-}
 
 static void *reserve(size_t bytes){
     void *p = os_reserve(bytes);

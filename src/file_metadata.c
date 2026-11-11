@@ -43,8 +43,15 @@ static Ref when_ref(const struct statx_timestamp *t){
     k += 9;
     return string_ref((const uint8_t *)b, k);
 }
+/* Where a file is within its source: its pathname from the source's root, never the host's directories above it. */
+static const char *within_source(const File *f){
+    const char *root = f->source ? f->source->found : NULL; size_t l = root ? strlen(root) : 0;
+    while (l && root[l - 1] == '/') l--;
+    if (l && !strncmp(f->path, root, l) && f->path[l] == '/') return f->path + l + 1;
+    return f->path;
+}
 size_t file_record(const Recipe *r, const File *f, Ref *out, size_t cap){
-    size_t n = 0; int k = 0; Ref seg[256]; uint32_t ns = 0; const char *p = f->path;
+    size_t n = 0; int k = 0; Ref seg[256]; uint32_t ns = 0; const char *p = within_source(f);
     while (*p && ns < 256) { const char *e = strchr(p, '/'); size_t l = e ? (size_t)(e - p) : strlen(p);
         if (l) { seg[ns] = string_ref((const uint8_t *)p, l); seg[ns].said = 0; ns++; } p += l; if (*p == '/') p++; }
     if (ns) { if (record_kept(r, k, "pathname")) { Ref path = compose(seg, ns, ref_above(seg, ns)); path.said = 0; record_part(r, out, &n, cap, k, "pathname", path); } k++;
@@ -60,20 +67,10 @@ size_t file_record(const Recipe *r, const File *f, Ref *out, size_t cap){
     #undef WHEN
     return n;
 }
-/* The OS's record of a file as one node, the first part of its metadata tree: computed from stat alone, before a byte
- * of the file is read, so a file whose trunk is recorded is found by it (ingest.c, files_recorded). 0: none. */
+/* What the file is within its source, as one node: the first part of its metadata tree. Content only: no host path,
+ * no inode, owner, device or time, and no digest of the program or recipe that reads it. 0: none. */
 int file_os(const Recipe *r, const File *f, Ref *out){
     Ref m[32]; size_t n = file_record(r, f, m, 32); if (!n) return 0;
-    uint8_t environment[32], program[32], stock[32], digest[32];
-    program_environment_hash(environment); recipe_reading_hash(r, program); recipe_reading_hash(stock_file, stock);
-    blake3_hasher hash; blake3_hasher_init(&hash);
-    blake3_hasher_update(&hash, environment, sizeof environment); blake3_hasher_update(&hash, program, sizeof program);
-    blake3_hasher_update(&hash, stock, sizeof stock); blake3_hasher_finalize(&hash, digest, sizeof digest);
-    static const char hex[] = "0123456789abcdef"; uint8_t text[64];
-    for (unsigned i = 0; i < sizeof digest; i++) { text[2 * i] = hex[digest[i] >> 4]; text[2 * i + 1] = hex[digest[i] & 15]; }
-    if (n == 32) { fputs("file metadata has no room for its reading contract\n", stderr); exit(1); }
-    Ref contract[2] = {string_ref((const uint8_t *)"reading contract", 16), string_ref(text, sizeof text)};
-    m[n++] = said_tuple(compose(contract, 2, ref_above(contract, 2)));
     *out = compose(m, (uint32_t)n, ref_above(m, n)); out->said = 0; return 1;
 }
 /* The file, read: every part of its outermost tier on every core, joined in the file's order; then its trunk, over

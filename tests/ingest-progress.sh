@@ -73,7 +73,7 @@ root_reference(){
 before=$(root_reference "$conn")
 standing_before=$("$psql" -XwAt -v ON_ERROR_STOP=1 -d "$conn" -c 'SELECT jsonb_agg(to_jsonb(c) ORDER BY claim) FROM public.consensus c')
 "$L" ingest -d "$conn" -j 2 unicode > "$scratch/replay.log" 2>&1 || { cat "$scratch/replay.log"; exit 1; }
-grep -q 'files recorded already' "$LAPLACE_WORK/logs/ingest/unicode.log"
+grep -Eq 'which say nothing again: [1-9]' "$LAPLACE_WORK/logs/ingest/unicode.log"
 [[ "$before" == "$(root_reference "$conn")" ]] || { echo 'unchanged precheck changed the source reference'; exit 1; }
 # A missing operational measurement is recovered from retained testimony. It
 # does not replay the source or invoke the standing solver.
@@ -98,7 +98,7 @@ SQL
 # or indexed reference must give the same source geometry as a cold reading.
 printf 'Unicode fixture description\n' > "$LAPLACE_DATA/UCD/Public/UCD/latest/ReadMe.txt"
 "$L" ingest -d "$conn" -j 2 unicode > "$scratch/partial-replay.log" 2>&1 || { cat "$scratch/partial-replay.log"; exit 1; }
-grep -q 'files recorded already' "$LAPLACE_WORK/logs/ingest/unicode.log"
+grep -Eq 'which say nothing again: [1-9]' "$LAPLACE_WORK/logs/ingest/unicode.log"
 cold_conn="host=${PGHOST:-/tmp} port=${PGPORT:-5432} user=${PGUSER:-laplace} dbname=$cold"
 "$L" deploy -d "$cold_conn" > "$scratch/cold-deploy.log" 2>&1 || { cat "$scratch/cold-deploy.log"; exit 1; }
 "$L" ingest -d "$cold_conn" -j 2 unicode > "$scratch/cold.log" 2>&1 || { cat "$scratch/cold.log"; exit 1; }

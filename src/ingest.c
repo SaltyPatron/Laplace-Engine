@@ -25,6 +25,15 @@ typedef struct {
 static int stream_window_flush(StreamWindow *window){
     if (!window->nroots && !window->events.n && !window->ncomplete) return 0;
     File batch = {.said=window->roots, .nsaid=window->nroots, .ev=window->events};
+    if (window->ncomplete) {                                          /* recorded trunks, asked once for the window before it loads */
+        lp_id *ids = malloc(window->ncomplete * sizeof *ids); size_t n = 0;
+        if (!ids) { perror("recorded file trunks"); return 1; }
+        for (size_t i=0; i<window->ncomplete; i++) if (window->complete[i]->has_file) ids[n++] = window->complete[i]->file.id;
+        if (n) { uint8_t *recorded = db_recorded(window->conninfo, ids, (uint64_t)n);
+            for (size_t i=0; i<n; i++) window->stats->known += recorded[i] != 0;
+            free(recorded); }
+        free(ids);
+    }
     if (load(window->conninfo, window->threads, &batch, 1, window->stats)) return 1;
     /* A composed-file receipt means its Native closure has been committed,
      * even when other files shared that apply. Never report it early. */
@@ -280,31 +289,10 @@ int cmd_ingest(int argc, char **argv){
         return 0;
     }
 
-    /* Unchanged published files are found from stat metadata before opening
-     * their contents. Novel files are subsequently pruned trunk to leaf. */
+    /* Every file is read: a file is known by its trunk, which is content alone, so an unchanged file is found only once it is
+     * decomposed, and pruned there trunk to leaf with everything beneath it (files_known). */
     fflush(stdout); /* Keep catalog/coverage output before any worker's failure in redirected logs. */
-    int nknown = 0; ctx_open(threads);
-    /* Reading a reference depends on the source's provider estate, not only
-     * this file's bytes. Stat/reader identities suffice to invalidate that
-     * context before any input is opened. Files that never perform a lookup
-     * retain their ordinary file-only precheck. */
-    lp_id *identities=calloc((size_t)nfiles,sizeof *identities);
-    if(nfiles && !identities){perror("source reading context");return 1;}
-    for(int i=0;i<nfiles;i++) if(!files[i].skipped){Ref os;if(file_os(files[i].recipe,&files[i],&os))identities[i]=os.id;}
-    for(int i=0;i<nfiles;i++) {
-        int first=0;while(first<i && files[first].source!=files[i].source)first++;
-        if(first<i){memcpy(files[i].reading_context,files[first].reading_context,32);continue;}
-        blake3_hasher hash;blake3_hasher_init(&hash);
-        for(int j=0;j<nfiles;j++)if(!files[j].skipped && files[j].source==files[i].source)blake3_hasher_update(&hash,identities[j].b,sizeof identities[j].b);
-        blake3_hasher_finalize(&hash,files[i].reading_context,32);
-    }
-    free(identities);
-    if (do_load) { double tk = now(); nknown = files_recorded(conninfo, files, nfiles); if (nknown < 0) return 1; if (nknown) fprintf(stderr, "  %d files recorded already, found by the OS's record of them, not read (%.2f s)\n", nknown, now() - tk); }
-    int restore_keys = 0;
-    /* Restoring a provider's complete declaration table is needed only when
-     * pending work reads keys. Local-program references can cross files too;
-     * say_refers() lists only external recipes and would miss those readers. */
-    for (int i = 0; i < nfiles; i++) if (!files[i].known && !files[i].skipped && say_reads_keys(files[i].recipe)) { restore_keys = 1; break; }
+    ctx_open(threads);
 
     /* ---- a batch at a time: decomposed on every core, recomposed and compared, recorded, and the table emptied for
      * the next. A file too long for one batch is read a stretch at a time, if its records can be parted. */
@@ -331,7 +319,6 @@ int cmd_ingest(int argc, char **argv){
     for (int i=0; i<nfiles && preview_streaming; i++)
         if (!files[i].skipped && (say_has_keys(files[i].recipe) || say_refers(files[i].recipe,0))) preview_streaming=0;
     say_source_begin();
-    st.known += (uint64_t)nknown;                                            /* found by their OS record, never read */
     uint64_t *size = calloc((size_t)nfiles, 8);
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
         size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
@@ -343,7 +330,6 @@ int cmd_ingest(int argc, char **argv){
     /* Keep the recorded-key reader and its Native backend caches alive for
      * this source. Opening a backend for each known file discards those
      * caches and repeats connection/library initialization on every replay. */
-    PGconn *key_reader = NULL;
     for (int a0 = 0; a0 < nfiles; ) {
         int b0 = a0; uint64_t sum = 0;
         int streaming = (do_load || preview_streaming) && !files[a0].known && !files[a0].skipped && recipe_record_streamable(files[a0].recipe);
@@ -374,10 +360,6 @@ int cmd_ingest(int argc, char **argv){
             /* Source-rank declarations must arrive in canonical file order.
              * Each file's grammar records still run on all worker lanes. */
             for (int i = a0; i < b0; i++) {
-                if (restore_keys && files[i].known && say_has_keys(files[i].recipe)) {
-                    if (!key_reader) key_reader = db_connect(conninfo);
-                    if (load_file_keys(key_reader, &files[i])) { PQfinish(key_reader); return 1; }
-                }
                 if (files[i].known || files[i].skipped) continue;
                 progress_file("file-start", &files[i]);
                 decompose_file(CTX[0], &files[i]); if (!do_load) progress_file("file-composed", &files[i]); bytes += files[i].bytes; done++;
@@ -400,7 +382,7 @@ int cmd_ingest(int argc, char **argv){
                 #pragma omp critical
                 {
                     bytes += files[i].bytes; done++;
-                    if(progress_console()) fprintf(stderr, "\r  %d/%d files  %.1f MB  %.1f MB/s  %'llu nodes   ", done, nfiles - nknown, bytes / 1e6, bytes / 1e6 / (now() - t), (unsigned long long)table_count());
+                    if(progress_console()) fprintf(stderr, "\r  %d/%d files  %.1f MB  %.1f MB/s  %'llu nodes   ", done, nfiles, bytes / 1e6, bytes / 1e6 / (now() - t), (unsigned long long)table_count());
                 }
             }
         }
@@ -425,7 +407,7 @@ int cmd_ingest(int argc, char **argv){
             if (streaming) {
                 if (stream_window_add(&window, &files[a0])) return 1;
             } else {
-                ingest_known(conninfo, files + a0, b0 - a0);
+                st.known += (uint64_t)ingest_known(conninfo, files + a0, b0 - a0);   /* recorded trunks: pruned whole, said nothing again */
                 fold_events(fold, files + a0, b0 - a0);
                 if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1;
             }
@@ -445,7 +427,6 @@ int cmd_ingest(int argc, char **argv){
         }
         a0 = b0;
     }
-    if (key_reader) PQfinish(key_reader);
     double source_finish = now(), database_before = completion.database_seconds;
     if (say_source_end(source_file_ready, &completion)) return 1;
     t_dec += now() - source_finish - (completion.database_seconds - database_before);

@@ -30,7 +30,6 @@
 #define show_entities lp_ingest_show_entities
 #define show_record_events lp_ingest_show_record_events
 #define ingest_every lp_ingest_every
-#define files_recorded lp_ingest_files_recorded
 #define ingest_highway lp_ingest_highway
 
 extern char **paths;
@@ -47,7 +46,6 @@ void tsv_record(const lp_id *id, unsigned position);
 void show_entities(const char *conninfo, int ask);
 void show_record_events(const File *file);
 int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int nrec, const int *want);
-int files_recorded(const char *conninfo, File *files, int nfiles);
 int ingest_highway(const char *conninfo, const char *t0p, int threads, int do_load);
 
 #endif

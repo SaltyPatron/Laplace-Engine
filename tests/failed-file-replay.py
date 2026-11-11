@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -74,7 +75,7 @@ def main():
                 before = sql(query)
                 assert before != 'null', 'Corrected reading published no testimony'
                 replay = ingest(name, 0)
-                assert '1 files recorded already' in replay and sql(query) == before, 'Accepted file lost exact cached replay'
+                assert re.search(r'which say nothing again: 1\b', replay) and sql(query) == before, 'Accepted file lost exact cached replay'
             print(json.dumps({'rejected_replays': 'failed twice without witnesses',
                               'corrected_readings': 'published and replayed exactly', 'cases': len(cases)}))
         finally:

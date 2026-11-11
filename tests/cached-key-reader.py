@@ -81,9 +81,8 @@ def main():
                 before = int(sql(warm, 'SELECT sessions FROM pg_stat_database WHERE datname=current_database()'))
                 report = run(warm, 'replay')
                 after = int(sql(warm, 'SELECT sessions FROM pg_stat_database WHERE datname=current_database()'))
-                assert f'{count} files recorded already' in report, report
-                restored = len(re.findall('compiled reference bindings from recorded metadata:', report))
-                assert restored == count, (restored, count, report)
+                # The unchanged providers are read and found recorded by their content trunks; nothing is restored from metadata.
+                assert re.search(rf'which say nothing again: {count}\b', report), report
                 deltas.append(after - before)
                 cold = database('cold')
                 run(cold, 'cold')
@@ -95,7 +94,7 @@ def main():
                 expected = sql(cold, query)
                 actual = sql(warm, query)
                 assert expected and actual == expected, ('Warm and cold source references differ', actual, expected)
-                print(f'cached-key-reader: {count} recorded providers, {restored} real restores, {deltas[-1]} sessions', flush=True)
+                print(f'cached-key-reader: {count} recorded providers, {deltas[-1]} sessions', flush=True)
             assert deltas[0] == deltas[1], ('Cached providers increased the session count', deltas)
             print('cached-key-reader: constant connection count and identical warm/cold canonical source references')
     finally:
