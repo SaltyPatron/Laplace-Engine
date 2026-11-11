@@ -22,8 +22,9 @@ content *
 together row
 value - generation_method
 relation "the prompt used for generation" prompt
-relation "the probability predicted by our corresponding RoBERTa model" roberta_prediction
 relation "whether or not the prompt is toxic" prompt_label
 relation "the target group of the prompt" group
-attest row prompt generation_method roberta_prediction
+attest row prompt generation_method
 attest row prompt_label group of prompt
+# The ratings the set holds (the 1-5 harm and intent scales, the model probability, the time) are quantities, no claim's
+# value: they stay in the row, the record, beside the text, and are attested of nothing. The categorical verdicts are attested.

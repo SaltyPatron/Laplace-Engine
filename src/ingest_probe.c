@@ -226,6 +226,7 @@ void show_record_events(const File *file){
         show_tuple(&event->claim);
         if (event->position) printf("   #%u", event->position);
         if (event->score != 1.0f) printf("   score %.3g", (double)event->score);
+        if (event->run > 1) printf("   games %u", (unsigned)event->run);
         putchar('\n');
     }
 }

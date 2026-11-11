@@ -31,16 +31,18 @@ type synset_offset ili as \0-{pos} as \0-s
 relation "synset containing lemma" synset_offset
 attest line synset_offset
 # "ptr_symbol: A space separated list of p_cnt different types of pointers that lemma has in all synsets containing
-# it": each as WordNet writes it (@, ~, !, ...)
-content ptr_symbol
-relation "type of pointer that lemma has in all synsets containing it" ptr_symbol
-# each in its own group (counted p_cnt), said of the lemma the line is
-attest pointer ptr_symbol
-# "tagsense_cnt: Number of senses of lemma that are ranked according to their frequency of occurrence in semantic
-# concordance texts": a number the index states, an observation
-content tagsense_cnt
-relation "number of senses of lemma that are ranked according to their frequency of occurrence in semantic concordance texts" tagsense_cnt
-attest line tagsense_cnt
+# it": each as WordNet writes it (@, ~, !, ...), which is the file's markup. The relation is what wninput.5WN says the
+# symbol is (hypernym, hyponym, member meronym, ...), said of the lemma the line is, in its own group (counted p_cnt).
+# An adverb's backslash is "Derived from adjective", an adjective's "Pertainym".
+when ^line/pos is r
+type ptr_symbol wnpointer vocabulary wordnet-pointer-adverb node
+always
+when ^line/pos is-not r
+type ptr_symbol wnpointer vocabulary wordnet-pointer node
+always
+pair pointer ptr_symbol
 # synset_cnt and p_cnt count what follows; sense_cnt: "Same as sync_cnt above. This is redundant, but the field was
-# preserved for compatibility reasons": the file's layout, read by nothing
-omit synset_cnt p_cnt sense_cnt
+# preserved for compatibility reasons": the file's layout, read by nothing. tagsense_cnt, "Number of senses of lemma that
+# are ranked according to their frequency of occurrence in semantic concordance texts", is a count the semantic
+# concordance measures (the tag counts are cntlist's, and become the attestation's games): it is no claim's value.
+omit synset_cnt p_cnt sense_cnt tagsense_cnt

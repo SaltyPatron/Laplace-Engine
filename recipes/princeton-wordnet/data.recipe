@@ -61,7 +61,15 @@ attest row gloss
 # synset_offset". A lexical pointer (source/target not 0000: "the word number in the current (source) synset ... and
 # the word number in the target synset") resolves each byte index within its
 # canonical synset. Only the selected words enter the lexical relation.
-content pointer_symbol
+# The symbol is WordNet's markup; the relation is what wninput.5WN says it is (hypernym, hyponym, instance hypernym, member
+# meronym, antonym, ...), read from the vocabulary of that page, and is the only one of the two a claim holds. An
+# adverb's backslash is "Derived from adjective", an adjective's "Pertainym".
+when ^row/ss_type is r
+type pointer_symbol wnpointer vocabulary wordnet-pointer-adverb node
+always
+when ^row/ss_type is-not r
+type pointer_symbol wnpointer vocabulary wordnet-pointer node
+always
 value - pointer_symbol
 type target ili as \0-{pos} as \0-s
 omit pos
