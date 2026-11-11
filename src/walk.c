@@ -68,55 +68,37 @@ int walk_up(PGconn *pg,Dag *d, const lp_id *claims, size_t n, uint64_t *rows){
     lp_vec_free(&vx); lp_idmap_free(front); return level;
 }
 
-/* ---- the witnesses: a trunk in the attestation table, and its trust */
+/* ---- the witnesses: a trunk in the attestation table, and its trust (laplace_witness_trust: one index probe each) */
 void witnesses_known(PGconn *pg, Root *r, size_t n){
     lp_id *ids = malloc(sizeof(lp_id) * (n + 1)); for (size_t i = 0; i < n; i++) ids[i] = r[i].id;
-    Args q = { 0 }; arg_ids(&q, ids, n); PGresult *w = ask_once(pg, "SELECT DISTINCT ON (witness) witness, trust FROM @extschema@.attestation WHERE witness OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[]) ORDER BY witness, lineage NULLS FIRST", &q);
+    Args q = { 0 }; arg_ids(&q, ids, n); PGresult *w = ask_once(pg, "SELECT witness, trust FROM @extschema@.laplace_witness_trust($1::@extschema@.blake3[])", &q);
     for (int j = 0; j < PQntuples(w); j++) for (size_t k = 0; k < n; k++) if (!memcmp(col_id(w, j, 0), &r[k].id, 16)) { r[k].witness = 1; r[k].trust = col_f64(w, j, 1); }
     PQclear(w); args_free(&q); free(ids);
 }
 
-/* Who said these claims: one row a claim and the trunk above it, with what the records under it said of the claim. */
+/* Who said these claims: one row a claim and the witness trunk above it, read from the attestation records. Every
+ * supported extension has laplace_attested, so there is no probe and no containment walk-up fallback: a probe cached for
+ * the process outlived an extension upgrade and sent every read up the containment DAG instead. */
 Attested *attested(PGconn *pg, const lp_id *claims, int n, int *nout, uint64_t *rows){
     *nout = 0; if (n <= 0) return NULL;
-    static int has_pg_attested = -1;
-    if (has_pg_attested < 0) {
-        PGresult *pr = ask_once(pg, "SELECT to_regprocedure('@extschema@.laplace_attested(@extschema@.blake3[])') IS NOT NULL", NULL);
-        has_pg_attested = (PQntuples(pr) > 0 && PQgetvalue(pr, 0, 0)[0] == 't') ? 1 : 0;
-        PQclear(pr);
+    Args q = { 0 }; arg_ids(&q, claims, (size_t)n);
+    PGresult *r = ask_once(pg, "SELECT claim, trunk, games, tokens, score, \"position\", trust, witness FROM @extschema@.laplace_attested($1::@extschema@.blake3[])", &q);
+    args_free(&q);
+    int nr = PQntuples(r); if (rows) *rows += (uint64_t)nr;
+    Attested *out = calloc((size_t)(nr ? nr : 1), sizeof(Attested));
+    for (int i = 0; i < nr; i++) {
+        out[i].claim    = *col_id(r, i, 0);
+        out[i].trunk    = *col_id(r, i, 1);
+        out[i].games    = col_f64(r, i, 2);
+        out[i].tokens   = col_f64(r, i, 3);
+        out[i].score    = col_f64(r, i, 4);
+        out[i].position = (uint32_t)col_int(r, i, 5);
+        out[i].trust    = col_f64(r, i, 6);
+        out[i].witness  = PQgetvalue(r, i, 7)[0] != 0;
     }
-    if (has_pg_attested) {
-        Args q = { 0 }; arg_ids(&q, claims, (size_t)n);
-        PGresult *r = ask_once(pg, "SELECT claim, trunk, games, tokens, score, \"position\", trust, witness FROM @extschema@.laplace_attested($1::@extschema@.blake3[])", &q);
-        args_free(&q);
-        int nr = PQntuples(r); if (rows) *rows += (uint64_t)nr;
-        Attested *out = calloc((size_t)(nr ? nr : 1), sizeof(Attested));
-        for (int i = 0; i < nr; i++) {
-            out[i].claim    = *col_id(r, i, 0);
-            out[i].trunk    = *col_id(r, i, 1);
-            out[i].games    = col_f64(r, i, 2);
-            out[i].tokens   = col_f64(r, i, 3);
-            out[i].score    = col_f64(r, i, 4);
-            out[i].position = (uint32_t)col_int(r, i, 5);
-            out[i].trust    = col_f64(r, i, 6);
-            out[i].witness  = PQgetvalue(r, i, 7)[0] != 0;
-        }
-        PQclear(r);
-        *nout = nr;
-        return out;
-    }
-    Dag d = { 0 }; uint64_t rd_rows = 0; walk_up(pg,&d, claims, (size_t)n, &rd_rows); if (rows) *rows += rd_rows;
-    lp_vec(Root) roots = { 0 }; lp_vec(size_t) at = { 0 };
-    for (size_t i = (size_t)n; i < d.nn; i++) if (!d.n[i].nparents) { lp_push(&roots, (Root){ d.n[i].id, 0, 0, 0 }); lp_push(&at, i); }
-    witnesses_known(pg, roots.v, roots.n);
-    lp_vec(Attested) out = { 0 };
-    for (size_t r = 0; r < roots.n; r++) {
-        double *cnt = down_from(&d, at.v[r]); lp_idmap *pc = lp_idmap_sized(sizeof(Tally)); tally_under(&d, cnt, pc, NULL);
-        for (size_t i = 0; i < lp_idmap_count(pc); i++) { const Tally *t = lp_idmap_at(pc, i); if (t->games <= 0) continue;
-            Attested a = { lp_idmap_keys(pc)[i], roots.v[r].id, t->games, t->tokens, t->score, t->position, roots.v[r].trust, roots.v[r].witness }; lp_push(&out, a); }
-        lp_idmap_free(pc); free(cnt); }
-    lp_vec_free(&roots); lp_vec_free(&at); dag_free(&d);
-    *nout = (int)out.n; return out.v;
+    PQclear(r);
+    *nout = nr;
+    return out;
 }
 
 /* ---- down: from a trunk to every claim its records say. What a node is follows from how it was reached:
