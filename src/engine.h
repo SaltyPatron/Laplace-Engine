@@ -330,6 +330,21 @@ void tiers_of(PGconn *pg,const lp_id *ids,int n,int *tiers); /* -1 for absent ID
 Hold *paths_of(PGconn *pg,const lp_id *ids,int n,int *nout);
 /* All-member count remains in PostgreSQL. kind: 0 observations, 1 claims, -1 both. */
 long holds_count(PGconn *pg,const lp_id *keys,int nkeys,int kind);
+/* Up the container index from keys to the files that hold them (read.c): one indexed frontier a level. A holder whose
+ * first vertex is the OS's record of a file is that file, and the walk stops there. by = HELD_CONTENT: through every
+ * path that holds a node as content, never through a file's record (a name held only as metadata, a file called so, is
+ * no occurrence). by = HELD_NAME: through the record only: up from a name to the files whose record holds it, and a file
+ * reached through its content is not one. Each node carries the keys below it (bit k: keys[k], for k < 64), propagated
+ * up as they arrive, so the lowest node holding a set of keys is their common ancestor. node[k] is keys[k] (the keys are
+ * distinct); an edge is parent and child by node index. cap >= 0: a key with more direct holders of a kind than cap is
+ * a hub, its bit is set in hub, and its holders of that kind are not walked (cap < 0 walks every key). max_nodes bounds
+ * the walk: cut says it stopped there. */
+enum { HELD_CONTENT = 0, HELD_NAME = 1 };
+typedef struct { lp_id id; uint64_t keys; uint8_t file; } Held;
+typedef struct { uint32_t parent, child; uint8_t said; } HeldEdge;   /* said: the child's role in the parent's path (LP_SAID_*) */
+typedef struct { Held *node; size_t n; HeldEdge *edge; size_t ne; uint64_t hub; int levels, cut; } HeldUp;
+void held_up(PGconn *pg,const lp_id *keys,int nkeys,int by,int cap,size_t max_nodes,HeldUp *out);
+void held_up_free(HeldUp *);
 int tier_max(PGconn *pg,const lp_id *ids,int n);
 #define ARGS_MAX 8
 enum { SQL_ID_ARRAY=2 }; /* binary payload whose element OID binds at execution */

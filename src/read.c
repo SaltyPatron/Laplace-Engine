@@ -102,3 +102,63 @@ long holds_count(PGconn *pg,const lp_id *keys,int n,int kind){
         " WHERE $2::smallint<0 OR (mask OPERATOR(@extschema@.?) 0::smallint)=($2::smallint=1)",&args);
     long count=(long)col_int(rows,0,0);PQclear(rows);args_free(&args);return count;
 }
+
+/* Up the container index to the files (engine.h, held_up). The front is the nodes whose keys changed at the level
+ * before; each holder of a front node takes the keys of every front node it holds (by content, or by its record), and
+ * is in the next front when it is new or its keys grew, unless it is a file. Keys only grow, so a node re-enters the
+ * front at most once a key. */
+static size_t held_node(HeldUp *out,lp_idmap *at,size_t *cap,const lp_id *id,bool *fresh){
+    size_t i=lp_idmap_put(at,id,fresh);
+    if(*fresh){lp_reserve((void **)&out->node,cap,out->n+1,sizeof *out->node);out->node[out->n++]=(Held){.id=*id};}
+    return i;
+}
+void held_up(PGconn *pg,const lp_id *keys,int nkeys,int by,int cap,size_t max_nodes,HeldUp *out){
+    memset(out,0,sizeof *out);
+    if(nkeys<=0)return;
+    lp_idmap *at=lp_idmap_new(),*front=lp_idmap_new();
+    lp_strmap *pairs=lp_strmap_sized(1);
+    size_t ncap=0,ecap=0;lp_vec(lp_vertex) vx={0};
+    for(int k=0;k<nkeys;k++){
+        bool fresh;size_t i=held_node(out,at,&ncap,keys+k,&fresh);
+        if(k<64)out->node[i].keys|=1ull<<k;
+        lp_idmap_put(front,keys+k,NULL);
+    }
+    while(lp_idmap_count(front) && out->levels<128 && !out->cut){
+        int nh=0;Hold *h;
+        if(out->levels==0 && cap>=0){
+            int *hub=calloc((size_t)nkeys*2,sizeof *hub);
+            h=holds_capped(pg,lp_idmap_keys(front),(int)lp_idmap_count(front),cap,0,3,hub,&nh);
+            for(int k=0;k<nkeys && k<64;k++)if(hub[2*k] || hub[2*k+1])out->hub|=1ull<<k;
+            free(hub);
+        }else h=holds_any(pg,lp_idmap_keys(front),(int)lp_idmap_count(front),&nh);
+        lp_idmap *next=lp_idmap_new();
+        for(int j=0;j<nh && !out->cut;j++){
+            size_t nv=lp_path_vertices(h[j].path,(size_t)h[j].path_len,NULL,0);if(!nv)continue;
+            lp_vec_reserve(&vx,nv);lp_path_vertices(h[j].path,(size_t)h[j].path_len,vx.v,nv);
+            int file=vx.v[0].said==LP_SAID_METADATA;size_t parent=SIZE_MAX;uint64_t before=0;bool grew=false;
+            /* by name, a file is reached through its record (its first vertex) and nothing else that is a file counts */
+            if(by==HELD_NAME && file && lp_idmap_find(front,&vx.v[0].id)<0)continue;
+            for(size_t v=0;v<nv;v++){
+                if(lp_idmap_find(front,&vx.v[v].id)<0)continue;
+                if(by==HELD_CONTENT ? vx.v[v].said==LP_SAID_METADATA : file && v>0)continue;
+                int64_t child=lp_idmap_find(at,&vx.v[v].id);if(child<0)continue;
+                if(parent==SIZE_MAX){
+                    bool fresh;
+                    if(lp_idmap_find(at,&h[j].entity)<0 && out->n>=max_nodes){out->cut=1;break;}
+                    parent=held_node(out,at,&ncap,&h[j].entity,&fresh);
+                    out->node[parent].file|=(uint8_t)file;grew=fresh;before=out->node[parent].keys;
+                }
+                out->node[parent].keys|=out->node[child].keys;
+                uint64_t key=((uint64_t)parent<<32)|(uint64_t)child;bool added;
+                lp_strmap_put(pairs,&key,sizeof key,&added);
+                if(added){lp_reserve((void **)&out->edge,&ecap,out->ne+1,sizeof *out->edge);
+                    out->edge[out->ne++]=(HeldEdge){(uint32_t)parent,(uint32_t)child,(uint8_t)vx.v[v].said};}
+            }
+            if(parent!=SIZE_MAX && !file && (grew || out->node[parent].keys!=before))
+                lp_idmap_put(next,&out->node[parent].id,NULL);
+        }
+        holds_free(h,nh);lp_idmap_free(front);front=next;out->levels++;
+    }
+    lp_vec_free(&vx);lp_idmap_free(front);lp_idmap_free(at);lp_strmap_free(pairs);
+}
+void held_up_free(HeldUp *u){free(u->node);free(u->edge);memset(u,0,sizeof *u);}
