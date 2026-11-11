@@ -21,8 +21,8 @@ content lemma pos qualifier weight surfaceText contributor
 type lexicalization.language language
 
 # Universal POS is attached beside the source's own category, so adjective
-# satellites keep their 's' identity while sharing the ADJ highway class.
-type pos.category upos vocabulary wordnet-pos
+# satellites keep their 's' identity while sharing the ADJ highway class (the wordnet-pos tagset's edge).
+type pos.category upos crosswalk wordnet-pos
 
 thing concept resolved lexicalization/lemma required lexicalization/language required pos pos/category qualifier
 thing edge preserve start rel/2 end

@@ -326,7 +326,7 @@ static void compile_targets(Say *say, Dis *rules, int count, const char *recipe)
                         if (!value || !strcmp(say->dis[z].name,qualified)) value=&say->dis[z];
                     }
                     int literal=value && !conditional && (value->what==D_KEY || value->what==D_CONTENT ||
-                        (value->what==D_TYPE && value->k.node && !value->k.vocabulary && !value->k.has_re && !value->k.nas));
+                        (value->what==D_TYPE && value->k.node && !value->k.vocabulary && !value->k.crosswalk[0] && !value->k.has_re && !value->k.nas));
                     for (int z=0; literal && z<say->nthing; z++) {
                         const Thing *thing=&say->thing[z];
                         if (strcmp(thing->tier,key->tier)) continue;

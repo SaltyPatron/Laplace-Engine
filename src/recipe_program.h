@@ -18,7 +18,8 @@ typedef struct KeyProgram KeyProgram;
 typedef struct DiagnosticLabel DiagnosticLabel;
 typedef struct { char canonical[64]; uint16_t length; } VocabularyValue;
 typedef struct { char list[32], path[160], as[4][64]; int nas; regex_t re; int has_re, node; KeyProgram *program;
-                 lp_strmap *vocabulary; char vocabulary_name[64]; } KSpec; /* immutable, field-scoped vocabulary */
+                 lp_strmap *vocabulary; char vocabulary_name[64];
+                 char crosswalk[32]; } KSpec; /* immutable, field-scoped vocabulary; or the highway tagset whose edges reach the type */
 typedef struct Dis Dis;
 enum { RECIPE_ARGUMENT_BYTES = 256 };
 typedef struct { char name[64]; uint16_t length, tier_id, scope_key; uint8_t within, local, constructor; lp_id domain; const Dis *constructor_value; } TargetCode;

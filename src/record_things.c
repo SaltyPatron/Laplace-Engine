@@ -345,6 +345,15 @@ void record_vocabulary_evidence(RecordWorker *k, const SemanticRecord *t){
             Ref parts[3]={said_tuple(compose(notation,2,ref_above(notation,2))),string_ref((const uint8_t *)"refers to",9),target};
             record_emit_claim_once(k,parts,3); continue;
         }
+        if (d->what==D_TYPE && d->k.crosswalk[0]) {
+            /* The source's notation and the type the highway's crosswalk reaches from it; a category of the tagset's
+             * own (no edge) denotes nothing, and is said as written. */
+            Ref canonical; if (!record_value(k,t,(int32_t)i,&canonical,0)) continue;
+            Ref written=record_text(x->val,x->vlen); if (lp_id_eq(&canonical.id,&written.id)) continue;
+            Ref notation[2]={string_ref((const uint8_t *)d->k.crosswalk,strlen(d->k.crosswalk)),written};
+            Ref parts[3]={said_tuple(compose(notation,2,ref_above(notation,2))),string_ref((const uint8_t *)"denotes",7),canonical};
+            record_emit_claim_once(k,parts,3); continue;
+        }
         if (d->what==D_TYPE && !d->k.vocabulary && d->ntargets==1 &&
             (d->k.node || (HW && lp_highway_list(HW,d->targets[0].name) && !lp_highway_bank(HW,d->targets[0].name)))) {
             Ref identifier; if (!record_value(k,t,(int32_t)i,&identifier,0)) continue;

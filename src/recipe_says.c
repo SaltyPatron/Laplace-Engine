@@ -418,7 +418,18 @@ int say_says(Recipe *r, const char *path, char *tok){
                     }
                     continue;
                 }
+                /* A tagset the highway lists (manifest/slots), with edges to the target list: the source's spelling is
+                 * a key of the tagset, and the tagset's type reaches the target's type by its one edge. */
+                if (!strcmp(more,"crosswalk")) {
+                    if (ks.vocabulary || ks.crosswalk[0] || strchr(a2,' ') || !name_next(&at,more,sizeof more) || !*more || strlen(more)>=sizeof ks.crosswalk) {
+                        fprintf(stderr,"%s: type FIELD LIST crosswalk TAGSET (one target list)\n",path); return -1;
+                    }
+                    snprintf(ks.crosswalk,sizeof ks.crosswalk,"%s",more); continue;
+                }
                 if(!target_append(a2,sizeof a2,more,path))return -1; }
+            if (ks.crosswalk[0] && (ks.vocabulary || ks.has_re || ks.nas || ks.node || strchr(a2,' '))) {
+                fprintf(stderr,"%s: crosswalk lookup takes one list and the source spelling directly\n",path); return -1;
+            }
             if (ks.vocabulary && (ks.has_re || ks.nas || strchr(a2,' '))) {
                 fprintf(stderr,"%s: vocabulary lookup takes one list and the source spelling directly\n",path); return -1;
             }
