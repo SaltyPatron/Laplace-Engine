@@ -290,7 +290,6 @@ void  fold_events(Fold *, const File *files, int nfiles);
 typedef struct { lp_id claim, trunk; double games, tokens, score; uint32_t position; double trust; int witness; } Attested;
 Attested *lp_provenance_of(PGconn *, const lp_id *, size_t, int files, int *nout);
 Attested *attested(PGconn *pg, const lp_id *claims, int n, int *nout, uint64_t *rows);
-lp_id *trunk_claims(PGconn *pg, const lp_id *trunk, size_t *n);            /* the claims a trunk's records say: a walk down */
 int standings_replay(PGconn *pg, const lp_id *claims, size_t n, uint64_t *played, uint64_t *orphaned);   /* their standings again, from the witnesses that hold them */
 int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers, uint64_t n);   /* every one of them recorded (in its tier's partition) */
 int merge(const char *conninfo, int npg, LoadStats *stats); /* source publication and its measured assertions */
