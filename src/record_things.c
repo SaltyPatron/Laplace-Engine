@@ -140,6 +140,9 @@ static int one_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, const 
                 p[z]=thing_operand(th,p[z],k->s,NULL); continue;
             }
             int32_t c = record_select_first(t, g, th->name[z]); if (c < 0) return 0;
+            if (th->product_id[z]) {                                         /* the part read as its native grammar's product, not its content */
+                if (!record_product(k, t, c, th->product_id[z], &p[z], depth)) return 0;
+                p[z].said = 0; continue; }
             if (th->form[z].has_re || th->space[z]) {                        /* the part's text as the source's notation parts it: what it writes, never what it is disposed as */
                 const SemanticValue *cn = &t->n[c]; if (cn->kind == S_GROUP && record_field_first(cn) >= 0 && record_field_next(&t->n[record_field_first(cn)]) < 0 && t->n[record_field_first(cn)].kind == S_TEXT) cn = &t->n[record_field_first(cn)];
                 if (cn->kind == S_GROUP || record_value_empty(k->s, cn)) return 0;
@@ -371,4 +374,13 @@ void record_vocabulary_evidence(RecordWorker *k, const SemanticRecord *t){
             string_ref((const uint8_t *)"denotes",7),canonical};
         record_emit_claim_once(k,parts,3);
     }
+}
+
+int record_held_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, Ref *out){
+    int r = record_thing(k, t, g, out, 0); if (!r) return 0;
+    const Thing *th = &k->s->thing[r - 1];
+    if (th->n != 1 || !th->product_id[0] || th->of || th->span || th->resolved || th->within || th->infile) return r;
+    int32_t c = record_select_first(t, g, th->name[0]); Ref content;
+    if (c >= 0 && record_value(k, t, c, &content, 0)) { content.said = 0; *out = content; }
+    return r;
 }

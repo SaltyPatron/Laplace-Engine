@@ -192,6 +192,12 @@ add_executable(reader_depth EXCLUDE_FROM_ALL tests/reader-depth.c)
 laplace_utf8_executable(reader_depth)
 target_compile_options(reader_depth PRIVATE ${LP_C_FLAGS} -UNDEBUG)
 target_link_libraries(reader_depth PRIVATE laplace_engine_reader laplace_text)
+# The reader's chess (chess_rules.c): the IDs a reader such as Laplace-MCP gives a FEN and a line (tests/opening-lines.sh).
+add_executable(chess_positions EXCLUDE_FROM_ALL tests/chess-positions.c)
+laplace_utf8_executable(chess_positions)
+target_compile_options(chess_positions PRIVATE ${LP_C_FLAGS} -UNDEBUG)
+target_compile_definitions(chess_positions PRIVATE "LAPLACE_GRAMMARS_DEFAULT=\"${LAPLACE_GRAMMARS}\"")
+target_link_libraries(chess_positions PRIVATE laplace_engine_reader laplace_text)
 # One relocatable recipe runtime is consumed by the modular CLI and managed hosts.
 # Its executable is the canonical Engine, with the same compiled grammars and estate.
 install(TARGETS laplace_engine

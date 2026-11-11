@@ -256,9 +256,13 @@ typedef struct NativeGrammar {
     void (*input)(const Recipe *, File *, const struct SInput *);          /* grammar-bounded windows from a single input stream */
     /* A field of another grammar's file that a recipe parts by this one (part NAME grammar GRAMMAR): the field's text read
      * as this grammar's content, the same content a file of it would hold for that text. 1 read; 0 not this grammar's.
-     * Called with no text and no out when the recipe loads: 1 when fields can be read. NULL: it reads files alone. */
-    int  (*field)(const uint8_t *text, size_t n, Ref *out);
+     * Called with no text and no out when the recipe loads: 1 when fields can be read. NULL: it reads files alone.
+     * product 0 is that content; product i > 0 is products[i - 1], a part of it the grammar can name (a recipe's
+     * thing TIER NAME product PRODUCT): the same reading, another of its products. 0: it has none of that product. */
+    int  (*field)(const uint8_t *text, size_t n, unsigned product, Ref *out);
+    const char *const *products;                                             /* NULL-terminated; NULL: the content alone */
 } NativeGrammar;
+unsigned native_product(const NativeGrammar *, const char *name);            /* a product's number (field's product), or 0: none of that name */
 const NativeGrammar *native_grammar(const char *name);                       /* the native grammar of that name, or NULL */
 int  reads_in_stretches(const Recipe *, char *boundary);                    /* whether a file of this recipe can be: 1 at a line's end, 2 at an empty line */
 void table_reset(void);                                                      /* what was decomposed is recorded: the table is emptied for what comes next */

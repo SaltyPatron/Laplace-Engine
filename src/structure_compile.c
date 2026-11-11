@@ -111,7 +111,7 @@ int layout_compile_parts(Layout *layout){
          * one (recipe.c): the field is one value, its text read by that grammar as its content (NativeGrammar.field). */
         const NativeGrammar *native = *name ? native_grammar(name) : NULL;
         if (native) {
-            if (!native->field || !native->field(NULL, 0, NULL)) { fprintf(stderr, "part %s: grammar %s reads files, not fields\n", part->path, name); valid = 0; }
+            if (!native->field || !native->field(NULL, 0, 0, NULL)) { fprintf(stderr, "part %s: grammar %s reads files, not fields\n", part->path, name); valid = 0; }
             else { part->native = native; layout->native_parts = 1; }
         }
         else if (*name) { part->inner = inner_layout(name); if (!part->inner) valid = 0; else part->child_grammar_id = part->inner->g.grammar_id; }

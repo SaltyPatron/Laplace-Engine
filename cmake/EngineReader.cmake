@@ -14,7 +14,7 @@ function(laplace_define_engine_reader engine_src)
     endif()
   endif()
 
-  foreach(f os.c os.h read.c read_ids.c read_text.c pg.c pg_plan.c pg_plan.h walk.c walk.h engine.h)
+  foreach(f os.c os.h read.c read_ids.c read_text.c pg.c pg_plan.c pg_plan.h walk.c walk.h engine.h chess_rules.c chess_rules.h)
     if(NOT EXISTS "${engine_src}/${f}")
       message(FATAL_ERROR "laplace_define_engine_reader: missing ${f} at '${engine_src}'")
     endif()
@@ -41,7 +41,8 @@ function(laplace_define_engine_reader engine_src)
       "${engine_src}/read_text.c"
       "${engine_src}/pg.c"
       "${engine_src}/pg_plan.c"
-      "${engine_src}/walk.c")
+      "${engine_src}/walk.c"
+      "${engine_src}/chess_rules.c")
     set_target_properties(laplace_engine_reader PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_include_directories(laplace_engine_reader PUBLIC
       "${engine_src}"
@@ -54,7 +55,8 @@ function(laplace_define_engine_reader engine_src)
       laplace_static
       lp_crmath
       BLAKE3::blake3
-      OpenMP::OpenMP_C)
+      OpenMP::OpenMP_C
+      ts_runtime)
     if(WIN32)
       target_link_libraries(laplace_engine_reader PUBLIC "${LAPLACE_PG_DIR}/lib/libpq.lib")
     else()

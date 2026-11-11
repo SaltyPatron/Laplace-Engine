@@ -92,167 +92,6 @@ const Rules *rules_named(const char *v, size_t l){
     return NULL;
 }
 
-/* ---- the board */
-static const int KN[8][2] = { {1,2},{2,1},{2,-1},{1,-2},{-1,-2},{-2,-1},{-2,1},{-1,2} }, KG[8][2] = { {1,0},{1,1},{0,1},{-1,1},{-1,0},{-1,-1},{0,-1},{1,-1} };
-static const int DIAG[4][2] = { {1,1},{1,-1},{-1,1},{-1,-1} }, ORTH[4][2] = { {1,0},{-1,0},{0,1},{0,-1} };
-static int on(int f, int r){ return f >= 0 && f < 8 && r >= 0 && r < 8; }
-/* Whether colour by attacks square s. */
-static int attacked(const Bd *b, int s, int by){
-    int f = s & 7, r = s >> 3, sg = by ? -1 : 1;
-    int pr = r - (by ? -1 : 1);                                               /* a pawn of by attacks s from the rank behind it */
-    for (int df = -1; df <= 1; df += 2) if (on(f + df, pr) && b->sq[pr * 8 + f + df] == sg * PAWN) return 1;
-    for (int i = 0; i < 8; i++) { int ff = f + KN[i][0], rr = r + KN[i][1]; if (on(ff, rr) && b->sq[rr * 8 + ff] == sg * KNIGHT) return 1; }
-    for (int i = 0; i < 8; i++) { int ff = f + KG[i][0], rr = r + KG[i][1]; if (on(ff, rr) && b->sq[rr * 8 + ff] == sg * KING) return 1; }
-    for (int i = 0; i < 4; i++) for (int ff = f + DIAG[i][0], rr = r + DIAG[i][1]; on(ff, rr); ff += DIAG[i][0], rr += DIAG[i][1]) { int8_t p = b->sq[rr * 8 + ff]; if (!p) continue; if (p == sg * BISHOP || p == sg * QUEEN) return 1; break; }
-    for (int i = 0; i < 4; i++) for (int ff = f + ORTH[i][0], rr = r + ORTH[i][1]; on(ff, rr); ff += ORTH[i][0], rr += ORTH[i][1]) { int8_t p = b->sq[rr * 8 + ff]; if (!p) continue; if (p == sg * ROOK || p == sg * QUEEN) return 1; break; }
-    return 0;
-}
-static int in_check(const Bd *b, int c){ int k = king_sq(b, c); return k >= 0 && attacked(b, k, !c); }
-void make(Bd *b, const Mv *m){
-    int c = b->side, back = c ? 56 : 0; int8_t p = b->sq[m->from];
-    if (m->castle) {
-        int ks = m->from, rs = m->to, kingside = (rs & 7) > (ks & 7); int8_t k = b->sq[ks], rk = b->sq[rs];
-        b->sq[ks] = 0; b->sq[rs] = 0; b->sq[back + (kingside ? 6 : 2)] = k; b->sq[back + (kingside ? 5 : 3)] = rk;
-        b->rights[c] = 0; b->ep = -1; b->side = (uint8_t)!c; return; }
-    int8_t cap = b->sq[m->to];
-    if (cap && (cap == ROOK || cap == -ROOK) && (m->to >> 3) == (c ? 0 : 7)) b->rights[!c] &= (uint8_t)~(1u << (m->to & 7));   /* a rook taken where it may still castle */
-    if (p == KING || p == -KING) b->rights[c] = 0;
-    if ((p == ROOK || p == -ROOK) && (m->from & ~7) == back) b->rights[c] &= (uint8_t)~(1u << (m->from & 7));
-    b->sq[m->to] = m->promo ? (int8_t)(c ? -m->promo : m->promo) : p; b->sq[m->from] = 0;
-    if (m->ep) b->sq[(m->from & ~7) | (m->to & 7)] = 0;
-    b->ep = -1; if ((p == PAWN || p == -PAWN) && abs((m->to >> 3) - (m->from >> 3)) == 2) b->ep = (int8_t)((m->from + m->to) / 2);
-    b->side = (uint8_t)!c;
-}
-/* Every legal move, castling as each rook the side may castle with (Chess960's rule holds Standard's). */
-int gen(const Bd *b, Mv *out){
-    Mv ps[256]; int n = 0, c = b->side, sg = c ? -1 : 1;
-    #define ADD(F, T, PR, CA, EP) do { ps[n].from = (uint8_t)(F); ps[n].to = (uint8_t)(T); ps[n].promo = (uint8_t)(PR); ps[n].castle = (uint8_t)(CA); ps[n].ep = (uint8_t)(EP); n++; } while (0)
-    for (int s = 0; s < 64; s++) { int8_t p = b->sq[s]; if (!p || colour_of(p) != c) continue; int a = abs(p), f = s & 7, r = s >> 3;
-        if (a == PAWN) { int dr = c ? -1 : 1, last = c ? 0 : 7, start = c ? 6 : 1;
-            if (on(f, r + dr) && !b->sq[(r + dr) * 8 + f]) {
-                if (r + dr == last) for (int pr = KNIGHT; pr <= QUEEN; pr++) ADD(s, (r + dr) * 8 + f, pr, 0, 0); else ADD(s, (r + dr) * 8 + f, 0, 0, 0);
-                if (r == start && !b->sq[(r + 2 * dr) * 8 + f]) ADD(s, (r + 2 * dr) * 8 + f, 0, 0, 0); }
-            for (int df = -1; df <= 1; df += 2) { if (!on(f + df, r + dr)) continue; int t = (r + dr) * 8 + f + df;
-                if (b->sq[t] && colour_of(b->sq[t]) != c) { if (r + dr == last) for (int pr = KNIGHT; pr <= QUEEN; pr++) ADD(s, t, pr, 0, 0); else ADD(s, t, 0, 0, 0); }
-                else if (t == b->ep && !b->sq[t]) ADD(s, t, 0, 0, 1); } }
-        else if (a == KNIGHT || a == KING) { const int (*d)[2] = a == KNIGHT ? KN : KG;
-            for (int i = 0; i < 8; i++) { int ff = f + d[i][0], rr = r + d[i][1]; if (!on(ff, rr)) continue; int8_t q = b->sq[rr * 8 + ff]; if (q && colour_of(q) == c) continue; ADD(s, rr * 8 + ff, 0, 0, 0); } }
-        else { for (int k = 0; k < 2; k++) { if ((k == 0 && a == ROOK) || (k == 1 && a == BISHOP)) continue; const int (*d)[2] = k ? ORTH : DIAG;
-                for (int i = 0; i < 4; i++) for (int ff = f + d[i][0], rr = r + d[i][1]; on(ff, rr); ff += d[i][0], rr += d[i][1]) { int8_t q = b->sq[rr * 8 + ff];
-                    if (q && colour_of(q) == c) break; ADD(s, rr * 8 + ff, 0, 0, 0); if (q) break; } } } }
-    /* castling: the king and its rook on the back rank, the squares each crosses empty but for the two of them, and
-     * the king in check on none of the squares from where it stands to where it ends */
-    int back = c ? 56 : 0, ks = king_sq(b, c);
-    if (ks >= 0 && (ks & ~7) == back && b->rights[c] && !attacked(b, ks, !c))
-        for (int rf = 0; rf < 8; rf++) { if (!(b->rights[c] & (1u << rf))) continue; int rs = back + rf; if (b->sq[rs] != sg * ROOK) continue;
-            int kingside = rf > (ks & 7), kd = back + (kingside ? 6 : 2), rd = back + (kingside ? 5 : 3), ok = 1;
-            int lo = ks < kd ? ks : kd, hi = ks < kd ? kd : ks; for (int s = lo; s <= hi && ok; s++) if (s != ks && s != rs && b->sq[s]) ok = 0;
-            lo = rs < rd ? rs : rd; hi = rs < rd ? rd : rs; for (int s = lo; s <= hi && ok; s++) if (s != ks && s != rs && b->sq[s]) ok = 0;
-            if (!ok) continue;
-            Bd t = *b; t.sq[ks] = 0; t.sq[rs] = 0; lo = ks < kd ? ks : kd; hi = ks < kd ? kd : ks;
-            for (int s = lo; s <= hi && ok; s++) if (attacked(&t, s, !c)) ok = 0;
-            if (ok) ADD(ks, rs, 0, 1, 0); }
-    #undef ADD
-    int k = 0; for (int i = 0; i < n; i++) { Bd t = *b; make(&t, &ps[i]); if (!in_check(&t, c)) out[k++] = ps[i]; }
-    return k;
-}
-/* SAN, as the PGN standard writes it (8.2.3), its check or mate mark with it when check is set. */
-void san_of(const Bd *b, const Mv *m, const Mv *all, int nall, int check, char *out){
-    char *o = out; int8_t p = b->sq[m->from]; int a = abs(p);
-    if (m->castle) o += sprintf(o, (m->to & 7) > (m->from & 7) ? "O-O" : "O-O-O");
-    else {
-        int cap = b->sq[m->to] != 0 || m->ep;
-        if (a == PAWN) { if (cap) { *o++ = (char)('a' + (m->from & 7)); *o++ = 'x'; } }
-        else { *o++ = PIECES[a]; int same = 0, file = 0, rank = 0;
-            for (int i = 0; i < nall; i++) { const Mv *x = &all[i]; if (x->castle || x->to != m->to || x->from == m->from || abs(b->sq[x->from]) != a) continue;
-                same = 1; if ((x->from & 7) == (m->from & 7)) file = 1; if ((x->from >> 3) == (m->from >> 3)) rank = 1; }
-            if (same) { if (!file) *o++ = (char)('a' + (m->from & 7)); else if (!rank) *o++ = (char)('1' + (m->from >> 3)); else { *o++ = (char)('a' + (m->from & 7)); *o++ = (char)('1' + (m->from >> 3)); } }
-            if (cap) *o++ = 'x'; }
-        *o++ = (char)('a' + (m->to & 7)); *o++ = (char)('1' + (m->to >> 3));
-        if (m->promo) { *o++ = '='; *o++ = PIECES[m->promo]; } }
-    if (check) { Bd t = *b; make(&t, m); if (in_check(&t, t.side)) { Mv r[256]; *o++ = gen(&t, r) ? '+' : '#'; } }
-    *o = 0;
-}
-/* The legal move a SAN token names (its check mark and suffix annotations taken off already), or -1. */
-static int san_match(const Bd *b, const char *tok, const Mv *all, int nall){
-    char t[32]; size_t l = 0; for (const char *c = tok; *c && l < 31; c++) t[l++] = *c == '0' ? 'O' : *c; t[l] = 0;     /* 0-0: the PGN standard's O-O written with zeros */
-    if (!strchr(tok, '-')) for (size_t i = 0; i < l; i++) if (t[i] == 'O') t[i] = '0';
-    char s[32];
-    for (int i = 0; i < nall; i++) { san_of(b, &all[i], all, nall, 0, s); if (!strcmp(s, t)) return i; }
-    /* as the import format allows: the piece's square over-specified, or a promotion without its = */
-    int pc = PAWN, ff = -1, fr = -1, to = -1, pr = 0; const char *c = t;
-    if (strchr("NBRQK", *c) && *c) { pc = (int)(strchr(PIECES, *c) - PIECES); c++; }
-    char sq[8]; int ns = 0; for (const char *d = c; *d && ns < 6; d++) if ((*d >= 'a' && *d <= 'h') || (*d >= '1' && *d <= '8')) sq[ns++] = *d; else if (*d == '=' || *d == 'x' || *d == '-') continue; else if (strchr("NBRQ", *d)) { pr = (int)(strchr(PIECES, *d) - PIECES); break; } else return -1;
-    if (ns < 2) return -1; to = (sq[ns - 2] - 'a') + 8 * (sq[ns - 1] - '1'); if (to < 0 || to > 63) return -1;
-    for (int k = 0; k < ns - 2; k++) { if (sq[k] >= 'a' && sq[k] <= 'h') ff = sq[k] - 'a'; else fr = sq[k] - '1'; }
-    int hit = -1;
-    for (int i = 0; i < nall; i++) { const Mv *m = &all[i]; if (m->castle || m->to != to || abs(b->sq[m->from]) != pc || m->promo != pr) continue;
-        if (ff >= 0 && (m->from & 7) != ff) continue; if (fr >= 0 && (m->from >> 3) != fr) continue; if (hit >= 0) return -1; hit = i; }
-    return hit;
-}
-void board_start(Bd *b){
-    memset(b, 0, sizeof *b); const char *back = "RNBQKBNR";
-    for (int f = 0; f < 8; f++) { int8_t p = (int8_t)(strchr(PIECES, back[f]) - PIECES); b->sq[f] = p; b->sq[56 + f] = (int8_t)-p; b->sq[8 + f] = PAWN; b->sq[48 + f] = -PAWN; }
-    b->rights[0] = b->rights[1] = (1u << 0) | (1u << 7); b->ep = -1;
-}
-/* A FEN (its first four fields): KQkq the outermost rook on that side of the king, a file letter (Shredder-FEN) that
- * file's rook; under Standard's rules only a king on e and rooks on a and h castle. Returns 0 when it is no FEN. */
-int board_fen(Bd *b, const char *fen, size_t n, int c960){
-    memset(b, 0, sizeof *b); b->ep = -1; size_t i = 0; int r = 7, f = 0;
-    for (; i < n && fen[i] != ' '; i++) { char ch = fen[i];
-        if (ch == '/') { if (f != 8) return 0; r--; f = 0; continue; }
-        if (ch >= '1' && ch <= '8') { f += ch - '0'; if (f > 8) return 0; continue; }
-        const char *pc = strchr(PIECES, toupper((unsigned char)ch)); if (!pc || ch == '.' || f > 7 || r < 0) return 0;
-        b->sq[r * 8 + f++] = (int8_t)((pc - PIECES) * (isupper((unsigned char)ch) ? 1 : -1)); }
-    if (r != 0 || f != 8) return 0;
-    while (i < n && fen[i] == ' ') i++; if (i >= n) return 0; b->side = fen[i] == 'b'; i++;
-    while (i < n && fen[i] == ' ') i++;
-    for (; i < n && fen[i] != ' '; i++) { char ch = fen[i]; if (ch == '-') continue; int c = islower((unsigned char)ch) ? 1 : 0, back = c ? 56 : 0, ks = king_sq(b, c); if (ks < 0 || (ks & ~7) != back) continue;
-        int8_t rk = c ? -ROOK : ROOK; char u = (char)toupper((unsigned char)ch);
-        if (u == 'K' || u == 'Q') { int found = -1;
-            if (!c960) { int rf = u == 'K' ? 7 : 0; if ((ks & 7) == 4 && b->sq[back + rf] == rk) found = rf; }
-            else if (u == 'K') { for (int x = 7; x > (ks & 7); x--) if (b->sq[back + x] == rk) { found = x; break; } }
-            else { for (int x = 0; x < (ks & 7); x++) if (b->sq[back + x] == rk) { found = x; break; } }
-            if (found >= 0) b->rights[c] |= (uint8_t)(1u << found); }
-        else if (u >= 'A' && u <= 'H') { int x = u - 'A'; if (b->sq[back + x] == rk && x != (ks & 7)) b->rights[c] |= (uint8_t)(1u << x); } }
-    while (i < n && fen[i] == ' ') i++;
-    if (i < n && fen[i] >= 'a' && fen[i] <= 'h' && i + 1 < n && fen[i + 1] >= '1' && fen[i + 1] <= '8') b->ep = (int8_t)((fen[i] - 'a') + 8 * (fen[i + 1] - '1'));
-    return 1;
-}
-/* The castling mask of 27.1: the king's file its centre bit, the rooks' files it castles with on either side; file f
- * is bit 7 - f, so the mask in binary reads a to h. 0: it does not castle. */
-unsigned castle_mask(const Bd *b, int c){
-    if (!b->rights[c]) return 0; int ks = king_sq(b, c); unsigned m = 0;
-    if (ks >= 0) m |= 0x80u >> (ks & 7); for (int f = 0; f < 8; f++) if (b->rights[c] & (1u << f)) m |= 0x80u >> f;
-    return m;
-}
-/* The en passant square of the position: only where a pawn can take on it by a legal move (otherwise the same
- * position would have two identities). */
-int ep_square(const Bd *b){
-    if (b->ep < 0) return -1; Mv m[256]; int n = gen(b, m);
-    for (int i = 0; i < n; i++) if (m[i].ep) return b->ep;
-    return -1;
-}
-
-/* ---- chess as content: the IDs a client computes from tier 0 alone (Native's lp_id_*), and the same as Refs in the
- * node table when a file is read (compose) */
-static void id_cp(uint32_t cp, lp_id *out){ lp_id_codepoint(cp, out); }
-static void id_number(unsigned v, lp_id *out){ char d[16]; int l = snprintf(d, sizeof d, "%u", v); lp_id k[16]; for (int i = 0; i < l; i++) id_cp((uint32_t)d[i], &k[i]); lp_id_compose(k, (size_t)l, out); }
-static void id_square(int s, lp_id *out){ lp_id k[2]; id_cp((uint32_t)('a' + (s & 7)), &k[0]); id_cp((uint32_t)('1' + (s >> 3)), &k[1]); lp_id_compose(k, 2, out); }
-/* A position's ID, computed here without the node table: the same bytes compose() hashes. */
-void id_position(const Bd *b, lp_id *out){
-    lp_id ps[64], two[2]; int n = 0;
-    for (int s = 0; s < 64; s++) if (b->sq[s]) { id_cp(piece_cp(b->sq[s]), &two[0]); id_square(s, &two[1]); lp_id_compose(two, 2, &ps[n++]); }
-    lp_id part[4]; lp_id_compose(ps, (size_t)n, &part[0]); id_cp(b->side ? 'b' : 'w', &part[1]);
-    id_number(castle_mask(b, 0), &two[0]); id_number(castle_mask(b, 1), &two[1]); lp_id_compose(two, 2, &part[2]);
-    int ep = ep_square(b); if (ep >= 0) id_square(ep, &part[3]); else id_cp('-', &part[3]);
-    lp_id_compose(part, 4, out);
-}
-void id_move(const Bd *b, const Mv *m, lp_id *out){
-    lp_id k[4]; int n = 3; id_cp(piece_cp(b->sq[m->from]), &k[0]); id_square(m->from, &k[1]); id_square(m->to, &k[2]);
-    if (m->promo) { id_cp(piece_cp((int8_t)(b->side ? -m->promo : m->promo)), &k[3]); n = 4; }
-    lp_id_compose(k, (size_t)n, out);
-}
 
 /* ---- reading a file: the node table */
 typedef struct { Ref ps[13][64]; uint8_t has[13][64]; Ref sq[64]; uint8_t hsq[64]; } RefCache;      /* within one file's reading: what a batch's node table holds */
@@ -349,15 +188,13 @@ static Ref comp(const Ref *k, size_t n){ Ref x = n == 1 ? k[0] : compose(k, (uin
 typedef struct { RefCache *rc; RV nags, transitions; long errs; char err[160]; uint64_t plies, castles; } Rd;
 /* A line replayed from b0: its trajectory, and its layer where it has annotations (has_layer). 0: a move that is not
  * legal there, said in r->err. */
-static int replay(Rd *r, const Line *L, const Bd *b0, Ref *line, Ref *layer, int *has_layer){
+static int replay(Rd *r, const Line *L, const Bd *b0, Ref *line, Ref *layer, int *has_layer, Ref *end){
     Bd b = *b0; RV traj = { 0 }, lay = { 0 }; int annotated = L->nlead > 0; Ref P = r_position(r->rc, &b); rv(&traj, P);
     if (L->nlead) { RV e = { 0 }; rv(&e, P);
         for (int j = 0; j < L->nlead; j++) { const Ann *x = &L->lead[j]; if (x->kind == 3) continue; rv(&e, r_text((const uint8_t *)x->t, x->n)); }
         rv(&lay, comp(e.c, e.n)); }
     for (int i = 0; i < L->n; i++) { const Ply *p = &L->p[i];
-        Mv all[256]; int na = gen(&b, all); char tok[32]; size_t tl = p->n < 31 ? p->n : 31; memcpy(tok, p->san, tl); tok[tl] = 0;
-        size_t z = tl; while (z && (tok[z - 1] == '+' || tok[z - 1] == '#')) tok[--z] = 0;
-        int k = z ? san_match(&b, tok, all, na) : -1;
+        Mv all[256]; int na = gen(&b, all); int k = san_match(&b, p->san, p->n, all, na);
         if (k < 0) { snprintf(r->err, sizeof r->err, "%.*s is no legal move at ply %d", (int)p->n, p->san, i + 1); return 0; }
         Ref M = r_move(r->rc, &b, &all[k]); Bd before = b; Ref Pb = P; make(&b, &all[k]); P = r_position(r->rc, &b); rv(&traj, M); rv(&traj, P); r->plies++; r->castles += all[k].castle;
         rv(&r->transitions,Pb);rv(&r->transitions,M);rv(&r->transitions,P);
@@ -366,16 +203,16 @@ static int replay(Rd *r, const Line *L, const Bd *b0, Ref *line, Ref *layer, int
         for (int j = 0; j < p->nann; j++) { const Ann *x = &p->ann[j];
             if (x->kind == 1) rv(&e, r_text((const uint8_t *)x->t, x->n));
             else if (x->kind == 2) { Ref nag = r_text((const uint8_t *)x->t, x->n); rv(&e, nag); rv(&r->nags, Pb); rv(&r->nags, M); rv(&r->nags, nag); }
-            else if (x->var && x->var->n) { Ref vl, vy; int hv = 0; if (!replay(r, x->var, &before, &vl, &vy, &hv)) { return 0; }
+            else if (x->var && x->var->n) { Ref vl, vy; int hv = 0; if (!replay(r, x->var, &before, &vl, &vy, &hv, NULL)) { return 0; }
                 if (hv) { Ref two[2] = { vl, vy }; rv(&e, comp(two, 2)); } else rv(&e, vl); } }
         rv(&lay, comp(e.c, e.n)); }
-    *line = comp(traj.c, traj.n); *has_layer = annotated; if (annotated) *layer = comp(lay.c, lay.n);
+    *line = comp(traj.c, traj.n); *has_layer = annotated; if (annotated) *layer = comp(lay.c, lay.n); if (end) *end = P;
     return 1;
 }
 /* A game's content, however it is read (a file of games, or a field that holds one): where it replays under its rules,
  * [line, tags, layer], its tags only where it has any and its layer only where it is annotated, so a game of neither is
  * its line; where it does not, [tags, movetext] as written. 0: it holds nothing. */
-typedef struct { const char *variant, *fen, *result; size_t vl, fl, rl; const Rules *rules; Bd b0; Ref line; int ok; } Start;
+typedef struct { const char *variant, *fen, *result; size_t vl, fl, rl; const Rules *rules; Bd b0; Ref line, end; int ok; } Start;      /* end: the position the line ends in */
 static int game_content(Rd *rd, const Game *g, Start *st, Ref *rec){
     memset(st, 0, sizeof *st);
     for (int i = 0; i < g->ntag; i++) { const Tag *t = &g->tag[i];
@@ -391,7 +228,7 @@ static int game_content(Rd *rd, const Game *g, Start *st, Ref *rec){
     st->rules = rules_named(st->variant, st->vl); st->ok = st->rules != NULL;
     if (st->ok) { if (st->fen) st->ok = board_fen(&st->b0, st->fen, st->fl, st->rules->c960); else board_start(&st->b0); }
     Ref layer; int has_layer = 0; rd->nags.n = rd->transitions.n = 0;
-    if (st->ok && !g->bad) st->ok = replay(rd, &g->main, &st->b0, &st->line, &layer, &has_layer); else if (st->ok) { st->ok = 0; snprintf(rd->err, sizeof rd->err, "its variations are not closed"); }
+    if (st->ok && !g->bad) st->ok = replay(rd, &g->main, &st->b0, &st->line, &layer, &has_layer, &st->end); else if (st->ok) { st->ok = 0; snprintf(rd->err, sizeof rd->err, "its variations are not closed"); }
     else if (!st->rules) snprintf(rd->err, sizeof rd->err, "its variant %.*s is in no rules (firmware/chess.firmware)", (int)st->vl, st->variant); else snprintf(rd->err, sizeof rd->err, "its FEN is no position");
     RV part = { 0 };
     if (st->ok) { rv(&part, st->line); if (tags.n) rv(&part, T); if (has_layer) rv(&part, layer); }
@@ -554,21 +391,24 @@ static int movetext_ready(void){
         if (movetext_state < 0) fputs("chess: the movetext grammar (formats/pgn_moves.format) is unavailable\n", stderr); }
     int ready = movetext_state > 0; pthread_mutex_unlock(&movetext_mu); return ready;
 }
-static int chess_field(const uint8_t *text, size_t n, Ref *out){
+/* product 1, position: the position the field's line ends in (an opening book's row names it), where the line replays. */
+static const char *const chess_products[] = { "position", NULL };
+static int chess_field(const uint8_t *text, size_t n, unsigned product, Ref *out){
     if (!text) return movetext_ready();                                       /* at the recipe's load */
-    if (__atomic_load_n(&movetext_state, __ATOMIC_ACQUIRE) <= 0 || n > UINT32_MAX) return 0;
+    if (__atomic_load_n(&movetext_state, __ATOMIC_ACQUIRE) <= 0 || n > UINT32_MAX || product > 1) return 0;
     TSParser *parser = lp_tls_parser(movetext.layout->g.grammar_id); if (!parser) return 0;
     TSTree *tree = ts_parser_parse_string(parser, NULL, (const char *)text, (uint32_t)n); if (!tree) return 0;
     TSNode root = ts_tree_root_node(tree); static int told; int held = 0;
-    if (ts_node_has_error(root)) { if (__atomic_fetch_add(&told, 1, __ATOMIC_RELAXED) < 5) fprintf(stderr, "\n  chess: \"%.*s\" is no movetext\n", (int)(n < 80 ? n : 80), (const char *)text); }
+    if (ts_node_has_error(root)) { if (!product && __atomic_fetch_add(&told, 1, __ATOMIC_RELAXED) < 5) fprintf(stderr, "\n  chess: \"%.*s\" is no movetext\n", (int)(n < 80 ? n : 80), (const char *)text); }
     else {
         size_t mark = chess_arena.used; Game g; pgn_game(&movetext, root, (const char *)text, &g);
         RefCache *rc = arena_alloc(&chess_arena, sizeof *rc); memset(rc, 0, sizeof *rc); Rd rd = { .rc = rc }; Start st;
-        held = game_content(&rd, &g, &st, out);
-        if (held && !st.ok && __atomic_fetch_add(&told, 1, __ATOMIC_RELAXED) < 5) fprintf(stderr, "\n  chess: \"%.*s\" is kept as its text and not replayed: %s\n", (int)(n < 80 ? n : 80), (const char *)text, rd.err);
+        Ref content; held = game_content(&rd, &g, &st, &content);
+        if (!product) { if (held) *out = content; } else { held = held && st.ok; if (held) *out = st.end; }
+        if (!product && held && !st.ok && __atomic_fetch_add(&told, 1, __ATOMIC_RELAXED) < 5) fprintf(stderr, "\n  chess: \"%.*s\" is kept as its text and not replayed: %s\n", (int)(n < 80 ? n : 80), (const char *)text, rd.err);
         chess_arena.used = mark; }
     ts_tree_delete(tree); return held;
 }
 
 /* PGN packaging uses the shared compiled grammar/framer; C owns chess rules. */
-const NativeGrammar chess_pgn = { "pgn", chess_says, chess_recipe, chess_read, chess_input, chess_field };
+const NativeGrammar chess_pgn = { "pgn", chess_says, chess_recipe, chess_read, chess_input, chess_field, chess_products };

@@ -248,6 +248,10 @@ int say_says(Recipe *r, const char *path, char *tok){
             if (!strcmp(nm, "literal")) { if (p->n == 8 || !name_next(&at, nm, sizeof nm)) { fprintf(stderr, "%s: thing TIER ... literal TEXT (at most 8 parts)\n", path); return -1; } p->lit[p->n] = 1; snprintf(p->name[p->n++], sizeof p->name[0], "%s", nm); continue; }
             if (!strcmp(nm, "matching") && p->n && !p->lit[p->n - 1]) { char pat[160]; KSpec *ks = &p->form[p->n - 1];
                 if (!name_next(&at, pat, sizeof pat) || regcomp(&ks->re, pat, REG_EXTENDED)) { fprintf(stderr, "%s: thing TIER NAME matching PATTERN (it must compile)\n", path); return -1; } ks->has_re = 1; continue; }
+            /* NAME product PRODUCT: the part NAME, which a grammar of the engine's own parts (part NAME grammar G), read as
+             * that grammar's PRODUCT of its text rather than its content (NativeGrammar.field: an opening's pgn read
+             * as the position its line ends in) */
+            if (!strcmp(nm, "product") && p->n && !p->lit[p->n - 1]) { if (!name_next(&at, p->product[p->n - 1], sizeof p->product[0])) { fprintf(stderr, "%s: thing TIER NAME product PRODUCT\n", path); return -1; } continue; }
             if (!strcmp(nm, "space") && p->n && !p->lit[p->n - 1]) { char ch[8]; if (!name_next(&at, ch, sizeof ch) || strlen(ch) != 1) { fprintf(stderr, "%s: thing TIER NAME space CHAR\n", path); return -1; } p->space[p->n - 1] = ch[0]; continue; }
             if (!strcmp(nm,"required")) {
                 if (!p->resolved || !p->n || p->lit[p->n-1]) { fprintf(stderr,"%s: required follows a resolved selector\n",path); return -1; }

@@ -34,7 +34,8 @@ typedef struct { char tier[32], rel[64], to[64]; uint32_t when; char with[64], o
 /* of: constituent things in source order; resolved: selectors in recipe order.
  * required rejects an unresolved operand; preserve retains nested tuple roles. */
 typedef struct { char tier[32], name[8][160]; int n, within, infile, span, inclusive, of, resolved, preserve;
-                 char lit[8], space[8], required[8]; KSpec form[8]; } Thing;
+                 char lit[8], space[8], required[8]; KSpec form[8];
+                 char product[8][32]; uint8_t product_id[8]; } Thing;     /* product: NAME read by its part's native grammar as that product of it (NativeGrammar.field), resolved to product_id when the recipe compiles */
 typedef struct { char tier[32], name[64]; double from, to; int mapped; } Score;
 typedef struct { char name[64]; int op; char val[128]; regex_t re; } Where;
 typedef struct {

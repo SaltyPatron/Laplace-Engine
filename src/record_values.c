@@ -278,21 +278,24 @@ static int type_value(RecordWorker *k, const SemanticRecord *t, int32_t c, const
         return 0;
 }
 
-int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, int depth){
+int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, int depth){ return record_product(k, t, c, 0, out, depth); }
+/* What a part is (product 0), or, for a part a grammar of the engine's own parts, that grammar's product of its text. */
+int record_product(RecordWorker *k, const SemanticRecord *t, int32_t c, unsigned product, Ref *out, int depth){
     const SemanticValue *x = &t->n[c], *named = x; const Say *s = k->s; const Dis *d = record_field_disposition(s, x);
     int typed_payload=x->kind==S_GROUP && x->scalar && d &&
         (d->what==D_CONTENT || d->what==D_TYPE || d->what==D_REFER || d->what==D_CODEPOINTS || d->what==D_RANGE);
     SemanticValue payload;
+    if (product && (!d || d->what != D_CONTENT)) return 0;                 /* a product is read of content a native grammar parts */
     /* An injected list may have a recipe-defined identity made from its
      * structured members. Resolve that identity before the flat scalar-list
      * path, which deliberately refuses group members. */
-    if (x->kind == S_GROUP && depth < 16 && k->tc_tree == t && (uint32_t)c < k->tc_n && !composing(c)) {
+    if (!product && x->kind == S_GROUP && depth < 16 && k->tc_tree == t && (uint32_t)c < k->tc_n && !composing(c)) {
         Ref value; if (record_thing(k,t,c,&value,depth+1)) { *out=value; return 1; }
     }
     if (!typed_payload && x->kind == S_GROUP && x->join == S_PIECES && record_field_first(x) >= 0 && record_field_next(&t->n[record_field_first(x)]) >= 0) {      /* a list of values: the tuple of what each is ([display text, target]) */
         return compose_values(k,t,c,depth,VALUE_PARTS_FLAT|VALUE_PARTS_TUPLE,out); }
     if (x->kind == S_GROUP && depth < 16) {                                    /* a part that is a thing: that thing */
-        int32_t only = record_field_first(x); if (!typed_payload && only >= 0 && record_field_next(&t->n[only]) < 0 && t->n[only].kind == S_GROUP) return record_value(k, t, only, out, depth + 1); }     /* holding one part: what that part is */
+        int32_t only = record_field_first(x); if (!typed_payload && only >= 0 && record_field_next(&t->n[only]) < 0 && t->n[only].kind == S_GROUP) return record_product(k, t, only, product, out, depth + 1); }     /* holding one part: what that part is */
     if (typed_payload) { payload=*x; payload.kind=S_TEXT; x=&payload; }
     if (x->kind == S_GROUP) {                                                 /* a part that holds only its text: that text, as the part is disposed of */
         int32_t only = record_field_first(x); if (only < 0 || record_field_next(&t->n[only]) >= 0 || t->n[only].kind != S_TEXT) return 0;
@@ -304,7 +307,8 @@ int record_value(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out, 
     if (d->what == D_CONTENT) {
         if (s->lay.native_parts && named->nlen) {                            /* parted by a grammar of the engine's own: its text read as that grammar's content */
             const SPart *part = part_at(&s->lay, named->name, named->nlen);
-            if (part && part->native) return part->native->field(x->val, x->vlen, out); }
+            if (part && part->native) return part->native->field(x->val, x->vlen, product, out); }
+        if (product) return 0;                                                   /* a product is a native grammar's alone */
         if (s->selfmark && k->selfcp >= 0 && memchr(x->val, s->selfmark, x->vlen)) {    /* the code point itself, written out where the source writes its mark */
             char hex[16]; size_t hl = hex_upper((unsigned long)k->selfcp, hex);
             size_t mark = scratch_mark();

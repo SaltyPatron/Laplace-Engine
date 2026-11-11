@@ -5,10 +5,14 @@ header
 tier field by \t
 # An opening is an incomplete game: its pgn is movetext with no tag pairs and no result, read by chess (src/chess.c,
 # the native grammar pgn) as the line a game of the same moves plays, [P0, M0, P1, ..., Pn], replayed from the standard
-# start position. The opening is that line, so it shares its positions and moves with every game that plays it.
+# start position. The line is the row's content, the route the book gives, so it shares its positions and moves with
+# every game that plays it.
 part pgn grammar pgn
 content eco name pgn
-thing opening pgn
+# An opening names a position, a fixed board state: the Queen's Gambit is the position after 1. d4 d5 2. c4, and its
+# Accepted and Declined are later ones. So what the row says is said of the position its line ends in (chess's product
+# position of the pgn), and a game that transposes into that position reaches the same name.
+thing opening pgn product position
 # ECO is a classification, not an identity or a game result. No win/loss evidence is invented.
 relation "opening name" name
 relation "Encyclopaedia of Chess Openings code" eco

@@ -180,3 +180,9 @@ TSParser *lp_tls_parser(uint16_t grammar_id){
     }
     return ps;
 }
+
+unsigned native_product(const NativeGrammar *grammar, const char *name){
+    if (!grammar || !grammar->products || !name) return 0;
+    for (unsigned i = 0; grammar->products[i]; i++) if (!strcmp(grammar->products[i], name)) return i + 1;
+    return 0;
+}

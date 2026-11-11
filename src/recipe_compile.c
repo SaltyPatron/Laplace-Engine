@@ -536,6 +536,14 @@ int say_compile(Recipe *r){
     if (!s->lay.ntier && !s->lay.g.n) return 1;
     if (!layout_compile_recipe(&s->lay, r->grammar, sizeof r->grammar)) return 0;
     layout_bind_names(&s->lay, compile_name_bindings, s->paths);
+    /* A thing's part read as a product of its native grammar: the part must be parted by one, and name its product. */
+    for (int i = 0; i < s->nthing; i++) for (int j = 0; j < s->thing[i].n; j++) if (s->thing[i].product[j][0]) {
+        Thing *thing = &s->thing[i]; const SPart *part = part_at(&s->lay, (const uint8_t *)thing->name[j], (uint32_t)strlen(thing->name[j]));
+        unsigned product = part && part->native ? native_product(part->native, thing->product[j]) : 0;
+        if (!product || product > UINT8_MAX) { fprintf(stderr, "%s: thing %s: %s is no product of a grammar its part %s is read by (part %s grammar ...)\n",
+            r->name, thing->tier, thing->product[j], thing->name[j], thing->name[j]); return 0; }
+        thing->product_id[j] = (uint8_t)product;
+    }
     r->lang = grammar_lang(s->lay.g.grammar_id); return r->lang != NULL;
 }
 static int static_name_matches(const NameCode *pattern, const uint8_t *name, uint32_t length){
