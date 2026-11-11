@@ -171,13 +171,11 @@ void fold_events(Fold *f, const File *files, int nfiles){
             if (fresh) *s=(Series){.claim=event->claim,.witness=source.id,.lineage=lineage,
                 .trust=observation_trust,.has_lineage=has_lineage};
             uint64_t run = event->run ? event->run : 1, played = event->games ? run : 1;   /* a stated count is games; a record's repeat, tokens */
-            if (s->games > UINT64_C(9007199254740992) - played) { fprintf(stderr,"series exceeds exact Native game range\n"); exit(1); }
+            if (s->t.tokens > 9007199254740992.0 - (double)run) { fprintf(stderr,"series exceeds exact Native game range\n"); exit(1); }
             /* Map slots are stable while a window grows. The database retains
              * totals; the client releases this map after every committed window. */
             if(!s->dirty)lp_push(&f->dirty,index);
-            s->games += played; s->tokens += run;
-            s->sum+=lp_score_carried(event->score)*(double)played;
-            if(event->position && (!s->position || event->position < s->position)) s->position = event->position;
+            lp_tally_add(&s->t, (double)played, (double)run, lp_score_carried(event->score)*(double)played, event->position);
             s->dirty=1;
         }
     }
@@ -201,11 +199,11 @@ void flush_series(Fold *f){    if (!f || !f->dirty.n) return;
         Series *s=lp_strmap_at(f->series,f->dirty.v[i]);
         lp_copy_row(&copy,9); lp_copy_id(&copy,&s->claim); lp_copy_id(&copy,&s->witness);
         if(s->has_lineage) lp_copy_id(&copy,&s->lineage); else lp_copy_null(&copy);
-        lp_copy_i64(&copy,(int64_t)s->games); lp_copy_i64(&copy,(int64_t)(s->tokens >= s->games ? s->tokens : s->games));
-        lp_copy_f64(&copy,s->sum/(double)s->games);
-        if(s->position) lp_copy_i32(&copy,(int32_t)s->position); else lp_copy_null(&copy);
+        lp_copy_i64(&copy,(int64_t)s->t.games); lp_copy_i64(&copy,(int64_t)(s->t.tokens >= s->t.games ? s->t.tokens : s->t.games));
+        lp_copy_f64(&copy,s->t.wins/s->t.games);
+        if(s->t.position) lp_copy_i32(&copy,(int32_t)s->t.position); else lp_copy_null(&copy);
         lp_copy_f64(&copy,s->trust);
-        lp_copy_f64(&copy,s->sum);
+        lp_copy_f64(&copy,s->t.wins);
     }
     copy_close(&copy); lp_buf_free(&copy.buf);
     series_delta_apply(); statement(writer.series,"COMMIT");
