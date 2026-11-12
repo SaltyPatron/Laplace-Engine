@@ -45,6 +45,6 @@ fingerprint(){ sql -c "SELECT md5(string_agg(to_jsonb(e)::text,E'\n' ORDER BY id
 before=$(fingerprint)
 "$L" ingest -d "$conn" -j 2 "$scratch/inputs" > "$scratch/again.log" 2>&1 || { cat "$scratch/again.log"; exit 1; }
 [[ $(fingerprint) == "$before" ]] || { echo 'rich-text-db: unchanged source changed stored canonical state'; exit 1; }
-grep -q 'files whose trunk was already recorded, which say nothing again: 4$' "$scratch/again.log" ||
+grep -q 'files whose trunk was already recorded, which say nothing again: 5$' "$scratch/again.log" ||
   { echo 'rich-text-db: the unchanged files were not all found recorded by their trunks'; cat "$scratch/again.log"; exit 1; }
 echo 'rich-text-db: one shared content ID, four file trunks, exact PostgreSQL packaging readback, zero altitude violations and unchanged-source pruning passed'
