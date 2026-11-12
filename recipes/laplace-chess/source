@@ -1,0 +1,12 @@
+name laplace-chess
+# The games Laplace plays: a play session's game, a Lichess game and a lab match, each one PGN file the application
+# writes when the game ends (Laplace monorepo, ChessGameRecorder). The runtime and self-play lane of Sequence 27.3: what
+# was played and how it ended, under its own source and trust class, and admitted after the game closes (27.9). A game
+# Laplace played does not certify itself: it is testimony as any game is, at the class an application's own output has.
+# White and Black are participants named in each record, never witnesses.
+witness Laplace
+# AppDerived: an application's own output (trust_classes.toml)
+class AppDerived
+root $LAPLACE_DATA/Games/Chess/laplace
+files $LAPLACE_DATA/Games/Chess/laplace/*.pgn
+after unicode

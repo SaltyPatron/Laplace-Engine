@@ -26,6 +26,13 @@ got:
 $got
 want:
 $want"
+# Laplace's own games (laplace-chess) and a PGN of no corpus (the generic pgn recipe) are read as chess-com's are: the
+# same game is the same content whoever witnesses it.
+for how in "-s laplace-chess" ""; do
+  copy=$scratch/brought.pgn; cp "$here/chess/identity.pgn" "$copy"
+  again=$(LAPLACE_DATA=$scratch "$L" ingest --claims-tsv $how "$copy" 2>&1 | tr -d '') || fail "${how:-the generic pgn recipe} did not read identity.pgn: $again"
+  [ "$(awk -F'	' '$1 == "record" && $2 > 0 { print $4 }' <<<"$again")" = "$want" ] || fail "${how:-the generic pgn recipe} gives another id"
+done
 # the start position's own text, so a change of id is told from a change of content
 grep -qF 'Ra1Nb1Bc1Qd1Ke1Bf1Ng1Rh1Pa2Pb2Pc2Pd2Pe2Pf2Pg2Ph2pa7pb7pc7pd7pe7pf7pg7ph7ra8nb8bc8qd8ke8bf8ng8rh8w137137-' <<<"$out" || fail "the start position is not [board, w, castling 137 137, -]"
 echo "chess-identity: positions, moves and lines keep their content ids"

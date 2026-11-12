@@ -1,0 +1,4 @@
+name laplace-chess-games
+match *.pgn
+# Read as chess-com's games are (chess.c, grammar pgn, records played).
+like chess-com-games

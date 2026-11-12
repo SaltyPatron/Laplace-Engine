@@ -1,0 +1,9 @@
+name pgn
+# A PGN file that belongs to no corpus of the estate (a player's download, a match a user brings): read as chess-com's
+# games are (chess.c, grammar pgn, records played), the file's trunk its own witness. A record with variations or NAGs
+# is said as a study.
+match *.pgn
+# StructuredCorpus: the class Sequence 9 gives game collections
+class StructuredCorpus
+grammar pgn
+records played
