@@ -199,6 +199,11 @@ laplace_utf8_executable(chess_positions)
 target_compile_options(chess_positions PRIVATE ${LP_C_FLAGS} -UNDEBUG)
 target_compile_definitions(chess_positions PRIVATE "LAPLACE_GRAMMARS_DEFAULT=\"${LAPLACE_GRAMMARS}\"")
 target_link_libraries(chess_positions PRIVATE laplace_engine_reader laplace_text)
+# The Syzygy decoder alone (src/chess_syzygy.c over the reader's chess): a table's lines, every piece count's (tests/syzygy-pieces.sh).
+add_executable(syzygy_decode EXCLUDE_FROM_ALL tests/syzygy-decode.c src/chess_syzygy.c)
+laplace_utf8_executable(syzygy_decode)
+target_compile_options(syzygy_decode PRIVATE ${LP_C_FLAGS} -UNDEBUG)
+target_link_libraries(syzygy_decode PRIVATE laplace_engine_reader laplace_text)
 # One relocatable recipe runtime is consumed by the modular CLI and managed hosts.
 # Its executable is the canonical Engine, with the same compiled grammars and estate.
 install(TARGETS laplace_engine

@@ -86,6 +86,7 @@ jobs:
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target claim_decode
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target input_frame_test
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target chess_positions
+          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target syzygy_decode
           mkdir -p "$RUNNER_TEMP/engine" && cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace" "$RUNNER_TEMP/engine/laplace"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/presence_frontier" "$RUNNER_TEMP/engine/presence-frontier"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/pg_plan_lifecycle" "$RUNNER_TEMP/engine/pg-plan-lifecycle"
@@ -93,6 +94,7 @@ jobs:
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/claim_decode" "$RUNNER_TEMP/engine/claim-decode"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/input_frame_test" "$RUNNER_TEMP/engine/input-frame"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/chess_positions" "$RUNNER_TEMP/engine/chess-positions"
+          cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/syzygy_decode" "$RUNNER_TEMP/engine/syzygy-decode"
           sha256sum "$RUNNER_TEMP/engine/laplace" | tee "$RUNNER_TEMP/engine/laplace.sha256"
       - name: Provide the pinned Rust compiler for the Tree-sitter generator
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
@@ -133,6 +135,8 @@ jobs:
           python3 Laplace-Engine/tests/tree-occurrences.py "$L"
           python3 Laplace-Engine/tests/prompt-occurrences.py "$L"
           python3 Laplace-Engine/tests/firmware-relations.py "$L"
+          # the tablebase source's own tables, 3, 4 and 5 pieces (the host declares where its data is)
+          bash Laplace-Engine/tests/syzygy-pieces.sh "$RUNNER_TEMP/engine/syzygy-decode" "${LAPLACE_DATA:-$(. /etc/laplace/machine.env && echo "$LAPLACE_DATA")}/Games/Chess/syzygy/3-4-5"
           python3 Laplace-Engine/tests/recipe-order.py "$L"
           python3 Laplace-Engine/tests/record-values-width.py "$L"
           python3 Laplace-Engine/tests/semantic-interpretation.py "$L"
