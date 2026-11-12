@@ -68,7 +68,12 @@ def main():
                             'laplace.tier0': os.environ['LAPLACE_TIER0'],
                             'laplace.flags': os.environ.get('LAPLACE_FLAGS') or str(Path(os.environ['LAPLACE_TIER0']).with_suffix('.flags')),
                             'laplace.highway': os.environ.get('LAPLACE_HIGHWAY') or str(Path(os.environ['LAPLACE_TIER0']).with_suffix('.highway')),
-                            'shared_preload_libraries': 'pg_stat_statements'}.items():
+                            'shared_preload_libraries': 'pg_stat_statements',
+                            # This cluster is deleted with the job: nothing in it outlives a crash, so nothing is
+                            # flushed for one. Every database a check makes and drops otherwise waits on a forced
+                            # checkpoint and a flush of each relation file of the whole schema.
+                            'fsync': 'off', 'synchronous_commit': 'off', 'full_page_writes': 'off',
+                            'max_wal_size': '16GB', 'checkpoint_timeout': '1h'}.items():
             stream.write(name + ' = ' + quote(value) + '\n')
         stream.write('port = 5432\nmax_connections = 128\n')
     state_path.write_text(json.dumps(dict(data=str(data), pgbin=str(pgbin))) + '\n')
