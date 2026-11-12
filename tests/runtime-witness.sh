@@ -70,10 +70,11 @@ alice=$(sed -n 's/^  its ID, the witness  *\([0-9a-f]\{32\}\)$/\1/p' <<<"$out");
 standing(){ sql "SELECT c.rating FROM public.consensus c JOIN public.attestation a ON a.claim::text=c.claim::text WHERE a.witness::text='$alice' AND a.score=$1"; }
 confirmed=$(standing 1); refuted=$(standing 0)
 awk -v c="$confirmed" -v r="$refuted" 'BEGIN{exit !(c>1500 && r<1500)}' || fail "a confirmation did not raise and a refutation lower the standing: $confirmed $refuted"
+sql "CREATE TABLE seen_entity AS SELECT id::text AS id FROM public.entity" >/dev/null
 before=$(state)
 cp "$scratch/feedback.statement" "$scratch/again.statement"
 out=$(witness --as alice --class UserPromptContent "$scratch/again.statement" 2>&1) || fail "witness again: $out"
-[[ "$(state)" == "$before" ]] || fail "the same statement stated again changed the record: $before -> $(state)"
+[[ "$(state)" == "$before" ]] || fail "the same statement stated again changed the record: $before -> $(state): $(sql "SELECT e.id::text||' tier '||e.tier||' '||coalesce(public.laplace_text(e.id),'') FROM public.entity e WHERE e.id::text NOT IN (SELECT id FROM seen_entity)") :: $(grep -i 'witness\|trunk\|recorded' <<<"$out")"
 grep -q "^  its ID, the witness  *$alice\$" <<<"$out" || fail "the same statement is another witness: $out"
 
 out=$(witness --as bob --class UserCuratedResource "$scratch/feedback.statement" 2>&1) || fail "witness, bob: $out"
