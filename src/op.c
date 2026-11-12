@@ -53,7 +53,14 @@ static const Param
     CLAIMS_TSV = { "claims_tsv", "--claims-tsv", ARG_FLAG, NULL, "--claims for a machine: a claim a line, kind, position, score and its parts between tabs (LIST:KEY for a type of the highway)" },
     ENTITIES = { "entities", "--entities", ARG_FLAG, NULL, "every composition a sample makes, its tier, parts and text, new or recorded; nothing is loaded" },
     AS       = { "as", "--as", ARG_TEXT, "USER", "USER" },
+    WITNESS_AS = { "as", "--as", ARG_TEXT, NULL, "WITNESS: who states it, a name recorded as content: the record its trunk begins with" },
+    CLASS    = { "class", "--class", ARG_TEXT, NULL, "CLASS: the witness's trust class, one Laplace-Native's manifest/trust_classes.toml declares; its prior is the trust its claims play at" },
+    LINEAGE  = { "lineage", "--lineage", ARG_TEXT, "the witness's own name", "NAME: the witness it derives from; one lineage plays one matchup a claim" },
+    STATED   = { "file", NULL, ARG_PATH, NULL, "what it states: a .statement (a claim a line: subject, relation, object and a score from 0 to 1, between tabs), or any file a recipe reads" },
     SESSION  = { "session", "--session", ARG_TEXT, NULL, "NAME" },
+    BY       = { "by", "--by", ARG_TEXT, "Laplace", "NAME: who gave the response, a name recorded as content" },
+    AS_FILES = { "files", "--files", ARG_FLAG, NULL, "the prompt and the response are files that hold them" },
+    RESPONSE = { "response", NULL, ARG_TEXT, NULL, "response" },
     READ     = { "read", "--read", ARG_FLAG, NULL, "a read: nothing is witnessed" },
     SEGMENTS = { "segments", "--segments", ARG_FLAG, NULL, "canonical word-segment occurrence IDs as JSON, including separators; no database" },
     LAYERS   = { "layers", "--layers", ARG_INT, "every layer", "N" },
@@ -86,6 +93,8 @@ static const Arg A_FLAGS[] = { O(UCD), O(OUT_FL), END };
 static const Arg A_HIGHWAY[] = { O(OUT_HW), O(FINGERPRINT), O(IDENTITIES), END };
 static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(HIGHWAY), O(WHOLE), O(NO_LOAD), O(PLAN), O(CATALOG), O(LIST_SOURCES), O(CLAIMS), O(CLAIMS_TSV), O(ENTITIES),
                                 { &WHAT, ARG_MANY, NULL, NULL }, END };
+static const Arg A_WITNESS[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), { &WITNESS_AS, ARG_REQUIRED, NULL, NULL }, { &CLASS, ARG_REQUIRED, NULL, NULL }, O(LINEAGE), O(NO_LOAD), O(CLAIMS),
+                                 { &STATED, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
 static const Arg A_MERGE[] = { O(CONNINFO), { &JOBS, 0, NULL, "every processor" }, END };
 static const Arg A_PROJECTION[] = { O(CONNINFO), O(APPLY), END };
 static const Arg A_FORGET[] = { O(CONNINFO), O(JOBS), O(EXCEPT), O(TRUNK), { &WITNESS, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
@@ -99,6 +108,7 @@ static const Arg A_TEXT[] = { O(SEGMENTS), { &TEXT, ARG_REQUIRED, NULL, NULL }, 
 static const Arg A_FIRMWARE[] = { O(FIRMWARE), O(FW_OPERATION), END };
 static const Arg A_PULL[] = { O(CONNINFO), O(FIRMWARE), O(SEED), { &PROMPT, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_TURN[] = { O(CONNINFO), O(FIRMWARE), O(AS), O(SESSION), O(SEED), O(READ), { &PROMPT, ARG_REQUIRED, NULL, NULL }, END };
+static const Arg A_SAID[] = { O(CONNINFO), O(FIRMWARE), O(AS), O(SESSION), O(BY), O(AS_FILES), { &PROMPT, ARG_REQUIRED, NULL, NULL }, { &RESPONSE, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_HOP[] = { O(CONNINFO), { &LIMIT, 0, NULL, "24" }, O(FIRMWARE), O(FAN), O(K),
                              { &TEXT, ARG_REQUIRED | ARG_MANY, "text | subject predicate object (? for a part left open)", NULL }, END };
 static const Arg A_TRANSLATE[] = { O(CONNINFO), { &LIMIT, 0, "concepts", "4" }, O(FIRMWARE), { &WORD, ARG_REQUIRED, NULL, NULL },
@@ -120,6 +130,7 @@ const Op OPS[] = {
     { "deploy",    cmd_deploy,    "make a database a Laplace database", A_NONE, W_DB | R_F, "text" },
     { "sources",   cmd_sources,   "the sources there are recipes for, in the order they go in", A_SOURCES, R_DB | R_F, "text" },
     { "ingest",    cmd_ingest,    "a source by its name, or files, through their recipes", A_INGEST, W_DB | R_F, "text" },
+    { "witness",   cmd_witness,   "what a witness named at run time states, recorded as a source is: its files through their recipes, its trunk the witness of what they attest", A_WITNESS, W_DB | R_F, "text" },
     { "merge",     cmd_merge,     "what the ingest staged, into the real tables at once", A_MERGE, W_DB, "text" },
     { "projection",cmd_projection,"audit or repair derived coordinates while preserving content IDs and paths", A_PROJECTION, W_DB, "text" },
     { "forget",    cmd_forget,    "what one witness said, taken back out: its trunk, what it alone holds, and the standings it touched played again", A_FORGET, W_DB | EFFECT_DESTROYS, "text" },
@@ -133,6 +144,7 @@ const Op OPS[] = {
     { "firmware",  cmd_firmware,  "inspect the recipe relations a query will use, without database access", A_FIRMWARE, R_F, "JSON" },
     { "pull",      cmd_pull,      "the forward pass: a prompt, and the segments and strands its firmware takes", A_PULL, R_DB | R_F, "text" },
     { "turn",      cmd_turn,      "a turn of a session: the one forward program, RESOLVE to WITNESS, each emitted constituent changing the next", A_TURN, W_DB | R_F, "text" },
+    { "said",      cmd_said,      "a turn said elsewhere, witnessed: the prompt and the response another program gave, recorded as a turn of the session is, nothing generated", A_SAID, W_DB | R_F, "text" },
     { "hop",       cmd_hop,       "everything attested about an entity", A_HOP, R_DB | R_F, "text" },
     { "translate", cmd_translate, "a word up to its concepts and down into other languages", A_TRANSLATE, R_DB | R_F, "text" },
     { "degrees",   cmd_degrees,   "how far one entity is from another, over rated claims", A_DEGREES, R_DB | R_F, "text" },

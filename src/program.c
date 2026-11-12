@@ -231,6 +231,99 @@ static int orient(State *st, Field *fd, Bind *bind, const Readings *R, int *namb
         if (bind[i].choice >= 0) { bound += owes; if (bind[i].level && owes) (*nambig)++; bind[i].choice = R->cand[bind[i].choice].cell; } }
     return bound;
 }
+/* ---- a session and its turns, the same for a turn answered here (laplace turn) and one said elsewhere (laplace said).
+ * The session is its name within its user's, [USER, NAME]; its turns are the claims [session, turn] its user witnessed,
+ * in the order their positions in attestation give. */
+static Ref session_handle(const char *user, const char *session, Ref *who){
+    *who = text_ref(CTX[0], (const uint8_t *)user, strlen(user)); Ref sname = text_ref(CTX[0], (const uint8_t *)session, strlen(session));
+    Ref hp[2] = { *who, sname }; hp[0].said = hp[1].said = 0;
+    return said_tuple(compose(hp, 2, (uint8_t)((who->tier > sname.tier ? who->tier : sname.tier) + 1)));
+}
+/* The session's turns from the record, in order: the claims [handle, turn] alone, at the front of what is returned
+ * (free()); *ordinal is the place the next turn takes. */
+static Claim *session_turns(PGconn *pg, const Firmware *fw, const lp_id *handle, int *nturn, int *ordinal){
+    int have[3] = { 2, 0, 0 }, n, cap, kept = 0; lp_id part[3] = { *handle, *handle, *handle };
+    Claim *tc = claims_like(pg, part, have, fw->fan, fw->k, &n, &cap);
+    positions_of(pg, tc, n); lp_sort(tc, (size_t)n, sizeof(Claim), claim_by_position);
+    *ordinal = 1;
+    for (int i = 0; i < n; i++) { if (tc[i].np != 2 || memcmp(&tc[i].part[0], handle, 16)) continue;
+        if (tc[i].position >= *ordinal) *ordinal = tc[i].position + 1;
+        tc[kept++] = tc[i]; }
+    *nturn = kept; return tc;
+}
+/* WITNESS, the turn recorded: the prompt and the response as content, the turn [prompt, response] with them; the user's
+ * [session, turn] at its ordinal, under UserPromptContent, its witness the trunk [user, that claim]; and the responder's
+ * [response, prompt], the response's dependence on the prompt, under ResponseContent, its witness the trunk [responder,
+ * that claim]. One load through the one writer (db.c), the standings folded in the database. 0 when it is recorded. */
+static int turn_witness(const char *conninfo, Ref who, Ref by, Ref handle, Ref pr, Ref resp, int ordinal, LoadStats *ls, lp_id *turn_id){
+    Ref tp[2] = { pr, resp }; tp[0].said = tp[1].said = 0; Ref turn = compose(tp, 2, ref_above(tp, 2));
+    const lp_trust_class *uc = lp_trust_class_named("UserPromptContent"), *rc = lp_trust_class_named("ResponseContent");
+    File f[2]; memset(f, 0, sizeof f);
+    Ref p1[2] = { handle, turn }; p1[0].said = LP_SAID_TUPLE; p1[1].said = 0; Ref c1 = said_claim(compose(p1, 2, ref_above(p1, 2)));
+    c1.outcome = (uint8_t)lp_outcome_of(1.0, &c1.spare); c1.position = (uint32_t)ordinal;
+    Ref p2[2] = { resp, pr }; p2[0].said = p2[1].said = 0; Ref c2 = said_claim(compose(p2, 2, ref_above(p2, 2)));
+    c2.outcome = (uint8_t)lp_outcome_of(1.0, &c2.spare);
+    Ref u_tr[2] = { said_metadata(who), c1 }; Ref u_trunk = compose(u_tr, 2, ref_above(u_tr, 2));
+    Ref r_tr[2] = { said_metadata(by), c2 }; Ref r_trunk = compose(r_tr, 2, ref_above(r_tr, 2));
+    f[0].path = "the prompt"; f[0].witness = who; f[0].trust = uc ? uc->prior : 0.3; f[0].trunk = u_trunk; f[0].file = u_trunk; f[0].has_file = 1;
+    Event e1 = { .claim = c1.id, .witnessed = c1.id, .score = 1.0f, .enter_rating = 1500.0f, .position = (uint32_t)ordinal, .kind = EV_CLAIM }; ev_push(&f[0].ev, &e1);
+    f[1].path = "the response"; f[1].witness = by; f[1].trust = rc ? rc->prior : 0.2; f[1].trunk = r_trunk; f[1].file = r_trunk; f[1].has_file = 1;
+    Event e2 = { .claim = c2.id, .witnessed = c2.id, .score = 1.0f, .enter_rating = 1500.0f, .kind = EV_CLAIM }; ev_push(&f[1].ev, &e2);
+    Fold *fold = fold_new(); fold_events(fold, f, 2);
+    LoadWitness lw[2] = { { .id = u_trunk.id, .trust = f[0].trust }, { .id = r_trunk.id, .trust = f[1].trust } };
+    int rc_ = load(conninfo, 2, f, 2, ls); fold_free(fold);
+    free(f[0].ev.e); free(f[1].ev.e);
+    if (rc_ || load_register(conninfo, 2, lw, 2, f, 2) || merge(conninfo, 2, ls)) return 1;
+    *turn_id = turn.id; return 0;
+}
+/* ---- laplace said: a turn said elsewhere, witnessed. Another program answered (a conventional model behind the chat
+ * endpoint, an agent): nothing is generated here. The prompt and the response are decomposed as laplace turn decomposes
+ * its own, and the same [session, turn] and [response, prompt] are recorded by the same writer (turn_witness).
+ *
+ *   laplace said [-d conninfo] [--firmware FILE] [--as USER] [--session NAME] [--by NAME] [--files] prompt response
+ *
+ * The turn [prompt, response] is content: said again in the same session it is the same claim, which the session
+ * already holds, and nothing is witnessed again (a write retried adds nothing). */
+static uint8_t *said_text(const char *arg, int files, const char *what, size_t *n){
+    uint8_t *text;
+    if (!files) { *n = strlen(arg); text = malloc(*n + 1); if (text) memcpy(text, arg, *n + 1); }
+    else { FILE *f = fopen(arg, "rb"); if (!f) { fprintf(stderr, "said: the %s's file %s: %s\n", what, arg, strerror(errno)); return NULL; }
+        size_t cap = 1 << 16; text = malloc(cap); *n = 0; size_t k;
+        while (text && (k = fread(text + *n, 1, cap - *n, f)) > 0) { *n += k; if (*n == cap) { cap *= 2; text = xrealloc(text, cap); } }
+        fclose(f); }
+    if (!text) { perror("said"); return NULL; }
+    if (!*n) { fprintf(stderr, "said: the %s is empty: no turn\n", what); free(text); return NULL; }
+    for (size_t i = 0; i < *n; ) { uint32_t cp; if (!text[i] || !lp_utf8_next(text, *n, &i, &cp)) { fprintf(stderr, "said: the %s is not UTF-8 text\n", what); free(text); return NULL; } }
+    return text;
+}
+int cmd_said(int argc, char **argv){
+    const char *conninfo = laplace_db(), *fwp = NULL, *user = getenv("USER"), *session = NULL, *by = "Laplace"; int files = 0;
+    int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "--firmware", .kind = 's', .at = &fwp }, { .flag = "--as", .kind = 's', .at = &user }, { .flag = "--session", .kind = 's', .at = &session },
+                                            { .flag = "--by", .kind = 's', .at = &by }, { .flag = "--files", .kind = 'b', .at = &files }, { 0 } });
+    if (a + 2 != argc) { fprintf(stderr, "usage: laplace said [-d conninfo] [--firmware FILE] [--as USER] [--session NAME] [--by NAME] [--files] prompt response\n"); return 2; }
+    if (!user || !*user) user = "user"; if (!session) session = "session";
+    if (!*session || !*by) { fprintf(stderr, "said: a session and a responder have names\n"); return 2; }
+    double T = now();
+    size_t np, nr; uint8_t *prompt = said_text(argv[a], files, "prompt", &np); if (!prompt) return 1;
+    uint8_t *response = said_text(argv[a + 1], files, "response", &nr); if (!response) return 1;
+    Firmware fw = firmware_for(fwp, FW_PULL);
+    tier0_open(NULL); table_init(); ctx_open(1);
+    Ref pr = text_ref(CTX[0], prompt, np), resp = text_ref(CTX[0], response, nr);
+    Ref who, handle = session_handle(user, session, &who), speaker = text_ref(CTX[0], (const uint8_t *)by, strlen(by));
+    Ref tp[2] = { pr, resp }; tp[0].said = tp[1].said = 0; Ref turn = compose(tp, 2, ref_above(tp, 2));
+    PGconn *pg = db_read(conninfo); int nturn, ordinal, held = 0;
+    Claim *tc = session_turns(pg, &fw, &handle.id, &nturn, &ordinal);
+    for (int i = 0; i < nturn && !held; i++) if (lp_id_eq(&tc[i].part[1], &turn.id)) held = tc[i].position ? tc[i].position : -1;
+    free(tc); PQfinish(pg);
+    char ti[33], pi[33], ri[33]; lp_id_hex(&turn.id, ti); lp_id_hex(&pr.id, pi); lp_id_hex(&resp.id, ri);
+    printf("RESOLVE    prompt %s, tier %d; response %s, tier %d; session \"%s\" of %s, %d turn%s before it\n", pi, pr.tier, ri, resp.tier, session, user, nturn, nturn == 1 ? "" : "s");
+    if (held) { if (held > 0) printf("WITNESS    turn %s is held by the session, at %d: nothing is witnessed again\n", ti, held); else printf("WITNESS    turn %s is held by the session: nothing is witnessed again\n", ti); }
+    else { LoadStats ls = { 0 }; lp_id id;
+        if (turn_witness(conninfo, who, speaker, handle, pr, resp, ordinal, &ls, &id)) return 1;
+        printf("WITNESS    turn %s, at %d in the session: %llu entities new, the user's [session, turn] and %s's [response, prompt]\n", ti, ordinal, (unsigned long long)ls.ent_rows, by); }
+    printf("\ntotal %.1f ms\n", (now() - T) * 1000);
+    free(prompt); free(response); return 0;
+}
 int cmd_turn(int argc, char **argv){
     const char *conninfo = laplace_db(), *fwp = NULL, *user = getenv("USER"), *session = NULL; int read_only = 0; long long seedv = -1;
     int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "--firmware", .kind = 's', .at = &fwp }, { .flag = "--as", .kind = 's', .at = &user }, { .flag = "--session", .kind = 's', .at = &session },
@@ -251,13 +344,10 @@ int cmd_turn(int argc, char **argv){
     if (occurrences > MAXOCC) { fprintf(stderr, "turn: prompt has %zu occurrences; this execution window supports %d\n", occurrences, MAXOCC); return 2; }
     st->nocc = (int)occurrences;
     st->pg = db_read(conninfo); st->rd = reader_new(st->pg);
-    Ref who = text_ref(CTX[0], (const uint8_t *)user, strlen(user)), sname = text_ref(CTX[0], (const uint8_t *)session, strlen(session));
-    Ref hp[2] = { who, sname }; hp[0].said = hp[1].said = 0; Ref handle = said_tuple(compose(hp, 2, (uint8_t)((who.tier > sname.tier ? who.tier : sname.tier) + 1)));    /* the session: its name within its user's */
+    Ref who, handle = session_handle(user, session, &who);                   /* the session: its name within its user's */
     int nturn = 0, ordinal = 1;
-    { int have[3] = { 2, 0, 0 }, n, cap; lp_id part[3] = { handle.id, handle.id, handle.id }; Claim *tc = claims_like(st->pg, part, have, fw.fan, fw.k, &n, &cap); st->trips++;
-      positions_of(st->pg, tc, n); lp_sort(tc, (size_t)n, sizeof(Claim), claim_by_position);
-      for (int i = 0; i < n; i++) { if (tc[i].np != 2 || memcmp(&tc[i].part[0], &handle.id, 16)) continue; nturn++;
-          if (tc[i].position >= ordinal) ordinal = tc[i].position + 1;
+    { Claim *tc = session_turns(st->pg, &fw, &handle.id, &nturn, &ordinal); st->trips++;
+      for (int i = 0; i < nturn; i++) {
           size_t remaining = (size_t)(MAXOCC - st->ndisc), parts = reader_parts(st->rd, &tc[i].part[1], st->disc + st->ndisc, remaining); st->trips++;
           if (parts > remaining) { fprintf(stderr, "turn: session discourse exceeds this execution window of %d constituents\n", MAXOCC); free(tc); return 2; }
           st->ndisc += (int)parts; }
@@ -486,28 +576,11 @@ int cmd_turn(int argc, char **argv){
 
     /* ---- WITNESS: the turn, recorded */
     if (!read_only && outn) {
-        Ref resp = text_ref(CTX[0], (const uint8_t *)out, outn); Ref tp[2] = { pr, resp }; tp[0].said = tp[1].said = 0; Ref turn = compose(tp, 2, ref_above(tp, 2));
-        const lp_trust_class *uc = lp_trust_class_named("UserPromptContent"), *rc = lp_trust_class_named("ResponseContent");
-        File f[2]; memset(f, 0, sizeof f);
-        Ref p1[2] = { handle, turn }; p1[0].said = LP_SAID_TUPLE; p1[1].said = 0; Ref c1 = said_claim(compose(p1, 2, ref_above(p1, 2)));
-        c1.outcome = (uint8_t)lp_outcome_of(1.0, &c1.spare); c1.position = (uint32_t)ordinal;
-        Ref p2[2] = { resp, pr }; p2[0].said = p2[1].said = 0; Ref c2 = said_claim(compose(p2, 2, ref_above(p2, 2)));
-        c2.outcome = (uint8_t)lp_outcome_of(1.0, &c2.spare);
-        Ref lap = text_ref(CTX[0], (const uint8_t *)"Laplace", 7);
-        Ref u_tr[2] = { said_metadata(who), c1 }; Ref u_trunk = compose(u_tr, 2, ref_above(u_tr, 2));
-        Ref r_tr[2] = { said_metadata(lap), c2 }; Ref r_trunk = compose(r_tr, 2, ref_above(r_tr, 2));
-        f[0].path = "the prompt"; f[0].witness = who; f[0].trust = uc ? uc->prior : 0.3; f[0].trunk = u_trunk; f[0].file = u_trunk; f[0].has_file = 1;
-        Event e1 = { .claim = c1.id, .witnessed = c1.id, .score = 1.0f, .enter_rating = 1500.0f, .position = (uint32_t)ordinal, .kind = EV_CLAIM }; ev_push(&f[0].ev, &e1);
-        f[1].path = "the response"; f[1].witness = lap; f[1].trust = rc ? rc->prior : 0.2; f[1].trunk = r_trunk; f[1].file = r_trunk; f[1].has_file = 1;
-        Event e2 = { .claim = c2.id, .witnessed = c2.id, .score = 1.0f, .enter_rating = 1500.0f, .kind = EV_CLAIM }; ev_push(&f[1].ev, &e2);
-        Fold *fold = fold_new(); fold_events(fold, f, 2);
-        LoadStats ls = { 0 };
-        LoadWitness lw[2] = { { .id = u_trunk.id, .trust = f[0].trust }, { .id = r_trunk.id, .trust = f[1].trust } };
-        int rc_ = load(conninfo, 2, f, 2, &ls); fold_free(fold);
-        if (rc_ || load_register(conninfo, 2, lw, 2, f, 2) || merge(conninfo, 2, &ls)) return 1;
-        char ti[33]; lp_id_hex(&turn.id, ti);
+        Ref resp = text_ref(CTX[0], (const uint8_t *)out, outn), lap = text_ref(CTX[0], (const uint8_t *)"Laplace", 7);
+        LoadStats ls = { 0 }; lp_id turn;
+        if (turn_witness(conninfo, who, lap, handle, pr, resp, ordinal, &ls, &turn)) return 1;
+        char ti[33]; lp_id_hex(&turn, ti);
         printf("WITNESS    turn %s, at %d in the session: %llu entities new, the user's [session, turn] and Laplace's [response, prompt]\n", ti, ordinal, (unsigned long long)ls.ent_rows);
-        free(f[0].ev.e); free(f[1].ev.e);
     } else printf("WITNESS    %s\n", read_only ? "a read: nothing is witnessed" : "nothing emitted: nothing to witness");
     printf("\n%llu round trips, %llu for text   total %.1f ms\n", (unsigned long long)st->trips, (unsigned long long)reader_trips(st->rd), (now() - T) * 1000);
     field_free(&fd); free(bind); free(out); reader_free(st->rd); PQfinish(st->pg); free(st);

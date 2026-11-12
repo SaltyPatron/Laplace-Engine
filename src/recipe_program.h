@@ -62,7 +62,8 @@ typedef struct { Layout lay; Dis dis[256]; int ndis; HwLine hw[32]; int nhw; Thi
                  char *said; size_t nsaid; int laid_line;                                  /* every word the recipe's lines write, each between spaces: a part named nowhere in them is left open (unmentioned); laid_line: the line just said lays the file out, which names its parts and reads none */
                  Dis val[256]; int nval;                                     /* value LIST NAME...: what a part means in a claim; arg: its road class's list, "" for none the highway holds */
                  Dis defaults[256]; int ndefaults;                           /* indexed field defaults; literals or compiled sibling selectors */
-                 Score score[4]; int nscore; Score games[4]; int ngames; Where where[16]; int nwhere; uint32_t whole, now;   /* whole: outermost conditions; now: conditions on the current declaration */
+                 Score score[4]; int nscore; Score games[4]; int ngames; char strict[4][32]; int nstrict;   /* strict TIER: a TIER read must attest, its score a number on its scale */
+                  Where where[16]; int nwhere; uint32_t whole, now;   /* whole: outermost conditions; now: conditions on the current declaration */
                  struct { char field[64]; const Dis *reference; } admission[8]; int nadmission; /* closed exported domains, checked before any product/key is published */
                  /* a record's layers down its rows and its tree by head, where the recipe gives them (layers, tree): parts of the
                   * record's path beside the claims it says (record_of) */

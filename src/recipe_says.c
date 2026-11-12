@@ -313,6 +313,9 @@ int say_says(Recipe *r, const char *path, char *tok){
         if (name_next(&at, w1, sizeof w1)) { if (strcmp(w1, "from") || !name_next(&at, lo, sizeof lo) || !name_next(&at, w2, sizeof w2) || strcmp(w2, "to") || !name_next(&at, hi, sizeof hi) || atof(hi) <= atof(lo)) { fprintf(stderr, "%s: score TIER NAME from A to B\n", path); return -1; }
             x->from = atof(lo); x->to = atof(hi); x->mapped = 1; }
         return 1; }                                                          /* the part is still what its own disposition says (content, usually) */
+    if (!strcmp(tok, "strict") && LAID) { char extra[16]; at = strtok(NULL, "\r\n");                 /* strict TIER: what a witness states at run time is read whole or not at all */
+        if (!name_next(&at, a2, sizeof a2) || name_next(&at, extra, sizeof extra) || s->nstrict == 4 || strlen(a2) >= sizeof s->strict[0]) { fprintf(stderr, "%s: strict TIER\n", path); return -1; }
+        snprintf(s->strict[s->nstrict++], sizeof s->strict[0], "%s", a2); return 1; }
     if (!strcmp(tok, "games") && LAID) { char extra[16]; at = strtok(NULL, "\r\n");
         if (!name_next(&at, a2, sizeof a2) || !name_next(&at, nm, sizeof nm) || name_next(&at, extra, sizeof extra) || s->ngames == 4) { fprintf(stderr, "%s: games TIER NAME\n", path); return -1; }
         Score *x = &s->games[s->ngames++]; snprintf(x->tier, sizeof x->tier, "%s", a2); snprintf(x->name, sizeof x->name, "%s", nm); x->from = 0; x->to = 1; x->mapped = 0;
