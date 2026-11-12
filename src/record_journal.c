@@ -202,7 +202,7 @@ void deferred_close(DeferredRecords *records){
 }
 void pending_outputs(RecordPipeline *pipeline){
     RecordWorker *result = pipeline->result; File *file = pipeline->file;
-    table_pin(&pipeline->filename.id); table_pin(&pipeline->stem.id); table_pin(&file->witness.id);
+    if (pipeline->names_file) { table_pin(&pipeline->filename.id); table_pin(&pipeline->stem.id); } table_pin(&file->witness.id);
     if (pipeline->say->file_qualifiers) table_pin(&pipeline->file_scope.id);
     if (file->has_lineage) table_pin(&file->lineage.id);
     for (size_t i = 0; i < result->things.n; i++) table_pin(&result->things.c[i].id);

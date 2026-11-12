@@ -383,6 +383,13 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     const char *dot = memchr(sb, sy->stem ? sy->stem : '.', (size_t)(base + bl - sb));
     Ref fname = string_ref((const uint8_t *)base, bl), fstem = string_ref((const uint8_t *)sb, dot ? (size_t)(dot - sb) : (size_t)(base + bl - sb));
     int needs_scope=sy->file_qualifiers;
+    /* The file's name and its stem are content only where the recipe says something by them (a thing within-file,
+     * {file}, about from the file's name). A recipe that says nothing by the name keeps no node of it: pinned, it
+     * was recorded under nothing, an entity for every name a file was ever read under. */
+    int names_file=sy->about_file;
+    for (int i=0; i<sy->nthing && !names_file; i++) names_file=sy->thing[i].infile;
+    for (int i=0; i<sy->npair && !names_file; i++) for (int z=0; z<sy->pair[i].n && !names_file; z++) names_file=!strcmp(sy->pair[i].name[z],"{file}");
+    for (int i=0; i<sy->nrel && !names_file; i++) names_file=!strcmp(sy->rel[i].rel,"{file}");
     Ref file_scope={0};
     if (needs_scope) {
         const char *relative=f->path;
@@ -393,7 +400,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
         file_scope=string_ref((const uint8_t *)relative,strlen(relative));
     }
     if (f->emit) {
-        table_pin(&fname.id); table_pin(&fstem.id); table_pin(&f->witness.id);
+        if (names_file) { table_pin(&fname.id); table_pin(&fstem.id); } table_pin(&f->witness.id);
         if (needs_scope) table_pin(&file_scope.id);
         if (f->has_lineage) table_pin(&f->lineage.id);
     }
@@ -404,7 +411,7 @@ static void read_laid(const Recipe *r, File *f, const uint8_t *src, size_t n, Hw
     if (!part || !lanes || !pipeline) { perror("record workers"); exit(2); }
     *part = (RecordWorker){.r=r, .s=sy, .hw=hw}; record_worker_outputs(part);
     *pipeline = (RecordPipeline){.recipe=r, .file=f, .say=sy, .source=src, .length=n, .input=input,
-        .result=part, .workers=lanes, .worker_count=workers, .filename=fname, .stem=fstem, .file_scope=file_scope};
+        .result=part, .workers=lanes, .worker_count=workers, .filename=fname, .stem=fstem, .file_scope=file_scope, .names_file=names_file};
     if (f->emit || omp_in_parallel()) read_records(pipeline);
     else {
         #pragma omp parallel

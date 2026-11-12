@@ -22,7 +22,7 @@ typedef struct {
 typedef struct RecordPipeline {
     const Recipe *recipe; File *file; const Say *say; const uint8_t *source; size_t length; const SInput *input;
     RecordWorker *result, *workers, *evaluators; uint32_t worker_count;
-    Ref filename, stem, file_scope, about; int has_about, failed; uint32_t key_gaps;
+    Ref filename, stem, file_scope, about; int has_about, failed, names_file; uint32_t key_gaps;   /* names_file: the recipe says something by the file's own name */
     DeferredRecords deferred;
     struct RecordPipeline *next;
 } RecordPipeline;
