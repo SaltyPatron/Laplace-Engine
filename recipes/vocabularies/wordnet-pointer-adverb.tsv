@@ -1,8 +1,12 @@
 # The pointer symbols of WordNet's adverbs (wninput(5WN), "The pointer_symbols for adverbs are"): the symbols shared with
-# the other categories mean what they mean there; "\" in an adverb is "Derived from adjective".
+# the other categories mean what they mean there; "\" in an adverb is "Derived from adjective". The database holds two
+# more than that page lists for adverbs: data.adv has one "+" (practicably, of practicable), which wnsearch(3WN) gives
+# one meaning in every category, and index.adv writes an adverb's domain pointers without their kind, as ";".
 list wnpointer
 "!" antonym
 "\" "derived from adjective"
+"+" "derivationally related form"
+";" "domain of synset"
 ";c" "domain of synset - TOPIC"
 ";r" "domain of synset - REGION"
 ";u" "domain of synset - USAGE"

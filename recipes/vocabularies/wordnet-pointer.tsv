@@ -2,6 +2,8 @@
 # verbs, adjectives and adverbs, which agree wherever a symbol is shared. The symbol is the file's markup; the relation is
 # what WordNet says it is, and is the only one of the two a claim holds. A satellite adjective's and an adjective's
 # symbols are the same list. A backslash is read here as in an adjective, and in an adverb in wordnet-pointer-adverb.
+# The index files write a lemma's domain pointers without their kind: wnsearch(3WN), "CLASSIFICATION 21 ; Domain of
+# synset" and "CLASS 22 - Member of this domain", of which ;c ;r ;u and -c -r -u are the TOPIC, REGION and USAGE kinds.
 list wnpointer
 "!" antonym
 "@" hypernym
@@ -16,6 +18,8 @@ list wnpointer
 "%p" "part meronym"
 "=" attribute
 "+" "derivationally related form"
+";" "domain of synset"
+"-" "member of this domain"
 ";c" "domain of synset - TOPIC"
 "-c" "member of this domain - TOPIC"
 ";r" "domain of synset - REGION"
