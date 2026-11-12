@@ -467,7 +467,16 @@ int recipes_catalog(const char *dir, FILE *out, int json){
     fputs("]}\n", out); return ferror(out) ? 1 : 0;
 }
 Source *sources_loaded(int *n){ *n = nsources; return sources; }
-static int reads(const Source *s, const Recipe *r){ for (int i = 0; i < s->nreads; i++) if (!strcmp(s->reads[i], r->name)) return 1; return 0; }
+const Source *source_runtime(const char *witness, const char *class_label, const char *lineage, const char *root){
+    sources = xrealloc(sources, sizeof(Source) * (size_t)(nsources + 1)); Source *s = &sources[nsources++]; memset(s, 0, sizeof *s);
+    snprintf(s->name, sizeof s->name, "witness"); s->runtime = 1;
+    snprintf(s->witness, sizeof s->witness, "%s", witness);
+    if (lineage) snprintf(s->lineage, sizeof s->lineage, "%s", lineage);
+    s->trust = class_trust("laplace witness", class_label);
+    snprintf(s->found, sizeof s->found, "%s", root);
+    return s;
+}
+static int reads(const Source *s, const Recipe *r){ if (s->runtime) return 1; for (int i = 0; i < s->nreads; i++) if (!strcmp(s->reads[i], r->name)) return 1; return 0; }
 static int under_source_root(const Source *s, const char *path){
     if (!s->found[0]) return 0;
     size_t fl = strlen(s->found);
@@ -535,7 +544,7 @@ Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, Reci
             if (!best || lit > best_lit) { best = &r[i]; best_lit = lit; }
         }
     }
-    if (!best && !of) best = sniff_generic_recipe(r, n, path);
+    if (!best && (!of || of->runtime)) best = sniff_generic_recipe(r, n, path);
     if (best && !best->curated && best->grammar[0] && strcmp(best->grammar, "text") != 0 && !best->lang) {
         best->lang = grammar_load(best->grammar);
         if (!best->lang) { fprintf(stderr, "recipe %s: required grammar %s is unavailable for %s\n", best->name, best->grammar, path); exit(2); }

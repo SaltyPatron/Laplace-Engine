@@ -142,7 +142,7 @@ jobs:
           python3 Laplace-Engine/tests/semantic-interpretation.py "$L"
           cmake -DWORK="$RUNNER_TEMP/reader-contract" -P Laplace-Engine/tests/reader-contract.cmake
           failed=0
-          for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing input-frame rich-text chess-identity opening-lines syzygy-tablebase; do
+          for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing input-frame rich-text chess-identity opening-lines syzygy-tablebase statement-claims; do
             if ! bash "Laplace-Engine/tests/$suite.sh" "$L"; then
               echo "::error::Engine check failed: $suite"
               failed=1
@@ -187,6 +187,11 @@ jobs:
           . Laplace-Operations/laplace.env
           export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
           bash Laplace-Engine/tests/supersede.sh "$RUNNER_TEMP/engine/laplace"
+      - name: a turn said elsewhere and a runtime witness's statement are recorded by the one writer
+        run: |
+          . Laplace-Operations/laplace.env
+          export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
+          bash Laplace-Engine/tests/runtime-witness.sh "$RUNNER_TEMP/engine/laplace"
       - name: Native progress agrees with committed source contents
         run: |
           . Laplace-Operations/laplace.env

@@ -147,6 +147,48 @@ static int file_reading_order(const void *a,const void *b){
     return x->order<y->order?-1:x->order>y->order;
 }
 static lp_id witness_trunk, witness_lineage; static double witness_trust; static int has_witness_trunk, has_witness_lineage, witness_supersedes;   /* the source's trunk, the witness: its trust and lineage keyed by it */
+/* ---- laplace witness: what a witness named at run time states (feedback on an answer, an attested fact, an outcome, a
+ * measured cost), recorded as a source is. The witness is no directory of recipes: its name, its trust class and its
+ * lineage are given, and the files are what it states, each read by the recipe any file of its kind is read by (a
+ * .statement by recipes/statement.recipe: a claim a line). Everything else is cmd_ingest, unchanged: the files
+ * decompose through the record VM, the trunk is [the witness's name, its files' trunks in path order], and that trunk is
+ * the witness its attestations are keyed by, at its class's prior. */
+typedef struct { const char *as, *class_label, *lineage; char root[4096]; } RuntimeWitness;
+static const RuntimeWitness *runtime_witness;
+int cmd_witness(int argc, char **argv){
+    const char *conninfo = NULL, *t0p = NULL, *rdir = NULL, *threads = NULL; int no_load = 0, claims = 0;
+    RuntimeWitness w = {0};
+    int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "-t", .kind = 's', .at = &t0p }, { .flag = "-r", .kind = 's', .at = &rdir }, { .flag = "-j", .kind = 's', .at = &threads },
+        { .flag = "--as", .kind = 's', .at = &w.as }, { .flag = "--class", .kind = 's', .at = &w.class_label }, { .flag = "--lineage", .kind = 's', .at = &w.lineage },
+        { .flag = "--no-load", .kind = 'b', .at = &no_load }, { .flag = "--claims", .kind = 'b', .at = &claims }, { 0 } });
+    if (a >= argc || argv[a][0] == '-' || !w.as || !*w.as || !w.class_label || !*w.class_label) {
+        fputs("usage: laplace witness [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] --as WITNESS --class CLASS [--lineage NAME] [--no-load] [--claims] file...\n", stderr); return 2; }
+    if (strlen(w.as) >= sizeof ((Source *)0)->witness || strchr(w.as, '{') || strchr(w.as, '\n') || (w.lineage && (strlen(w.lineage) >= sizeof ((Source *)0)->lineage || strchr(w.lineage, '\n')))) {
+        fputs("witness: a witness and a lineage are names of at most 127 bytes on one line, a witness without {\n", stderr); return 2; }
+    if (!w.lineage) w.lineage = w.as;                                          /* what one witness states at different times is one lineage: its repeats are no independent consensus */
+    /* The files as the OS resolves them, and the directory they share: a file's pathname is from there, never the host's. */
+    char **av = calloc((size_t)argc + 12, sizeof *av); int n = 0; if (!av) { perror("witness"); return 1; }
+    av[n++] = "ingest";
+    if (conninfo) { av[n++] = "-d"; av[n++] = (char *)conninfo; }
+    if (t0p) { av[n++] = "-t"; av[n++] = (char *)t0p; }
+    if (rdir) { av[n++] = "-r"; av[n++] = (char *)rdir; }
+    if (threads) { av[n++] = "-j"; av[n++] = (char *)threads; }
+    if (no_load) av[n++] = "--no-load";
+    if (claims) av[n++] = "--claims";
+    for (int i = a; i < argc; i++) {
+        struct stat st; char *real = malloc(4096);
+        if (!real || !realpath(argv[i], real) || stat(real, &st) || !S_ISREG(st.st_mode)) { fprintf(stderr, "witness: %s is not a file\n", argv[i]); return 2; }
+        for (char *q = real; *q; q++) if (*q == '\\') *q = '/';
+        char *slash = strrchr(real, '/'); size_t dir = slash ? (size_t)(slash - real) : 0;
+        if (i == a) { memcpy(w.root, real, dir); w.root[dir] = 0; }
+        else { size_t k = 0; while (w.root[k] && k < dir && w.root[k] == real[k]) k++;
+               if (w.root[k] || (real[k] != '/' && k != dir)) { while (k && w.root[k - 1] != '/') k--; if (k) k--; }
+               w.root[k] = 0; }
+        av[n++] = real;
+    }
+    runtime_witness = &w; int rc = cmd_ingest(n, av); runtime_witness = NULL;
+    return rc;
+}
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
     int highway = 0, threads = 0, do_load = 1, show_claims = 0, entities = 0, catalog = 0, list = 0; const char *of = NULL; extern int load_whole;
@@ -182,6 +224,10 @@ int cmd_ingest(int argc, char **argv){
      * asks the database of every composition, is of files only, never a source by its name */
     if (show_claims && a >= argc) { fprintf(stderr, "--claims and --entities show what files would record: name the files\n"); return 2; }
     Recipe *rec = NULL; int nrec = recipes_load(rdir, &rec), nsrc; Source *src = sources_loaded(&nsrc);
+    if (runtime_witness) {                                                    /* the files named are the witness's, and no name among them is a source's */
+        walking = source_runtime(runtime_witness->as, runtime_witness->class_label, runtime_witness->lineage, runtime_witness->root);
+        src = sources_loaded(&nsrc); nsrc = 0;
+    }
     if (entities) for (int i = a; i < argc; i++) { struct stat st_; if (stat(argv[i], &st_)) { fprintf(stderr, "--entities shows what files would record: %s is no file (a sample of a source: -s SOURCE FILE)\n", argv[i]); return 2; } }
     /* Validate the complete selection before a named source can open a load.
      * A misspelled source is not an empty, successfully ingested file. */
@@ -445,11 +491,11 @@ int cmd_ingest(int argc, char **argv){
     printf("   %'llu compositions, %'llu reused; %'llu claims said by records\n",(unsigned long long)table_total(), (unsigned long long)table_hits(), (unsigned long long)nev);
     uint64_t incomplete=0; for (int i=0; i<nfiles; i++) incomplete+=files[i].incomplete;
     uint64_t omissions=say_obligations(stdout);
-    extern uint64_t records_differ(void), say_unplaced(void);
-    uint64_t conflicts=records_differ(), unplaced=say_unplaced();
-    if (incomplete || omissions || conflicts || unplaced || mism) {
-        fprintf(stderr,"ingest rejected: incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu byte_mismatches=%d; source and observation windows were not published\n",
-            (unsigned long long)incomplete,(unsigned long long)omissions,(unsigned long long)conflicts,(unsigned long long)unplaced,mism);
+    extern uint64_t records_differ(void), say_unplaced(void), say_refused(void);
+    uint64_t conflicts=records_differ(), unplaced=say_unplaced(), refused=say_refused();
+    if (incomplete || omissions || conflicts || unplaced || refused || mism) {
+        fprintf(stderr,"ingest rejected: incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d; source and observation windows were not published\n",
+            (unsigned long long)incomplete,(unsigned long long)omissions,(unsigned long long)conflicts,(unsigned long long)unplaced,(unsigned long long)refused,mism);
         fold_free(fold); progress_end("failed",NULL); return 1;
     }
     printf("\n== phases\n");

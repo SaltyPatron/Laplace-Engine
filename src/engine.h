@@ -29,6 +29,7 @@ typedef struct Reader Reader;
 
 /* ---- commands */
 int cmd_ingest(int argc, char **argv);
+int cmd_witness(int argc, char **argv);              /* ingest.c: what a witness named at run time states, through the one ingest */
 int cmd_fills(int argc, char **argv);
 int cmd_tree(int argc, char **argv);
 int cmd_deploy(int argc, char **argv);
@@ -144,6 +145,7 @@ typedef struct {
     char found[1024];                                 /* where it is */
     int nfound;                                       /* how many directories its root matched: found is the last of them by name */
     char unset[64];                                   /* a variable its root or files name that the environment does not set: it is nowhere until it is */
+    int runtime;                                      /* a witness named at run time (laplace witness): no directory of recipes, its files read as any format reads them */
 } Source;
 int     recipes_load(const char *dir, Recipe **out);
 const char *recipes_directory(void);                /* selected estate, including an explicit -r */
@@ -151,6 +153,11 @@ int     recipes_catalog(const char *dir, FILE *out, int json);
 int     source_named(const Source *source, const char *name);
 void    json_str(FILE *out, const char *s);
 Source *sources_loaded(int *n);                                       /* in the order they go in */
+/* A witness named at run time, after the recipes are loaded: a source of this run alone, its record the witness's name,
+ * its trust its class's prior (a class the registry does not declare exits 2), its lineage as given, found at root, its
+ * files read as the formats read them. It is in no order and has no directory. The sources are one array: what
+ * sources_loaded gave before this is not kept. */
+const Source *source_runtime(const char *witness, const char *class_label, const char *lineage, const char *root);
 typedef enum { RECIPE_UNCOVERED, RECIPE_OMITTED, RECIPE_COVERED } RecipeCoverage;
 Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, RecipeCoverage *coverage);
 Recipe *recipe_for(Recipe *r, int n, const char *path, const Source *of);   /* of: among that source's recipes only */

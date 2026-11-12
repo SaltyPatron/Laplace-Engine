@@ -79,6 +79,7 @@ int cmd_translate(int argc, char **argv);
 int cmd_degrees(int argc, char **argv);
 int cmd_pull(int argc, char **argv);
 int cmd_turn(int argc, char **argv);
+int cmd_said(int argc, char **argv);                 /* program.c: a turn said elsewhere, witnessed as laplace turn witnesses its own */
 int cmd_text(int argc, char **argv);
 int cmd_firmware(int argc, char **argv);
 void   refuse_named(const Firmware *fw);                                 /* the predicates this pass's firmware refuses */

@@ -11,6 +11,7 @@
 #include "record_select.h"
 #include "record_diagnostics.h"
 #include "record_values.h"
+#include <math.h>
 #include "record_output.h"
 #include <blake3.h>
 #include <omp.h>
@@ -58,12 +59,29 @@ static void field_qualifier(RecordWorker *k, const SemanticValue *field, int fil
     for (size_t i=0; i<count; i++) parts[i].said=0;
     k->qualifier=said_tuple(compose(parts,(uint32_t)count,ref_above(parts,count))); k->qualified=1;
 }
-static float score_of(const Say *s, const SemanticRecord *t, int32_t g){
-    const SemanticValue *x = &t->n[g];
-    for (int i = 0; i < s->nscore; i++) if (record_field_named(x, s->score[i].tier, strlen(s->score[i].tier))) { int32_t c = record_select_first(t, g, s->score[i].name); if (c < 0 || !t->n[c].vlen || t->n[c].vlen > 31) return 1.0f;
-        char z[32]; memcpy(z, t->n[c].val, t->n[c].vlen); z[t->n[c].vlen] = 0; char *e; double v = strtod(z, &e); if (e == z) return 1.0f;
+/* off: the part is written and is no number on the scale (not a number, more after it, or beyond either end). A corpus's
+ * loose column is read as it always was (a win where it gives none, the nearest end beyond one); a strict tier is refused. */
+static float score_of(const Say *s, const SemanticRecord *t, int32_t g, int *off){
+    const SemanticValue *x = &t->n[g]; *off = 0;
+    for (int i = 0; i < s->nscore; i++) if (record_field_named(x, s->score[i].tier, strlen(s->score[i].tier))) { int32_t c = record_select_first(t, g, s->score[i].name); if (c < 0 || !t->n[c].vlen) return 1.0f;
+        if (t->n[c].vlen > 31) { *off = 1; return 1.0f; }
+        char z[32]; memcpy(z, t->n[c].val, t->n[c].vlen); z[t->n[c].vlen] = 0; char *e; double v = strtod(z, &e); if (e == z) { *off = 1; return 1.0f; }
+        if (*e || !isfinite(v) || v < s->score[i].from || v > s->score[i].to) *off = 1;
         v = (v - s->score[i].from) / (s->score[i].to - s->score[i].from); return (float)(v < 0 ? 0 : v > 1 ? 1 : v); }
     return 1.0f;
+}
+/* strict TIER: a part of that tier is what a witness states at run time, and is read whole or refused: one that attests
+ * nothing, or whose score is no number on its scale, is said, counted, and stops its ingest (say_refused, ingest.c). */
+static uint64_t records_refused;
+uint64_t say_refused(void){ return __atomic_load_n(&records_refused, __ATOMIC_RELAXED); }
+static _Thread_local int score_off;
+static int strict_tier(const Say *s, const SemanticValue *x){
+    for (int i = 0; i < s->nstrict; i++) if (record_field_named(x, s->strict[i], strlen(s->strict[i]))) return 1;
+    return 0;
+}
+static void strict_refuse(uint64_t ordinal, const char *why){
+    table_reading_invalid();
+    if (__atomic_fetch_add(&records_refused, 1, __ATOMIC_RELAXED) < 8) fprintf(stderr, "  refused: part %llu %s\n", (unsigned long long)ordinal + 1, why);
 }
 
 /* The games a part gives what its tier attests (games TIER NAME): the whole number of times the source observed it, one or
@@ -113,7 +131,7 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
         if (x->nlen) { const Dis *dg = record_field_disposition(s, x); if (dg && dg->what == D_OMIT) { g = (uint32_t)record_scope_end(t, (int32_t)g); continue; } }     /* the file's bookkeeping: nothing inside it is read */
         k->selfcp = -1;
         if (s->selfmark) { Ref X; if (record_subject(k, t, (int32_t)g, &X) && X.tier == 0) k->selfcp = (long)lp_tier0_codepoint(T0, &X.id); }     /* the code point the part speaks of, for the source's mark */
-        Ref S; int has = -1; float sc = score_of(s, t, (int32_t)g); k->score = s->nitself ? 1.0f : sc; k->qualified = 0;      /* the score is the attested tuple's, where there is one; what is said of it is said outright */
+        Ref S; int has = -1; int off; float sc = score_of(s, t, (int32_t)g, &off); if (off && strict_tier(s, x)) score_off = 1; k->score = s->nitself ? 1.0f : sc; k->qualified = 0;      /* the score is the attested tuple's, where there is one; what is said of it is said outright */
         uint64_t e0 = k->ev.n; k->grp.n = 0;
         record_emit_layers(k,t,(int32_t)g);
         for (int a = 0; a < s->nitself; a++) { if (!record_field_named(x, s->itself[a].tier, strlen(s->itself[a].tier)) || !record_conditions_match(s, t, (int32_t)g, s->itself[a].when)) continue;
@@ -298,7 +316,12 @@ void record_execute(RecordWorker *sink, const SemanticRecord *t, int32_t root, u
         scratch_restore(mark); }
     int speaks = record_conditions_match(s, t, root, s->whole);
     Pend pend[64]; int np_ = 0;      /* the parts whose claims are said together, still open */
+    score_off = 0;
     unit_range(k, t, 0, t->count, speaks, pend, &np_);
+    if (s->nstrict && strict_tier(s, &t->n[root])) {
+        if (score_off) strict_refuse(ordinal, "writes a score that is no number on its scale");
+        else if (k->ev.n == ev0) strict_refuse(ordinal, "attests nothing");
+    }
     if (speaks) {
         k->qualified=0; k->dependence_class=NULL; memset(&k->dependence,0,sizeof k->dependence); k->score=1.0f;
         record_highway_values(k,t,root);

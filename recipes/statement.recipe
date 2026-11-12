@@ -1,0 +1,26 @@
+name statement
+# What a witness named at run time states (laplace witness): feedback on an answer, an attested fact, an outcome, a
+# measured cost. A claim a line, its parts between tabs:
+#   subject <tab> relation <tab> object <tab> score
+# Each part is the text it is, the same entity wherever that text stands: a subject that is a recorded answer is that
+# answer. The claim is [subject, relation, object], or [subject, relation] where no object is written. The score is the
+# outcome, from 0 (it does not hold) to 1 (it holds), a draw halfway; none written is a win. The witness, its trust
+# class and its lineage are the command's, never the file's.
+match *.statement
+
+tier row by \n
+names subject relation object score
+tier field by \t
+
+# A statement is its content alone: the name of the file a program wrote it to is no part of it, so the same lines
+# are the same trunk wherever they were written.
+omit pathname filename
+
+thing row subject
+content subject relation object
+# the relation is the witness's own word for it, as written
+value - relation
+relate row relation to object alone
+score row score from 0 to 1
+# Read whole or refused: a line that attests nothing, or writes a score that is no number from 0 to 1, stops the run.
+strict row
