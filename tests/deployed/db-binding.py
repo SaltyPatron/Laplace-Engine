@@ -7,7 +7,7 @@ a reset, and the exact-ID reads (coordinates, tiers, paths, holders, standings) 
 rolls back. The catalog readback below shows every C function of the extension bound to one module, the binding
 `laplace deploy` restores (laplace_restore_function_bindings; the deployment runs it).
 
-The fixture: a three-row source of words no other source holds is ingested by its files (-s), recomposed byte for
+The fixture: a three-row source of words no other source holds is ingested by its name (a source's files read with -s make no trunk), recomposed byte for
 byte, ingested again with nothing under its trunk changed, read back by `hop`, and forgotten by its trunk ID, after
 which nothing of that trunk is recorded. Everything asserted is under its own trunk.
 """
@@ -59,7 +59,7 @@ def main():
         dog, warm, cat, cold = words
         (root / 'facts.tsv').write_text(f'{dog}\t{warm}\n{cat}\t{cold}\n{dog}\t{warm}\n', encoding='utf-8', newline='\n')
         fx.forget()
-        report = fx.run('ingest', '-j', '2', '-s', name, root).stdout
+        report = fx.run('ingest', '-j', '2', name).stdout
         assert 'mismatched 0' in report, report
         witness = re.search(r'its ID, the witness\s+([a-f0-9]{32})', report)
         assert witness, report
@@ -70,7 +70,7 @@ def main():
                      ' SELECT count(*) FROM physicality WHERE entity=:\'t\'::blake3', variables={'t': trunk})
         assert all(int(v) > 0 for v in counts.splitlines()), f'attestations, standings, trunk paths: {counts}'
         recorded = fingerprint([trunk])
-        fx.run('ingest', '-j', '2', '-s', name, root)
+        fx.run('ingest', '-j', '2', name)
         assert fx.trunks(name) == [trunk] and fingerprint([trunk]) == recorded, 'an unchanged reading changed its trunk'
         hop = fx.run('hop', dog).stdout
         assert re.search(r'attested: [1-9]', hop), f'the indexed read did not find the claim the fixture attests:\n{hop}'
