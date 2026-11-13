@@ -51,7 +51,8 @@ PY
 
 compile() {
   local parser=$1 scanner_root=$2 common=$3 name binary fresh
-  name=$(sed -n 's/.*TSLanguage \*tree_sitter_\([A-Za-z0-9_]*\)(void).*/\1/p' "$parser" | head -1)
+  # tree_sitter_x(void) or tree_sitter_x() (awk, mermaid and gstlaunch ship the latter)
+  name=$(sed -n 's/.*TSLanguage \*tree_sitter_\([A-Za-z0-9_]*\)(\(void\)\{0,1\}).*/\1/p' "$parser" | head -1)
   [[ -n "$name" ]] || { echo "No exported language in $parser" >&2; return 1; }
   binary="$OUT/libtree-sitter-$name.$ext"
   fresh="$binary.$$.tmp"
