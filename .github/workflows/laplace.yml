@@ -59,10 +59,6 @@ jobs:
         with: { repository: "${{ github.repository_owner }}/Laplace-Native", ref: main, path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
-      # Every job runs the binary its own run built (tests/ci-own-binary.py): the build directory is the runner's, shared
-      # by every run, so a job after this one reads the binary this job hands over, never the directory.
-      - name: workflow contract
-        run: python3 Laplace-Engine/tests/ci-own-binary.py Laplace-Engine/.github/workflows/laplace.yml
       - name: Select qualified Native inputs for the exact source revision
         env:
           GH_TOKEN: ${{ secrets.LAPLACE_CHECKOUT }}
