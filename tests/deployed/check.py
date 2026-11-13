@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -191,9 +192,18 @@ class Fixture:
         """The deployed program, refused anything that could reach beyond this check's sources. Its output is read as
         UTF-8; a byte that is not (a surrogate's generalized form) stays recoverable with surrogateescape."""
         arguments = self.refuse(arguments)
+        began = time.time()
         result = subprocess.run([str(self.program), *arguments], env=dict(self.env, **(env or {})), text=True,
                                 encoding='utf-8', errors='surrogateescape',
                                 capture_output=True, timeout=timeout, input=input)
+        # An ingest runs each source in its own process and writes what that source said (decomposition, mismatches,
+        # its witness ID) to <logs>/<source>.log; the stdout here is only the run's table. Read the source logs with it.
+        if arguments and arguments[0] == 'ingest':
+            logs = re.search(r'logs in (\S+)', result.stdout)
+            if logs and Path(logs[1]).is_dir():
+                said = ''.join(path.read_text(encoding='utf-8', errors='surrogateescape')
+                               for path in sorted(Path(logs[1]).glob('*.log')) if path.stat().st_mtime >= began - 1)
+                result.stdout += '\n' + said
         if check and result.returncode:
             raise RuntimeError(f'laplace {" ".join(arguments)} exited {result.returncode}\n{result.stdout}{result.stderr}')
         return result
