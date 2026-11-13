@@ -32,6 +32,15 @@ unsigned lp_chess_castle_mask(const Bd *b, int c);
 int lp_chess_ep_square(const Bd *b);
 void lp_chess_id_position(const Bd *b, lp_id *out);
 void lp_chess_id_move(const Bd *b, const Mv *m, lp_id *out);
+/* A position's parts: a square [file, rank]; a castling mask's number, its decimal digits; a piece on a square
+ * [piece, square]; the castling [White's mask, Black's mask]; the en passant field, a square or - (ep < 0); the board,
+ * its [piece, square]s in square order. id_position is [board, side, castling, en passant] of these. */
+void lp_chess_id_square(int s, lp_id *out);
+void lp_chess_id_number(unsigned v, lp_id *out);
+void lp_chess_id_piece_square(int8_t p, int s, lp_id *out);
+void lp_chess_id_castling(unsigned white, unsigned black, lp_id *out);
+void lp_chess_id_en_passant(int ep, lp_id *out);
+void lp_chess_id_board(const Bd *b, lp_id *out);
 /* Whether colour c's king is attacked where it stands. */
 int lp_chess_in_check(const Bd *b, int c);
 /* A position's FEN, its first four fields (board, side, castling, the en passant square only where a legal capture

@@ -58,6 +58,7 @@
  *                    ID under it from its constituents with BLAKE3 alone, every leaf a codepoint, and replays every
  *                    line: each position the one its move makes of the one before */
 #include "chess_internal.h"
+#include "chess_cache.h"
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -94,19 +95,30 @@ const Rules *rules_named(const char *v, size_t l){
 
 
 /* ---- reading a file: the node table */
-typedef struct { Ref ps[13][64]; uint8_t has[13][64]; Ref sq[64]; uint8_t hsq[64]; } RefCache;      /* within one file's reading: what a batch's node table holds */
-static Ref r_sq(RefCache *rc, int s){ if (!rc->hsq[s]) { Ref k[2] = { atom((uint32_t)('a' + (s & 7))), atom((uint32_t)('1' + (s >> 3))) }; rc->sq[s] = compose(k, 2, ref_above(k, 2)); rc->hsq[s] = 1; } return rc->sq[s]; }
+/* Within one file's reading: what a batch's node table holds. The vocabulary a load's database already holds comes from
+ * the chess perf-cache (chess_cache.c) and is never composed into the table again; the rest is composed. */
+typedef struct { Ref ps[13][64]; uint8_t has[13][64]; Ref sq[64]; uint8_t hsq[64]; } RefCache;
+static Ref r_sq(RefCache *rc, int s){
+    if (!rc->hsq[s]) {
+        if (!chess_square(s, &rc->sq[s])) { Ref k[2] = { atom((uint32_t)('a' + (s & 7))), atom((uint32_t)('1' + (s >> 3))) }; rc->sq[s] = compose(k, 2, ref_above(k, 2)); }
+        rc->hsq[s] = 1; }
+    return rc->sq[s];
+}
 static Ref r_number(unsigned v){ char d[16]; int l = snprintf(d, sizeof d, "%u", v); Ref k[16]; for (int i = 0; i < l; i++) k[i] = atom((uint32_t)d[i]); return l == 1 ? k[0] : compose(k, (uint32_t)l, ref_above(k, (size_t)l)); }
 static Ref r_position(RefCache *rc, const Bd *b){
     Ref ps[64]; uint32_t n = 0;
-    for (int s = 0; s < 64; s++) if (b->sq[s]) { int pi = b->sq[s] + 6; if (!rc->has[pi][s]) { Ref two[2] = { atom(piece_cp(b->sq[s])), r_sq(rc, s) }; rc->ps[pi][s] = compose(two, 2, ref_above(two, 2)); rc->has[pi][s] = 1; } ps[n++] = rc->ps[pi][s]; }
+    for (int s = 0; s < 64; s++) if (b->sq[s]) { int pi = b->sq[s] + 6;
+        if (!rc->has[pi][s]) { if (!chess_piece_square(b->sq[s], s, &rc->ps[pi][s])) { Ref two[2] = { atom(piece_cp(b->sq[s])), r_sq(rc, s) }; rc->ps[pi][s] = compose(two, 2, ref_above(two, 2)); } rc->has[pi][s] = 1; }
+        ps[n++] = rc->ps[pi][s]; }
     Ref part[4]; part[0] = compose(ps, n, ref_above(ps, n)); part[1] = atom(b->side ? 'b' : 'w');
-    Ref cm[2] = { r_number(castle_mask(b, 0)), r_number(castle_mask(b, 1)) }; part[2] = compose(cm, 2, ref_above(cm, 2));
+    unsigned wm = castle_mask(b, 0), bm = castle_mask(b, 1);
+    if (!chess_castling(wm, bm, &part[2])) { Ref cm[2] = { r_number(wm), r_number(bm) }; part[2] = compose(cm, 2, ref_above(cm, 2)); }
     int ep = ep_square(b); part[3] = ep >= 0 ? r_sq(rc, ep) : atom('-');
     for (int i = 0; i < 4; i++) part[i].said = 0;
     Ref p = compose(part, 4, ref_above(part, 4)); p.said = 0; return p;
 }
 static Ref r_move(RefCache *rc, const Bd *b, const Mv *m){
+    { Ref r; if (chess_move(b, m, &r)) { r.said = 0; return r; } }
     Ref k[4]; uint32_t n = 3; k[0] = atom(piece_cp(b->sq[m->from])); k[1] = r_sq(rc, m->from); k[2] = r_sq(rc, m->to);
     if (m->promo) { k[3] = atom(piece_cp((int8_t)(b->side ? -m->promo : m->promo))); n = 4; }
     Ref r = compose(k, n, ref_above(k, n)); r.said = 0; return r;
@@ -197,6 +209,7 @@ static int replay(Rd *r, const Line *L, const Bd *b0, Ref *line, Ref *layer, int
         Mv all[256]; int na = gen(&b, all); int k = san_match(&b, p->san, p->n, all, na);
         if (k < 0) { snprintf(r->err, sizeof r->err, "%.*s is no legal move at ply %d", (int)p->n, p->san, i + 1); return 0; }
         Ref M = r_move(r->rc, &b, &all[k]); Bd before = b; Ref Pb = P; make(&b, &all[k]); P = r_position(r->rc, &b); rv(&traj, M); rv(&traj, P); r->plies++; r->castles += all[k].castle;
+        if (chess_capture) chess_capture(&before, &all[k], &b, &Pb, &M, &P);
         rv(&r->transitions,Pb);rv(&r->transitions,M);rv(&r->transitions,P);
         if (!p->nann) { rv(&lay, M); continue; }
         annotated = 1; RV e = { 0 }; rv(&e, M);

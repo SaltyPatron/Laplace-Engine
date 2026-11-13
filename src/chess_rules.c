@@ -157,13 +157,21 @@ int ep_square(const Bd *b){
 static void id_cp(uint32_t cp, lp_id *out){ lp_id_codepoint(cp, out); }
 static void id_number(unsigned v, lp_id *out){ char d[16]; int l = snprintf(d, sizeof d, "%u", v); lp_id k[16]; for (int i = 0; i < l; i++) id_cp((uint32_t)d[i], &k[i]); lp_id_compose(k, (size_t)l, out); }
 static void id_square(int s, lp_id *out){ lp_id k[2]; id_cp((uint32_t)('a' + (s & 7)), &k[0]); id_cp((uint32_t)('1' + (s >> 3)), &k[1]); lp_id_compose(k, 2, out); }
+/* The parts of a position, each the same bytes compose() hashes (src/chess.c gives the layout). */
+void lp_chess_id_square(int s, lp_id *out){ id_square(s, out); }
+void lp_chess_id_number(unsigned v, lp_id *out){ id_number(v, out); }
+void lp_chess_id_piece_square(int8_t p, int s, lp_id *out){ lp_id two[2]; id_cp(piece_cp(p), &two[0]); id_square(s, &two[1]); lp_id_compose(two, 2, out); }
+void lp_chess_id_castling(unsigned white, unsigned black, lp_id *out){ lp_id two[2]; id_number(white, &two[0]); id_number(black, &two[1]); lp_id_compose(two, 2, out); }
+void lp_chess_id_en_passant(int ep, lp_id *out){ if (ep >= 0) id_square(ep, out); else id_cp('-', out); }
+void lp_chess_id_board(const Bd *b, lp_id *out){
+    lp_id ps[64]; int n = 0;
+    for (int s = 0; s < 64; s++) if (b->sq[s]) lp_chess_id_piece_square(b->sq[s], s, &ps[n++]);
+    lp_id_compose(ps, (size_t)n, out);
+}
 /* A position's ID, computed here without the node table: the same bytes compose() hashes. */
 void id_position(const Bd *b, lp_id *out){
-    lp_id ps[64], two[2]; int n = 0;
-    for (int s = 0; s < 64; s++) if (b->sq[s]) { id_cp(piece_cp(b->sq[s]), &two[0]); id_square(s, &two[1]); lp_id_compose(two, 2, &ps[n++]); }
-    lp_id part[4]; lp_id_compose(ps, (size_t)n, &part[0]); id_cp(b->side ? 'b' : 'w', &part[1]);
-    id_number(castle_mask(b, 0), &two[0]); id_number(castle_mask(b, 1), &two[1]); lp_id_compose(two, 2, &part[2]);
-    int ep = ep_square(b); if (ep >= 0) id_square(ep, &part[3]); else id_cp('-', &part[3]);
+    lp_id part[4]; lp_chess_id_board(b, &part[0]); id_cp(b->side ? 'b' : 'w', &part[1]);
+    lp_chess_id_castling(castle_mask(b, 0), castle_mask(b, 1), &part[2]); lp_chess_id_en_passant(ep_square(b), &part[3]);
     lp_id_compose(part, 4, out);
 }
 void id_move(const Bd *b, const Mv *m, lp_id *out){

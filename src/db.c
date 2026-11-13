@@ -3,6 +3,7 @@
  * canonical witness registration and authoritative standings share the final
  * publication transaction; parsing never retains consensus bucket locks. */
 #include "db_internal.h"
+#include "chess_cache.h"
 typedef struct { Node **item; size_t n,cap; } Nodes;
 static void add_node(Nodes *v,Node *node){
     if(v->n==v->cap){v->cap=v->cap?v->cap*2:256;v->item=xrealloc(v->item,v->cap*sizeof *v->item);}
@@ -33,8 +34,10 @@ static void prune(File *files,int nfiles,LoadStats *st){
         /* Tier-0 is the database realizer's storage-free leaf floor. Highway
          * membership supplies an identity/coordinate, not proof that its path
          * is readable from PostgreSQL. Persist its canonical logical closure
-         * on first admission; only a recorded trunk can prune that closure. */
-        x->keep=lp_idmap_find(writer.known,&x->id)>=0 || lp_tier0_contains(T0,&x->id) ? 2 : 0;
+         * on first admission; only a recorded trunk can prune that closure.
+         * A chess perf-cache record is likewise no proof by membership: it is
+         * known here only when this load's database was found to hold it. */
+        x->keep=lp_idmap_find(writer.known,&x->id)>=0 || lp_tier0_contains(T0,&x->id) || chess_cache_admitted(&x->id) ? 2 : 0;
     }
     TABLE_EACH(x) if(x->keep==2) known_tree(x);
     TABLE_EACH(x) if(x->pin) queue_node(frontier,x);

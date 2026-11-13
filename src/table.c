@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include "laplace/tier0.h"
 #include "laplace_reader_source.h"
+#include "chess_cache.h"
 
 Node *NODE; Vtx *VTX;
 const lp_tier0_record *T0;
@@ -506,5 +507,6 @@ Ref ref_of_id(const lp_id *id, int *ok){
     int64_t cp = lp_tier0_codepoint(T0, id); if (cp >= 0) return atom((uint32_t)cp);
     const lp_tier0_record *cached=lp_highway_find(HW,id);
     if (cached) { r.id=*id; memcpy(r.c.m,cached->m,sizeof r.c.m); r.tier=(uint8_t)cached->pad; return r; }
+    if (chess_cache_ref(id, &r)) return r;                                 /* chess vocabulary the table never composed */
     *ok = 0; r.id = *id; return r;
 }
