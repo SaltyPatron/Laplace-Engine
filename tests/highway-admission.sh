@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Read-only admission boundary checks against an existing generated artifact.
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 L=${1:?usage: highway-admission.sh /path/to/laplace}
 : "${LAPLACE_HIGHWAY:?existing highway artifact required}"
 : "${LAPLACE_TIER0:?existing tier-0 artifact required}"

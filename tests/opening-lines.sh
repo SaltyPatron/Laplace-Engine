@@ -11,6 +11,7 @@
 # the ingest's, and each named row's record must be [line, the two claims of that final position].
 #   tests/opening-lines.sh path/to/laplace [path/to/chess-positions]
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 L=${1:?usage: tests/opening-lines.sh path/to/laplace [path/to/chess-positions]}; here=$(cd "$(dirname "$0")" && pwd)
 P=${2:-}
 if [ -z "$P" ]; then for c in chess-positions chess_positions chess-positions.exe chess_positions.exe; do [ -x "$(dirname "$L")/$c" ] && P=$(dirname "$L")/$c && break; done; fi

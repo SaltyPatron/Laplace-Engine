@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Transport windows must preserve the compiled XML scope stream and its claims.
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 L=${1:?usage: tests/record-framing.sh path/to/laplace}
 here=$(cd "$(dirname "$0")" && pwd)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/record-framing.XXXXXX")

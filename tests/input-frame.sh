@@ -2,6 +2,7 @@
 # A byte frame must leave the generic JSON recipe's claims unchanged, exclude
 # the binary tail, and reject malformed input before any source admission.
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 L=${1:?usage: tests/input-frame.sh path/to/laplace}
 here=$(cd "$(dirname "$0")" && pwd)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/input-frame.XXXXXX")

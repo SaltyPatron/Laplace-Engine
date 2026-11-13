@@ -5,6 +5,7 @@
 # its compiled Tree-sitter grammar projects from a file.
 #   tests/layout-counted.sh path/to/laplace
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 L=${1:?usage: tests/layout-counted.sh path/to/laplace}; here=$(cd "$(dirname "$0")" && pwd)
 fail(){ echo "layout-counted: $*" >&2; exit 1; }
 out=$("$L" structure "$here/layout/wndb.layout" "$here/layout/data.sample" -n 1000 | tr -d '\r')

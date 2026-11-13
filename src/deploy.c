@@ -38,14 +38,22 @@ static char *one(PGconn *pg, const char *sql){
 /* The database the connection string names, made if the server does not have it: asked of the server's own
  * database, "postgres", by the same role over the same connection. */
 static void database_made(const char *conninfo){
-    PGconn *pg = PQconnectdb(conninfo); int there = PQstatus(pg) == CONNECTION_OK; PQfinish(pg); if (there) return;
+    PGconn *pg = PQconnectdb(conninfo); int there = PQstatus(pg) == CONNECTION_OK;
+    char first[512]; snprintf(first, sizeof first, "%s", there ? "" : PQerrorMessage(pg)); PQfinish(pg); if (there) return;
     char *err = NULL; PQconninfoOption *o = PQconninfoParse(conninfo, &err); if (!o) { fprintf(stderr, "%s", err ? err : "the connection string does not parse\n"); exit(1); }
     const char *kw[32], *vl[32], *db = NULL; int n = 0;
     for (PQconninfoOption *x = o; x->keyword && n < 30; x++) { if (!x->val) continue; if (!strcmp(x->keyword, "dbname")) { db = x->val; continue; } kw[n] = x->keyword; vl[n++] = x->val; }
     if (!db) { PQconninfoFree(o); return; }
     kw[n] = "dbname"; vl[n++] = "postgres"; kw[n] = NULL; vl[n] = NULL;
     pg = PQconnectdbParams(kw, vl, 0);
-    if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "%s", PQerrorMessage(pg)); exit(1); }
+    if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "cannot connect to %s: %scannot connect to postgres either: %s", db, first, PQerrorMessage(pg)); exit(1); }
+    {   /* Only a database the server does not have is made: any other refusal (authentication, pg_hba, CONNECT
+         * privilege, server down) is reported as it is. */
+        const char *pv[1] = { db };
+        PGresult *r = PQexecParams(pg, "SELECT 1 FROM pg_catalog.pg_database WHERE datname = $1", 1, NULL, pv, NULL, NULL, 0);
+        int exists = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1; PQclear(r);
+        if (exists) { fprintf(stderr, "cannot connect to %s, which exists: %s", db, first); PQfinish(pg); PQconninfoFree(o); exit(1); }
+    }
     char *id = PQescapeIdentifier(pg, db, strlen(db)), q[512]; snprintf(q, sizeof q, "CREATE DATABASE %s", id);
     printf("laplace deploy   the server has no database %s: making it\n", db);
     if (!run(pg, q, "the database")) exit(1);

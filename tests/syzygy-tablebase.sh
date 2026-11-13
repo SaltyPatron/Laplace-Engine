@@ -7,6 +7,7 @@
 # KQvK (tests/chess/syzygy, the tables of the lichess mirror) pins it.
 #   tests/syzygy-tablebase.sh path/to/laplace
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 L=${1:?usage: tests/syzygy-tablebase.sh path/to/laplace}; here=$(cd "$(dirname "$0")" && pwd)
 export LAPLACE_RECIPES=$here/../recipes
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/syzygy-tablebase.XXXXXX"); trap 'rm -rf "$scratch"' EXIT
