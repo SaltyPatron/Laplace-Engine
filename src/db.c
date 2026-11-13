@@ -558,7 +558,9 @@ int merge(const char *conninfo,int npg,LoadStats *stats){
         writer.pending,writer.affected);
     /* An unchanged registered source contributes no new evidence on replay.
      * Recompute only for new series or changed witness trust/containment. */
-    if(writer.series_changed || writer.witness_changed) statement(writer.series,sql);
+    /* A window of a source not yet registered inserts no attestation, so folding it publishes nothing; it would only
+     * hold every consensus bucket lock of its claims for the window (observation-windows). */
+    if(lp_idmap_count(writer.registered) && (writer.series_changed || writer.witness_changed)) statement(writer.series,sql);
     for(int lane=0;lane<writer.ncopy;lane++){
         snprintf(sql,sizeof sql,"DROP TABLE %s,%s",writer.entity[lane],writer.path[lane]);
         statement(writer.series,sql);
