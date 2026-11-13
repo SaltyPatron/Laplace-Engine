@@ -405,9 +405,16 @@ static int recipes_load_mode(const char *dir, Recipe **out, int metadata){
     if (recipes_now) { *out = recipes_now; return nrecipes_now; }
     metadata_root = dir;
     Recipe *r = NULL; int n = recipes_in(dir, -1, &r, 0, metadata);
+    /* A recipe reads like one that may itself read like another (twic-validated-games -> twic-games -> chess-com-games):
+     * each is resolved once what it names is, in rounds, whatever order the files load in. One left after a round that
+     * resolved nothing is in a cycle. */
+    for (int progress = 1; progress; ) {
+    progress = 0;
     for (int i = 0; i < n; i++) if (r[i].like[0]) {                          /* it reads as another recipe does */
         int j = 0; while (j < n && strcmp(r[j].name, r[i].like)) j++;
-        if (j == n || r[j].broken) { fprintf(stderr, "recipe %s reads like %s, which %s\n", r[i].name, r[i].like, j == n ? "is not a recipe" : "did not load"); r[i].broken = 1; r[i].like[0] = 0; continue; }
+        if (j == n || r[j].broken) { fprintf(stderr, "recipe %s reads like %s, which %s\n", r[i].name, r[i].like, j == n ? "is not a recipe" : "did not load"); r[i].broken = 1; r[i].like[0] = 0; progress = 1; continue; }
+        if (r[j].like[0]) continue;                                            /* what it reads like is not resolved yet */
+        progress = 1;
         Recipe me = r[i]; r[i] = r[j]; snprintf(r[i].file, sizeof r[i].file, "%s", me.file);
         blake3_hasher program; blake3_hasher_init(&program);
         blake3_hasher_update(&program, r[j].program_hash, sizeof r[j].program_hash);
@@ -415,6 +422,11 @@ static int recipes_load_mode(const char *dir, Recipe **out, int metadata){
         blake3_hasher_finalize(&program, r[i].program_hash, sizeof r[i].program_hash);
         snprintf(r[i].name, sizeof r[i].name, "%s", me.name); memcpy(r[i].match, me.match, sizeof me.match); r[i].nmatch = me.nmatch; r[i].source = me.source;
         memcpy(r[i].witness, me.witness, sizeof me.witness); memcpy(r[i].lineage, me.lineage, sizeof me.lineage); r[i].trust = me.trust; r[i].like[0] = 0;
+    }
+    }
+    for (int i = 0; i < n; i++) if (r[i].like[0]) {
+        fprintf(stderr, "recipe %s reads like %s, in a cycle of recipes each reading like another\n", r[i].name, r[i].like);
+        r[i].broken = 1; r[i].like[0] = 0;
     }
     /* A recipe outside any source that names no class stays at 0: no witness, content only (Sequence 9.4, 6.5).
      * A witness's trust is its class's prior, never a default figure. */
