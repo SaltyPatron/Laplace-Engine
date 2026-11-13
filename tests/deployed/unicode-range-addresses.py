@@ -51,12 +51,13 @@ SELECT 'lost|'||count(*) FROM (VALUES (0,44),(55296,64013),(55296,57343)) r(a,b)
      AND ST_NPoints(p.path)=2
      AND (laplace_vertex_ids(ST_PointN(p.path,1)))[1]=laplace_cp_id(r.a)
      AND (laplace_vertex_ids(ST_PointN(p.path,2)))[1]=laplace_cp_id(r.b));
--- The files' own content holds the text "D800" (every tier is recorded), so the question is whether a claim says the
--- hex spelling where the codepoint belongs: the index pair, the block's start, or the IDNA row.
-SELECT 'hex|'||EXISTS (SELECT FROM unnest(ARRAY[
+-- The files' content rows themselves are [High Surrogates, D800] and [D800, DISALLOWED] (the recipes' row and field
+-- tiers; every tier is recorded), so the question is whether a claim says the hex spelling where the codepoint belongs:
+-- the index pair, the block's start, or the IDNA row, among the claims under the trunk.
+SELECT 'hex|'||EXISTS (SELECT FROM laplace_contained_series({ids(trunks)}) s WHERE s.claim=ANY(ARRAY[
    laplace_compose(ARRAY[laplace_id('High Surrogates'),laplace_id('D800')]),
    laplace_compose(ARRAY[laplace_id('High Surrogates'),laplace_id('Start Code'),laplace_id('D800')]),
-   laplace_compose(ARRAY[laplace_id('D800'),laplace_id('DISALLOWED')])]) c(id) WHERE c.id=ANY({under}));
+   laplace_compose(ARRAY[laplace_id('D800'),laplace_id('DISALLOWED')])]));
 SELECT 'boundary|'||EXISTS (SELECT FROM laplace_contained_series({ids(trunks)})
  WHERE claim=laplace_compose(ARRAY[laplace_id('High Surrogates'),laplace_id('Start Code'),laplace_cp_id(55296)]));
 SELECT 'index|'||EXISTS (SELECT FROM physicality
