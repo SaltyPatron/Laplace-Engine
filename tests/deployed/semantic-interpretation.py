@@ -229,7 +229,7 @@ def main():
         if series(subset) != before:
             fail('the subset replay changed its published testimony')
 
-        ingest(chess)
+        chess_report = ingest(chess)
         chess_trunks = single(chess)
         # Lineage is carried on attestation rows; games are records under the trunk, so a chess source that attests
         # nothing has no row to carry it. Where it attests, every row carries its declared lineage.
@@ -238,7 +238,7 @@ def main():
             fail(f'the validated chess subset does not declare its lineage: {lineage_text(chess_trunks[0])!r}')
         before = series(chess_trunks)
         if before in ('', 'null'):
-            fail('validated games published no Native testimony')
+            fail(f'validated games published no Native testimony ({attested} attestation rows under {chess_trunks[0]})', chess_report[-3000:])
         ingest(chess)
         if series(chess_trunks) != before:
             fail('the validated chess replay changed its testimony')

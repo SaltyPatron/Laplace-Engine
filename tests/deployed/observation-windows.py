@@ -83,6 +83,9 @@ SELECT 'consensus|'||count(*) FROM consensus WHERE claim=ANY({ids(claims)});
 SELECT 'locks|'||NOT EXISTS (SELECT FROM pg_locks l JOIN pg_stat_activity s ON s.pid=l.pid
  WHERE l.locktype='advisory' AND l.classid=1279348803::oid AND l.objsubid=2 AND l.objid BETWEEN 0 AND 15
    AND s.application_name=:'app');
+SELECT 'holders|'||coalesce(string_agg(DISTINCT left(regexp_replace(s.query,'\\s+',' ','g'),300),' || '),'')
+ FROM pg_locks l JOIN pg_stat_activity s ON s.pid=l.pid
+ WHERE l.locktype='advisory' AND l.classid=1279348803::oid AND l.objsubid=2 AND s.application_name=:'app';
 COMMIT;
 """, variables={'app': application, 'witness': witness})
     except RuntimeError:
@@ -152,7 +155,8 @@ def main():
             if observed['consensus'] != '0':
                 raise SystemExit('observation-windows: an unregistered source published standings')
             if observed['locks'] != 't':
-                raise SystemExit('observation-windows: streaming retained public consensus bucket locks')
+                raise SystemExit('observation-windows: streaming retained public consensus bucket locks; held by: '
+                                 + observed.get('holders', ''))
             # A second, independent witness of the same claims, committed while the first source streams.
             fixture.run('ingest', '-j', '2', concurrent, env={'LAPLACE_INGEST_ONE': '1'})
             if process.poll() is not None or fixture.trunks(streamed):
