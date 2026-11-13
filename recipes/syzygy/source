@@ -1,25 +1,22 @@
 name syzygy
 # Syzygy endgame tablebases (Ronald de Man; syzygy-tables.info, the lichess mirror tablebase.lichess.ovh/tables/standard):
 # every position of 3 to 5 pieces, its win/draw/loss under the 50-move rule (.rtbw) and its distance to zeroing (.rtbz),
-# a table a material (KQvK holds KvKQ too). A table is an index over its material's placements, not a list of positions:
-# the engine decodes it (input decode syzygy, src/chess_syzygy.c) to a line a position, its FEN and its verdict, and the
-# recipes say the FEN is the position (grammar fen), the same position any game or opening that stands there holds.
+# a table a material (KQvK holds KvKQ too). A table is an index over its material's placements, a deterministic
+# provider: a position's verdict is read from it (laplace tablebase; Laplace-Engine src/chess_tablebase.c), never
+# recorded per position. What the source records are endings: from each position of up to five pieces a recorded game
+# or opening reaches, the tables' best-play line to its end, through each zeroing move into the smaller table and on,
+# recorded as games' lines are (lines.recipe), so it shares its transitions with every game that plays them.
 witness Syzygy Endgame Tablebases
 # StandardsDerived: the class trust_classes.toml gives tablebases
 class StandardsDerived
 root $LAPLACE_DATA/Games/Chess/syzygy
-# Read smallest material first, each table's WDL before its DTZ: the files are read in the order these lines name
-# them, so every 3-piece table is recorded before any 4-piece one and every 4-piece before any 5-piece, and what a
-# larger table holds in common with a smaller one (a [piece, square], a verdict, a number) is found recorded and not
-# written again. A name is its material: K?vK has three pieces; K??vK and K?vK? four; K???vK and K??vK? five.
+# A table file a material: its .rtbw is the file read (its lines are those beginning in its material); its .rtbz is
+# read beside it by the probe. The smallest material first, as the lines of a larger one run into the smaller tables.
+# A name is its material: K?vK has three pieces; K??vK and K?vK? four; K???vK and K??vK? five.
 files $LAPLACE_DATA/Games/Chess/syzygy/*/K?vK.rtbw
-files $LAPLACE_DATA/Games/Chess/syzygy/*/K?vK.rtbz
 files $LAPLACE_DATA/Games/Chess/syzygy/*/K??vK.rtbw
 files $LAPLACE_DATA/Games/Chess/syzygy/*/K?vK?.rtbw
-files $LAPLACE_DATA/Games/Chess/syzygy/*/K??vK.rtbz
-files $LAPLACE_DATA/Games/Chess/syzygy/*/K?vK?.rtbz
 files $LAPLACE_DATA/Games/Chess/syzygy/*/K???vK.rtbw
 files $LAPLACE_DATA/Games/Chess/syzygy/*/K??vK?.rtbw
-files $LAPLACE_DATA/Games/Chess/syzygy/*/K???vK.rtbz
-files $LAPLACE_DATA/Games/Chess/syzygy/*/K??vK?.rtbz
+# The positions the lines begin in are those the chess sources' records reach: they go in first (recipes/order).
 after unicode

@@ -1,0 +1,12 @@
+name syzygy-lines
+match *.rtbw
+# A table of the set, decoded (input decode syzygy, src/chess_syzygy.c): the best-play lines the tables give from the
+# positions of its material that recorded games and openings reach, read from the database this ingest loads into. A
+# line is written as the PGN a game of it is, [FEN "P0"], its moves and its result under the 50-move rule, and read as
+# a game is (chess.c, grammar pgn, records played): the line [P0, M0, P1, ..., Pn], and for each move the [P, M, P'] a
+# game that plays it claims, scored for the side that moves. So a tablebase line converges with the games that stand on
+# it and with the other lines that share its tail, by identity alone. No verdict of a position is written: a verdict is
+# a read of the tables (laplace tablebase).
+grammar pgn
+records played
+input decode syzygy

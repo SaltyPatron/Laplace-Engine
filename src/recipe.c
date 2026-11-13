@@ -185,6 +185,11 @@ static int recipe_parse(const char *path, Recipe *r, int metadata){
             if (!metadata && !recipe_product_format(r, name)) { fclose(f); r->program_state = NULL; return 0; }
         }
         else if (metadata) continue;                                    /* inventory needs no grammar, cache or database */
+        else if (r->native && !strcmp(tok, "input")) {                  /* input decode NAME: the text a decoder writes is what the native grammar reads */
+            char *kind = strtok(NULL, " \t\r\n"), *name = strtok(NULL, " \t\r\n");
+            const InputDecoder *decoder = kind && name && !strcmp(kind, "decode") ? input_decoder(name) : NULL;
+            if (!decoder || r->decoder || strtok(NULL, " \t\r\n")) { fprintf(stderr, "%s: input decode NAME (once; a decoder the engine holds: grammars.c)\n", path); fclose(f); r->program_state = NULL; return 0; }
+            r->decoder = decoder; }
         else { int sv = r->native ? r->native->says(r, path, tok)           /* a line of the native grammar the recipe names */
                               : say_says(r, path, tok);                     /* the file's layout and the disposition of its parts */
             if (sv > 0 && !r->native) say_mentions(r, whole);              /* its words: a part named in none is left open */

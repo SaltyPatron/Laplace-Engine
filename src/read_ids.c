@@ -54,6 +54,24 @@ Hold *paths_of(PGconn *pg,const lp_id *ids,int n,int *nout){
     args_free(&args);if(bag.n>1)qsort(bag.v,(size_t)bag.n,sizeof(Hold),hold_order);
     *nout=bag.n;return bag.v;
 }
+/* A path's ends without the path: its first and last vertices (a path of one vertex is both) and its length, runs
+ * written out, read where the path is, so a long composition's shape crosses the socket in a few dozen bytes. */
+Ends *ends_of(PGconn *pg,const lp_id *ids,size_t n,size_t *nout){
+    lp_vec(Ends) bag={0};Args args={0};
+    for(size_t at=0;at<n;){
+        size_t amount=n-at;if(amount>DB_ID_WINDOW)amount=DB_ID_WINDOW;
+        args_reset(&args);arg_ids(&args,ids+at,amount);
+        PGresult *rows=ask(pg,"SELECT p.ordinal,p.entity,COALESCE(@postgis@.ST_StartPoint(p.path),p.path),COALESCE(@postgis@.ST_EndPoint(p.path),p.path),"
+                              "@extschema@.laplace_path_length(p.path) FROM @extschema@.laplace_physicalities($1::@extschema@.blake3[]) p",&args);
+        for(int row=0;row<PQntuples(rows);row++){
+            lp_path first=col_path(rows,row,2),last=col_path(rows,row,3);if(!first.n || !last.n)continue;
+            Ends e;e.src=at+(size_t)col_int(rows,row,0)-1;e.entity=*col_id(rows,row,1);e.first=lp_path_id(first,0);e.last=lp_path_id(last,last.n-1);e.length=col_int(rows,row,4);
+            lp_push(&bag,e);
+        }
+        PQclear(rows);at+=amount;
+    }
+    args_free(&args);*nout=bag.n;return bag.v;
+}
 /* Canonical Tier-0 and Highway coordinates remain mmap reads. Only misses cross the socket;
  * request ordinals distribute each coordinate back to every occurrence. */
 void coords_of(PGconn *pg,const lp_id *ids,int n,double *out,uint8_t *has){

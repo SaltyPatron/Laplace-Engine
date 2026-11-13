@@ -189,6 +189,8 @@ int cmd_witness(int argc, char **argv){
     runtime_witness = &w; int rc = cmd_ingest(n, av); runtime_witness = NULL;
     return rc;
 }
+static const char *ingesting;
+const char *ingest_database(void){ return ingesting ? ingesting : laplace_db(); }
 int cmd_ingest(int argc, char **argv){
     const char *conninfo = laplace_db(), *t0p = NULL, *rdir = laplace_recipes();
     int highway = 0, threads = 0, do_load = 1, show_claims = 0, entities = 0, catalog = 0, list = 0; const char *of = NULL; extern int load_whole;
@@ -203,6 +205,7 @@ int cmd_ingest(int argc, char **argv){
         { .flag = "--claims-tsv", .kind = 'b', .at = &tsv_claims },                                     /* --claims for a machine: a claim a line, its parts between tabs */
         { .flag = "--entities", .kind = 'b', .at = &entities },                                         /* what the recipes would record, entities and claims; nothing is loaded */
         { 0 } });
+    ingesting = conninfo;
     if (catalog || list) {
         if (a < argc || of || highway || show_claims || tsv_claims || entities || do_load != 1 || (catalog && list)) {
             fputs("Use ingest --catalog or --list-sources with optional -r recipes.\n", stderr); return 2;

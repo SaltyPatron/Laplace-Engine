@@ -1,488 +1,324 @@
-/* Syzygy endgame tablebases (Ronald de Man's format, syzygy-tables.info), decoded for a recipe (input decode syzygy).
+/* Syzygy endgame tablebases as a source: the endgame trajectories the tables give from where recorded games stand
+ * (input decode syzygy, recipes/syzygy). Sequence 27.1-27.2: a game is P0 -> M0 -> P1 ...; tablebases are endings,
+ * trajectories that converge with the games' and with each other's.
  *
- * A table, KQvK.rtbw or KQvK.rtbz, holds a verdict for every position of its material, White's or Black's to move, the
- * material either way round (KQvK is also KvKQ): its WDL file the win/draw/loss under the 50-move rule (a cursed win
- * is a win the 50-move rule draws, a blessed loss a loss it saves), its DTZ file the distance to zeroing, the plies to
- * the next capture or pawn move under best play. Neither is a list of positions: each is an index over the material's
- * placements, folded by the board's symmetries and compressed, its values right only where no capture decides them,
- * and the DTZ file holds one side to move. So the verdict of a position is a probe: the captures searched (the tables
- * of the material they leave, found beside the file), then the table. That is the format's own law, as Fathom
- * (Ronald de Man, basil00, Jon Dart; MIT) implements it: its index encoding and pair decompression are carried over
- * here; every move, check and position is chess_rules.c's (the one chess this Engine has).
+ * A table's verdicts are not its content to record: a verdict is a deterministic read of the tables
+ * (chess_tablebase.c: laplace tablebase, and Laplace-MCP's tablebase read), so no position is recorded for being in a
+ * table. What the source records is what the tables add to what the database holds: for every position of the tables'
+ * material that a recorded line reaches (a game, an opening, any record whose content holds a line), the best-play
+ * line from it to its end, a mate, through each zeroing move into the smaller table and on; written as the PGN a game
+ * of that line is ([FEN "P0"], its SAN, the result under the 50-move rule), so chess.c composes it as it composes every
+ * game: the line [P0, M0, P1, ..., Pn], and for each move the [P, M, P'] a game that plays it claims, scored for the
+ * side that moves as a game's result scores it, attested by the source's witness. A line another reached position's
+ * line already holds from that position on, with the same result, is not written again: it is that line's tail.
  *
- * What the decoder writes is the table's content: a line for every legal position of the material, in the order the
- * table's pieces are placed, its FEN (chess_rules' lp_chess_fen_of, so a FEN read back is the same position) and the
- * verdict, tab-separated:
- *   .rtbw   FEN \t win | cursed win | draw | blessed loss | loss         every position
- *   .rtbz   FEN \t the distance to zeroing, signed for the side to move   every position that is not a draw (a drawn
- *                                                                        position has no zeroing to reach)
- * as Fathom's probe_wdl and probe_dtz give it: DTZ in plies, over 100 where the 50-move rule turns the result, and
- * possibly one more than the true distance where the table rounds. The recipe (recipes/syzygy) says what each part is:
- * the FEN the position (grammar fen), the verdict a claim of it. No castling rights are in any table's position; an en
- * passant square is, where a pawn of the side to move can take on it. The tables a probe reaches are read whole into
- * memory when the file is opened (a 3-to-5-piece table's captures reach the smaller tables of the same set). */
+ * The reached positions are read from the database the ingest loads into (ingest_database), through the Engine's
+ * reader, a level a round trip: the trunks of the sources whose recipes read chess (grammar pgn, or a part read by
+ * it), down to their records (said RECORD); from each record to the line it holds (a composition of an odd number of
+ * constituents, at least three, whose first and last are positions), its ends alone read (ends_of); the line's last
+ * position decoded, and for a line that ends within the tables' pieces every position of it. Positions are decoded from
+ * their constituents by the IDs chess_rules composes ([piece, square], the side, the castling masks, the en passant
+ * square), each checked by composing its ID again. Positions with castling rights are in no table.
+ *
+ * Every table file of the source is read by the recipe (*.rtbw): the lines that begin in its material, either colouring,
+ * in their positions' ID order. The work is done once a run, at the first table opened; each table's text is then
+ * written out from it. */
 #include "engine.h"
-#include "chess_rules.h"
+#include "chess_tablebase.h"
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { TB_WDL, TB_DTZ };
-#define TB_PIECES 7
-#define TB_MAX_SYMS 4096
-static const char *const SUFFIX[2] = { ".rtbw", ".rtbz" };
-static const uint32_t MAGIC[2] = { 0x5d23e871, 0xa50c66d7 };
+#define LINE_PLIES 2048
+#define LEVEL_CHUNK 262144
 
-static uint16_t le16(const uint8_t *p){ return (uint16_t)(p[0] | p[1] << 8); }
-static uint32_t le32(const uint8_t *p){ return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
-static uint32_t be32(const uint8_t *p){ return (uint32_t)p[3] | (uint32_t)p[2] << 8 | (uint32_t)p[1] << 16 | (uint32_t)p[0] << 24; }
-static uint64_t be64(const uint8_t *p){ return (uint64_t)be32(p) << 32 | be32(p + 4); }
-
-/* ---- the index: placements of the pieces, folded by symmetry (Fathom's tables and encode) */
-static const int8_t OffDiag[64] = {
-  0,-1,-1,-1,-1,-1,-1,-1, 1, 0,-1,-1,-1,-1,-1,-1, 1, 1, 0,-1,-1,-1,-1,-1, 1, 1, 1, 0,-1,-1,-1,-1,
-  1, 1, 1, 1, 0,-1,-1,-1, 1, 1, 1, 1, 1, 0,-1,-1, 1, 1, 1, 1, 1, 1, 0,-1, 1, 1, 1, 1, 1, 1, 1, 0 };
-static const uint8_t Triangle[64] = {
-  6, 0, 1, 2, 2, 1, 0, 6, 0, 7, 3, 4, 4, 3, 7, 0, 1, 3, 8, 5, 5, 8, 3, 1, 2, 4, 5, 9, 9, 5, 4, 2,
-  2, 4, 5, 9, 9, 5, 4, 2, 1, 3, 8, 5, 5, 8, 3, 1, 0, 7, 3, 4, 4, 3, 7, 0, 6, 0, 1, 2, 2, 1, 0, 6 };
-static const uint8_t FlipDiag[64] = {
-  0, 8,16,24,32,40,48,56, 1, 9,17,25,33,41,49,57, 2,10,18,26,34,42,50,58, 3,11,19,27,35,43,51,59,
-  4,12,20,28,36,44,52,60, 5,13,21,29,37,45,53,61, 6,14,22,30,38,46,54,62, 7,15,23,31,39,47,55,63 };
-static const uint8_t Lower[64] = {
- 28, 0, 1, 2, 3, 4, 5, 6, 0,29, 7, 8, 9,10,11,12, 1, 7,30,13,14,15,16,17, 2, 8,13,31,18,19,20,21,
-  3, 9,14,18,32,22,23,24, 4,10,15,19,22,33,25,26, 5,11,16,20,23,25,34,27, 6,12,17,21,24,26,27,35 };
-static const uint8_t Diag[64] = {
-  0, 0, 0, 0, 0, 0, 0, 8, 0, 1, 0, 0, 0, 0, 9, 0, 0, 0, 2, 0, 0,10, 0, 0, 0, 0, 0, 3,11, 0, 0, 0,
-  0, 0, 0,12, 4, 0, 0, 0, 0, 0,13, 0, 0, 5, 0, 0, 0,14, 0, 0, 0, 0, 6, 0,15, 0, 0, 0, 0, 0, 0, 7 };
-static const uint8_t Flap[64] = {
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 6,12,18,18,12, 6, 0, 1, 7,13,19,19,13, 7, 1, 2, 8,14,20,20,14, 8, 2,
-  3, 9,15,21,21,15, 9, 3, 4,10,16,22,22,16,10, 4, 5,11,17,23,23,17,11, 5, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const uint8_t PawnTwist[64] = {
-  0, 0, 0, 0, 0, 0, 0, 0,47,35,23,11,10,22,34,46,45,33,21, 9, 8,20,32,44,43,31,19, 7, 6,18,30,42,
- 41,29,17, 5, 4,16,28,40,39,27,15, 3, 2,14,26,38,37,25,13, 1, 0,12,24,36, 0, 0, 0, 0, 0, 0, 0, 0 };
-static const int16_t KKIdx[10][64] = {
-  { -1, -1, -1,  0,  1,  2,  3,  4, -1, -1, -1,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-    26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57 },
-  { 58, -1, -1, -1, 59, 60, 61, 62, 63, -1, -1, -1, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83,
-    84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115 },
-  {116,117, -1, -1, -1,118,119,120,121,122, -1, -1, -1,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,
-   142,143,144,145,146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,164,165,166,167,168,169,170,171,172,173 },
-  {174, -1, -1, -1,175,176,177,178,179, -1, -1, -1,180,181,182,183,184, -1, -1, -1,185,186,187,188,189,190,191,192,193,194,195,196,
-   197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228 },
-  {229,230, -1, -1, -1,231,232,233,234,235, -1, -1, -1,236,237,238,239,240, -1, -1, -1,241,242,243,244,245,246,247,248,249,250,251,
-   252,253,254,255,256,257,258,259,260,261,262,263,264,265,266,267,268,269,270,271,272,273,274,275,276,277,278,279,280,281,282,283 },
-  {284,285,286,287,288,289,290,291,292,293, -1, -1, -1,294,295,296,297,298, -1, -1, -1,299,300,301,302,303, -1, -1, -1,304,305,306,
-   307,308,309,310,311,312,313,314,315,316,317,318,319,320,321,322,323,324,325,326,327,328,329,330,331,332,333,334,335,336,337,338 },
-  { -1, -1,339,340,341,342,343,344, -1, -1,345,346,347,348,349,350, -1, -1,441,351,352,353,354,355, -1, -1, -1,442,356,357,358,359,
-    -1, -1, -1, -1,443,360,361,362, -1, -1, -1, -1, -1,444,363,364, -1, -1, -1, -1, -1, -1,445,365, -1, -1, -1, -1, -1, -1, -1,446 },
-  { -1, -1, -1,366,367,368,369,370, -1, -1, -1,371,372,373,374,375, -1, -1, -1,376,377,378,379,380, -1, -1, -1,447,381,382,383,384,
-    -1, -1, -1, -1,448,385,386,387, -1, -1, -1, -1, -1,449,388,389, -1, -1, -1, -1, -1, -1,450,390, -1, -1, -1, -1, -1, -1, -1,451 },
-  {452,391,392,393,394,395,396,397, -1, -1, -1, -1,398,399,400,401, -1, -1, -1, -1,402,403,404,405, -1, -1, -1, -1,406,407,408,409,
-    -1, -1, -1, -1,453,410,411,412, -1, -1, -1, -1, -1,454,413,414, -1, -1, -1, -1, -1, -1,455,415, -1, -1, -1, -1, -1, -1, -1,456 },
-  {457,416,417,418,419,420,421,422, -1,458,423,424,425,426,427,428, -1, -1, -1, -1, -1,429,430,431, -1, -1, -1, -1, -1,432,433,434,
-    -1, -1, -1, -1, -1,435,436,437, -1, -1, -1, -1, -1,459,438,439, -1, -1, -1, -1, -1, -1,460,440, -1, -1, -1, -1, -1, -1, -1,461 } };
-static const uint8_t FileToFile[8] = { 0, 1, 2, 3, 3, 2, 1, 0 };
-static const int WdlToMap[5] = { 1, 3, 0, 2, 0 };
-static const uint8_t PAFlags[5] = { 8, 0, 0, 0, 4 };
-static size_t Binomial[7][64], PawnIdx[6][24], PawnFactorFile[6][4];
-
-static void indices_init(void){
-    for (int i = 0; i < 7; i++) for (int j = 0; j < 64; j++) { size_t f = 1, l = 1; for (int k = 0; k < i; k++) { f *= (size_t)(j - k); l *= (size_t)(k + 1); } Binomial[i][j] = f / l; }
-    for (int i = 0; i < 6; i++) { size_t s = 0;
-        for (int j = 0; j < 24; j++) { PawnIdx[i][j] = s; s += Binomial[i][PawnTwist[(1 + (j % 6)) * 8 + (j / 6)]]; if ((j + 1) % 6 == 0) { PawnFactorFile[i][j / 6] = s; s = 0; } } }
+/* ---- a position's constituents, decoded by the IDs chess_rules gives them */
+typedef struct { lp_idmap *pair, *square; lp_id white, black, none, castle_none; } Decode;
+static void decode_init(Decode *d){
+    d->pair = lp_idmap_sized(sizeof(int)); d->square = lp_idmap_sized(sizeof(int));
+    for (int s = 0; s < 64; s++) { lp_id k[2]; lp_id_codepoint((uint32_t)('a' + (s & 7)), &k[0]); lp_id_codepoint((uint32_t)('1' + (s >> 3)), &k[1]);
+        lp_id sq; lp_id_compose(k, 2, &sq); *(int *)lp_idmap_get(d->square, &sq, NULL) = s;
+        for (int p = -KING; p <= KING; p++) { if (!p) continue; lp_id two[2]; lp_id_codepoint(piece_cp((int8_t)p), &two[0]); two[1] = sq;
+            lp_id pr; lp_id_compose(two, 2, &pr); *(int *)lp_idmap_get(d->pair, &pr, NULL) = (p + 6) * 64 + s; } }
+    lp_id_codepoint('w', &d->white); lp_id_codepoint('b', &d->black); lp_id_codepoint('-', &d->none);
+    lp_id z[2]; lp_id_codepoint('0', &z[0]); z[1] = z[0]; lp_id_compose(z, 2, &d->castle_none);
+}
+static void decode_free(Decode *d){ lp_idmap_free(d->pair); lp_idmap_free(d->square); }
+/* A position's four parts: 1 where they are a position the tables can hold (no castling); its board's ID in board. */
+static int position_parts(const Decode *d, const lp_id *k, size_t n, Bd *b, lp_id *board){
+    if (n != 4) return 0;
+    memset(b, 0, sizeof *b); b->ep = -1;
+    if (lp_id_eq(&k[1], &d->white)) b->side = 0; else if (lp_id_eq(&k[1], &d->black)) b->side = 1; else return 0;
+    if (!lp_id_eq(&k[2], &d->castle_none)) return 0;
+    if (!lp_id_eq(&k[3], &d->none)) { int64_t s = lp_idmap_find(d->square, &k[3]); if (s < 0) return 0; b->ep = (int8_t)*(int *)lp_idmap_at(d->square, (size_t)s); }
+    *board = k[0]; return 1;
+}
+static int board_parts(const Decode *d, const lp_id *k, size_t n, Bd *b){
+    for (size_t i = 0; i < n; i++) { int64_t at = lp_idmap_find(d->pair, &k[i]); if (at < 0) return 0;
+        int v = *(int *)lp_idmap_at(d->pair, (size_t)at); b->sq[v % 64] = (int8_t)(v / 64 - 6); }
+    return king_sq(b, 0) >= 0 && king_sq(b, 1) >= 0;
 }
 
-typedef struct {
-    const uint8_t *indexTable, *sizeTable, *data, *offset, *symPat;
-    uint8_t *symLen; uint64_t *base;
-    uint8_t blockSize, idxBits, minLen, constValue[2];
-} Pairs;
-typedef struct { Pairs *precomp; size_t factor[TB_PIECES]; uint8_t pieces[TB_PIECES], norm[TB_PIECES]; } Enc;
-typedef struct {
-    char name[16]; int num, symmetric, pawned, kk_enc; uint8_t pawns[2];
-    uint8_t *bytes[2], *mem[2];                       /* each file's bytes (64-aligned, as the format's offsets assume) */
-    Enc wdl[8], dtz[4];                               /* pieces: wdl[bside], dtz[0]; pawns: wdl[file + 4 bside], dtz[file] */
-    const uint8_t *dtzMap; uint16_t dtzMapIdx[4][4]; uint8_t dtzFlags[4];
-} Table;
-typedef struct { Table *t; int n, cap; char dir[1024]; } Set;
-
-static size_t subfactor(size_t k, size_t n){ size_t f = n, l = 1; for (size_t i = 1; i < k; i++) { f *= n - i; l *= i + 1; } return f / l; }
-static size_t enc_init(Enc *ei, const Table *t, const uint8_t *tb, int shift, int file){
-    int more = t->pawned && t->pawns[1] > 0;
-    for (int i = 0; i < t->num; i++) { ei->pieces[i] = (uint8_t)((tb[i + 1 + more] >> shift) & 0x0f); ei->norm[i] = 0; }
-    int order = (tb[0] >> shift) & 0x0f, order2 = more ? (tb[1] >> shift) & 0x0f : 0x0f;
-    int k = ei->norm[0] = (uint8_t)(t->pawned ? t->pawns[0] : t->kk_enc ? 2 : 3);
-    if (more) { ei->norm[k] = t->pawns[1]; k += ei->norm[k]; }
-    for (int i = k; i < t->num; i += ei->norm[i]) for (int j = i; j < t->num && ei->pieces[j] == ei->pieces[i]; j++) ei->norm[i]++;
-    int n = 64 - k; size_t f = 1;
-    for (int i = 0; k < t->num || i == order || i == order2; i++) {
-        if (i == order) { ei->factor[0] = f; f *= t->pawned ? PawnFactorFile[ei->norm[0] - 1][file] : t->kk_enc ? 462 : 31332; }
-        else if (i == order2) { ei->factor[ei->norm[0]] = f; f *= subfactor(ei->norm[ei->norm[0]], (size_t)(48 - ei->norm[0])); }
-        else { ei->factor[k] = f; f *= subfactor(ei->norm[k], (size_t)n); n -= ei->norm[k]; k += ei->norm[k]; } }
-    return f;
+/* ---- the reached positions */
+typedef struct { lp_id id; Bd b; int wdl, plies, covered, failed; Mv *line; char result[8]; } Start;
+typedef struct { lp_idmap *at; Start *s; size_t n, cap; int pieces; uint64_t records, lines, ending, positions; } Reach;
+static void reach_add(Reach *r, const lp_id *id, const Bd *b){
+    bool fresh; size_t i = lp_idmap_put(r->at, id, &fresh); if (!fresh) return;
+    if (r->n == r->cap) { r->cap = r->cap ? r->cap * 2 : 1024; r->s = realloc(r->s, sizeof(Start) * r->cap); }
+    Start *s = &r->s[r->n++]; memset(s, 0, sizeof *s); s->id = *id; s->b = *b; (void)i;
 }
-static void sym_len(Pairs *d, uint32_t s, char *seen){
-    const uint8_t *w = d->symPat + 3 * s; uint32_t s2 = (uint32_t)(w[2] << 4) | (w[1] >> 4);
-    if (s2 == 0x0fff) d->symLen[s] = 0;
-    else { uint32_t s1 = (uint32_t)((w[1] & 0xf) << 8) | w[0]; if (!seen[s1]) sym_len(d, s1, seen); if (!seen[s2]) sym_len(d, s2, seen); d->symLen[s] = (uint8_t)(d->symLen[s1] + d->symLen[s2] + 1); }
-    seen[s] = 1;
+typedef lp_vec(lp_id) IdList;
+static void ids_unique(IdList *v){                                           /* in place, first occurrence kept */
+    lp_idmap *m = lp_idmap_new(); size_t k = 0;
+    for (size_t i = 0; i < v->n; i++) { bool fresh; lp_idmap_put(m, &v->v[i], &fresh); if (fresh) v->v[k++] = v->v[i]; }
+    v->n = k; lp_idmap_free(m);
 }
-/* A table's pairs header: its sizes (index table, size table, data) in size[3]. NULL: it is malformed. */
-static Pairs *pairs_setup(const uint8_t **at, size_t tb_size, size_t size[3], uint8_t *flags, int type){
-    const uint8_t *data = *at; Pairs *d = calloc(1, sizeof *d); *flags = data[0];
-    if (data[0] & 0x80) { d->constValue[0] = type == TB_WDL ? data[1] : 0; *at = data + 2; size[0] = size[1] = size[2] = 0; return d; }
-    d->blockSize = data[1]; d->idxBits = data[2]; uint32_t real = le32(data + 4), blocks = real + data[3];
-    int maxLen = data[8]; d->minLen = data[9]; int h = maxLen - d->minLen + 1; uint32_t nsyms = le16(data + 10 + 2 * h);
-    if (h <= 0 || nsyms >= TB_MAX_SYMS) { free(d); return NULL; }
-    d->offset = data + 10; d->symPat = data + 12 + 2 * h; d->symLen = calloc(nsyms ? nsyms : 1, 1); d->base = calloc((size_t)h, sizeof(uint64_t));
-    *at = data + 12 + 2 * h + 3 * nsyms + (nsyms & 1);
-    size_t indices = (tb_size + ((size_t)1 << d->idxBits) - 1) >> d->idxBits;
-    size[0] = 6 * indices; size[1] = 2 * (size_t)blocks; size[2] = (size_t)real << d->blockSize;
-    char seen[TB_MAX_SYMS]; memset(seen, 0, nsyms);
-    for (uint32_t s = 0; s < nsyms; s++) if (!seen[s]) sym_len(d, s, seen);
-    d->base[h - 1] = 0;
-    for (int i = h - 2; i >= 0; i--) d->base[i] = (d->base[i + 1] + le16(d->offset + 2 * i) - le16(d->offset + 2 * (i + 1))) / 2;
-    for (int i = 0; i < h; i++) d->base[i] <<= 64 - (d->minLen + i);
-    return d;
+/* Positions decoded: each ID's position where it is one the tables can hold, at most r->pieces pieces, checked by its
+ * ID composed again. out[i] set and ok[i] 1 where it is. Two round trips: the positions' parts, then their boards'. */
+static void positions_decode(PGconn *pg, const Decode *d, int pieces, const lp_id *ids, size_t n, Bd *out, uint8_t *ok){
+    memset(ok, 0, n);
+    for (size_t at = 0; at < n; at += LEVEL_CHUNK) {
+        size_t k = n - at < LEVEL_CHUNK ? n - at : LEVEL_CHUNK; int nh = 0;
+        Hold *h = paths_of(pg, ids + at, (int)k, &nh);
+        lp_id *board = calloc(k, sizeof(lp_id)); uint8_t *has = calloc(k, 1); Ids parts = { 0 };
+        for (int j = 0; j < nh; j++) { size_t i = (size_t)h[j].src; if (i >= k) continue;
+            path_into(&parts, lp_path_of(h[j].path, (size_t)h[j].path_len));
+            if (position_parts(d, parts.v, parts.n, &out[at + i], &board[i])) has[i] = 1; }
+        holds_free(h, nh);
+        /* the boards: their lengths first (a board is its pieces), then the paths of those within the tables */
+        IdList want = { 0 }; for (size_t i = 0; i < k; i++) if (has[i]) lp_push(&want, board[i]);
+        size_t ne = 0; Ends *e = ends_of(pg, want.v, want.n, &ne); lp_idmap *small = lp_idmap_new();
+        for (size_t j = 0; j < ne; j++) if (e[j].length <= pieces) lp_idmap_put(small, &e[j].entity, NULL);
+        free(e); want.n = 0;
+        for (size_t j = 0; j < lp_idmap_count(small); j++) lp_push(&want, lp_idmap_keys(small)[j]);
+        int nb = 0; Hold *bh = paths_of(pg, want.v, (int)want.n, &nb);
+        lp_idmap *bset = lp_idmap_sized(sizeof(int));
+        for (int j = 0; j < nb; j++) *(int *)lp_idmap_get(bset, &bh[j].entity, NULL) = j;
+        for (size_t i = 0; i < k; i++) { if (!has[i]) continue; int64_t at2 = lp_idmap_find(bset, &board[i]); if (at2 < 0) continue;
+            const Hold *x = &bh[*(int *)lp_idmap_at(bset, (size_t)at2)];
+            path_into(&parts, lp_path_of(x->path, (size_t)x->path_len));
+            Bd *b = &out[at + i]; if (!board_parts(d, parts.v, parts.n, b)) continue;
+            lp_id again; id_position(b, &again); ok[at + i] = lp_id_eq(&again, &ids[at + i]); }
+        holds_free(bh, nb); lp_idmap_free(bset); lp_idmap_free(small); lp_vec_free(&want); lp_vec_free(&parts); free(board); free(has); }
 }
-static const uint8_t *pairs_value(const Pairs *d, size_t idx){
-    if (!d->idxBits) return d->constValue;
-    uint32_t main = (uint32_t)(idx >> d->idxBits); int lit = (int)(idx & (((size_t)1 << d->idxBits) - 1)) - (1 << (d->idxBits - 1));
-    uint32_t block = le32(d->indexTable + 6 * main); lit += le16(d->indexTable + 6 * main + 4);
-    if (lit < 0) while (lit < 0) lit += le16(d->sizeTable + 2 * --block) + 1;
-    else while (lit > le16(d->sizeTable + 2 * block)) lit -= le16(d->sizeTable + 2 * block++) + 1;
-    const uint8_t *ptr = d->data + ((size_t)block << d->blockSize);
-    int m = d->minLen; uint64_t code = be64(ptr); ptr += 8; uint32_t bits = 0, sym;
-    for (;;) {
-        int l = m; while (code < d->base[l - m]) l++;
-        sym = le16(d->offset + 2 * (l - m)) + (uint32_t)((code - d->base[l - m]) >> (64 - l));
-        if (lit < (int)d->symLen[sym] + 1) break;
-        lit -= (int)d->symLen[sym] + 1; code <<= l; bits += (uint32_t)l;
-        if (bits >= 32) { bits -= 32; code |= (uint64_t)be32(ptr) << bits; ptr += 4; } }
-    while (d->symLen[sym]) { const uint8_t *w = d->symPat + 3 * sym; uint32_t s1 = (uint32_t)((w[1] & 0xf) << 8) | w[0];
-        if (lit < (int)d->symLen[s1] + 1) sym = s1; else { lit -= (int)d->symLen[s1] + 1; sym = (uint32_t)(w[2] << 4) | (w[1] >> 4); } }
-    return d->symPat + 3 * sym;
+/* Whether each ID is a position at all (its parts are four, the side w or b): for telling a line from other content. */
+static void positions_are(PGconn *pg, const Decode *d, const lp_id *ids, size_t n, uint8_t *ok){
+    memset(ok, 0, n);
+    for (size_t at = 0; at < n; at += LEVEL_CHUNK) {
+        size_t k = n - at < LEVEL_CHUNK ? n - at : LEVEL_CHUNK; size_t ne = 0;
+        Ends *e = ends_of(pg, ids + at, k, &ne); IdList want = { 0 }; lp_idmap *four = lp_idmap_new();
+        for (size_t j = 0; j < ne; j++) if (e[j].length == 4) lp_idmap_put(four, &e[j].entity, NULL);
+        for (size_t j = 0; j < lp_idmap_count(four); j++) lp_push(&want, lp_idmap_keys(four)[j]);
+        int nh = 0; Hold *h = paths_of(pg, want.v, (int)want.n, &nh); lp_idmap *pos = lp_idmap_new(); Ids parts = { 0 };
+        for (int j = 0; j < nh; j++) { path_into(&parts, lp_path_of(h[j].path, (size_t)h[j].path_len));
+            if (parts.n == 4 && (lp_id_eq(&parts.v[1], &d->white) || lp_id_eq(&parts.v[1], &d->black))) lp_idmap_put(pos, &h[j].entity, NULL); }
+        for (size_t i = 0; i < k; i++) ok[at + i] = lp_idmap_find(pos, &ids[at + i]) >= 0;
+        holds_free(h, nh); lp_idmap_free(pos); lp_idmap_free(four); lp_vec_free(&want); lp_vec_free(&parts); free(e); }
 }
-
-/* ---- the tables of a set: a material's name (KQvKR), and its files read whole */
-static void material_name(const int w[7], const int b[7], char *out){
-    static const char L[] = " PNBRQK"; char *o = out;
-    for (int p = KING; p >= PAWN; p--) for (int i = 0; i < w[p]; i++) *o++ = L[p];
-    *o++ = 'v'; for (int p = KING; p >= PAWN; p--) for (int i = 0; i < b[p]; i++) *o++ = L[p];
-    *o = 0;
+/* The witnesses' trunks of the sources whose recipes read chess, but this one (whose recipe decodes its input). */
+static void chess_trunks(PGconn *pg, IdList *trunks){
+    int nsrc, nrec; Source *src = sources_loaded(&nsrc); Recipe *rec = NULL; nrec = recipes_load(recipes_directory(), &rec);
+    const NativeGrammar *pgn = native_grammar("pgn"); lp_vec(const char *) names = { 0 };
+    for (int i = 0; i < nsrc; i++) { int chess = 0;
+        for (int k = 0; k < nrec; k++) if (rec[k].source == i && !rec[k].decoder && !rec[k].broken && ((rec[k].native == pgn) || say_part_native(&rec[k], pgn))) chess = 1;
+        const char *w = chess ? source_called(&src[i]) : NULL; if (w) lp_push(&names, w); }
+    Args a = { 0 }; PGresult *q = ask_try(pg, "SELECT witness FROM @extschema@.laplace_witness_trust()", &a); args_free(&a);
+    if (!q) return;
+    Reader *rd = reader_new(pg);
+    for (int r = 0; r < PQntuples(q); r++) { const lp_id *w = col_id(q, r, 0); lp_id first[2]; char *nm = reader_parts(rd, w, first, 2) ? reader_text(rd, &first[0], 256) : NULL;
+        for (size_t i = 0; nm && i < names.n; i++) if (!strcmp(nm, names.v[i])) { lp_push(trunks, *w); fprintf(stderr, "  syzygy: the lines recorded under %s\n", nm); break; }
+        free(nm); }
+    reader_free(rd); PQclear(q); lp_vec_free(&names);
 }
-static uint8_t *file_read(const char *path, uint8_t **mem, size_t *n){
-    FILE *f = fopen(path, "rb"); if (!f) return NULL;
-    fseek(f, 0, SEEK_END); long l = ftell(f); rewind(f); if (l <= 0) { fclose(f); return NULL; }
-    *mem = malloc((size_t)l + 64); uint8_t *b = (uint8_t *)(((uintptr_t)*mem + 63) & ~(uintptr_t)63);
-    if (fread(b, 1, (size_t)l, f) != (size_t)l) { fclose(f); free(*mem); *mem = NULL; return NULL; }
-    fclose(f); *n = (size_t)l; return b;
+/* Down each trunk to its records, a level a round trip (Laplace-MCP's chess games read walks the same): below a trunk
+ * its files' trunks, below them a vertex said HOLDS holds records, one said RECORD is a record as its file holds it. */
+static void records_under(PGconn *pg, const IdList *trunks, IdList *records){
+    IdList level = { 0 }; lp_idmap *seen = lp_idmap_new();
+    for (size_t i = 0; i < trunks->n; i++) { bool fresh; lp_idmap_put(seen, &trunks->v[i], &fresh); if (fresh) lp_push(&level, trunks->v[i]); }
+    for (int depth = 0; depth < 12 && level.n; depth++) {
+        IdList next = { 0 };
+        for (size_t at = 0; at < level.n; at += LEVEL_CHUNK) {
+            size_t k = level.n - at < LEVEL_CHUNK ? level.n - at : LEVEL_CHUNK; int nh = 0; Hold *h = paths_of(pg, level.v + at, (int)k, &nh);
+            for (int j = 0; j < nh; j++) { lp_path p = lp_path_of(h[j].path, (size_t)h[j].path_len);
+                for (size_t v = 0; v < p.n; v++) { uint32_t said = lp_path_said(p, v);
+                    if (said != LP_SAID_RECORD && said != LP_SAID_HOLDS && !(said == 0 && depth < 2 && v > 0)) continue;
+                    lp_id id = lp_path_id(p, v); bool fresh; lp_idmap_put(seen, &id, &fresh); if (!fresh) continue;
+                    if (said == LP_SAID_RECORD) lp_push(records, id); else lp_push(&next, id); } }
+            holds_free(h, nh); }
+        lp_vec_free(&level); level = next; }
+    lp_vec_free(&level); lp_idmap_free(seen);
 }
-static int table_file(Table *t, const char *dir, int type){
-    char path[1100]; snprintf(path, sizeof path, "%s/%s%s", dir, t->name, SUFFIX[type]); size_t n;
-    uint8_t *data = file_read(path, &t->mem[type], &n); if (!data) return 0;
-    if ((n & 63) != 16 || le32(data) != MAGIC[type]) { fprintf(stderr, "%s: no Syzygy %s table (or an incomplete one)\n", path, type ? "DTZ" : "WDL"); return -1; }
-    t->bytes[type] = data;
-    int split = type != TB_DTZ && (data[4] & 0x01), num = t->pawned ? 4 : 1; data += 5;
-    Enc *ei = type == TB_WDL ? t->wdl : t->dtz; size_t tb_size[4][2];
-    for (int f = 0; f < num; f++) {
-        tb_size[f][0] = enc_init(&ei[f], t, data, 0, f);
-        if (split) tb_size[f][1] = enc_init(&ei[num + f], t, data, 4, f);
-        data += t->num + 1 + (t->pawned && t->pawns[1]); }
-    data += (uintptr_t)data & 1;
-    size_t size[4][2][3];
-    for (int f = 0; f < num; f++) { uint8_t flags;
-        if (!(ei[f].precomp = pairs_setup((const uint8_t **)&data, tb_size[f][0], size[f][0], &flags, type))) return -1;
-        if (type == TB_DTZ) t->dtzFlags[f] = flags;
-        if (split && !(ei[num + f].precomp = pairs_setup((const uint8_t **)&data, tb_size[f][1], size[f][1], &flags, type))) return -1; }
-    if (type == TB_DTZ) {
-        t->dtzMap = data;
-        for (int f = 0; f < num; f++) if (t->dtzFlags[f] & 2) {
-            if (!(t->dtzFlags[f] & 16)) for (int i = 0; i < 4; i++) { t->dtzMapIdx[f][i] = (uint16_t)(data + 1 - t->dtzMap); data += 1 + data[0]; }
-            else { data += (uintptr_t)data & 1; for (int i = 0; i < 4; i++) { t->dtzMapIdx[f][i] = (uint16_t)((data + 2 - t->dtzMap) / 2); data += 2 + 2 * le16(data); } } }
-        data += (uintptr_t)data & 1; }
-    for (int f = 0; f < num; f++) { ei[f].precomp->indexTable = data; data += size[f][0][0]; if (split) { ei[num + f].precomp->indexTable = data; data += size[f][1][0]; } }
-    for (int f = 0; f < num; f++) { ei[f].precomp->sizeTable = data; data += size[f][0][1]; if (split) { ei[num + f].precomp->sizeTable = data; data += size[f][1][1]; } }
-    for (int f = 0; f < num; f++) {
-        data = (uint8_t *)(((uintptr_t)data + 0x3f) & ~(uintptr_t)0x3f); ei[f].precomp->data = data; data += size[f][0][2];
-        if (split) { data = (uint8_t *)(((uintptr_t)data + 0x3f) & ~(uintptr_t)0x3f); ei[num + f].precomp->data = data; data += size[f][1][2]; } }
-    if (data > t->bytes[type] + n) { fprintf(stderr, "%s: the table's sections run past its end\n", path); return -1; }
-    return 1;
+/* From records to the lines they hold, at most three levels down (a record held as [record, its claims...], a record
+ * [line, tags, layer], a row whose field is the line): a line is a composition of an odd number of constituents, three
+ * or more, whose first and last are positions. Below a composition its first constituent is looked at, and its last
+ * where it has at most three (a row's last field); a record whose line of more than one move is found is looked at no
+ * further. A claim [P, M, P'] is a line too, of the one move it is: what it holds is in its game's line as well. */
+typedef struct { lp_id id; size_t rec; } Cand;
+static void lines_of(PGconn *pg, const Decode *d, const lp_id *records, size_t n, IdList *lines, IdList *ends){
+    lp_vec(Cand) cand = { 0 }; for (size_t i = 0; i < n; i++) { Cand c = { records[i], i }; lp_push(&cand, c); }
+    uint8_t *done = calloc(n ? n : 1, 1); IdList ids = { 0 };
+    for (int depth = 0; depth < 4 && cand.n; depth++) {
+        ids.n = 0; for (size_t i = 0; i < cand.n; i++) lp_push(&ids, cand.v[i].id);
+        size_t ne = 0; Ends *e = ends_of(pg, ids.v, ids.n, &ne);
+        IdList check = { 0 }; for (size_t j = 0; j < ne; j++) if (e[j].length >= 3 && (e[j].length & 1)) { lp_push(&check, e[j].first); lp_push(&check, e[j].last); }
+        uint8_t *pos = malloc(check.n ? check.n : 1), *line = calloc(ne ? ne : 1, 1); positions_are(pg, d, check.v, check.n, pos);
+        for (size_t j = 0, c = 0; j < ne; j++) if (e[j].length >= 3 && (e[j].length & 1)) { line[j] = pos[c] && pos[c + 1]; c += 2;
+            if (!line[j]) continue;
+            lp_push(lines, e[j].entity); lp_push(ends, e[j].last);
+            if (e[j].length > 3) done[cand.v[e[j].src].rec] = 1; }
+        lp_vec(Cand) next = { 0 };
+        for (size_t j = 0; j < ne; j++) { size_t rec = cand.v[e[j].src].rec; if (line[j] || done[rec]) continue;
+            Cand f = { e[j].first, rec }; lp_push(&next, f);
+            if (e[j].length <= 3 && !lp_id_eq(&e[j].last, &e[j].first)) { Cand l = { e[j].last, rec }; lp_push(&next, l); } }
+        free(pos); free(line); free(e); lp_vec_free(&check); lp_vec_free(&cand); cand.v = next.v; cand.n = next.n; cand.cap = next.cap; }
+    lp_vec_free(&cand); lp_vec_free(&ids); free(done);
 }
-static void pairs_free(Pairs *p){ if (p) { free(p->symLen); free(p->base); free(p); } }
-static void table_free(Table *t){
-    for (int i = 0; i < 8; i++) pairs_free(t->wdl[i].precomp);
-    for (int i = 0; i < 4; i++) pairs_free(t->dtz[i].precomp);
-    free(t->mem[0]); free(t->mem[1]);
+/* Every reached position: the lines under the chess sources' records whose last position is within the tables' pieces,
+ * each of their positions that is. */
+static void reach_read(PGconn *pg, const Decode *d, Reach *r){
+    IdList trunks = { 0 }, records = { 0 }; double t = now();
+    chess_trunks(pg, &trunks); records_under(pg, &trunks, &records); r->records = records.n;
+    fprintf(stderr, "  syzygy: %zu trunks, %zu records (%.1f s)\n", trunks.n, records.n, now() - t);
+    for (size_t at = 0; at < records.n; at += LEVEL_CHUNK) {
+        size_t k = records.n - at < LEVEL_CHUNK ? records.n - at : LEVEL_CHUNK;
+        IdList lines = { 0 }, ends = { 0 }; lines_of(pg, d, records.v + at, k, &lines, &ends); r->lines += lines.n;
+        Bd *b = malloc(sizeof(Bd) * (ends.n ? ends.n : 1)); uint8_t *ok = malloc(ends.n ? ends.n : 1);
+        positions_decode(pg, d, r->pieces, ends.v, ends.n, b, ok);
+        IdList ending = { 0 }; for (size_t i = 0; i < lines.n; i++) if (ok[i]) lp_push(&ending, lines.v[i]);
+        free(b); free(ok); ids_unique(&ending); r->ending += ending.n;
+        /* their positions, every one: the paths of the lines that end within the tables */
+        IdList positions = { 0 }; Ids parts = { 0 };
+        for (size_t j = 0; j < ending.n; j += 4096) { int nh = 0; size_t m = ending.n - j < 4096 ? ending.n - j : 4096; Hold *h = paths_of(pg, ending.v + j, (int)m, &nh);
+            for (int x = 0; x < nh; x++) { path_into(&parts, lp_path_of(h[x].path, (size_t)h[x].path_len)); for (size_t v = 0; v < parts.n; v += 2) lp_push(&positions, parts.v[v]); }
+            holds_free(h, nh); }
+        ids_unique(&positions); r->positions += positions.n;
+        b = malloc(sizeof(Bd) * (positions.n ? positions.n : 1)); ok = malloc(positions.n ? positions.n : 1);
+        positions_decode(pg, d, r->pieces, positions.v, positions.n, b, ok);
+        for (size_t i = 0; i < positions.n; i++) if (ok[i]) reach_add(r, &positions.v[i], &b[i]);
+        free(b); free(ok); lp_vec_free(&parts); lp_vec_free(&positions); lp_vec_free(&ending); lp_vec_free(&lines); lp_vec_free(&ends); }
+    fprintf(stderr, "  syzygy: %llu lines, %llu ending within %d pieces, %llu of their positions read, %zu within the tables (%.1f s)\n",
+            (unsigned long long)r->lines, (unsigned long long)r->ending, r->pieces, (unsigned long long)r->positions, r->n, now() - t);
+    lp_vec_free(&trunks); lp_vec_free(&records);
 }
-/* The table of a material, as either side holds it: its index in the set, and whether the material is the table's
- * with the colours swapped. -1: the set has none (a material of the kings alone has none, and needs none). */
-static int set_find(const Set *s, const int w[7], const int b[7], int *flip){
-    char a[16], z[16]; material_name(w, b, a); material_name(b, w, z);
-    for (int i = 0; i < s->n; i++) { if (!strcmp(s->t[i].name, a)) { *flip = 0; return i; } if (!strcmp(s->t[i].name, z)) { *flip = 1; return i; } }
-    return -1;
-}
-/* A material's table loaded from the set's directory, under whichever of its two names the file has: 1 loaded (or
- * there already), 0 the directory has none, -1 its file is not a table. */
-static int set_load(Set *s, const int w[7], const int b[7]){
-    int flip; if (set_find(s, w, b, &flip) >= 0) return 1;
-    for (int side = 0; side < 2; side++) {
-        const int *x = side ? b : w, *y = side ? w : b; Table t; memset(&t, 0, sizeof t); material_name(x, y, t.name);
-        char path[1100]; snprintf(path, sizeof path, "%s/%s%s", s->dir, t.name, SUFFIX[TB_WDL]); FILE *probe = fopen(path, "rb"); if (!probe) continue; fclose(probe);
-        for (int p = PAWN; p <= KING; p++) t.num += x[p] + y[p];
-        int same = 1; for (int p = PAWN; p <= KING; p++) if (x[p] != y[p]) same = 0; t.symmetric = same;
-        t.pawned = x[PAWN] || y[PAWN];
-        if (!t.pawned) { int singles = 0; for (int p = PAWN; p <= KING; p++) singles += (x[p] == 1) + (y[p] == 1); t.kk_enc = singles == 2; }
-        else { t.pawns[0] = (uint8_t)x[PAWN]; t.pawns[1] = (uint8_t)y[PAWN]; if (y[PAWN] && (!x[PAWN] || x[PAWN] > y[PAWN])) { uint8_t q = t.pawns[0]; t.pawns[0] = t.pawns[1]; t.pawns[1] = q; } }
-        for (int type = 0; type < 2; type++) { int got = table_file(&t, s->dir, type); if (got < 0 || (!got && type == TB_WDL)) { table_free(&t); return -1; } }
-        if (s->n == s->cap) { s->cap = s->cap ? s->cap * 2 : 16; s->t = realloc(s->t, sizeof(Table) * (size_t)s->cap); }
-        s->t[s->n++] = t; return 1; }
-    return 0;
-}
-/* Every table a probe from this material can reach: the material after a capture of either side's, a promotion, or
- * both, down to the kings alone. A table the set lacks is said; probes that reach it fail. */
-static int set_reach(Set *s, const int w[7], const int b[7], int depth){
-    int n = 0; for (int p = PAWN; p < KING; p++) n += w[p] + b[p];
-    if (!n || depth > 32) return 1;
-    int got = set_load(s, w, b); if (got < 0) return 0;
-    if (!got) { char name[16]; material_name(w, b, name); fprintf(stderr, "syzygy: %s: no table %s beside it; its positions' probes fail\n", s->dir, name); return 1; }
-    for (int side = 0; side < 2; side++) {
-        int x[7], y[7]; memcpy(x, side ? b : w, sizeof x); memcpy(y, side ? w : b, sizeof y);
-        for (int p = PAWN; p < KING; p++) if (y[p]) { y[p]--; if (!(side ? set_reach(s, y, x, depth + 1) : set_reach(s, x, y, depth + 1))) return 0;     /* x takes a y piece */
-            if (x[PAWN]) for (int q = KNIGHT; q <= QUEEN; q++) { x[PAWN]--; x[q]++; if (!(side ? set_reach(s, y, x, depth + 1) : set_reach(s, x, y, depth + 1))) return 0; x[q]--; x[PAWN]++; }
-            y[p]++; }
-        if (x[PAWN]) for (int q = KNIGHT; q <= QUEEN; q++) { x[PAWN]--; x[q]++; if (!(side ? set_reach(s, y, x, depth + 1) : set_reach(s, x, y, depth + 1))) return 0; x[q]--; x[PAWN]++; } }
-    return 1;
-}
-
-/* ---- a probe: the table's value of a position (Fathom's probe_table), over chess_rules' board */
-static size_t encode(int *p, const Enc *ei, const Table *t, int pawned){
-    int n = t->num, k; size_t idx;
-    #define SWAP(a, b) do { int q_ = a; a = b; b = q_; } while (0)
-    if (p[0] & 0x04) for (int i = 0; i < n; i++) p[i] ^= 0x07;
-    if (!pawned) {
-        if (p[0] & 0x20) for (int i = 0; i < n; i++) p[i] ^= 0x38;
-        for (int i = 0; i < n; i++) if (OffDiag[p[i]]) { if (OffDiag[p[i]] > 0 && i < (t->kk_enc ? 2 : 3)) for (int j = 0; j < n; j++) p[j] = FlipDiag[p[j]]; break; }
-        if (t->kk_enc) { idx = (size_t)KKIdx[Triangle[p[0]]][p[1]]; k = 2; }
-        else { int s1 = p[1] > p[0], s2 = (p[2] > p[0]) + (p[2] > p[1]);
-            if (OffDiag[p[0]]) idx = (size_t)(Triangle[p[0]] * 63 * 62 + (p[1] - s1) * 62 + (p[2] - s2));
-            else if (OffDiag[p[1]]) idx = (size_t)(6 * 63 * 62 + Diag[p[0]] * 28 * 62 + Lower[p[1]] * 62 + p[2] - s2);
-            else if (OffDiag[p[2]]) idx = (size_t)(6 * 63 * 62 + 4 * 28 * 62 + Diag[p[0]] * 7 * 28 + (Diag[p[1]] - s1) * 28 + Lower[p[2]]);
-            else idx = (size_t)(6 * 63 * 62 + 4 * 28 * 62 + 4 * 7 * 28 + Diag[p[0]] * 7 * 6 + (Diag[p[1]] - s1) * 6 + (Diag[p[2]] - s2));
-            k = 3; }
-        idx *= ei->factor[0];
-    } else {
-        for (int i = 1; i < t->pawns[0]; i++) for (int j = i + 1; j < t->pawns[0]; j++) if (PawnTwist[p[i]] < PawnTwist[p[j]]) SWAP(p[i], p[j]);
-        k = t->pawns[0]; idx = PawnIdx[k - 1][Flap[p[0]]];
-        for (int i = 1; i < k; i++) idx += Binomial[k - i][PawnTwist[p[i]]];
-        idx *= ei->factor[0];
-        if (t->pawns[1]) { int e = k + t->pawns[1];
-            for (int i = k; i < e; i++) for (int j = i + 1; j < e; j++) if (p[i] > p[j]) SWAP(p[i], p[j]);
-            size_t s = 0; for (int i = k; i < e; i++) { int sq = p[i], skips = 0; for (int j = 0; j < k; j++) skips += sq > p[j]; s += Binomial[i - k + 1][sq - skips - 8]; }
-            idx += s * ei->factor[k]; k = e; } }
-    while (k < n) { int e = k + ei->norm[k];
-        for (int i = k; i < e; i++) for (int j = i + 1; j < e; j++) if (p[i] > p[j]) SWAP(p[i], p[j]);
-        size_t s = 0; for (int i = k; i < e; i++) { int sq = p[i], skips = 0; for (int j = 0; j < k; j++) skips += sq > p[j]; s += Binomial[i - k + 1][sq - skips]; }
-        idx += s * ei->factor[k]; k = e; }
-    #undef SWAP
-    return idx;
-}
-/* The squares of the table's pieces from i on of piece code pc[i] (1-6 White's pawn to king, 9-14 Black's), the
- * colours swapped where flip, each square XOR mirror; pieces of one code are consecutive. */
-static int fill(const Bd *b, const uint8_t *pc, int flip, int mirror, int *p, int i){
-    int white = !(pc[i] >> 3); if (flip) white = !white; int8_t want = (int8_t)((pc[i] & 7) * (white ? 1 : -1));
-    for (int s = 0; s < 64; s++) if (b->sq[s] == want) p[i++] = s ^ mirror;
-    return i;
-}
-static void material_of(const Bd *b, int w[7], int k[7]){
-    memset(w, 0, sizeof(int) * 7); memset(k, 0, sizeof(int) * 7);
-    for (int s = 0; s < 64; s++) { int8_t p = b->sq[s]; if (p > 0) w[p]++; else if (p < 0) k[-p]++; }
-}
-/* type TB_WDL: -2..2; TB_DTZ: the stored distance for the wdl s. success: 0 failed, -1 the DTZ table holds the other
- * side to move. */
-static int probe_table(const Set *set, const Bd *b, int s, int *success, int type){
-    int w[7], k[7]; material_of(b, w, k);
-    int only_kings = 1; for (int p = PAWN; p < KING; p++) if (w[p] || k[p]) only_kings = 0;
-    if (type == TB_WDL && only_kings) return 0;
-    int flip, at = set_find(set, w, k, &flip); if (at < 0) { *success = 0; return 0; }
-    const Table *t = &set->t[at]; if (type == TB_DTZ && !t->bytes[TB_DTZ]) { *success = 0; return 0; }
-    int bside; if (!t->symmetric) bside = (b->side == 0) == flip; else { flip = b->side != 0; bside = 0; }
-    int p[TB_PIECES]; size_t idx; int f = 0; uint8_t flags = 0; const Enc *ei;
-    if (!t->pawned) {
-        if (type == TB_DTZ) { flags = t->dtzFlags[0]; if ((flags & 1) != bside && !t->symmetric) { *success = -1; return 0; } ei = &t->dtz[0]; }
-        else ei = &t->wdl[bside];
-        for (int i = 0; i < t->num;) i = fill(b, ei->pieces, flip, 0, p, i);
-        idx = encode(p, ei, t, 0);
-    } else {
-        const Enc *first = type == TB_WDL ? t->wdl : t->dtz;
-        int i = fill(b, first->pieces, flip, flip ? 0x38 : 0, p, 0);
-        for (int j = 1; j < t->pawns[0]; j++) if (Flap[p[0]] > Flap[p[j]]) { int q = p[0]; p[0] = p[j]; p[j] = q; }
-        f = FileToFile[p[0] & 7];
-        if (type == TB_DTZ) { flags = t->dtzFlags[f]; if ((flags & 1) != bside && !t->symmetric) { *success = -1; return 0; } }
-        ei = type == TB_WDL ? &t->wdl[f + 4 * bside] : &t->dtz[f];
-        while (i < t->num) i = fill(b, ei->pieces, flip, flip ? 0x38 : 0, p, i);
-        idx = encode(p, ei, t, 1);
-    }
-    if (!ei->precomp) { *success = 0; return 0; }
-    const uint8_t *v8 = pairs_value(ei->precomp, idx);
-    if (type == TB_WDL) return (int)v8[0] - 2;
-    int v = v8[0] + ((v8[1] & 0x0f) << 8);
-    if (flags & 2) { int m = WdlToMap[s + 2];
-        if (!(flags & 16)) v = t->dtzMap[t->dtzMapIdx[f][m] + v];
-        else v = le16(t->dtzMap + 2 * ((size_t)t->dtzMapIdx[f][m] + (size_t)v)); }
-    if (!(flags & PAFlags[s + 2]) || (s & 1)) v *= 2;
-    return v;
+/* Each reached position's best-play line, on every core; then a line another one holds from its start on, with the
+ * same result, is that line's tail and is not written again. */
+static void reach_lines(LpTablebase *tb, Reach *r){
+    double t = now();
+    #pragma omp parallel for schedule(dynamic, 16)
+    for (int64_t i = 0; i < (int64_t)r->n; i++) { Start *s = &r->s[i]; Mv *mv = malloc(sizeof(Mv) * LINE_PLIES);
+        int n = lp_tablebase_line(tb, &s->b, mv, LINE_PLIES, s->result);
+        if (n < 0) { s->failed = 1; free(mv); continue; }
+        s->plies = n; if (!n) { free(mv); continue; }
+        s->line = realloc(mv, sizeof(Mv) * (size_t)n); }
+    /* tails: along each line, a reached position (not its start) with the same result is covered by it */
+    #pragma omp parallel for schedule(dynamic, 16)
+    for (int64_t i = 0; i < (int64_t)r->n; i++) { const Start *s = &r->s[i]; Bd cur = s->b;
+        for (int p = 0; p < s->plies; p++) { make(&cur, &s->line[p]); lp_id id; id_position(&cur, &id); int64_t j = lp_idmap_find(r->at, &id);
+            if (j >= 0 && j != i && r->s[j].plies && !strcmp(r->s[j].result, s->result)) __atomic_store_n(&r->s[j].covered, 1, __ATOMIC_RELAXED); } }
+    uint64_t draws = 0, failed = 0, covered = 0, written = 0, plies = 0;
+    for (size_t i = 0; i < r->n; i++) { const Start *s = &r->s[i]; if (s->failed) failed++; else if (!s->plies) draws++; else if (s->covered) covered++; else { written++; plies += (uint64_t)s->plies; } }
+    fprintf(stderr, "  syzygy: %zu reached positions: %llu with no line (a draw, or mate already), %llu a tail of another's line, %llu lines of %llu plies, %llu the tables do not cover (%.1f s)\n",
+            r->n, (unsigned long long)draws, (unsigned long long)covered, (unsigned long long)written, (unsigned long long)plies, (unsigned long long)failed, now() - t);
 }
 
-/* ---- the verdicts (Fathom's probe_ab, probe_wdl, probe_dtz), every move chess_rules' */
-static int is_capture(const Bd *b, const Mv *m){ return !m->castle && (b->sq[m->to] || m->ep); }
-static int probe_ab(const Set *set, const Bd *b, int alpha, int beta, int *success){
-    Mv all[256]; int n = gen(b, all);
-    for (int i = 0; i < n; i++) { if (!is_capture(b, &all[i])) continue;
-        Bd t = *b; make(&t, &all[i]); int v = -probe_ab(set, &t, -beta, -alpha, success);
-        if (!*success) return 0;
-        if (v > alpha) { if (v >= beta) return v; alpha = v; } }
-    int v = probe_table(set, b, 0, success, TB_WDL);
-    return alpha >= v ? alpha : v;
-}
-/* -2 loss, -1 blessed loss, 0 draw, 1 cursed win, 2 win, for the side to move. success 2: a capture (or an en passant
- * capture alone) is the best move, which probe_dtz needs. */
-static int probe_wdl(const Set *set, const Bd *b, int *success){
-    *success = 1; Mv all[256]; int n = gen(b, all), bestCap = -3, bestEp = -3;
-    for (int i = 0; i < n; i++) { if (!is_capture(b, &all[i])) continue;
-        Bd t = *b; make(&t, &all[i]); int v = -probe_ab(set, &t, -2, -bestCap, success);
-        if (!*success) return 0;
-        if (v > bestCap) { if (v == 2) { *success = 2; return 2; } if (!all[i].ep) bestCap = v; else if (v > bestEp) bestEp = v; } }
-    int v = probe_table(set, b, 0, success, TB_WDL); if (!*success) return 0;
-    if (bestEp > bestCap) { if (bestEp > v) { *success = 2; return bestEp; } bestCap = bestEp; }
-    if (bestCap >= v) { *success = 1 + (bestCap > 0); return bestCap; }
-    if (bestEp > -3 && v == 0) {                                             /* stalemate but for an en passant capture */
-        int other = 0; for (int i = 0; i < n; i++) if (!all[i].ep) { other = 1; break; }
-        if (!other && !in_check(b, b->side)) { *success = 2; return bestEp; } }
-    return v;
-}
-static const int WdlToDtz[5] = { -1, -101, 0, 101, 1 };
-static int is_mate(const Bd *b){ Mv all[256]; return in_check(b, b->side) && !gen(b, all); }
-static int probe_dtz(const Set *set, const Bd *b, int *success){
-    int wdl = probe_wdl(set, b, success); if (!*success) return 0;
-    if (!wdl) return 0;
-    if (*success == 2) return WdlToDtz[wdl + 2];
-    Mv all[256]; int n = gen(b, all);
-    if (wdl > 0) for (int i = 0; i < n; i++) {                                /* a winning pawn move */
-        if (abs(b->sq[all[i].from]) != PAWN || is_capture(b, &all[i])) continue;
-        Bd t = *b; make(&t, &all[i]); int v = -probe_wdl(set, &t, success); if (!*success) return 0;
-        if (v == wdl) return WdlToDtz[wdl + 2]; }
-    int dtz = probe_table(set, b, wdl, success, TB_DTZ);
-    if (*success >= 0) return WdlToDtz[wdl + 2] + (wdl > 0 ? dtz : -dtz);
-    *success = 1; int best = wdl > 0 ? INT32_MAX : WdlToDtz[wdl + 2];      /* the table holds the other side to move */
-    for (int i = 0; i < n; i++) {
-        if (is_capture(b, &all[i]) || abs(b->sq[all[i].from]) == PAWN) continue;
-        Bd t = *b; make(&t, &all[i]); int v = -probe_dtz(set, &t, success); if (!*success) return 0;
-        if (v == 1 && is_mate(&t)) best = 1;
-        else if (wdl > 0) { if (v > 0 && v + 1 < best) best = v + 1; }
-        else if (v - 1 < best) best = v - 1; }
-    return best;
+/* ---- once a run: the tables, the reached positions and their lines */
+static pthread_mutex_t once_mu = PTHREAD_MUTEX_INITIALIZER;
+static int once_state;                                                       /* 0 not yet, 1 ready, -1 failed */
+static Reach REACH; static LpTablebase *TB;
+static int reach_once(const char *table_path){
+    pthread_mutex_lock(&once_mu);
+    if (!once_state) {
+        once_state = -1;
+        /* the tables: those under the directory above the one this table is in (the source's root: syzygy/3-4-5/) */
+        char root[1100]; snprintf(root, sizeof root, "%s", table_path); os_slashes(root);
+        for (int up = 0; up < 2; up++) { char *s = strrchr(root, '/'); if (s) *s = 0; else snprintf(root, sizeof root, "."); }
+        if (!*root) snprintf(root, sizeof root, "/");
+        TB = lp_tablebase_open(root, 0);
+        const char *conninfo = ingest_database(); PGconn *pg = TB ? PQconnectdb(conninfo) : NULL;
+        if (TB && PQstatus(pg) != CONNECTION_OK) fprintf(stderr, "syzygy: the tables' lines begin where recorded games stand, read from the database: %s", PQerrorMessage(pg));
+        else if (TB) {
+            LpTablebaseStats st; lp_tablebase_stats(TB, &st); int pieces = st.pieces;          /* the most the tables hold: 5 of the 3-4-5 set */
+            fprintf(stderr, "\n  syzygy: %d tables under %s; positions of up to %d pieces\n", st.tables, root, pieces);
+            Decode d; decode_init(&d); REACH.at = lp_idmap_new(); REACH.pieces = pieces;
+            reach_read(pg, &d, &REACH); decode_free(&d);
+            reach_lines(TB, &REACH);
+            lp_tablebase_stats(TB, &st);
+            fprintf(stderr, "  syzygy: tables mapped %llu times, unmapped %llu, %d at once at most (bound %d)\n", (unsigned long long)st.maps, (unsigned long long)st.unmaps, st.peak, st.max_open);
+            once_state = 1; }
+        if (pg) PQfinish(pg); }
+    int ok = once_state > 0; pthread_mutex_unlock(&once_mu); return ok;
 }
 
-/* ---- the decoder: every legal position of the table's material, a line each */
-static const char *const WDL_TEXT[5] = { "loss", "blessed loss", "draw", "cursed win", "win" };
-typedef struct {
-    Set set; int type, table, failed;
-    int8_t piece[2][TB_PIECES]; int orientations, num;                     /* the pieces placed, as each colouring of the material */
-    uint64_t chunk, chunks;                                                  /* a chunk: the squares of the first pieces (64^head) */
-    int head;
-    lp_buf out; size_t at;                                                   /* lines written and not yet read */
-    uint64_t positions, written, unprobed;
-} Decoder;
-
-/* One chunk's lines: piece i on square sq[i]; same pieces in ascending squares (one placement of identical pieces),
- * a pawn on neither back rank, each side to move where the side not to move is not in check, then each en passant
- * square a pawn of the side to move can take on. */
-typedef struct { char *b; size_t n, cap; uint64_t positions, written, unprobed; int failed; } Lines;
-static void lines_put(Lines *l, const char *s, size_t n){ if (l->n + n > l->cap) { l->cap = (l->n + n) * 2 + 4096; l->b = realloc(l->b, l->cap); } memcpy(l->b + l->n, s, n); l->n += n; }
-static void position_line(const Decoder *d, const Bd *b, Lines *l){
-    int success; char line[160]; size_t n = lp_chess_fen_of(b, line); l->positions++;
-    if (d->type == TB_WDL) { int v = probe_wdl(&d->set, b, &success); if (!success) { l->unprobed++; return; }
-        n += (size_t)snprintf(line + n, sizeof line - n, "\t%s\n", WDL_TEXT[v + 2]); }
-    else { int v = probe_dtz(&d->set, b, &success); if (!success) { l->unprobed++; return; } if (!v) return;
-        n += (size_t)snprintf(line + n, sizeof line - n, "\t%d\n", v); }
-    lines_put(l, line, n); l->written++;
+/* ---- the decoder: a table file's lines, those that begin in its material */
+typedef struct { lp_buf out; size_t at; int failed; } Decoder;
+static int material_counts(const char *name, size_t n, int w[7], int k[7]){
+    memset(w, 0, sizeof(int) * 7); memset(k, 0, sizeof(int) * 7); int *x = w, c = 0; static const char L[] = " PNBRQK";
+    for (size_t i = 0; i < n; i++) { if (name[i] == 'v') { if (x == k) return 0; x = k; continue; } const char *p = strchr(L + 1, name[i]); if (!p || !name[i]) return 0; x[p - L]++; c++; }
+    return c >= 3 && w[KING] == 1 && k[KING] == 1;
 }
-static void place(const Decoder *d, const int8_t *pc, Bd *b, int i, Lines *l){
-    if (i == d->num) {
-        for (int side = 0; side < 2; side++) { b->side = (uint8_t)side; b->ep = -1;
-            if (in_check(b, !side)) continue;
-            position_line(d, b, l);
-            /* the en passant squares: a pawn of the other side that has just moved two squares, the two behind it empty */
-            int dir = side ? 1 : -1, row = side ? 3 : 4;                       /* White's pawn on rank 4 when Black moves, Black's on 5 */
-            for (int f = 0; f < 8; f++) { int at = row * 8 + f, over = at - 8 * dir, from = at - 16 * dir;
-                if (b->sq[at] != (side ? PAWN : -PAWN) || b->sq[over] || b->sq[from]) continue;
-                Bd e = *b; e.ep = (int8_t)over; if (ep_square(&e) >= 0) position_line(d, &e, l); } }
-        return; }
-    for (int s = 0; s < 64; s++) {
-        if (b->sq[s]) continue;
-        if ((pc[i] == PAWN || pc[i] == -PAWN) && (s < 8 || s >= 56)) continue;
-        if (i && pc[i] == pc[i - 1]) { int prev = -1; for (int q = 63; q >= 0; q--) if (b->sq[q] == pc[i]) { prev = q; break; } if (s < prev) continue; }
-        b->sq[s] = pc[i]; place(d, pc, b, i + 1, l); b->sq[s] = 0; }
-}
-static void chunk_lines(const Decoder *d, uint64_t chunk, Lines *l){
-    uint64_t per = 1; for (int i = 0; i < d->head; i++) per *= 64;
-    int orient = (int)(chunk / per); uint64_t c = chunk % per; const int8_t *pc = d->piece[orient];
-    Bd b; memset(&b, 0, sizeof b); b.ep = -1;
-    for (int i = d->head - 1; i >= 0; i--) { int s = (int)(c % 64); c /= 64;
-        if (b.sq[s]) return; if ((pc[i] == PAWN || pc[i] == -PAWN) && (s < 8 || s >= 56)) return; b.sq[s] = pc[i]; }
-    int sq[TB_PIECES]; c = chunk % per; for (int j = d->head - 1; j >= 0; j--) { sq[j] = (int)(c % 64); c /= 64; }
-    for (int i = 1; i < d->head; i++) if (pc[i] == pc[i - 1] && sq[i] < sq[i - 1]) return;
-    place(d, pc, &b, d->head, l);
-}
-static int decoder_refill(Decoder *d){
-    if (d->chunk >= d->chunks) return 0;
-    int threads = omp_get_max_threads(); uint64_t batch = (uint64_t)threads * 64; if (d->num <= 3) batch = d->chunks;
-    if (d->chunk + batch > d->chunks) batch = d->chunks - d->chunk;
-    Lines *lines = calloc((size_t)batch, sizeof(Lines));
-    #pragma omp parallel for schedule(dynamic, 1)
-    for (int64_t i = 0; i < (int64_t)batch; i++) chunk_lines(d, d->chunk + (uint64_t)i, &lines[i]);
-    d->out.n = 0; d->at = 0;
-    for (uint64_t i = 0; i < batch; i++) { uint8_t *o = lp_buf_room(&d->out, lines[i].n); if (lines[i].n) memcpy(o, lines[i].b, lines[i].n);
-        d->positions += lines[i].positions; d->written += lines[i].written; d->unprobed += lines[i].unprobed; free(lines[i].b); }
-    free(lines); d->chunk += batch; return 1;
-}
-
+static int start_order(const void *a, const void *b){ return memcmp(&(*(const Start *const *)a)->id, &(*(const Start *const *)b)->id, sizeof(lp_id)); }
 static void *syzygy_open(const char *path){
-    static int ready; if (!__atomic_load_n(&ready, __ATOMIC_ACQUIRE)) { indices_init(); __atomic_store_n(&ready, 1, __ATOMIC_RELEASE); }
     const char *slash = strrchr(path, '/'), *back = strrchr(path, '\\'); if (back > slash) slash = back;
-    const char *base = slash ? slash + 1 : path, *dot = strrchr(base, '.');
-    int type = dot && !strcmp(dot, ".rtbz") ? TB_DTZ : dot && !strcmp(dot, ".rtbw") ? TB_WDL : -1;
-    if (type < 0 || (size_t)(dot - base) >= 16) { fprintf(stderr, "%s: a Syzygy table is NAME.rtbw or NAME.rtbz\n", path); return NULL; }
-    int w[7] = { 0 }, k[7] = { 0 }, *x = w, n = 0; static const char L[] = " PNBRQK";
-    for (const char *c = base; c < dot; c++) { if (*c == 'v') { if (x == k) break; x = k; continue; } const char *p = strchr(L + 1, *c); if (!p || !*c) { n = -1; break; } x[p - L]++; n++; }
-    if (n < 3 || n > TB_PIECES || w[KING] != 1 || k[KING] != 1) { fprintf(stderr, "%s: %.*s names no material of two kings\n", path, (int)(dot - base), base); return NULL; }
-    Decoder *d = calloc(1, sizeof *d); d->type = type; d->num = n;
-    snprintf(d->set.dir, sizeof d->set.dir, "%.*s", slash ? (int)(slash - path) : 1, slash ? path : ".");
-    if (!set_reach(&d->set, w, k, 0)) { fprintf(stderr, "%s: a table it reaches cannot be read\n", path); free(d); return NULL; }
-    int flip; d->table = set_find(&d->set, w, k, &flip);
-    if (d->table < 0 || flip || (type == TB_DTZ && !d->set.t[d->table].bytes[TB_DTZ])) { fprintf(stderr, "%s: not read as a table of its set\n", path); free(d); return NULL; }
-    /* its pieces, each colouring: the material as named (White the first side), and with the colours swapped unless the
-     * two sides hold the same */
-    d->orientations = d->set.t[d->table].symmetric ? 1 : 2;
-    for (int o = 0; o < d->orientations; o++) { int i = 0;
-        for (int side = 0; side < 2; side++) { const int *m = side ? k : w; int sign = (side ^ o) ? -1 : 1;
-            for (int p = KING; p >= PAWN; p--) for (int j = 0; j < m[p]; j++) d->piece[o][i++] = (int8_t)(sign * p); } }
-    d->head = n < 3 ? n : 3; d->chunks = (uint64_t)d->orientations; for (int i = 0; i < d->head; i++) d->chunks *= 64;
-    return d;
+    const char *base = slash ? slash + 1 : path, *dot = strrchr(base, '.'); int w[7], k[7];
+    if (!dot || strcmp(dot, ".rtbw") || !material_counts(base, (size_t)(dot - base), w, k)) { fprintf(stderr, "%s: a Syzygy table is NAME.rtbw, its material\n", path); return NULL; }
+    if (!reach_once(path)) return NULL;
+    Decoder *d = calloc(1, sizeof *d);
+    lp_vec(Start *) mine = { 0 };
+    for (size_t i = 0; i < REACH.n; i++) { Start *s = &REACH.s[i]; if (!s->plies || s->covered) continue;
+        int sw[7], sk[7]; memset(sw, 0, sizeof sw); memset(sk, 0, sizeof sk);
+        for (int q = 0; q < 64; q++) { int8_t p = s->b.sq[q]; if (p > 0) sw[p]++; else if (p < 0) sk[-p]++; }
+        if (!memcmp(sw, w, sizeof sw) && !memcmp(sk, k, sizeof sk)) lp_push(&mine, s);
+        else if (!memcmp(sw, k, sizeof sw) && !memcmp(sk, w, sizeof sk)) lp_push(&mine, s); }
+    if (mine.n > 1) qsort(mine.v, mine.n, sizeof(Start *), start_order);
+    uint64_t plies = 0;
+    for (size_t i = 0; i < mine.n; i++) { const Start *s = mine.v[i]; uint8_t *o = lp_buf_room(&d->out, 128 + 16 * (size_t)s->plies);
+        size_t n = lp_tablebase_pgn(&s->b, s->line, s->plies, s->result, (char *)o); d->out.n -= 128 + 16 * (size_t)s->plies - n; plies += (uint64_t)s->plies; }
+    fprintf(stderr, "\n  syzygy %.*s: %zu lines, %llu plies\n", (int)(dot - base), base, mine.n, (unsigned long long)plies);
+    lp_vec_free(&mine); return d;
 }
 static size_t syzygy_read(void *context, uint8_t *out, size_t capacity){
-    Decoder *d = context; if (d->failed) return 0;
-    while (d->at == d->out.n) if (!decoder_refill(d)) {
-        if (d->positions) { static const char *name[2] = { "WDL", "DTZ" };
-            fprintf(stderr, "\n  syzygy %s %s: %llu positions, %llu lines, %llu not probed\n", d->set.t[d->table].name, name[d->type], (unsigned long long)d->positions, (unsigned long long)d->written, (unsigned long long)d->unprobed); d->positions = 0; }
-        return 0; }
-    size_t n = d->out.n - d->at; if (n > capacity) n = capacity;
+    Decoder *d = context; size_t n = d->out.n - d->at; if (n > capacity) n = capacity;
     memcpy(out, d->out.b + d->at, n); d->at += n; return n;
 }
-static int syzygy_error(void *context){ Decoder *d = context; return d->failed || d->unprobed; }
-static void syzygy_close(void *context){
-    Decoder *d = context; for (int i = 0; i < d->set.n; i++) table_free(&d->set.t[i]); free(d->set.t); lp_buf_free(&d->out); free(d);
-}
+static int syzygy_error(void *context){ Decoder *d = context; return d->failed; }
+static void syzygy_close(void *context){ Decoder *d = context; lp_buf_free(&d->out); free(d); }
 const InputDecoder syzygy_decoder = { "syzygy", syzygy_open, syzygy_read, syzygy_error, syzygy_close };
+
+/* ---- laplace tablebase: a position's verdict, its moves ranked and its best-play line, from the tables alone */
+static const char *const WDL_WORD[5] = { "loss", "blessed loss", "draw", "cursed win", "win" };
+static int tablebase_one(LpTablebase *tb, const char *fen, size_t n, int line, int pgn){
+    if (pgn) {
+        Bd b; if (!board_fen(&b, fen, n, 0) || king_sq(&b, 0) < 0 || king_sq(&b, 1) < 0) { fprintf(stderr, "%.*s: no FEN\n", (int)n, fen); return 2; }
+        Mv *mv = malloc(sizeof(Mv) * LINE_PLIES); char result[8]; int plies = lp_tablebase_line(tb, &b, mv, LINE_PLIES, result);
+        if (plies < 0) { fprintf(stderr, "%.*s: the tables do not cover it\n", (int)n, fen); free(mv); return 1; }
+        if (plies) { char *o = malloc(128 + 16 * (size_t)plies); size_t k = lp_tablebase_pgn(&b, mv, plies, result, o); fwrite(o, 1, k, stdout); free(o); }
+        free(mv); return 0; }
+    LpTbProbe *p = malloc(sizeof *p); int got = lp_tablebase_probe_fen(tb, fen, n, p); char hex[33];
+    if (got < 0) { fprintf(stderr, "%.*s: no FEN\n", (int)n, fen); free(p); return 2; }
+    id_text(&p->position, hex);
+    if (got) printf("position\t%s\t%s\t%d\n", hex, WDL_WORD[p->wdl + 2], p->dtz); else printf("position\t%s\tnone\t\n", hex);
+    for (int i = 0; i < p->nmoves; i++) { const LpTbMove *m = &p->move[i]; char ph[33], ch[33]; id_text(&m->position, ph); id_text(&m->claim, ch);
+        if (got) printf("move\t%s\t%s\t%s\t%d\t%d\t%s\t%s\n", m->san, m->uci, WDL_WORD[m->wdl + 2], m->dtz, m->value, ph, ch);
+        else printf("move\t%s\t%s\t\t\t\t%s\t%s\n", m->san, m->uci, ph, ch); }
+    if (line && got) {
+        LpTbPly *ply = malloc(sizeof(LpTbPly) * LINE_PLIES); lp_id lid; char result[8] = "";
+        int k = lp_tablebase_line_fen(tb, fen, n, ply, LINE_PLIES, &lid, result); id_text(&lid, hex);
+        if (k < 0) printf("line\t\t\t-1\n");
+        else { printf("line\t%s\t%s\t%d\t", hex, result, k); for (int i = 0; i < k; i++) printf("%s%s", i ? " " : "", ply[i].san); printf("\n");
+            for (int i = 0; i < k; i++) { char ch[33]; id_text(&ply[i].claim, ch); printf("claim\t%d\t%s\t%s\n", i + 1, ply[i].san, ch); } }
+        free(ply); }
+    free(p); return got ? 0 : 1;
+}
+int cmd_tablebase(int argc, char **argv){
+    const char *root = NULL; int open = 0, line = 0, pgn = 0;
+    int a = opts(argc, argv, (const Opt[]){ { .flag = "-T", .kind = 's', .at = &root }, { .flag = "-n", .kind = 'i', .at = &open }, { .flag = "--line", .kind = 'b', .at = &line }, { .flag = "--pgn", .kind = 'b', .at = &pgn }, { 0 } });
+    if (a < argc && argv[a][0] == '-') { fputs("usage: laplace tablebase [-T tables] [-n open] [--line | --pgn] [FEN...]   (none: a FEN a line of standard input)\n", stderr); return 2; }
+    LpTablebase *tb = lp_tablebase_open(root, open); if (!tb) return 1;
+    int rc = 0;
+    if (a < argc) for (int i = a; i < argc; i++) { int r = tablebase_one(tb, argv[i], strlen(argv[i]), line, pgn); if (r > rc) rc = r; }
+    else { char buf[512]; while (fgets(buf, sizeof buf, stdin)) { size_t n = strcspn(buf, "\r\n"); if (!n) continue; int r = tablebase_one(tb, buf, n, line, pgn); if (r > rc) rc = r; } }
+    LpTablebaseStats st; lp_tablebase_stats(tb, &st);
+    fprintf(stderr, "tablebase: %d tables; mapped %llu times, unmapped %llu, %d at once at most (bound %d)\n", st.tables, (unsigned long long)st.maps, (unsigned long long)st.unmaps, st.peak, st.max_open);
+    lp_tablebase_close(tb); fflush(stdout); return rc;
+}
