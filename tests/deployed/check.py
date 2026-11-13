@@ -100,6 +100,14 @@ SELECT 'series',count(*),md5(string_agg(to_jsonb(s)::text,E'\\n' ORDER BY to_jso
 """)
 
 
+# A source's trunks: the witness trunks that begin with its record; for a source that attests nothing (so is no
+# witness), the paths that begin with its record (indexed ^@).
+TRUNKS = ("WITH witnessed AS (SELECT DISTINCT p.entity::text e FROM laplace_witness_trust() w"
+          " JOIN physicality p ON p.entity=w.witness WHERE p.path ^@ laplace_text_id(:'witness'))"
+          " SELECT e FROM witnessed UNION SELECT DISTINCT p.entity::text FROM physicality p"
+          " WHERE p.path ^@ laplace_text_id(:'witness') AND NOT EXISTS (SELECT FROM witnessed) ORDER BY 1")
+
+
 class Fixture:
     """A check's scratch directory, recipes and sources. A check writes its sources, calls forget() for a clean
     slate (a run cut off before its end left its witnesses), ingests and asserts; as a context manager the fixture
@@ -247,13 +255,11 @@ class Fixture:
         return arguments
 
     def trunks(self, name):
-        """The trunks recorded for one of this check's sources: every path that begins with its record (indexed ^@).
-        A trunk is recorded whether or not its source attests anything, so this does not go through the witnesses."""
+        """The trunks recorded for one of this check's sources (TRUNKS)."""
         if name not in self.sources:
             raise ValueError(f'{name} is not a source of check {self.check}')
         witness = self.witness_of(name)
-        rows = sql('SELECT DISTINCT p.entity::text FROM physicality p'
-                   ' WHERE p.path ^@ laplace_text_id(:\'witness\') ORDER BY 1',
+        rows = sql(TRUNKS,
                    variables={'witness': witness})
         found = [r for r in rows.splitlines() if r]
         self.trunks_recorded.update(found)
@@ -288,8 +294,7 @@ class Fixture:
         that begin with its name's record, as Fixture.trunks finds a source's."""
         if name not in self.witnesses:
             raise ValueError(f'{name} is not a witness of check {self.check}')
-        rows = sql('SELECT DISTINCT p.entity::text FROM physicality p'
-                   ' WHERE p.path ^@ laplace_text_id(:\'witness\') ORDER BY 1',
+        rows = sql(TRUNKS,
                    variables={'witness': name})
         found = [r for r in rows.splitlines() if r]
         self.trunks_recorded.update(found)
