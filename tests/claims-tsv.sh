@@ -1,5 +1,5 @@
 #!/bin/bash
-# laplace ingest --claims-tsv: what --claims says, for a machine (the claim-level parity of tools/parity reads it). A claim
+# laplace ingest --claims-tsv: what --claims says, for a machine. A claim
 # a line: kind, position, score, then each part as text; a type of the highway, which has no text, is LIST:KEY (the
 # first key beside the highway naming its slot); a tab, a line end or a backslash in a part is escaped. Read with the
 # highway the environment names.

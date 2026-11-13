@@ -8,6 +8,7 @@ export LAPLACE_RECIPES=${LAPLACE_RECIPES:-$here/../recipes}
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/record-thing.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
 export LAPLACE_WORK=$scratch/work LAPLACE_DATA=$scratch/data
+export LAPLACE_CONNINFO='host=127.0.0.1 port=1 user=unavailable dbname=unavailable connect_timeout=1'   # no database: a check of component CI
 mkdir -p "$LAPLACE_DATA/ConceptNet"
 file=$LAPLACE_DATA/ConceptNet/assertions.csv
 printf '%s\t%s\t%s\t%s\t%s\n' \
@@ -26,9 +27,8 @@ grep -q $'^claim\t.*Antonym' <<< "$output"
 grep -q $'^claim\t.*IsA' <<< "$output"
 ! grep -q 'the strength with which this edge expresses this assertion' <<< "$output"      # the weight is the edge's score, never a claim's value
 grep -Eq $'^claim\t[0-9]+\t1\t.*IsA' <<< "$output"      # weight 2 on a scale of 0 to 2: a win
-# A reachable database without Laplace is still irrelevant to a local preview.
-# CI supplies a real PostgreSQL server; this also works when none is running.
-preview_conn="host='${PGHOST:-/tmp}' port=${PGPORT:-5432} user=${PGUSER:-laplace} dbname=postgres connect_timeout=1"
+# A preview needs no database: none is reachable here.
+preview_conn=$LAPLACE_CONNINFO
 dump=$("$engine" ingest --no-load --entities -d "$preview_conn" -s conceptnet "$file" 2>&1) || { printf '%s\n' "$dump" >&2; exit 1; }
 entities=$(grep '^  tier ' <<< "$dump")
 if grep -Eq 'parts +(weight|surfaceText|rAntonym|rIsA)([[:space:]]|$)' <<< "$entities"; then

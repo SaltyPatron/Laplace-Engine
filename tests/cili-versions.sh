@@ -10,6 +10,7 @@ scratch=$(mktemp -d "${TMPDIR:-/tmp}/cili-versions.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
 fail() { echo "cili-versions: $*" >&2; exit 1; }
 export LAPLACE_DATA=$scratch/data LAPLACE_WORK=$scratch/work
+export LAPLACE_CONNINFO='host=127.0.0.1 port=1 user=unavailable dbname=unavailable connect_timeout=1'   # no database: a check of component CI
 mkdir -p "$LAPLACE_DATA/CILI" "$LAPLACE_DATA/CiliProbe" "$LAPLACE_WORK" "$scratch/recipes/cili-probe" "$scratch/recipes/cili"
 for source in unicode iso-639; do ln -s "$recipes/$source" "$scratch/recipes/$source"; done
 for file in "$recipes/cili/"*; do ln -s "$file" "$scratch/recipes/cili/"; done

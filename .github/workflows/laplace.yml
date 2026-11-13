@@ -1,11 +1,13 @@
-# Build the Engine with its native dependency and verify artifact/admission boundaries.
-# The runner declaration supplies dependencies and independently installed perf-caches.
+# Build the Engine with its native dependency and verify artifact/admission boundaries, with no database: no check here
+# starts a server, makes a database or connects to one. The Engine's database checks (tests/deployed/) run after
+# Laplace-Operations has deployed a merge to main, against the deployed database through the deployed program
+# (Laplace-Operations laplace.yml, job tests). The runner declaration supplies dependencies and installed perf-caches.
 name: Laplace-Engine
 on:
   workflow_dispatch:
     inputs:
       verify_estate:
-        description: "Audit every installed corpus and compare full ISO ingestion with the published monorepo"
+        description: "Audit every installed corpus: each source's files matched to its recipes (ingest --plan)"
         type: boolean
         default: false
   push:
@@ -23,7 +25,7 @@ jobs:
   engine:
     runs-on: [self-hosted, laplace, Laplace-Engine]
     outputs:
-      parity: ${{ steps.changes.outputs.parity }}
+      deploys: ${{ steps.changes.outputs.deploys }}
     steps:
       - name: Select this run's canonical cache closure
         run: |
@@ -34,8 +36,8 @@ jobs:
           echo "LAPLACE_GRAMMARS=$RUNNER_TEMP/engine/inputs/grammars" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with: { path: Laplace-Engine }
-      # Whether this change can move what an ingest records (tools/ci/parity-needed.sh says which paths can); the parity
-      # job runs only then. A change that cannot be listed runs it.
+      # Whether this change, merged, is deployed (tools/ci/deploy-needed.sh says which paths can move the deployed system or
+      # its database checks); the deploy job dispatches only then. A change that cannot be listed deploys.
       - name: changes
         id: changes
         env:
@@ -50,19 +52,13 @@ jobs:
                   else files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq 'if (.files | length) >= 300 then "*" else .files[].filename end') || files='*'; fi ;;
             *) files='*' ;;
           esac
-          parity=$(printf '%s\n' "$files" | bash Laplace-Engine/tools/ci/parity-needed.sh)
-          echo "parity=$parity" >> "$GITHUB_OUTPUT"
-          echo "parity: $parity ($EVENT)" | tee -a "$GITHUB_STEP_SUMMARY"
+          deploys=$(printf '%s\n' "$files" | bash Laplace-Engine/tools/ci/deploy-needed.sh)
+          echo "deploys=$deploys" >> "$GITHUB_OUTPUT"
+          echo "deploys: $deploys ($EVENT)" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Native", ref: main, path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
-      - uses: actions/checkout@v4
-        with:
-          repository: "${{ github.repository_owner }}/Laplace-postgres"
-          ref: main
-          path: Laplace-postgres
-          token: "${{ secrets.LAPLACE_CHECKOUT }}"
       # Every job runs the binary its own run built (tests/ci-own-binary.py): the build directory is the runner's, shared
       # by every run, so a job after this one reads the binary this job hands over, never the directory.
       - name: workflow contract
@@ -80,16 +76,8 @@ jobs:
           cmake -S Laplace-Engine -B "$LAPLACE_BUILD/Laplace-Engine/icx-release" -G Ninja -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DLAPLACE_TIER0:FILEPATH="$LAPLACE_TIER0" -DLAPLACE_NATIVE:PATH="$LAPLACE_NATIVE" -DLAPLACE_OPERATIONS:PATH="$GITHUB_WORKSPACE/Laplace-Operations"
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
-          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target presence_frontier
-          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target pg_plan_lifecycle
-          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target reader_depth
-          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target claim_decode
-          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target input_frame_test
-          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target chess_positions
-          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target syzygy_decode
+          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target reader_depth claim_decode input_frame_test chess_positions syzygy_decode
           mkdir -p "$RUNNER_TEMP/engine" && cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace" "$RUNNER_TEMP/engine/laplace"
-          cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/presence_frontier" "$RUNNER_TEMP/engine/presence-frontier"
-          cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/pg_plan_lifecycle" "$RUNNER_TEMP/engine/pg-plan-lifecycle"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/reader_depth" "$RUNNER_TEMP/engine/reader-depth"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/claim_decode" "$RUNNER_TEMP/engine/claim-decode"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/input_frame_test" "$RUNNER_TEMP/engine/input-frame"
@@ -118,7 +106,7 @@ jobs:
           cp -a --reflink=auto --no-preserve=ownership "$LAPLACE_FLAGS" "$RUNNER_TEMP/engine/inputs/tier0.flags"
           cp -a --reflink=auto --no-preserve=ownership "${LAPLACE_FLAGS}.layout" "$RUNNER_TEMP/engine/inputs/tier0.flags.layout"
           cp -a --reflink=auto --no-preserve=ownership "$LAPLACE_HIGHWAY" "$RUNNER_TEMP/engine/inputs/highway.bin"
-      # The run's binary, for its plan and parity jobs: a later run's build cannot replace it (one name per run; a job run
+      # The run's binary, for its plan job: a later run's build cannot replace it (one name per run; a job run
       # again replaces it with its own build).
       - uses: actions/upload-artifact@v4
         with: { name: laplace-engine, path: "${{ runner.temp }}/engine/", retention-days: 1, overwrite: true, if-no-files-found: error }
@@ -142,95 +130,27 @@ jobs:
           python3 Laplace-Engine/tests/semantic-interpretation.py "$L"
           cmake -DWORK="$RUNNER_TEMP/reader-contract" -P Laplace-Engine/tests/reader-contract.cmake
           failed=0
-          for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing input-frame rich-text chess-identity opening-lines syzygy-tablebase statement-claims; do
+          for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing input-frame rich-text chess-identity opening-lines syzygy-tablebase statement-claims cili-versions record-thing framenet-differences; do
             if ! bash "Laplace-Engine/tests/$suite.sh" "$L"; then
               echo "::error::Engine check failed: $suite"
               failed=1
             fi
           done
-          for suite in test_diff test_claims; do
-            if ! python3 "Laplace-Engine/tools/parity/$suite.py"; then
-              echo "::error::Engine check failed: $suite"
-              failed=1
-            fi
-          done
-          if ! bash Laplace-Engine/tests/parity-needed.sh; then
-            echo "::error::Engine check failed: parity-needed"
+          if ! bash Laplace-Engine/tests/deploy-needed.sh; then
+            echo "::error::Engine check failed: deploy-needed"
             failed=1
           fi
+          # The database checks run after deployment (Laplace-Operations); here they must at least compile.
+          for check in Laplace-Engine/tests/deployed/*.py; do
+            python3 -m py_compile "$check" || { echo "::error::Engine database check does not compile: $check"; failed=1; }
+          done
+          bash -n Laplace-Engine/tests/deployed/run.sh || { echo "::error::Engine database check runner does not parse"; failed=1; }
           exit "$failed"
-      - name: Start PostgreSQL with the extension from this Native revision
-        run: |
-          . Laplace-Operations/laplace.env
-          . /opt/intel/oneapi/setvars.sh >/dev/null 2>&1 || true
-          export LAPLACE_NATIVE="$GITHUB_WORKSPACE/Laplace-Native"
-          python3 Laplace-Engine/tools/ci/postgres.py start "$RUNNER_TEMP/engine-pg" --source "$GITHUB_WORKSPACE/Laplace-postgres"
-      - name: Verify ingestion staging under a scoped database identity
-        run: |
-          . Laplace-Operations/laplace.env
-          export LAPLACE_NATIVE=$GITHUB_WORKSPACE/Laplace-Native
-          python3 Laplace-Engine/tests/staging-role.py "$RUNNER_TEMP/engine/laplace"
-      - name: Schema preparation preserves the running runtime cache selection
-        run: |
-          . Laplace-Operations/laplace.env
-          export TMPDIR=${RUNNER_TEMP:?} PSQL=$(dirname "$PG_CONFIG")/psql
-          bash Laplace-Engine/tests/deploy-prepare.sh "$RUNNER_TEMP/engine/laplace"
-      - name: Prepared SQL follows connection lifetime and caller planner policy
-        run: |
-          . Laplace-Operations/laplace.env
-          "$RUNNER_TEMP/engine/pg-plan-lifecycle" "host=${PGHOST:-/tmp} port=${PGPORT:-5432} user=${PGUSER:-laplace} dbname=postgres"
-          export TMPDIR=${RUNNER_TEMP:?} PSQL=$(dirname "$PG_CONFIG")/psql
-          python3 Laplace-Engine/tests/db-binding.py "$RUNNER_TEMP/engine/pg-plan-lifecycle" "$RUNNER_TEMP/engine/laplace"
-          python3 Laplace-Engine/tests/parity-cleanup.py
-      - name: a working tree's whole reading supersedes the readings before it
-        run: |
-          . Laplace-Operations/laplace.env
-          export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
-          bash Laplace-Engine/tests/supersede.sh "$RUNNER_TEMP/engine/laplace"
-      - name: a turn said elsewhere and a runtime witness's statement are recorded by the one writer
-        run: |
-          . Laplace-Operations/laplace.env
-          export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
-          bash Laplace-Engine/tests/runtime-witness.sh "$RUNNER_TEMP/engine/laplace"
-      - name: Native progress agrees with committed source contents
-        run: |
-          . Laplace-Operations/laplace.env
-          export LAPLACE_RECIPES="$GITHUB_WORKSPACE/Laplace-Engine/recipes"
-          export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
-          bash Laplace-Engine/tests/ingest-progress.sh "$RUNNER_TEMP/engine/laplace"
-          bash Laplace-Engine/tests/after-recorded.sh "$RUNNER_TEMP/engine/laplace"
-          bash Laplace-Engine/tests/cached-key-reader.sh "$RUNNER_TEMP/engine/laplace"
-          python3 Laplace-Engine/tests/reader-depth.py "$RUNNER_TEMP/engine/reader-depth"
-          python3 Laplace-Engine/tests/claim-width.py "$RUNNER_TEMP/engine/laplace"
-          bash Laplace-Engine/tests/cili-versions.sh "$RUNNER_TEMP/engine/laplace"
-          bash Laplace-Engine/tests/record-thing.sh "$RUNNER_TEMP/engine/laplace"
-          bash Laplace-Engine/tests/stream-working-set.sh "$RUNNER_TEMP/engine/laplace"
-          python3 Laplace-Engine/tests/publication-waves.py "$RUNNER_TEMP/engine/laplace"
-          python3 Laplace-Engine/tests/failed-file-replay.py "$RUNNER_TEMP/engine/laplace"
-          python3 Laplace-Engine/tests/observation-windows.py "$RUNNER_TEMP/engine/laplace"
-          python3 Laplace-Engine/tests/semantic-interpretation.py "$RUNNER_TEMP/engine/laplace" --database
-          bash Laplace-Engine/tests/rich-text-db.sh "$RUNNER_TEMP/engine/laplace"
-          bash Laplace-Engine/tests/presence-frontier.sh "$RUNNER_TEMP/engine/laplace" "$RUNNER_TEMP/engine/presence-frontier"
-          bash Laplace-Engine/tests/framenet-differences.sh "$RUNNER_TEMP/engine/laplace"
-      - name: Unicode ranges and sequences retain the complete codepoint floor
-        run: |
-          . Laplace-Operations/laplace.env
-          export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
-          bash Laplace-Engine/tests/unicode-range-addresses.sh "$RUNNER_TEMP/engine/laplace"
-      - name: translate goes through the lexicalization, read from the recipe (dog en en, dog en fr)
-        run: |
-          . Laplace-Operations/laplace.env
-          export TMPDIR=${RUNNER_TEMP:?} LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway} PSQL=$(dirname "$PG_CONFIG")/psql
-          LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes bash Laplace-Engine/tests/translate.sh "$RUNNER_TEMP/engine/laplace"
-      - name: Stop the private PostgreSQL instance
-        if: always()
-        run: python3 Laplace-Engine/tools/ci/postgres.py stop "$RUNNER_TEMP/engine-pg"
   # Every source in recipes/order is where its recipe says, on the data host (Laplace-Engine#60): the plan walks each
   # source's root and matches its files to recipes, without the database, and fails on a source whose root is unset, at
   # none of its roots or holding no files. Its own job: what it finds is the data's, and does not hold the deploy.
   plan:
     # Corpus availability is an estate audit, not a software build requirement.
-    # PRs qualify all recipes plus actual ingestion on scoped database fixtures.
     if: github.event_name == 'workflow_dispatch' && inputs.verify_estate
     needs: engine
     runs-on: [self-hosted, laplace, Laplace-Engine]
@@ -256,48 +176,12 @@ jobs:
           export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes LAPLACE_WORK=${RUNNER_TEMP:?}
           export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
           "$RUNNER_TEMP/engine/laplace" ingest --plan | tee -a "$GITHUB_STEP_SUMMARY"
-  # The parity harness (Laplace#1885 step 1): iso-639 ingested by the monorepo's published CLI and by this build, each
-  # into a scratch database (laplace_parity_*, dropped after), and what each recorded compared. Its differences are
-  # findings, written to the job summary; the job fails only when the harness cannot run. Its own job, as plan is.
-  # Estate ingestion is an explicit operator audit; ordinary builds never start it.
-  parity:
-    needs: [engine, plan]
-    if: ${{ !cancelled() && needs.engine.result == 'success' && needs.engine.outputs.parity == 'true' && github.event_name == 'workflow_dispatch' && inputs.verify_estate }}
-    runs-on: [self-hosted, laplace, Laplace-Engine]
-    steps:
-      - name: Select this run's canonical cache closure
-        run: |
-          echo "LAPLACE_TIER0=$RUNNER_TEMP/engine/inputs/tier0.bin" >> "$GITHUB_ENV"
-          echo "LAPLACE_FLAGS=$RUNNER_TEMP/engine/inputs/tier0.flags" >> "$GITHUB_ENV"
-          echo "LAPLACE_HIGHWAY=$RUNNER_TEMP/engine/inputs/highway.bin" >> "$GITHUB_ENV"
-          echo "LAPLACE_GRAMMARS=$RUNNER_TEMP/engine/inputs/grammars" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
-        with: { path: Laplace-Engine }
-      - uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
-      - uses: actions/download-artifact@v4
-        with: { name: laplace-engine, path: "${{ runner.temp }}/engine" }
-      - name: the run's own binary
-        run: chmod +x "$RUNNER_TEMP/engine/laplace" && (cd "$RUNNER_TEMP/engine" && sed "s#  .*#  laplace#" laplace.sha256 | sha256sum -c -)
-      - name: iso-639, laplace-mono against the Engine
-        shell: bash
-        run: |
-          . Laplace-Operations/laplace.env
-          export LAPLACE_RECIPES=$GITHUB_WORKSPACE/Laplace-Engine/recipes LAPLACE_WORK=${RUNNER_TEMP:?}/work TMPDIR=${RUNNER_TEMP:?}
-          export LAPLACE_HIGHWAY=${LAPLACE_HIGHWAY:-${LAPLACE_TIER0%.bin}.highway}
-          export LAPLACE_ENGINE_BIN=$RUNNER_TEMP/engine/laplace PSQL=$(dirname "$PG_CONFIG")/psql
-          mkdir -p "$LAPLACE_WORK"
-          rc=0; bash Laplace-Engine/tools/parity/parity.sh --out "$RUNNER_TEMP/parity" --after unicode=unicode iso-639=iso639 || rc=$?
-          [[ -f "$RUNNER_TEMP/parity/report.md" ]] && cat "$RUNNER_TEMP/parity/report.md" >> "$GITHUB_STEP_SUMMARY"
-          exit $rc
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with: { name: parity-iso-639, path: "${{ runner.temp }}/parity/*.md\n${{ runner.temp }}/parity/*.json\n${{ runner.temp }}/parity/logs\n${{ runner.temp }}/parity/*/*/replay.log", if-no-files-found: ignore }
-  # Every merge to main that passes deploys hart-server: Laplace-Operations' deployment runs with every repository at its
-  # main (its laplace.yml, on a repository_dispatch main-merged; the token is the secret LAPLACE_CHECKOUT, agents.sh's).
+  # Every merge to main that passes and can move the deployment deploys hart-server: Laplace-Operations' deployment runs
+  # with this commit (its laplace.yml, on a repository_dispatch main-merged; the token is the secret LAPLACE_CHECKOUT,
+  # agents.sh's), and its job tests runs this commit's database checks (tests/deployed/) against what it deployed.
   deploy:
     needs: engine
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.engine.outputs.parity == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.engine.outputs.deploys == 'true'
     runs-on: [self-hosted, laplace, Laplace-Engine]
     steps:
       - name: hart-server deploys main (Laplace-Operations)

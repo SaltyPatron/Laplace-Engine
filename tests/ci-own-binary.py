@@ -38,7 +38,13 @@ class OwnBinary(unittest.TestCase):
         self.assertIn("name: laplace-engine", j)
 
     def test_test_only_changes_do_not_dispatch_runtime_deployment(self):
-        self.assertIn("needs.engine.outputs.parity == 'true'", self.jobs['deploy'])
+        self.assertIn("needs.engine.outputs.deploys == 'true'", self.jobs['deploy'])
+
+    def test_no_job_starts_or_makes_a_database(self):
+        # The database checks run against the deployed database after deployment (Laplace-Operations, job tests).
+        for name, j in self.jobs.items():
+            self.assertNotRegex(j, r"initdb|pg_ctl|postgres\.py|createdb|dropdb|CREATE DATABASE|--temp-instance|psql",
+                                f"job {name} starts, makes or reads a database")
 
     def test_no_other_job_reads_the_shared_build_directory(self):
         for name, j in self.jobs.items():
