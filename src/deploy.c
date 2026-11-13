@@ -59,6 +59,20 @@ static void database_made(const char *conninfo){
     if (!run(pg, q, "the database")) exit(1);
     PQfreemem(id); PQfinish(pg); PQconninfoFree(o);
 }
+/* Nothing is released, so nothing is upgraded: a database made by another build of the extension is dropped (its
+ * sessions ended) and made again from this one, asked of "postgres" by the same role over the same connection. */
+static void database_dropped(const char *conninfo){
+    char *err = NULL; PQconninfoOption *o = PQconninfoParse(conninfo, &err); if (!o) { fprintf(stderr, "%s", err ? err : "the connection string does not parse\n"); exit(1); }
+    const char *kw[32], *vl[32], *db = NULL; int n = 0;
+    for (PQconninfoOption *x = o; x->keyword && n < 30; x++) { if (!x->val) continue; if (!strcmp(x->keyword, "dbname")) { db = x->val; continue; } kw[n] = x->keyword; vl[n++] = x->val; }
+    if (!db) { fputs("laplace deploy: the connection string names no database to make again\n", stderr); exit(1); }
+    kw[n] = "dbname"; vl[n++] = "postgres"; kw[n] = NULL; vl[n] = NULL;
+    PGconn *pg = PQconnectdbParams(kw, vl, 0);
+    if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "cannot connect to postgres to make %s again: %s", db, PQerrorMessage(pg)); exit(1); }
+    char *id = PQescapeIdentifier(pg, db, strlen(db)), q[512]; snprintf(q, sizeof q, "DROP DATABASE %s WITH (FORCE)", id);
+    if (!run(pg, q, "the database, dropped")) exit(1);
+    PQfreemem(id); PQfinish(pg); PQconninfoFree(o);
+}
 int cmd_deploy(int argc, char **argv){
     int configure_cache=0,prepare_only=0;const char *schema=NULL;
     for(int i=1;i<argc;i++){
@@ -96,14 +110,16 @@ int cmd_deploy(int argc, char **argv){
     if(!quoted){PQfinish(pg);return 1;}
     snprintf(sql,sizeof sql,"CREATE EXTENSION IF NOT EXISTS laplace SCHEMA %s",quoted);PQfreemem(quoted);
     if(!run(pg,sql,"extension laplace")){PQfinish(pg);return 1;}
-    {   /* Greenfield until something is deployed: no update path. A database holding another version is recreated. */
+    {   /* Nothing is released: a database holding another version of the extension is made again from this one. */
         PGresult *v = PQexec(pg, "SELECT e.extversion, a.default_version FROM pg_extension e"
                                  " JOIN pg_available_extensions a ON a.name = e.extname WHERE e.extname = 'laplace'");
         if (PQresultStatus(v) != PGRES_TUPLES_OK || PQntuples(v) != 1) { fprintf(stderr, "laplace extension version: %s", PQerrorMessage(pg)); PQclear(v); PQfinish(pg); return 1; }
         if (strcmp(PQgetvalue(v, 0, 0), PQgetvalue(v, 0, 1))) {
-            fprintf(stderr, "%s holds laplace %s and the installed extension is %s: recreate the database (there is no upgrade path before release)\n",
-                    PQdb(pg), PQgetvalue(v, 0, 0), PQgetvalue(v, 0, 1));
-            PQclear(v); PQfinish(pg); return 1;
+            printf("laplace deploy   %s holds laplace %s and the installed extension is %s: making it again\n",
+                   PQdb(pg), PQgetvalue(v, 0, 0), PQgetvalue(v, 0, 1));
+            PQclear(v); PQfinish(pg); fflush(stdout);
+            database_dropped(conn_arg(argc, argv));
+            return cmd_deploy(argc, argv);
         }
         PQclear(v);
     }
