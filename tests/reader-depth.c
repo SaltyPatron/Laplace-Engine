@@ -54,7 +54,7 @@ static PGresult *store(PGconn *pg,const Fixeds *all){
         double xyzm[4];lp_coord_xyzm(&node->c,xyzm);
         for(int d=0;d<4;d++){snprintf(value,sizeof value,"%s%.17g",sep,xyzm[d]);put_text(axes[d],value);}
         snprintf(value,sizeof value,"%s%lld",sep,(long long)lp_hilbert_key(lp_hilbert4(&node->c)));put_text(&hilbert,value);
-        put_text(&paths,sep);put_text(&paths,node->path);
+        put_text(&paths,i?":":"{");put_text(&paths,node->path); /* PostGIS geometry's array delimiter is ':' (WKT has commas) */
     }
     lp_buf *arrays[6]={&tiers,&x,&y,&z,&w,&hilbert};
     for(int i=0;i<6;i++)lp_buf_put(arrays[i],"}",2);
