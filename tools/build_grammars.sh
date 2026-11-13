@@ -111,7 +111,13 @@ generate() {
   input=$(inputs_key "$generator_identity|abi15|native" "$package" "$(dirname "$package")/common")
   output=$(inputs_key generated "$generated")
   if [[ ! -s "$generated/parser.c" || ! -f "$stamp" || $(cat "$stamp") != "$input $output" ]]; then
-    "$generator" generate "$definition" --output "$generated" --abi 15 --js-runtime native
+    # The embedded QuickJS runtime first; a grammar.js it cannot load (tree-sitter-perl's v-flag class-set regexes)
+    # is evaluated by Node where the host has it. The generated parser depends only on the evaluated grammar.
+    if ! "$generator" generate "$definition" --output "$generated" --abi 15 --js-runtime native; then
+      command -v node >/dev/null || { echo "Cannot evaluate $definition: QuickJS failed and node is not installed" >&2; return 1; }
+      echo "Evaluating $definition with node"
+      "$generator" generate "$definition" --output "$generated" --abi 15 --js-runtime node
+    fi
     output=$(inputs_key generated "$generated")
     printf '%s %s\n' "$input" "$output" > "$stamp.$$.tmp"
     mv -f "$stamp.$$.tmp" "$stamp"
