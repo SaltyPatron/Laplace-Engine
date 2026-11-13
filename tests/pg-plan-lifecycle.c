@@ -82,7 +82,7 @@ static void stored_reads(PGconn *pg){
     char probe[512],sql[2048];probe_sql(probe,sizeof probe);
     command(pg,"BEGIN");
     snprintf(sql,sizeof sql,"INSERT INTO @extschema@.entity(id,tier,coord,hilbert) SELECT %s,"
-        "pg_catalog.greatest(@extschema@.laplace_tier('%s'),@extschema@.laplace_tier('%s'))+1,"
+        "GREATEST(@extschema@.laplace_tier('%s'),@extschema@.laplace_tier('%s'))+1,"
         "@extschema@.laplace_coord('%s'),@extschema@.laplace_hilbert('%s')",probe,XW,YW,XW,XW);
     command(pg,sql);
     snprintf(sql,sizeof sql,"INSERT INTO @extschema@.physicality(entity,tier,hilbert,path) SELECT id,tier,hilbert,"
