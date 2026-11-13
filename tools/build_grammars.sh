@@ -91,6 +91,10 @@ generate() {
   package=$(dirname "$definition")
   [[ $(basename "$definition") != grammar.json ]] || package=$(dirname "$package")
   [[ ! -f "$package/src/parser.c" ]] || return 0
+  # A workspace root (tree-sitter-jinja) holds its grammar packages in subdirectories, each with its own grammar.js
+  # and tree-sitter.json; the root's grammar.js is no package of its own, and the CLI cannot generate it.
+  if [[ $(basename "$definition") == grammar.js && ! -f "$package/tree-sitter.json" ]] &&
+     compgen -G "$package/*/grammar.js" >/dev/null; then return 0; fi
   if [[ -z "$generator" ]]; then
     generator=${LAPLACE_TREESITTER_CLI:-$(command -v tree-sitter || true)}
     if [[ -z "$generator" ]] || ! "$generator" --version >/dev/null 2>&1; then
