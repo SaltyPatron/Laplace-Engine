@@ -414,8 +414,8 @@ static int chess_field(const uint8_t *text, size_t n, unsigned product, Ref *out
 const NativeGrammar chess_pgn = { "pgn", chess_says, chess_recipe, chess_read, chess_input, chess_field, chess_products };
 
 /* ---- a field that is a FEN (part NAME grammar fen): the position its first four fields give, the content a game that
- * stands there holds (its clocks and move number are no part of a position). A tablebase's rows name their positions
- * so (recipes/syzygy). A text that is no FEN, or a board without both kings, is no position: 0. Fields alone. */
+ * stands there holds (its clocks and move number are no part of a position). A text that is no FEN, or a board without
+ * both kings, is no position: 0. Fields alone. */
 static __thread RefCache fen_cache;
 static int fen_field(const uint8_t *text, size_t n, unsigned product, Ref *out){
     if (!text) return 1;

@@ -50,6 +50,8 @@ int cmd_held(int argc, char **argv);                                  /* provena
 int cmd_replay(int argc, char **argv);                                /* provenance.c: standings from containment alone, against the recorded */
 int cmd_structure(int argc, char **argv);
 int cmd_pgn(int argc, char **argv);                  /* chess.c: a PGN file's records written again from the database alone */
+int cmd_tablebase(int argc, char **argv);            /* chess_syzygy.c: a position's tablebase verdict, its moves ranked, its best-play line */
+const char *ingest_database(void);                   /* the database the ingest running loads into (its -d, else LAPLACE_CONNINFO) */
 
 /* ---- the bits a row must have (physicality.mask): what it is, by LP_KIND_*; as the text of a smallint[] parameter */
 #define CLAIM_BITS "{0}"
@@ -240,6 +242,7 @@ void say_highway(const Recipe *, File *, const uint8_t *src, size_t n, Hw *);
 int  say_has_highway(const Recipe *);
 const char *say_relation(const Recipe *, const char *name);                  /* relation "TEXT" NAME: TEXT, or NULL where the recipe declares none of NAME */
 int say_games(const Recipe *, const char *name);                             /* games TIER NAME: 1 where the recipe gives NAME as the games of what it attests */
+int say_part_native(const Recipe *, const struct NativeGrammar *);           /* 1 where a part of its layout is read by that grammar of the engine's own (part NAME grammar G) */
 int  say_thing_parts(const Recipe *, const char *tier, const char *a, const char *b, int *ia, int *ib);     /* the first way it names a TIER by parts A and B: its parts, and where A and B stand; -1 none */
 void say_highway_lists(const Recipe *, Hw *);
 uint64_t say_obligations(FILE *);                                            /* reports and returns semantic omissions before source publication */
@@ -347,6 +350,10 @@ Hold *holds_capped(PGconn *pg,const lp_id *keys,int nkeys,int cap,int standing,i
 void coords_of(PGconn *pg,const lp_id *ids,int n,double *out,uint8_t *has);
 void tiers_of(PGconn *pg,const lp_id *ids,int n,int *tiers); /* -1 for absent IDs */
 Hold *paths_of(PGconn *pg,const lp_id *ids,int n,int *nout);
+/* Each recorded ID's first and last constituents and its length (runs written out), without its path: src its place in
+ * ids. The caller frees the rows. */
+typedef struct { lp_id entity, first, last; int64_t length; size_t src; } Ends;
+Ends *ends_of(PGconn *pg,const lp_id *ids,size_t n,size_t *nout);
 /* All-member count remains in PostgreSQL. kind: 0 observations, 1 claims, -1 both. */
 long holds_count(PGconn *pg,const lp_id *keys,int nkeys,int kind);
 /* Up the container index from keys to the files that hold them (read.c): one indexed frontier a level. A holder whose

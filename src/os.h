@@ -47,6 +47,8 @@ void os_slashes(char *path);
 void *os_reserve(size_t bytes);
 /* A file mapped read-only (mmap; MapViewOfFile): its bytes and size, NULL on failure. */
 const void *os_map_read(const char *path, size_t *size);
+/* A mapping os_map_read gave, of that size, given back. */
+void os_unmap(const void *p, size_t size);
 /* Pages of reserved memory handed back: they read as zero when touched again (madvise MADV_DONTNEED). */
 void os_discard(void *p, size_t bytes);
 /* A program run to its end with its standard output and error in a log file (truncated) and, when var is non-NULL,

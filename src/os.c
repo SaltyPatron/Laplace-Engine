@@ -60,6 +60,7 @@ const void *os_map_read(const char *path, size_t *size){
     if (p == MAP_FAILED) return NULL;
     *size = (size_t)st.st_size; return p;
 }
+void os_unmap(const void *p, size_t size){ if (p) munmap((void *)p, size); }
 void os_discard(void *p, size_t bytes){ if (bytes) madvise(p, bytes, MADV_DONTNEED); }
 int os_run_logged(const char *exe, char *const argv[], const char *log, const char *var, const char *value){
     (void)exe; (void)argv; (void)log; (void)var; (void)value; errno = ENOSYS; return -1;      /* POSIX callers fork */
@@ -225,6 +226,7 @@ const void *os_map_read(const char *path, size_t *size){
     if (p) *size = (size_t)n.QuadPart;
     return p;
 }
+void os_unmap(const void *p, size_t size){ (void)size; if (p) UnmapViewOfFile(p); }
 
 /* Decommitted and committed again, the whole pages come back zero; a partial last page is zeroed by hand. */
 void os_discard(void *p, size_t bytes){

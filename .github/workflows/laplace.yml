@@ -76,13 +76,12 @@ jobs:
           cmake -S Laplace-Engine -B "$LAPLACE_BUILD/Laplace-Engine/icx-release" -G Ninja -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DLAPLACE_TIER0:FILEPATH="$LAPLACE_TIER0" -DLAPLACE_NATIVE:PATH="$LAPLACE_NATIVE" -DLAPLACE_OPERATIONS:PATH="$GITHUB_WORKSPACE/Laplace-Operations"
           cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release"
-          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target reader_depth claim_decode input_frame_test chess_positions syzygy_decode
+          cmake --build "$LAPLACE_BUILD/Laplace-Engine/icx-release" --target reader_depth claim_decode input_frame_test chess_positions
           mkdir -p "$RUNNER_TEMP/engine" && cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/laplace" "$RUNNER_TEMP/engine/laplace"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/reader_depth" "$RUNNER_TEMP/engine/reader-depth"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/claim_decode" "$RUNNER_TEMP/engine/claim-decode"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/input_frame_test" "$RUNNER_TEMP/engine/input-frame"
           cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/chess_positions" "$RUNNER_TEMP/engine/chess-positions"
-          cp "$LAPLACE_BUILD/Laplace-Engine/icx-release/syzygy_decode" "$RUNNER_TEMP/engine/syzygy-decode"
           sha256sum "$RUNNER_TEMP/engine/laplace" | tee "$RUNNER_TEMP/engine/laplace.sha256"
       - name: Provide the pinned Rust compiler for the Tree-sitter generator
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
@@ -123,8 +122,8 @@ jobs:
           python3 Laplace-Engine/tests/tree-occurrences.py "$L"
           python3 Laplace-Engine/tests/prompt-occurrences.py "$L"
           python3 Laplace-Engine/tests/firmware-relations.py "$L"
-          # the tablebase source's own tables, 3, 4 and 5 pieces (the host declares where its data is)
-          bash Laplace-Engine/tests/syzygy-pieces.sh "$RUNNER_TEMP/engine/syzygy-decode" "${LAPLACE_DATA:-$(. /etc/laplace/machine.env && echo "$LAPLACE_DATA")}/Games/Chess/syzygy/3-4-5"
+          # the tablebase source's own tables, 3, 4 and 5 pieces, probed with a bounded cache (the host declares where its data is)
+          bash Laplace-Engine/tests/syzygy-pieces.sh "$L" "${LAPLACE_DATA:-$(. /etc/laplace/machine.env && echo "$LAPLACE_DATA")}/Games/Chess/syzygy/3-4-5"
           python3 Laplace-Engine/tests/recipe-order.py "$L"
           python3 Laplace-Engine/tests/record-values-width.py "$L"
           python3 Laplace-Engine/tests/semantic-interpretation.py "$L"

@@ -81,6 +81,11 @@ static const Param
     OUT_PGN  = { "output", "-o", ARG_PATH, "standard output", "file.pgn" },
     VERIFY   = { "verify", "--verify", ARG_FLAG, NULL, "every ID under them recomputed from its constituents with BLAKE3 alone, every leaf a codepoint" },
     ROOT     = { "id", NULL, ARG_TEXT, NULL, "a file's, a record's or a line's ID" },
+    TABLES   = { "tables", "-T", ARG_PATH, "LAPLACE_SYZYGY, else $LAPLACE_DATA/Games/Chess/syzygy", "the Syzygy tables: ROOT/NAME.rtbw and ROOT/DIR/NAME.rtbw" },
+    TB_OPEN  = { "open", "-n", ARG_INT, "64", "tables mapped at once" },
+    TB_LINE  = { "line", "--line", ARG_FLAG, NULL, "the best-play line from each position too, and the [P, M, P'] claim of each of its moves" },
+    TB_PGN   = { "pgn", "--pgn", ARG_FLAG, NULL, "the best-play line alone, as the PGN the syzygy source records" },
+    FEN      = { "fen", NULL, ARG_TEXT, "a FEN a line of standard input", "a FEN (its first four fields)" },
     MODEL    = { "model_dir", NULL, ARG_PATH, NULL, "model_dir" };
 
 /* ---- the operations */
@@ -118,6 +123,7 @@ static const Arg A_DEGREES[] = { O(CONNINFO), O(FIRMWARE), { &LIMIT, 0, NULL, "2
 static const Arg A_FILLS[] = { O(CONNINFO), { &LIMIT, 0, NULL, "12" }, O(TIER0), { &PHRASE, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_MODEL[] = { { &MODEL, ARG_REQUIRED, NULL, NULL }, O(LAYERS), O(ZMIN), O(CAP), { &SAMPLE, ARG_MANY, NULL, NULL }, END };
 static const Arg A_PGN[] = { O(CONNINFO), O(TIER0), O(OUT_PGN), O(VERIFY), { &ROOT, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
+static const Arg A_TABLEBASE[] = { O(TABLES), O(TB_OPEN), O(TB_LINE), O(TB_PGN), { &FEN, ARG_MANY, NULL, NULL }, END };
 
 #define R_DB EFFECT_READS_DB
 #define W_DB (EFFECT_READS_DB | EFFECT_WRITES_DB)
@@ -153,6 +159,7 @@ const Op OPS[] = {
     { "bench",     cmd_bench,     "every native operation, measured; --joins reports corpus convergence", A_JOINS, R_DB | R_F, "text" },
     { "model",     cmd_model,     "a transformer checkpoint read as testimony", A_MODEL, R_F, "text" },
     { "pgn",       cmd_pgn,       "a PGN file's games written again from the database alone: the read edge of chess", A_PGN, R_DB | R_F, "PGN" },
+    { "tablebase", cmd_tablebase, "a position's endgame tablebase verdict, its legal moves ranked and its best-play line, read from the Syzygy tables alone", A_TABLEBASE, R_F, "text" },
 };
 const size_t NOPS = sizeof OPS / sizeof *OPS;
 

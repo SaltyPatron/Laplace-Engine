@@ -628,3 +628,8 @@ int say_games(const Recipe *r, const char *name){
     for (int i = 0; i < s->ngames; i++) if (!strcmp(s->games[i].name, name)) return 1;
     return 0;
 }
+int say_part_native(const Recipe *r, const struct NativeGrammar *g){
+    const Say *s = r ? r->say : NULL; if (!s || !g) return 0;
+    for (int i = 0; i < s->lay.npart; i++) if (s->lay.part[i].native == g) return 1;
+    return 0;
+}
