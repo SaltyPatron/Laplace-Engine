@@ -231,7 +231,10 @@ def main():
 
         ingest(chess)
         chess_trunks = single(chess)
-        if lineage_text(chess_trunks[0]) != chess_lineage:
+        # Lineage is carried on attestation rows; games are records under the trunk, so a chess source that attests
+        # nothing has no row to carry it. Where it attests, every row carries its declared lineage.
+        attested = sql(f"SELECT count(*) FROM attestation WHERE witness='{chess_trunks[0]}'::blake3")
+        if attested != '0' and lineage_text(chess_trunks[0]) != chess_lineage:
             fail(f'the validated chess subset does not declare its lineage: {lineage_text(chess_trunks[0])!r}')
         before = series(chess_trunks)
         if before in ('', 'null'):

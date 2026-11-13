@@ -85,7 +85,14 @@ static lp_id *selected_roots(PGconn *pg,const lp_id *ids,const lp_id *records,si
     Args args={0};arg_ids(&args,ids,n);arg_ids(&args,records,n);uint8_t invert=except!=0;arg_raw(&args,&invert,1);
     PGresult *q=ask_once(pg,"SELECT w.id FROM (SELECT DISTINCT witness AS id FROM @extschema@.attestation) w JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) w.id"
         " WHERE (w.id OPERATOR(@extschema@.=) ANY($1::@extschema@.blake3[]) OR EXISTS(SELECT FROM unnest($2::@extschema@.blake3[]) r(id)"
-        " WHERE @extschema@.laplace_path_starts(p.path,r.id)))<>$3::boolean ORDER BY w.id",&args);
+        " WHERE @extschema@.laplace_path_starts(p.path,r.id)))<>$3::boolean"
+        /* A named source that attests nothing is no witness, yet its trunk is recorded: the paths that begin with its
+         * record, for a record that begins no witness trunk. */
+        " UNION SELECT p.entity FROM unnest($2::@extschema@.blake3[]) r(id) JOIN @extschema@.physicality p"
+        " ON p.path OPERATOR(@extschema@.^@) r.id WHERE NOT $3::boolean AND NOT EXISTS("
+        "  SELECT FROM (SELECT DISTINCT witness AS id FROM @extschema@.attestation) w JOIN @extschema@.physicality q"
+        "  ON q.entity OPERATOR(@extschema@.=) w.id WHERE q.path OPERATOR(@extschema@.^@) r.id)"
+        " ORDER BY 1",&args);
     size_t nr=(size_t)PQntuples(q);lp_id *roots=malloc((nr?nr:1)*sizeof *roots);if(!roots){perror("witness IDs");exit(1);}
     for(size_t i=0;i<nr;i++)roots[i]=*col_id(q,(int)i,0);*count=nr;PQclear(q);args_free(&args);return roots;
 }
