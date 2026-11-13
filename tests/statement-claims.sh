@@ -3,7 +3,8 @@
 # (recipes/statement.recipe: subject, relation, object and a score from 0 to 1, between tabs), its row strict: a line
 # that attests nothing or writes a score that is no number on its scale is refused and the run exits 1. A statement is
 # its content alone: the same lines under another file name are the same trunk. `laplace describe` lists both runtime
-# entries, witness and said, and said refuses an empty or missing text before it opens a database.
+# entries, witness and said, and the receipt a turn writes; said and turn refuse an empty or missing text, and a receipt
+# that cannot be written, before they open a database.
 #   tests/statement-claims.sh path/to/laplace
 set -euo pipefail
 L=${1:?usage: tests/statement-claims.sh path/to/laplace}; here=$(cd "$(dirname "$0")" && pwd)
@@ -51,6 +52,11 @@ code=0; out=$(witness --claims "$scratch/absent.statement" 2>&1) || code=$?
 
 catalog=$("$L" describe)
 for op in witness said; do grep -q "\"name\":\"$op\"" <<<"$catalog" || fail "describe does not list $op"; done
+grep -q -- '--receipt' <<<"$catalog" || fail "describe does not list the turn's receipt"
+code=0; out=$("$L" turn --files "$scratch/absent.txt" 2>&1) || code=$?
+[[ $code -eq 1 ]] && grep -q "the prompt's file" <<<"$out" || fail "a turn's prompt file that is not there: exit $code: $out"
+code=0; out=$("$L" said --as u --session s --receipt "$scratch/no/such/dir/r.jsonl" "a prompt" "a response" 2>&1) || code=$?
+[[ $code -eq 1 ]] && grep -q 'the receipt' <<<"$out" || fail "a receipt that cannot be written: exit $code: $out"
 code=0; out=$("$L" said --as u --session s "" "a response" 2>&1) || code=$?
 [[ $code -eq 1 ]] && grep -q 'the prompt is empty' <<<"$out" || fail "an empty prompt: exit $code: $out"
 code=0; out=$("$L" said --as u --session s --files "$scratch/absent.txt" "$scratch/a.statement" 2>&1) || code=$?

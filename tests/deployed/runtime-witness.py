@@ -12,6 +12,7 @@ Scoped: every user (--as), responder (--by) and stating witness is a witness of 
 with it), and every query is constrained by their trunks, the claims those trunks attest, or an ID the check composed.
 The prompts, responses and statements say this check's name, so no other witness attests their claims.
 """
+import json
 import os
 import re
 import sys
@@ -46,8 +47,14 @@ def main():
             return fx.run('said', '--as', carol, '--by', responder, *arguments, check=check)
 
         # ---- a turn said elsewhere
-        out = said('--session', 'geography', question, answer).stdout
+        receipt = fx.scratch / 'said.jsonl'
+        out = said('--session', 'geography', '--receipt', str(receipt), question, answer).stdout
         assert re.search(r'WITNESS    turn [0-9a-f]{32}, at 1 in the session', out), f'the first turn is not at 1: {out}'
+        events = [json.loads(line) for line in receipt.read_text(encoding='utf-8').splitlines()]
+        assert [e['event'] for e in events] == ['resolve', 'witness'] and events[1]['witnessed'] is True \
+            and events[1]['ordinal'] == 1 and events[1]['response'] == events[0]['response'] \
+            and re.search(rf"WITNESS    turn {events[1]['turn']}, at 1", out), \
+            f'the receipt does not say the turn the trace says: {events} {out}'
         text = fx.run('text', answer).stdout
         answer_id = re.search(r'^entity +([0-9a-f]{32}) ', text, re.M)
         assert answer_id, f'no ID for the answer: {text}'

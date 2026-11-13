@@ -60,6 +60,8 @@ static const Param
     SESSION  = { "session", "--session", ARG_TEXT, NULL, "NAME" },
     BY       = { "by", "--by", ARG_TEXT, "Laplace", "NAME: who gave the response, a name recorded as content" },
     AS_FILES = { "files", "--files", ARG_FLAG, NULL, "the prompt and the response are files that hold them" },
+    PROMPT_FILE = { "files", "--files", ARG_FLAG, NULL, "the prompt is a file that holds it" },
+    RECEIPT  = { "receipt", "--receipt", ARG_PATH, NULL, "FILE: what the turn did, for a program: one JSON object a line (resolve, each step, realize, witness), each written as it happens" },
     RESPONSE = { "response", NULL, ARG_TEXT, NULL, "response" },
     READ     = { "read", "--read", ARG_FLAG, NULL, "a read: nothing is witnessed" },
     SEGMENTS = { "segments", "--segments", ARG_FLAG, NULL, "canonical word-segment occurrence IDs as JSON, including separators; no database" },
@@ -112,8 +114,8 @@ static const Arg A_TREE[] = { O(RECIPES), O(GRAMMAR), { &NODES, 0, NULL, "400" }
 static const Arg A_TEXT[] = { O(SEGMENTS), { &TEXT, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_FIRMWARE[] = { O(FIRMWARE), O(FW_OPERATION), END };
 static const Arg A_PULL[] = { O(CONNINFO), O(FIRMWARE), O(SEED), { &PROMPT, ARG_REQUIRED, NULL, NULL }, END };
-static const Arg A_TURN[] = { O(CONNINFO), O(FIRMWARE), O(AS), O(SESSION), O(SEED), O(READ), { &PROMPT, ARG_REQUIRED, NULL, NULL }, END };
-static const Arg A_SAID[] = { O(CONNINFO), O(FIRMWARE), O(AS), O(SESSION), O(BY), O(AS_FILES), { &PROMPT, ARG_REQUIRED, NULL, NULL }, { &RESPONSE, ARG_REQUIRED, NULL, NULL }, END };
+static const Arg A_TURN[] = { O(CONNINFO), O(FIRMWARE), O(AS), O(SESSION), O(SEED), O(READ), O(PROMPT_FILE), O(RECEIPT), { &PROMPT, ARG_REQUIRED, NULL, NULL }, END };
+static const Arg A_SAID[] = { O(CONNINFO), O(FIRMWARE), O(AS), O(SESSION), O(BY), O(AS_FILES), O(RECEIPT), { &PROMPT, ARG_REQUIRED, NULL, NULL }, { &RESPONSE, ARG_REQUIRED, NULL, NULL }, END };
 static const Arg A_HOP[] = { O(CONNINFO), { &LIMIT, 0, NULL, "24" }, O(FIRMWARE), O(FAN), O(K),
                              { &TEXT, ARG_REQUIRED | ARG_MANY, "text | subject predicate object (? for a part left open)", NULL }, END };
 static const Arg A_TRANSLATE[] = { O(CONNINFO), { &LIMIT, 0, "concepts", "4" }, O(FIRMWARE), { &WORD, ARG_REQUIRED, NULL, NULL },
