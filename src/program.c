@@ -284,6 +284,52 @@ static int turn_witness(const char *conninfo, Ref who, Ref by, Ref handle, Ref p
  *
  * The turn [prompt, response] is content: said again in the same session it is the same claim, which the session
  * already holds, and nothing is witnessed again (a write retried adds nothing). */
+/* ---- the receipt (--receipt FILE): what a turn did, for a program to read, one JSON object a line, each written and
+ * flushed as it happens, so a caller can follow a turn while it runs:
+ *   {"event":"resolve","prompt":ID,["response":ID,]"user":U,"session":S,"ordinal":N,"turns_before":N}
+ *   {"event":"step","step":N,"kind":"answers"|"follows"|"like","id":ID,"text":T,"grounds":G,"continuity":C,"confidence":F}
+ *   {"event":"realize","text":T,"disposition":D}
+ *   {"event":"witness","witnessed":true,"turn":ID,"response":ID,"ordinal":N,"entities":N}
+ *   {"event":"witness","witnessed":false,"held":N|null,"turn":ID|null,"reason":R}
+ * The trace on stdout is unchanged; the receipt says what it says without a program having to parse it. */
+static FILE *RECEIPT;
+static int receipt_open(const char *path){
+    if (!path) return 0;
+    RECEIPT = fopen(path, "wb"); if (!RECEIPT) { fprintf(stderr, "the receipt %s: %s\n", path, strerror(errno)); return 1; }
+    return 0;
+}
+static void receipt_close(void){ if (RECEIPT) { fclose(RECEIPT); RECEIPT = NULL; } }
+static void receipt_id(const char *key, const lp_id *id){ char h[33]; lp_id_hex(id, h); fprintf(RECEIPT, ",\"%s\":\"%s\"", key, h); }
+static void receipt_end(void){ fputs("}\n", RECEIPT); fflush(RECEIPT); }
+static void receipt_resolve(const lp_id *prompt, const lp_id *response, const char *user, const char *session, int ordinal, int nturn){
+    if (!RECEIPT) return;
+    fputs("{\"event\":\"resolve\"", RECEIPT); receipt_id("prompt", prompt); if (response) receipt_id("response", response);
+    fputs(",\"user\":", RECEIPT); json_str(RECEIPT, user); fputs(",\"session\":", RECEIPT); json_str(RECEIPT, session);
+    fprintf(RECEIPT, ",\"ordinal\":%d,\"turns_before\":%d", ordinal, nturn); receipt_end();
+}
+static void receipt_step(int step, const char *kind, const lp_id *id, const char *text, double grounds, int continuity, double confidence){
+    if (!RECEIPT) return;
+    fprintf(RECEIPT, "{\"event\":\"step\",\"step\":%d,\"kind\":", step); json_str(RECEIPT, kind); receipt_id("id", id);
+    fputs(",\"text\":", RECEIPT); json_str(RECEIPT, text);
+    fprintf(RECEIPT, ",\"grounds\":%.6g,\"continuity\":%d,\"confidence\":%.6g", grounds, continuity, confidence); receipt_end();
+}
+static void receipt_realize(const char *text, const char *disposition){
+    if (!RECEIPT) return;
+    fputs("{\"event\":\"realize\",\"text\":", RECEIPT); json_str(RECEIPT, text); fputs(",\"disposition\":", RECEIPT); json_str(RECEIPT, disposition); receipt_end();
+}
+static void receipt_witnessed(const lp_id *turn, const lp_id *response, int ordinal, unsigned long long entities){
+    if (!RECEIPT) return;
+    fputs("{\"event\":\"witness\",\"witnessed\":true", RECEIPT); receipt_id("turn", turn); receipt_id("response", response);
+    fprintf(RECEIPT, ",\"ordinal\":%d,\"entities\":%llu", ordinal, entities); receipt_end();
+}
+static void receipt_unwitnessed(const lp_id *turn, int held, const char *reason){
+    if (!RECEIPT) return;
+    fputs("{\"event\":\"witness\",\"witnessed\":false", RECEIPT);
+    if (held) fprintf(RECEIPT, ",\"held\":%d", held > 0 ? held : 0); else fputs(",\"held\":null", RECEIPT);
+    if (turn) receipt_id("turn", turn); else fputs(",\"turn\":null", RECEIPT);
+    fputs(",\"reason\":", RECEIPT); json_str(RECEIPT, reason); receipt_end();
+}
+/* A prompt or a response: the argument itself, or with --files the file it names; whole UTF-8 text, never empty. */
 static uint8_t *said_text(const char *arg, int files, const char *what, size_t *n){
     uint8_t *text;
     if (!files) { *n = strlen(arg); text = malloc(*n + 1); if (text) memcpy(text, arg, *n + 1); }
@@ -297,12 +343,13 @@ static uint8_t *said_text(const char *arg, int files, const char *what, size_t *
     return text;
 }
 int cmd_said(int argc, char **argv){
-    const char *conninfo = laplace_db(), *fwp = NULL, *user = getenv("USER"), *session = NULL, *by = "Laplace"; int files = 0;
+    const char *conninfo = laplace_db(), *fwp = NULL, *user = getenv("USER"), *session = NULL, *by = "Laplace", *receipt = NULL; int files = 0;
     int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "--firmware", .kind = 's', .at = &fwp }, { .flag = "--as", .kind = 's', .at = &user }, { .flag = "--session", .kind = 's', .at = &session },
-                                            { .flag = "--by", .kind = 's', .at = &by }, { .flag = "--files", .kind = 'b', .at = &files }, { 0 } });
-    if (a + 2 != argc) { fprintf(stderr, "usage: laplace said [-d conninfo] [--firmware FILE] [--as USER] [--session NAME] [--by NAME] [--files] prompt response\n"); return 2; }
+                                            { .flag = "--by", .kind = 's', .at = &by }, { .flag = "--files", .kind = 'b', .at = &files }, { .flag = "--receipt", .kind = 's', .at = &receipt }, { 0 } });
+    if (a + 2 != argc) { fprintf(stderr, "usage: laplace said [-d conninfo] [--firmware FILE] [--as USER] [--session NAME] [--by NAME] [--files] [--receipt FILE] prompt response\n"); return 2; }
     if (!user || !*user) user = "user"; if (!session) session = "session";
     if (!*session || !*by) { fprintf(stderr, "said: a session and a responder have names\n"); return 2; }
+    if (receipt_open(receipt)) return 1;
     double T = now();
     size_t np, nr; uint8_t *prompt = said_text(argv[a], files, "prompt", &np); if (!prompt) return 1;
     uint8_t *response = said_text(argv[a + 1], files, "response", &nr); if (!response) return 1;
@@ -317,19 +364,25 @@ int cmd_said(int argc, char **argv){
     free(tc); PQfinish(pg);
     char ti[33], pi[33], ri[33]; lp_id_hex(&turn.id, ti); lp_id_hex(&pr.id, pi); lp_id_hex(&resp.id, ri);
     printf("RESOLVE    prompt %s, tier %d; response %s, tier %d; session \"%s\" of %s, %d turn%s before it\n", pi, pr.tier, ri, resp.tier, session, user, nturn, nturn == 1 ? "" : "s");
-    if (held) { if (held > 0) printf("WITNESS    turn %s is held by the session, at %d: nothing is witnessed again\n", ti, held); else printf("WITNESS    turn %s is held by the session: nothing is witnessed again\n", ti); }
+    receipt_resolve(&pr.id, &resp.id, user, session, held > 0 ? held : held ? 0 : ordinal, nturn);
+    if (held) { if (held > 0) printf("WITNESS    turn %s is held by the session, at %d: nothing is witnessed again\n", ti, held); else printf("WITNESS    turn %s is held by the session: nothing is witnessed again\n", ti);
+        receipt_unwitnessed(&turn.id, held, "the turn is held by the session: nothing is witnessed again"); }
     else { LoadStats ls = { 0 }; lp_id id;
-        if (turn_witness(conninfo, who, speaker, handle, pr, resp, ordinal, &ls, &id)) return 1;
-        printf("WITNESS    turn %s, at %d in the session: %llu entities new, the user's [session, turn] and %s's [response, prompt]\n", ti, ordinal, (unsigned long long)ls.ent_rows, by); }
+        if (turn_witness(conninfo, who, speaker, handle, pr, resp, ordinal, &ls, &id)) { receipt_close(); return 1; }
+        printf("WITNESS    turn %s, at %d in the session: %llu entities new, the user's [session, turn] and %s's [response, prompt]\n", ti, ordinal, (unsigned long long)ls.ent_rows, by);
+        receipt_witnessed(&id, &resp.id, ordinal, (unsigned long long)ls.ent_rows); }
     printf("\ntotal %.1f ms\n", (now() - T) * 1000);
-    free(prompt); free(response); return 0;
+    receipt_close(); free(prompt); free(response); return 0;
 }
 int cmd_turn(int argc, char **argv){
-    const char *conninfo = laplace_db(), *fwp = NULL, *user = getenv("USER"), *session = NULL; int read_only = 0; long long seedv = -1;
+    const char *conninfo = laplace_db(), *fwp = NULL, *user = getenv("USER"), *session = NULL, *receipt = NULL; int read_only = 0, files = 0; long long seedv = -1;
     int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "--firmware", .kind = 's', .at = &fwp }, { .flag = "--as", .kind = 's', .at = &user }, { .flag = "--session", .kind = 's', .at = &session },
-                                            { .flag = "--seed", .kind = 'l', .at = &seedv }, { .flag = "--read", .kind = 'b', .at = &read_only }, { 0 } });      /* --read: a read, nothing is witnessed */
-    if (a >= argc) { fprintf(stderr, "usage: laplace turn [-d conninfo] [--firmware FILE] [--as USER] [--session NAME] [--seed N] [--read] prompt\n"); return 2; }
+                                            { .flag = "--seed", .kind = 'l', .at = &seedv }, { .flag = "--read", .kind = 'b', .at = &read_only },      /* --read: a read, nothing is witnessed */
+                                            { .flag = "--files", .kind = 'b', .at = &files }, { .flag = "--receipt", .kind = 's', .at = &receipt }, { 0 } });
+    if (a + 1 != argc) { fprintf(stderr, "usage: laplace turn [-d conninfo] [--firmware FILE] [--as USER] [--session NAME] [--seed N] [--read] [--files] [--receipt FILE] prompt\n"); return 2; }
     if (!user || !*user) user = "user"; if (!session) session = "session";
+    size_t prompt_n; uint8_t *prompt_text = said_text(argv[a], files, "prompt", &prompt_n); if (!prompt_text) return 1;
+    if (receipt_open(receipt)) return 1;
     double T = now(); if (getenv("LAPLACE_TIMES")) setvbuf(stdout, NULL, _IONBF, 0);      /* each line as it is reached, to be timed */
     Firmware fw = firmware_for(fwp, FW_PULL); ELECT = &fw;
     tier0_open(NULL); table_init(); ctx_open(1); lp_text *c = lp_text_new(T0);
@@ -338,9 +391,8 @@ int cmd_turn(int argc, char **argv){
     firmware_say(&fw, FW_PULL);
 
     /* ---- RESOLVE: the prompt as content; the session from the record */
-    const char *prompt = argv[a];
     size_t occurrences;
-    Ref pr = text_occurrences(CTX[0], (const uint8_t *)prompt, strlen(prompt), st->occ, MAXOCC, &occurrences); st->prompt = pr.id;
+    Ref pr = text_occurrences(CTX[0], prompt_text, prompt_n, st->occ, MAXOCC, &occurrences); st->prompt = pr.id;
     if (occurrences > MAXOCC) { fprintf(stderr, "turn: prompt has %zu occurrences; this execution window supports %d\n", occurrences, MAXOCC); return 2; }
     st->nocc = (int)occurrences;
     st->pg = db_read(conninfo); st->rd = reader_new(st->pg);
@@ -379,6 +431,7 @@ int cmd_turn(int argc, char **argv){
     for (int i = 0; i < st->nocc; i++) reader_want(st->rd, &st->occ[i]);
     char idt[33]; lp_id_hex(&pr.id, idt);
     printf("RESOLVE    prompt %s, tier %d, %d occurrences; session \"%s\" of %s, turn %d (%d before it, %d discourse entities)\n", idt, pr.tier, st->nocc, session, user, ordinal, nturn, st->ndisc);
+    receipt_resolve(&pr.id, NULL, user, session, ordinal, nturn);
     if (!read_only) printf("           admitted as content, the user witnessing it: %llu entities new\n", (unsigned long long)st->admitted);
     printf("           language:"); for (int y = 0; y < st->nlang; y++) { reader_want(st->rd, &st->lang[y]); char *tl = reader_text(st->rd, &st->lang[y], 16); printf(" %s", tl); free(tl); } if (!st->nlang) printf(" not known"); printf("\n");
     printf("           obligations:"); for (int i = 0; i < st->nocc; i++) if (st->composed[i]) { char *tx = reader_text(st->rd, &st->occ[i], 32); printf(" %s%s(%.2f)", tx, (st->open.w[i >> 6] >> (i & 63)) & 1 ? "" : "~", st->role[i]); free(tx); } printf("\n");
@@ -556,8 +609,9 @@ int cmd_turn(int argc, char **argv){
         /* REALIZE */
         reader_want(st->rd, &sel.id); char *tx = reader_text(st->rd, &sel.id, 400);
         size_t tl = strlen(tx); int sep = sel.kind != P_FOLLOW && outn && out[outn - 1] != ' ' && tl && tx[0] != ' ';
-        out = xrealloc(out, outn + tl + 2); if (sep) out[outn++] = ' '; memcpy(out + outn, tx, tl); outn += tl; out[outn] = 0;
+        size_t at = outn; out = xrealloc(out, outn + tl + 2); if (sep) out[outn++] = ' '; memcpy(out + outn, tx, tl); outn += tl; out[outn] = 0;
         printf("STEP %-3d   %s \"%s\"   grounds %.2f, continuity %d, confidence %.3f\n", step + 1, sel.kind == P_FOLLOW ? "follows" : sel.kind == P_SHAPE ? "like   " : "answers", tx, sel.grounds / 1000.0, sel.cont, sel.conf);
+        receipt_step(step + 1, sel.kind == P_FOLLOW ? "follows" : sel.kind == P_SHAPE ? "like" : "answers", &sel.id, out + at, sel.grounds / 1000.0, sel.cont, sel.conf);   /* what the step adds to the response */
         free(tx);
         /* WITNESS, within the pass: the constituent joins the trajectory; what it grounds closes; the next coupling sees it */
         if (nemit < 512) emitted[nemit++] = sel.id; if (st->ntraj < 4096) st->traj[st->ntraj++] = sel.id; pass_add(st, &sel.id);
@@ -573,16 +627,19 @@ int cmd_turn(int argc, char **argv){
     }
     if (nemit >= fw.emit) disposition = "the emission budget is spent";
     printf("REALIZE    \"%s\"\n           %s\n", out, disposition);
+    receipt_realize(out, disposition);
 
     /* ---- WITNESS: the turn, recorded */
     if (!read_only && outn) {
         Ref resp = text_ref(CTX[0], (const uint8_t *)out, outn), lap = text_ref(CTX[0], (const uint8_t *)"Laplace", 7);
         LoadStats ls = { 0 }; lp_id turn;
-        if (turn_witness(conninfo, who, lap, handle, pr, resp, ordinal, &ls, &turn)) return 1;
+        if (turn_witness(conninfo, who, lap, handle, pr, resp, ordinal, &ls, &turn)) { receipt_close(); return 1; }
         char ti[33]; lp_id_hex(&turn, ti);
         printf("WITNESS    turn %s, at %d in the session: %llu entities new, the user's [session, turn] and Laplace's [response, prompt]\n", ti, ordinal, (unsigned long long)ls.ent_rows);
-    } else printf("WITNESS    %s\n", read_only ? "a read: nothing is witnessed" : "nothing emitted: nothing to witness");
+        receipt_witnessed(&turn, &resp.id, ordinal, (unsigned long long)ls.ent_rows);
+    } else { const char *why = read_only ? "a read: nothing is witnessed" : "nothing emitted: nothing to witness";
+        printf("WITNESS    %s\n", why); receipt_unwitnessed(NULL, 0, why); }
     printf("\n%llu round trips, %llu for text   total %.1f ms\n", (unsigned long long)st->trips, (unsigned long long)reader_trips(st->rd), (now() - T) * 1000);
-    field_free(&fd); free(bind); free(out); reader_free(st->rd); PQfinish(st->pg); free(st);
+    receipt_close(); field_free(&fd); free(bind); free(out); free(prompt_text); reader_free(st->rd); PQfinish(st->pg); free(st);
     return 0;
 }
