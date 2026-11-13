@@ -28,6 +28,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check import Fixture, ids, sql  # noqa: E402
 
+# A boolean joined into text is 'true' or 'false' (psql prints a boolean column as t or f); the checks compare t/f.
+TF = {'true': 't', 'false': 'f'}
+
 RECIPE = ('name {name}\nmatch *.tsv\ntier row by \\n\nnames thing value\n'
           'tier field by \\t\nthing row thing\ncontent thing value\n'
           'relation "has value" value\nattest row value\n')
@@ -80,17 +83,17 @@ SELECT 'trunks|'||count(DISTINCT p.entity) FROM laplace_witness_trust() w JOIN p
 SELECT 'consensus|'||count(*) FROM consensus WHERE claim=ANY({ids(claims)});
 -- The streaming ingest's own sessions (its application name) hold no consensus bucket lock; other work on the shared
 -- database may fold its own claims meanwhile, which says nothing of this ingest.
-SELECT 'locks|'||NOT EXISTS (SELECT FROM pg_locks l JOIN pg_stat_activity s ON s.pid=l.pid
- WHERE l.locktype='advisory' AND l.classid=1279348803::oid AND l.objsubid=2 AND l.objid BETWEEN 0 AND 15
-   AND s.application_name=:'app');
-SELECT 'holders|'||coalesce(string_agg(DISTINCT left(regexp_replace(s.query,'\\s+',' ','g'),300),' || '),'')
+-- One statement, so the lock and who holds it are read at the same moment (pg_locks is live, not in the snapshot).
+SELECT 'locks|'||(count(*)=0)||chr(10)||'holders|'||coalesce(string_agg(DISTINCT
+   l.objid::text||' '||s.state||' '||left(regexp_replace(s.query,'\\s+',' ','g'),300),' || '),'')
  FROM pg_locks l JOIN pg_stat_activity s ON s.pid=l.pid
- WHERE l.locktype='advisory' AND l.classid=1279348803::oid AND l.objsubid=2 AND s.application_name=:'app';
+ WHERE l.locktype='advisory' AND l.classid=1279348803::oid AND l.objsubid=2 AND l.objid BETWEEN 0 AND 15
+   AND s.application_name=:'app';
 COMMIT;
 """, variables={'app': application, 'witness': witness})
     except RuntimeError:
         return None                       # its windows went between the catalog read and the count
-    seen = dict(line.split('|', 1) for line in out.splitlines() if '|' in line)
+    seen = {k: TF.get(v, v) for k, v in (line.split('|', 1) for line in out.splitlines() if '|' in line)}
     return seen if 'rows' in seen else None
 
 
@@ -113,7 +116,7 @@ SELECT 'exact|'||NOT EXISTS (
     WHERE claim IN (SELECT claim FROM stage.{table}_claims)));
 ROLLBACK;
 """)
-    seen = dict(line.split('|', 1) for line in out.splitlines() if '|' in line)
+    seen = {k: TF.get(v, v) for k, v in (line.split('|', 1) for line in out.splitlines() if '|' in line)}
     if int(seen.get('claims', '0')) == 0:
         raise SystemExit('observation-windows: the fixture emitted no testimony')
     if seen.get('exact') != 't':

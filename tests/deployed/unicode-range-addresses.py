@@ -15,6 +15,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check import Fixture, closure, ids, sql  # noqa: E402
 
+# A boolean joined into text is 'true' or 'false' (psql prints a boolean column as t or f); the checks compare t/f.
+TF = {'true': 't', 'false': 'f'}
+
 UCD_XML = '''<ucd xmlns="http://www.unicode.org/ns/2003/ucd/1.0">
   <blocks>
     <block first-cp="0000" last-cp="007F" name="Basic Latin"/>
@@ -63,7 +66,7 @@ SELECT 'boundary|'||EXISTS (SELECT FROM laplace_contained_series({ids(trunks)})
 SELECT 'index|'||EXISTS (SELECT FROM physicality
  WHERE entity=laplace_compose(ARRAY[laplace_id('High Surrogates'),laplace_cp_id(55296)]) AND entity=ANY({under}));
 """)
-        seen = dict(line.split('|', 1) for line in found.splitlines() if '|' in line)
+        seen = {k: TF.get(v, v) for k, v in (line.split('|', 1) for line in found.splitlines() if '|' in line)}
         if seen.get('lost') != '0':
             raise SystemExit(f'unicode-range-addresses: {seen.get("lost")} range endpoints lost their canonical identity or order')
         if seen.get('hex') != 'f':
