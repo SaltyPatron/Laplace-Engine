@@ -345,7 +345,10 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         payload+=row->node->keep==1 ? 176u+(uint64_t)32*row->node->nv
             : 114u+(row->annotations?9u+(uint64_t)32*row->node->nv:0);
     }
-    uint64_t wanted=payload/((uint64_t)1<<22);
+    /* LAPLACE_PUBLISH_GRAIN_BYTES sizes that window (as the record and working-set windows are sized); 4 MiB by default. */
+    uint64_t grain=(uint64_t)1<<22;const char *grain_setting=getenv("LAPLACE_PUBLISH_GRAIN_BYTES");
+    if(grain_setting && *grain_setting){char *end;unsigned long long g=strtoull(grain_setting,&end,10);if(!*end && g)grain=g;}
+    uint64_t wanted=payload/grain;
     unsigned lanes=wanted<(uint64_t)writer.ncopy?(unsigned)wanted:(unsigned)writer.ncopy;
     if(!lanes)lanes=1;
     if(st->publish_lanes<lanes)st->publish_lanes=lanes;

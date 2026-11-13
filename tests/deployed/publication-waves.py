@@ -49,7 +49,10 @@ def main():
 
         def start(writers, case):
             log = fixture.scratch / f'{case}.log'
-            env = dict(base, LAPLACE_DB_POOL_SIZE=str(writers), LAPLACE_WORK=str(fixture.scratch / f'{case}-work'))
+            # Writers are sized by transport payload (one per LAPLACE_PUBLISH_GRAIN_BYTES, 4 MiB by default); the
+            # fixture is about 1.4 MB, so a 64 KiB grain lets the pool's writers share it.
+            env = dict(base, LAPLACE_DB_POOL_SIZE=str(writers), LAPLACE_WORK=str(fixture.scratch / f'{case}-work'),
+                       LAPLACE_PUBLISH_GRAIN_BYTES=str(1 << 16))
             return fixture.start('ingest', '-j', '8', name, log=log, env=env), log
 
         def finished(process, log, case):
