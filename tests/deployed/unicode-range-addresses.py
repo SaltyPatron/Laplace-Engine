@@ -67,8 +67,11 @@ SELECT 'index|'||EXISTS (SELECT FROM physicality
         if seen.get('lost') != '0':
             raise SystemExit(f'unicode-range-addresses: {seen.get("lost")} range endpoints lost their canonical identity or order')
         if seen.get('hex') != 'f':
-            said = sql(f"""SELECT string_agg(laplace_text(s.claim),' | ') FROM laplace_contained_series({ids(trunks)}) s
- WHERE laplace_id('D800')=ANY(laplace_vertex_ids((SELECT p.path FROM physicality p WHERE p.entity=s.claim LIMIT 1)))""")
+            said = sql(f"""SELECT string_agg(c.which||'='||c.id::text||' '||coalesce(laplace_text(c.id),'?'),' | ')
+ FROM laplace_contained_series({ids(trunks)}) s JOIN (VALUES
+   ('pair',laplace_compose(ARRAY[laplace_id('High Surrogates'),laplace_id('D800')])),
+   ('start',laplace_compose(ARRAY[laplace_id('High Surrogates'),laplace_id('Start Code'),laplace_id('D800')])),
+   ('idna',laplace_compose(ARRAY[laplace_id('D800'),laplace_id('DISALLOWED')]))) c(which,id) ON s.claim=c.id""")
             raise SystemExit('unicode-range-addresses: a surrogate codepoint was replaced by its hex spelling: ' + said)
         if seen.get('boundary') != 't':
             raise SystemExit('unicode-range-addresses: the surrogate block boundary was omitted instead of published as an address')
