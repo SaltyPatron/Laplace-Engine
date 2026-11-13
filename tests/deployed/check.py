@@ -247,13 +247,13 @@ class Fixture:
         return arguments
 
     def trunks(self, name):
-        """The witness trunks recorded for one of this check's sources: the trunks that begin with its record."""
+        """The trunks recorded for one of this check's sources: every path that begins with its record (indexed ^@).
+        A trunk is recorded whether or not its source attests anything, so this does not go through the witnesses."""
         if name not in self.sources:
             raise ValueError(f'{name} is not a source of check {self.check}')
         witness = self.witness_of(name)
-        rows = sql('SELECT DISTINCT p.entity::text FROM laplace_witness_trust() w'
-                   ' JOIN physicality p ON p.entity=w.witness'
-                   ' WHERE laplace_path_starts(p.path, laplace_text_id(:\'witness\')) ORDER BY 1',
+        rows = sql('SELECT DISTINCT p.entity::text FROM physicality p'
+                   ' WHERE p.path ^@ laplace_text_id(:\'witness\') ORDER BY 1',
                    variables={'witness': witness})
         found = [r for r in rows.splitlines() if r]
         self.trunks_recorded.update(found)
@@ -288,9 +288,8 @@ class Fixture:
         that begin with its name's record, as Fixture.trunks finds a source's."""
         if name not in self.witnesses:
             raise ValueError(f'{name} is not a witness of check {self.check}')
-        rows = sql('SELECT DISTINCT p.entity::text FROM laplace_witness_trust() w'
-                   ' JOIN physicality p ON p.entity=w.witness'
-                   ' WHERE laplace_path_starts(p.path, laplace_text_id(:\'witness\')) ORDER BY 1',
+        rows = sql('SELECT DISTINCT p.entity::text FROM physicality p'
+                   ' WHERE p.path ^@ laplace_text_id(:\'witness\') ORDER BY 1',
                    variables={'witness': name})
         found = [r for r in rows.splitlines() if r]
         self.trunks_recorded.update(found)
