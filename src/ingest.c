@@ -152,17 +152,27 @@ static lp_id witness_trunk, witness_lineage; static double witness_trust; static
  * lineage are given, and the files are what it states, each read by the recipe any file of its kind is read by (a
  * .statement by recipes/statement.recipe: a claim a line). Everything else is cmd_ingest, unchanged: the files
  * decompose through the record VM, the trunk is [the witness's name, its files' trunks in path order], and that trunk is
- * the witness its attestations are keyed by, at its class's prior. */
+ * the witness its attestations are keyed by, at its class's prior. A file's pathname is from the directory its files
+ * share, or from --root DIR, which every file is under: an application that keeps what a witness states at its own
+ * relative paths (an upload's folders) has those paths recorded as the files' pathnames. */
 typedef struct { const char *as, *class_label, *lineage; char root[4096]; } RuntimeWitness;
 static const RuntimeWitness *runtime_witness;
 int cmd_witness(int argc, char **argv){
-    const char *conninfo = NULL, *t0p = NULL, *rdir = NULL, *threads = NULL; int no_load = 0, claims = 0;
+    const char *conninfo = NULL, *t0p = NULL, *rdir = NULL, *threads = NULL, *root = NULL; int no_load = 0, claims = 0;
     RuntimeWitness w = {0};
     int a = opts(argc, argv, (const Opt[]){ { .flag = "-d", .kind = 's', .at = &conninfo }, { .flag = "-t", .kind = 's', .at = &t0p }, { .flag = "-r", .kind = 's', .at = &rdir }, { .flag = "-j", .kind = 's', .at = &threads },
         { .flag = "--as", .kind = 's', .at = &w.as }, { .flag = "--class", .kind = 's', .at = &w.class_label }, { .flag = "--lineage", .kind = 's', .at = &w.lineage },
+        { .flag = "--root", .kind = 's', .at = &root },
         { .flag = "--no-load", .kind = 'b', .at = &no_load }, { .flag = "--claims", .kind = 'b', .at = &claims }, { 0 } });
     if (a >= argc || argv[a][0] == '-' || !w.as || !*w.as || !w.class_label || !*w.class_label) {
-        fputs("usage: laplace witness [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] --as WITNESS --class CLASS [--lineage NAME] [--no-load] [--claims] file...\n", stderr); return 2; }
+        fputs("usage: laplace witness [-d conninfo] [-t tier0.bin] [-r recipes] [-j threads] --as WITNESS --class CLASS [--lineage NAME] [--root DIR] [--no-load] [--claims] file...\n", stderr); return 2; }
+    if (root) {                                                               /* the directory the files' pathnames are from, as the OS resolves it */
+        struct stat st; char real[4096];
+        if (!realpath(root, real) || stat(real, &st) || !S_ISDIR(st.st_mode) || strlen(real) >= sizeof w.root) { fprintf(stderr, "witness: --root %s is not a directory\n", root); return 2; }
+        for (char *q = real; *q; q++) if (*q == '\\') *q = '/';
+        size_t k = strlen(real); while (k > 1 && real[k - 1] == '/') real[--k] = 0;
+        memcpy(w.root, real, k + 1);
+    }
     if (strlen(w.as) >= sizeof ((Source *)0)->witness || strchr(w.as, '{') || strchr(w.as, '\n') || (w.lineage && (strlen(w.lineage) >= sizeof ((Source *)0)->lineage || strchr(w.lineage, '\n')))) {
         fputs("witness: a witness and a lineage are names of at most 127 bytes on one line, a witness without {\n", stderr); return 2; }
     if (!w.lineage) w.lineage = w.as;                                          /* what one witness states at different times is one lineage: its repeats are no independent consensus */
@@ -179,6 +189,11 @@ int cmd_witness(int argc, char **argv){
         struct stat st; char *real = malloc(4096);
         if (!real || !realpath(argv[i], real) || stat(real, &st) || !S_ISREG(st.st_mode)) { fprintf(stderr, "witness: %s is not a file\n", argv[i]); return 2; }
         for (char *q = real; *q; q++) if (*q == '\\') *q = '/';
+        if (root) {                                                           /* a file is under the root it is named from, or it is refused */
+            size_t rl = strlen(w.root);
+            if (strncmp(real, w.root, rl) || real[rl] != '/') { fprintf(stderr, "witness: %s is not under --root %s\n", argv[i], w.root); return 2; }
+            av[n++] = real; continue;
+        }
         char *slash = strrchr(real, '/'); size_t dir = slash ? (size_t)(slash - real) : 0;
         if (i == a) { memcpy(w.root, real, dir); w.root[dir] = 0; }
         else { size_t k = 0; while (w.root[k] && k < dir && w.root[k] == real[k]) k++;

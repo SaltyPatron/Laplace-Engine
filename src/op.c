@@ -57,6 +57,7 @@ static const Param
     CLASS    = { "class", "--class", ARG_TEXT, NULL, "CLASS: the witness's trust class, one Laplace-Native's manifest/trust_classes.toml declares; its prior is the trust its claims play at" },
     LINEAGE  = { "lineage", "--lineage", ARG_TEXT, "the witness's own name", "NAME: the witness it derives from; one lineage plays one matchup a claim" },
     STATED   = { "file", NULL, ARG_PATH, NULL, "what it states: a .statement (a claim a line: subject, relation, object and a score from 0 to 1, between tabs), or any file a recipe reads" },
+    WITNESS_ROOT = { "root", "--root", ARG_PATH, "the directory the files share", "DIR: the directory every file is under, its pathname recorded from there" },
     SESSION  = { "session", "--session", ARG_TEXT, NULL, "NAME" },
     BY       = { "by", "--by", ARG_TEXT, "Laplace", "NAME: who gave the response, a name recorded as content" },
     AS_FILES = { "files", "--files", ARG_FLAG, NULL, "the prompt and the response are files that hold them" },
@@ -100,7 +101,7 @@ static const Arg A_FLAGS[] = { O(UCD), O(OUT_FL), END };
 static const Arg A_HIGHWAY[] = { O(OUT_HW), O(FINGERPRINT), O(IDENTITIES), END };
 static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(HIGHWAY), O(WHOLE), O(NO_LOAD), O(PLAN), O(CATALOG), O(LIST_SOURCES), O(CLAIMS), O(CLAIMS_TSV), O(ENTITIES),
                                 { &WHAT, ARG_MANY, NULL, NULL }, END };
-static const Arg A_WITNESS[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), { &WITNESS_AS, ARG_REQUIRED, NULL, NULL }, { &CLASS, ARG_REQUIRED, NULL, NULL }, O(LINEAGE), O(NO_LOAD), O(CLAIMS),
+static const Arg A_WITNESS[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), { &WITNESS_AS, ARG_REQUIRED, NULL, NULL }, { &CLASS, ARG_REQUIRED, NULL, NULL }, O(LINEAGE), O(WITNESS_ROOT), O(NO_LOAD), O(CLAIMS),
                                  { &STATED, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
 static const Arg A_MERGE[] = { O(CONNINFO), { &JOBS, 0, NULL, "every processor" }, END };
 static const Arg A_PROJECTION[] = { O(CONNINFO), O(APPLY), END };
