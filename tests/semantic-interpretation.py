@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Source notation, open identifiers, scoped argument slots and real readback."""
+"""Source notation, open identifiers and scoped argument slots, read without a database.
+
+Their committed readback runs against the deployed database in tests/deployed/semantic-interpretation.py."""
 import argparse
 import csv
 import gzip
@@ -9,13 +11,11 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-import uuid
 
 
 def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument('engine', type=Path)
-    parser.add_argument('--database', action='store_true')
     parser.add_argument('--recipes', type=Path,
                         help='Verify the selected installed recipe resources instead of checkout resources')
     args = parser.parse_args()
@@ -690,160 +690,6 @@ def main():
         assert 'semantic_omissions=1' in rejected and 'unresolved obligations: 1 ' in rejected, rejected
         (data / 'canonical.tsv').write_text('duck\tNOUN\tlaplace-unlisted.987654321\tduck.03\tnovel-987654321.2\n', encoding='utf-8')
         print('PASS closed vocabulary failures are counted and return failure')
-        if not args.database:
-            return
-
-        psql = os.environ.get('PSQL', 'psql')
-        host, port, user = (os.environ.get(name, default) for name, default in
-                            [('PGHOST', '/tmp'), ('PGPORT', '5432'), ('PGUSER', 'laplace')])
-        database = 'laplace_semantics_' + uuid.uuid4().hex[:12]
-        created = False
-
-        def sql(query, db=database):
-            result = subprocess.run([psql, '-XwAtq', '-h', host, '-p', port, '-U', user, '-d', db,
-                                     '-v', 'ON_ERROR_STOP=1', '-c', query], capture_output=True, text=True,
-                                    encoding='utf-8', timeout=180)
-            assert result.returncode == 0, result.stderr
-            return result.stdout.strip()
-
-        connection = ' '.join(f"{name}='{value}'" for name, value in
-                              [('host', host), ('port', port), ('user', user), ('dbname', database)])
-        try:
-            sql(f'CREATE DATABASE "{database}"', 'postgres')
-            created = True
-            sql('CREATE EXTENSION laplace CASCADE')
-            run('ingest', '-d', connection, '-j', 4, 'semantic-alignment')
-            run('ingest', '-d', connection, '-j', 4, 'propbank')
-            before = sql('SELECT count(DISTINCT witness) FROM public.attestation')
-            assert before == '2', before
-            ud_data = root / 'data/ud'
-            ud_data.mkdir()
-            (ud_data / 'spacing.conllu').write_text(conllu.format(text='see  a.'), encoding='utf-8')
-            (ud_data / 'annotations.conllu').write_text(annotation_text, encoding='utf-8')
-            (recipes / 'universal-dependencies/source').write_text(
-                'name universal-dependencies\nwitness Universal Dependencies\nclass AcademicCurated\n'
-                'root $LAPLACE_DATA/ud\n', encoding='utf-8')
-            publication = run('ingest', '-d', connection, '-j', 4, 'universal-dependencies')
-            preserved = sql("""SELECT sum(games) FROM public.laplace_contained_series(
-                (SELECT array_agg(DISTINCT witness) FROM public.attestation))
-                WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('see  a.'),
-                    public.laplace_text_id('the fluent translation of the sentence to English'),
-                    public.laplace_text_id('Translated.')])""")
-            assert preserved == '1', ('Original sentence spacing did not survive database publication', preserved, publication)
-            for relation, pairs in [('The tectogrammatical functor and its parent', [('go','DIR3'),('home','LOC')]),
-                                    (None, [('go','Agent'),('named','Patient')])]:
-                pair_ids = ','.join("public.laplace_compose(ARRAY[public.laplace_text_id('%s'),public.laplace_text_id('%s')])" % pair
-                                    for pair in pairs)
-                operands = "public.laplace_text_id('home'),"
-                if relation:
-                    operands += "public.laplace_text_id('%s')," % relation
-                operands += 'public.laplace_compose(ARRAY[' + pair_ids + '])'
-                observed = sql("SELECT sum(games) FROM public.laplace_contained_series("
-                    "(SELECT array_agg(DISTINCT witness) FROM public.attestation)) WHERE claim=public.laplace_compose(ARRAY[" + operands + '])')
-                assert observed == '1', ('Structured bindings or parent association changed in PostgreSQL', relation, observed, publication)
-            detailed.rmdir()
-            detailed.write_text(rich_sentences, encoding='utf-8')
-            run('ingest', '-d', connection, '-j', 4, 'tatoeba')
-            language_games = sql("""SELECT sum(games) FROM public.laplace_contained_series(
-                (SELECT array_agg(DISTINCT witness) FROM public.attestation))
-                WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('Preferred cat.'),
-                    public.laplace_text_id('ISO 639-3 language code'),public.laplace_text_id('eng')])""")
-            assert language_games == '1', ('Mirrored sentence exports manufactured observations', language_games)
-            assert 'Fallback dog.' in run('hop', '-d', connection, 'Preferred cat.')
-            run('ingest','-d',connection,'wiktionary-kaikki')
-            dictionary_games=sql("""SELECT sum(games) FROM public.laplace_contained_series(
-                ARRAY(SELECT witness FROM (SELECT DISTINCT ON (witness) witness,lineage FROM public.attestation ORDER BY witness,lineage NULLS FIRST) w WHERE lineage=public.laplace_text_id('Wiktionary')))
-                WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('domestic'),
-                    public.laplace_text_id('qualifier of this form or sense'),public.laplace_text_id('domestic')])""")
-            assert dictionary_games=='1',('Dictionary homograph qualifier was lost or duplicated',dictionary_games)
-            usage = run('hop', '-d', connection, 'see  a.')
-            # The CLI truncates long display labels; the exact full relation
-            # and whitespace-preserving subject were checked above in SQL.
-            assert 'the fluent translation of the sentence to' in usage and 'Translated.' in usage, usage
-            run('ingest', '-d', connection, 'open-identifiers')
-            # Two declarations describe one reference in one source record.
-            # Replaying actual containment must still recover one observation.
-            games = sql("""SELECT sum(games) FROM public.laplace_contained_series(
-                (SELECT array_agg(DISTINCT witness) FROM public.attestation))
-                WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('single-unlisted.01'),
-                    public.laplace_text_id('identifier vocabulary'),public.laplace_text_id('pbroleset')])""")
-            assert games == '1', ('Duplicate declarations manufactured observations', games)
-            source_file = recipes / 'social-chemistry-101/source'
-            source_file.write_text('\n'.join(
-                'root ' + chemistry.as_posix() if line.startswith('root ') else line
-                for line in source_file.read_text(encoding='utf-8').splitlines()) + '\n', encoding='utf-8')
-            progress = root / 'social-chemistry-progress.jsonl'
-            run('ingest', '-d', connection, '-j', 4, 'social-chemistry-101',
-                extra={'LAPLACE_INGEST_PROGRESS_PATH': str(progress), 'LAPLACE_INGEST_ONE': '1'})
-            events = [json.loads(line) for line in progress.read_text(encoding='utf-8').splitlines()]
-            completed = [event for event in events if event['event'] == 'complete']
-            assert len(completed) == 1, completed
-            # The witness is [source metadata, recorded file trunks], rather
-            # than the title alone. Read the actual published source ID.
-            witness = bytes.fromhex(completed[0]['source_id']).hex()
-            assert len(witness) == 32, witness
-            repeated = sql(f"""SELECT sum(games)::text || ':' || min(position)::text
-                FROM public.laplace_contained_series(ARRAY['{witness}'::public.blake3])
-                WHERE claim=public.laplace_compose(ARRAY[public.laplace_text_id('First rule.'),
-                    public.laplace_text_id('Who is the RoT most likely targeting'),public.laplace_text_id('friend')])""")
-            assert repeated == '2:1', ('Qualified observations or their source positions changed', repeated)
-            subset_progress = root / 'social-chemistry-subset-progress.jsonl'
-            subset_environment = {'LAPLACE_INGEST_PROGRESS_PATH': str(subset_progress), 'LAPLACE_INGEST_ONE': '1'}
-            run('ingest', '-d', connection, '-j', 4, 'social-chemistry-101-validated', extra=subset_environment)
-            subset_events = [json.loads(line) for line in subset_progress.read_text(encoding='utf-8').splitlines()]
-            subset_id = next(event['source_id'] for event in subset_events if event['event'] == 'complete')
-            assert subset_id != witness, 'A derived subset impersonated the complete publisher source'
-            subset_lineage = sql(f"SELECT public.laplace_text(lineage) FROM (SELECT lineage FROM public.attestation WHERE witness='{subset_id}'::public.blake3 ORDER BY lineage NULLS FIRST LIMIT 1) a")
-            assert subset_lineage == 'Social-Chem-101 Dataset', subset_lineage
-            subset_query = f"SELECT jsonb_agg(to_jsonb(s) ORDER BY claim,dependence_root) FROM public.laplace_contained_series(ARRAY['{subset_id}'::public.blake3]) s"
-            subset_before = sql(subset_query)
-            run('ingest', '-d', connection, '-j', 4, 'social-chemistry-101-validated', extra=subset_environment)
-            assert sql(subset_query) == subset_before, 'Subset replay changed its published testimony'
-            chess_progress = root / 'twic-subset-progress.jsonl'
-            chess_environment = {'LAPLACE_INGEST_PROGRESS_PATH': str(chess_progress), 'LAPLACE_INGEST_ONE': '1'}
-            run('ingest', '-d', connection, '-j', 4, 'twic-validated', extra=chess_environment)
-            chess_events = [json.loads(line) for line in chess_progress.read_text(encoding='utf-8').splitlines()]
-            chess_id = next(event['source_id'] for event in chess_events if event['event'] == 'complete')
-            assert sql(f"SELECT public.laplace_text(lineage) FROM (SELECT lineage FROM public.attestation WHERE witness='{chess_id}'::public.blake3 ORDER BY lineage NULLS FIRST LIMIT 1) a") == 'The Week in Chess'
-            chess_query = f"SELECT jsonb_agg(to_jsonb(s) ORDER BY claim,dependence_root) FROM public.laplace_contained_series(ARRAY['{chess_id}'::public.blake3]) s"
-            chess_before = sql(chess_query)
-            assert chess_before != 'null', 'Validated games published no Native testimony'
-            run('ingest', '-d', connection, '-j', 4, 'twic-validated', extra=chess_environment)
-            assert sql(chess_query) == chess_before, 'Validated chess replay changed its testimony'
-            # Use the product consumer: these are committed, ranked claims read
-            # from PostgreSQL, not the preview or a test's reconstruction.
-            duck = run('hop', '-d', connection, 'duck')
-            assert 'NOUN' in duck and 'VERB' in duck and 'laplace-unlisted.987654321' in duck, duck
-            mapping = run('hop', '-d', connection, 'duck.03')
-            assert 'cross-resource mapping' in mapping and 'novel-987654321.2' in mapping, mapping
-            reference = run('hop', '-d', connection, 'laplace-unlisted.987654321')
-            assert 'identifier vocabulary' in reference and 'pbroleset' in reference, reference
-            usage = run('hop', '-d', connection, 'PersonX ducks.')
-            assert 'duck.01' in usage and 'duck.02' in usage and 'PersonX' in usage, usage
-            assert 'PersonY' in usage, usage
-            # Vocabulary edits invalidate the OS/file precheck even when all
-            # corpus bytes, timestamps and the .recipe itself are unchanged.
-            vocabulary = recipes / 'vocabularies/english-pos.tsv'
-            vocabulary.write_text(vocabulary.read_text(encoding='utf-8').replace('noun NOUN', 'noun ADV'), encoding='utf-8')
-            rereading = root / 'rereading.jsonl'
-            run('ingest', '-d', connection, 'semantic-alignment',
-                extra={'LAPLACE_INGEST_PROGRESS_PATH': str(rereading)})
-            events = [json.loads(line) for line in rereading.read_text(encoding='utf-8').splitlines()]
-            assert any(e['event'] == 'file-composed' and e['file'].endswith('names.tsv') for e in events), events
-            assert 'ADV' in run('hop', '-d', connection, 'duck')
-            before = sql('SELECT count(DISTINCT witness) FROM public.attestation')
-            progress = root / 'failed.jsonl'
-            (data / 'canonical.tsv').write_text('bad\tNOT_A_POS\tnew.03\tnew.03\tnew-99\n', encoding='utf-8')
-            rejected = run('ingest', '-d', connection, 'semantic-alignment', expected=1,
-                           extra={'LAPLACE_INGEST_PROGRESS_PATH': str(progress)})
-            assert 'semantic_omissions=1' in rejected, rejected
-            events = [json.loads(line) for line in progress.read_text(encoding='utf-8').splitlines()]
-            assert events[-1]['event'] == 'failed' and not any(e['event'] == 'complete' for e in events), events
-            assert sql('SELECT count(DISTINCT witness) FROM public.attestation') == before
-            print('PASS committed CLI readback and failed-source publication/progress boundary')
-        finally:
-            if created:
-                sql(f'DROP DATABASE "{database}" WITH (FORCE)', 'postgres')
 
 
 if __name__ == '__main__':
