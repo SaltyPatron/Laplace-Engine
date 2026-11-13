@@ -26,6 +26,13 @@ esac
 compiler_identity=$("$CC" --version)
 machine=$(uname -sm)
 built=0 reused=0 generated_count=0
+# The Engine's own definitions (recipes/formats/grammars, derived and patched, what the recipes are written against)
+# own their language names: compiling any other source tree into the same output leaves those libraries alone.
+OWNER=$(cd "$(dirname "$0")/../recipes/formats/grammars" 2>/dev/null && pwd || true)
+declare -A owned=()
+if [[ -n "$OWNER" && "$SRC" != "$OWNER" ]]; then
+  for owned_dir in "$OWNER"/*/; do owned[$(basename "$owned_dir")]=1; done
+fi
 
 # Contents survive fresh checkouts and source paths differ between build planes.
 # Include every local header/scanner, not checkout timestamps or absolute paths.
@@ -54,6 +61,7 @@ compile() {
   # tree_sitter_x(void) or tree_sitter_x() (awk, mermaid and gstlaunch ship the latter)
   name=$(sed -n 's/.*TSLanguage \*tree_sitter_\([A-Za-z0-9_]*\)(\(void\)\{0,1\}).*/\1/p' "$parser" | head -1)
   [[ -n "$name" ]] || { echo "No exported language in $parser" >&2; return 1; }
+  if [[ -n "${prebuilt:-}" && -n "${owned[$name]:-}" ]]; then echo "Kept grammar $name: defined in $OWNER"; return 0; fi
   binary="$OUT/libtree-sitter-$name.$ext"
   fresh="$binary.$$.tmp"
   local -a sources=("$parser") flags=(-O2 -shared -w "-I$(dirname "$parser")" "-I$scanner_root" "-I$common")
@@ -137,6 +145,9 @@ while IFS= read -r -d '' manifest; do
   generate "$definition" "$(basename "$(dirname "$manifest")")"
 done < <(find "$SRC" -name derivation.json -not -path '*/node_modules/*' -print0)
 
+# Prebuilt parsers of another tree (vendored gmr-postgres, c_sharp, typescript, ...) never replace a language the Engine
+# defines; a definition generated here (a copy of the Engine's own in a test tree) still builds.
+prebuilt=1
 while IFS= read -r -d '' parser; do
   package=$(dirname "$(dirname "$parser")")
   compile "$parser" "$(dirname "$parser")" "$(dirname "$package")/common"
