@@ -70,7 +70,7 @@ PENDING = """
 
 def observe(application, witness, claims):
     """One snapshot of the streaming source: rows in its committed windows, its trunks, its claims' standings, and
-    whether every consensus bucket lock is free. None when its windows are not there (yet, or any more)."""
+    whether its own sessions hold no consensus bucket lock. None when its windows are not there (yet, or any more)."""
     try:
         out = sql(f"""
 BEGIN ISOLATION LEVEL REPEATABLE READ;
@@ -78,7 +78,11 @@ SELECT format('SELECT %L||count(*) FROM stage.%I','rows|',c.relname) {PENDING} \
 SELECT 'trunks|'||count(DISTINCT p.entity) FROM laplace_witness_trust() w JOIN physicality p ON p.entity=w.witness
  WHERE laplace_path_starts(p.path, laplace_text_id(:'witness'));
 SELECT 'consensus|'||count(*) FROM consensus WHERE claim=ANY({ids(claims)});
-SELECT 'locks|'||bool_and(pg_try_advisory_xact_lock(1279348803,h)) FROM generate_series(0,15) h;
+-- The streaming ingest's own sessions (its application name) hold no consensus bucket lock; other work on the shared
+-- database may fold its own claims meanwhile, which says nothing of this ingest.
+SELECT 'locks|'||NOT EXISTS (SELECT FROM pg_locks l JOIN pg_stat_activity s ON s.pid=l.pid
+ WHERE l.locktype='advisory' AND l.classid=1279348803::oid AND l.objsubid=2 AND l.objid BETWEEN 0 AND 15
+   AND s.application_name=:'app');
 COMMIT;
 """, variables={'app': application, 'witness': witness})
     except RuntimeError:
