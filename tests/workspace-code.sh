@@ -5,6 +5,7 @@
 # the ignore file's directory, ! takes a file back, a nested ignore file adds to its parent's, hidden entries are kept out.
 #   tests/workspace-code.sh path/to/laplace
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 L=${1:?usage: tests/workspace-code.sh path/to/laplace}; here=$(cd "$(dirname "$0")" && pwd)
 export LAPLACE_RECIPES=${LAPLACE_RECIPES:-$here/../recipes}
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/workspace-code.XXXXXX"); trap 'rm -rf "$scratch"' EXIT

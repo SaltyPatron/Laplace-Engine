@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # tools/ci/deploy-needed.sh: the paths that can move the deployed system or its database checks deploy, and only those.
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 n="$(dirname "$0")/../tools/ci/deploy-needed.sh"
 fail=0
 expect() { local want=$1; shift; local got; got=$(printf '%s\n' "$@" | bash "$n"); [[ $got == "$want" ]] || { echo "FAIL: $* -> $got, wanted $want"; fail=1; }; }

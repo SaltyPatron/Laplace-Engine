@@ -2,6 +2,7 @@
 # A curated record holds its named thing and claims, rather than another
 # composition of its packaging pointers and JSON keys beside that thing.
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 engine=${1:?usage: record-thing.sh path/to/laplace}
 here=$(cd "$(dirname "$0")" && pwd)
 export LAPLACE_RECIPES=${LAPLACE_RECIPES:-$here/../recipes}

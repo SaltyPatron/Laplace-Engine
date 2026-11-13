@@ -5,6 +5,7 @@
 # highway the environment names.
 #   tests/claims-tsv.sh path/to/laplace
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 L=${1:?usage: tests/claims-tsv.sh path/to/laplace}; here=$(cd "$(dirname "$0")" && pwd)
 export LAPLACE_RECIPES=${LAPLACE_RECIPES:-$here/../recipes}
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/claims-tsv.XXXXXX"); trap 'rm -rf "$scratch"' EXIT

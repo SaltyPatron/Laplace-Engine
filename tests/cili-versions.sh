@@ -2,6 +2,7 @@
 # CILI's published release maps use the same offset for different concepts.
 # Resolve them from one self-contained cache built without the corpus suite.
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 engine=${1:?usage: cili-versions.sh path/to/laplace}
 here=$(cd "$(dirname "$0")" && pwd)
 recipes=${LAPLACE_RECIPES:-$here/../recipes}

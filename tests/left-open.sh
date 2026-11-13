@@ -6,6 +6,7 @@
 # omitted part is disposed of; each part is counted once.
 #   tests/left-open.sh path/to/laplace
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 L=${1:?usage: tests/left-open.sh path/to/laplace}
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/left-open.XXXXXX"); trap 'rm -rf "$scratch"' EXIT
 export LAPLACE_WORK=$scratch LAPLACE_RECIPES=$scratch/recipes

@@ -7,6 +7,7 @@
 # that cannot be written, before they open a database.
 #   tests/statement-claims.sh path/to/laplace
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 L=${1:?usage: tests/statement-claims.sh path/to/laplace}; here=$(cd "$(dirname "$0")" && pwd)
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/statement.XXXXXX")
 if command -v cygpath >/dev/null 2>&1; then scratch=$(cygpath -m "$scratch"); here=$(cygpath -m "$here"); fi

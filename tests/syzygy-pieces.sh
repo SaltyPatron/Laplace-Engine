@@ -5,6 +5,7 @@
 # smaller tables, and reads the same with two tables mapped at most as with the default bound.
 #   tests/syzygy-pieces.sh path/to/laplace TABLES   (TABLES: the source's root, or its 3-4-5 directory)
 set -euo pipefail
+set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
 L=${1:?usage: tests/syzygy-pieces.sh path/to/laplace TABLES}
 T=${2:?usage: tests/syzygy-pieces.sh path/to/laplace TABLES}
 fail(){ echo "syzygy-pieces: $*" >&2; exit 1; }
