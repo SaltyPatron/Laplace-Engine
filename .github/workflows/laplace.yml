@@ -24,6 +24,7 @@ concurrency:
 jobs:
   engine:
     runs-on: [self-hosted, laplace, Laplace-Engine]
+    timeout-minutes: 150
     outputs:
       deploys: ${{ steps.changes.outputs.deploys }}
     steps:
@@ -149,6 +150,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.verify_estate
     needs: engine
     runs-on: [self-hosted, laplace, Laplace-Engine]
+    timeout-minutes: 60
     steps:
       - name: Select this run's canonical cache closure
         run: |
@@ -178,6 +180,7 @@ jobs:
     needs: engine
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.engine.outputs.deploys == 'true'
     runs-on: [self-hosted, laplace, Laplace-Engine]
+    timeout-minutes: 10
     steps:
       - name: hart-server deploys main (Laplace-Operations)
         env:
