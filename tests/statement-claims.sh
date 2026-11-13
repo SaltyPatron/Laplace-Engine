@@ -26,6 +26,13 @@ grep -qxF '[def f(): pass, compiles]   score 0.5' <<<"$out" || fail "a pair with
 grep -qxF '[water, is, wet]' <<<"$out" || fail "a claim with no score is not a win: $out"
 grep -q '4 claims said by records' <<<"$out" || fail "the statement does not say four claims: $out"
 
+# a part may hold a line break, a tab or a backslash written after a backslash: the part is that text, every character
+printf '%s' $'def f():\\\n    return 1\\\tx \\\\ y\tcompiles\t\t1\n' > "$scratch/code.statement"
+out=$("$L" ingest --claims-tsv "$scratch/code.statement" 2>&1) || fail "an escaped statement was refused: $out"
+grep -qF 'def f():\n    return 1\tx \\ y' <<<"$out" || fail "an escaped part is not the text it writes: $out"
+out=$(witness --claims "$scratch/code.statement" 2>&1) || fail "an escaped statement was refused: $out"
+grep -q '1 claims said by records' <<<"$out" || fail "an escaped part broke its line into others: $out"
+
 # a statement is its content: no file name or path is in its trunk
 cp "$scratch/a.statement" "$scratch/renamed.statement"
 trunk(){ LAPLACE_TRUNKS=1 witness --no-load "$1" 2>&1 | sed -n 's/^  trunk \([0-9a-f]\{32\}\) .*/\1/p'; }

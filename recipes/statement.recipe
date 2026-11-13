@@ -9,6 +9,9 @@ name statement
 match *.statement
 
 tier row by \n
+# A part that holds a line break, a tab or a backslash, a program's code or a message of many lines, writes it after a
+# backslash: the part is the text it is, every character of it.
+escaped \
 names subject relation object score
 tier field by \t
 
