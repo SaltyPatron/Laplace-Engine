@@ -74,4 +74,21 @@ code=0; out=$("$L" said --as u --session s --files "$scratch/a.statement" "$scra
 [[ $code -eq 1 ]] && grep -q 'the response is not UTF-8 text' <<<"$out" || fail "a response that is not UTF-8: exit $code: $out"
 code=0; out=$("$L" said --as u --session s "only a prompt" 2>&1) || code=$?
 [[ $code -eq 2 ]] || fail "a prompt with no response: exit $code: $out"
-echo "statement-claims: a statement says its claims with their scores, is its content alone, and is refused whole when a line is malformed; said refuses what is no turn"
+# --root: a file's pathname is from the root it is named from. The same content at the same relative path under two
+# roots is one file; at another relative path it is another; a file outside the root, or a root that is no directory,
+# is refused before anything is read.
+mkdir -p "$scratch/r1/notes/deep" "$scratch/r2/notes/deep" "$scratch/r3/other"
+printf 'hello there\n' > "$scratch/r1/notes/deep/a.txt"
+cp "$scratch/r1/notes/deep/a.txt" "$scratch/r2/notes/deep/a.txt"; cp "$scratch/r1/notes/deep/a.txt" "$scratch/r3/other/a.txt"
+file_id(){ local p="$scratch/progress.jsonl"; : > "$p"
+  LAPLACE_INGEST_PROGRESS_PATH="$p" witness --root "$1" --no-load "$2" >/dev/null 2>&1 || fail "witness --root $1 $2 failed"
+  sed -n 's/.*"file_id":"\([0-9a-f]\{32\}\)".*/\1/p' "$p" | head -1; }
+one=$(file_id "$scratch/r1" "$scratch/r1/notes/deep/a.txt"); two=$(file_id "$scratch/r2" "$scratch/r2/notes/deep/a.txt")
+other=$(file_id "$scratch/r3" "$scratch/r3/other/a.txt"); shallow=$(file_id "$scratch/r1/notes" "$scratch/r1/notes/deep/a.txt")
+[[ -n $one && $one == "$two" ]] || fail "the same file at the same relative path under two roots is not one file: $one $two"
+[[ $one != "$other" && $one != "$shallow" ]] || fail "a file at another relative path is the same file: $one $other $shallow"
+code=0; out=$(witness --root "$scratch/r1" --no-load "$scratch/r3/other/a.txt" 2>&1) || code=$?
+[[ $code -eq 2 ]] && grep -q 'is not under --root' <<<"$out" || fail "a file outside the root: exit $code: $out"
+code=0; out=$(witness --root "$scratch/r1/notes/deep/a.txt" --no-load "$scratch/r1/notes/deep/a.txt" 2>&1) || code=$?
+[[ $code -eq 2 ]] && grep -q 'is not a directory' <<<"$out" || fail "a root that is a file: exit $code: $out"
+echo "statement-claims: a statement says its claims with their scores, is its content alone, and is refused whole when a line is malformed; said refuses what is no turn; a witness's files are named from --root"
