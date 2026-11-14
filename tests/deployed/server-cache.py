@@ -43,7 +43,16 @@ def main():
             assert message in failed.stderr, f'status did not give the server\'s refusal of {setting}:\n{failed.stdout}{failed.stderr}'
             assert 'older than' not in failed.stdout, failed.stdout
         checked = fx.run('status', check=False)
-        assert checked.returncode == 0 and checked.stdout.count("the same as this engine's") == 2, \
+        # by section: tier 0 and highway each the same as this engine's, nothing DIFFERS (status itself compares the
+        # chess perf-cache when the deployment has one, so the count of matching lines depends on what is deployed)
+        sections, current = {}, None
+        for line in checked.stdout.splitlines():
+            if line and not line[0].isspace():
+                current = line.split('  ')[0].strip(); sections[current] = []
+            elif current is not None:
+                sections[current].append(line.strip())
+        assert checked.returncode == 0 and 'DIFFERS' not in checked.stdout and all(
+            "the same as this engine's" in sections.get(name, ()) for name in ('tier 0', 'highway')), \
             f'status of the deployment does not find both artifacts the same as this engine\'s:\n{checked.stdout}{checked.stderr}'
         assert not re.search(r'entities and paths\s+-\d+', checked.stdout), \
             f'unknown planner statistics became a negative row count:\n{checked.stdout}'
