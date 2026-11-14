@@ -34,6 +34,7 @@ typedef struct {
     const Firmware *fw; PGconn *pg; Reader *rd; lp_text *c;
     Lexicalization lexical;
     lp_id prompt; lp_id occ[MAXOCC]; int nocc; double role[MAXOCC]; int composed[MAXOCC];
+    lp_id role_read[MAXOCC]; int role_votes[MAXOCC], role_seen[MAXOCC];    /* the reading each word is read as where it stands, by how many of how many observations of its run */
     lp_id disc[MAXOCC]; int ndisc;
     lp_id traj[4096]; int ntraj;
     Bits open;
