@@ -68,8 +68,7 @@ void   weights_named(lp_text *, const Firmware *, lp_id *ids);                  
 double strand_weight(const Firmware *, const lp_id *ids, const lp_id *part, int np);     /* how hard a claim of these parts is allowed to pull */
 void   weighed(lp_text *, const Firmware *, Claim *, int n);
 int lexicalization_counts(PGconn *, Reader *, const Lexicalization *, const lp_id *, int, int, double, long long *);
-void   roles_of(PGconn *, Firmware *, const lp_id *words, int n, double *out, uint64_t *trips);
-double role_of(PGconn *, Firmware *, const lp_id *word);                                  /* how hard a word pulls, by its role; -1 when nothing says */
+void   roles_of(PGconn *, Firmware *, const lp_id *seq, const uint8_t *word, int n, double *out, lp_id *reading, int *votes, int *seen, uint64_t *trips);   /* how hard each word pulls by what the observations of its run say it is where it stands; -1: nothing does */
 void   take_top(Claim *, int n, int want, const Firmware *, unsigned *seed);              /* the top, or as near a tie as the firmware allows (seed NULL: the top) */
 typedef int (*ChainFork)(void *ctx, const Claim *cl, int n);           /* at a fork of a chain: the branch to take, or -1 for the chain's own order */
 int    chain_follow(PGconn *, Reader *, Firmware *, const lp_id *word, const lp_id *reading, unsigned *seed, ChainFork fork, void *fork_ctx, lp_id *answer, ClaimStanding *last, int *alt);                             /* each claim's confidence by its weight, and the set in that order */                  /* what the firmware refuses, taken out */

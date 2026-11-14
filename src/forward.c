@@ -207,12 +207,12 @@ int cmd_pull(int argc, char **argv){
               for (int i = 0; i < np; i++) { if (!table_find(&ph[i]) || (np > 1 && !memcmp(&ph[i], &pr.id, 16))) continue;
                   bool fresh; lp_idmap_put(sm, &ph[i], &fresh); if (fresh) pl[npl++] = (Puller){ ph[i], fw.role_by[0] ? 0.5 : 1.0, i }; }     /* a word nothing says the role of pulls half */
               lp_idmap_free(sm); }
-            if (npl) {
-                lp_id *wids = malloc(sizeof(lp_id) * (size_t)npl); double *rw = malloc(sizeof(double) * (size_t)npl);
-                for (int i = 0; i < npl; i++) wids[i] = pl[i].id;
-                roles_of(pg, &fw, wids, npl, rw, NULL);
-                for (int i = 0; i < npl; i++) if (rw[i] >= 0) pl[i].w = rw[i];
-                free(wids); free(rw);
+            if (npl) {                                                         /* each puller by what it is where it stands in the prompt */
+                uint8_t *word = calloc((size_t)np, 1); double *rw = malloc(sizeof(double) * (size_t)np);
+                for (int i = 0; i < npl; i++) word[pl[i].at] = 1;
+                roles_of(pg, &fw, ph, word, np, rw, NULL, NULL, NULL, NULL);
+                for (int i = 0; i < npl; i++) if (rw[pl[i].at] >= 0) pl[i].w = rw[pl[i].at];
+                free(word); free(rw);
             }
             for (int a_ = 1; a_ < npl; a_++) { Puller x = pl[a_]; int b_ = a_; while (b_ > 0 && pl[b_ - 1].w < x.w) { pl[b_] = pl[b_ - 1]; b_--; } pl[b_] = x; }
             int answered = 0, nk0 = 0, alt0 = fw.nalt - 1;

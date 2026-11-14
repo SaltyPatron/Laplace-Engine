@@ -17,16 +17,16 @@ static int *rows_in_order(const PGresult *q, const int *cols, int ncols){
 void resolve_roles(State *st){
     Firmware *fw = (Firmware *)st->fw;
     const lp_layout *fl = lp_flags_map(NULL); const lp_field *alpha = fl ? lp_flags_field(fl, "Alphabetic") : NULL, *gc = fl ? lp_flags_field(fl, "General_Category") : NULL; int32_t nd = gc ? lp_flags_value(fl, gc, "Nd") : -1;
-    lp_id wids[MAXOCC]; int wat[MAXOCC], nw = 0;
+    uint8_t word[MAXOCC] = { 0 };
     for (int i = 0; i < st->nocc; i++) { st->role[i] = fw->role_by[0] ? 0.5 : 1.0; st->composed[i] = table_find(&st->occ[i]) != NULL;
         if (!st->composed[i]) { int64_t cp = lp_tier0_codepoint(T0, &st->occ[i]);      /* a word of one letter is a word: by its Unicode properties, Alphabetic or a decimal number */
             if (cp >= 0 && ((alpha && lp_flags_get(fl, (uint32_t)cp, alpha)) || (gc && nd >= 0 && lp_flags_get(fl, (uint32_t)cp, gc) == (uint32_t)nd))) st->composed[i] = 1; }
         if (!st->composed[i]) { st->role[i] = 0; continue; }                                   /* a space, a mark: no pull of its own, no obligation */
-        if (fw->role_by[0]) { wids[nw] = st->occ[i]; wat[nw++] = i; } }
-    if (nw) {
-        double rw[MAXOCC]; roles_of(st->pg, fw, wids, nw, rw, &st->trips);
-        for (int k = 0; k < nw; k++) if (rw[k] >= 0) st->role[wat[k]] = rw[k];
-    }
+        word[i] = 1; }
+    /* what each word is where it stands, read from the observations of the prompt's run (ORIENT): a word no observation
+     * of its run reads keeps the half pull of a word nothing says, and stays an obligation */
+    double rw[MAXOCC]; roles_of(st->pg, fw, st->occ, word, st->nocc, rw, st->role_read, st->role_votes, st->role_seen, &st->trips);
+    for (int i = 0; i < st->nocc; i++) if (word[i] && rw[i] >= 0) st->role[i] = rw[i];
     memset(&st->open, 0, sizeof st->open);
     for (int i = 0; i < st->nocc; i++) if (st->composed[i] && st->role[i] > 0) bit_set(&st->open, i);   /* an obligation until what is attested of it says it pulls nothing */
 }

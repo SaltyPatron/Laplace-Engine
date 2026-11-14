@@ -169,69 +169,124 @@ int cmd_degrees(int argc, char **argv){
 }
 
 /* ---- what the forward pass reads through the firmware, one way for every command */
-/* How hard each word in a set pulls (its role): what is attested of it under the firmware's role kind ([word, value]
- * for a highway bank, or [word, role_by, x] in the claims' order), the weight the firmware gives the strongest x it
- * names. -1 when nothing it names is attested. All words in the batch are resolved together in at most two round trips. */
-void roles_of(PGconn *pg, Firmware *fw, const lp_id *words, int n, double *out, uint64_t *trips){
-    for (int i = 0; i < n; i++) out[i] = -1.0;
+/* How hard each word of a sequence pulls, by what it is where it stands (Forward 20.3 ORIENT: "Content obligations come
+ * from an occurrence's own evidence"). A word's reading under the firmware's role kind is what the observations of the
+ * sequence's run say at the word's place: the observations that hold the word and the word after it in the sequence
+ * (their junction, read by intersection however common either word is; a junction more than the fan hold is reached,
+ * not crossed), and, in each record that holds such an observation, a sibling layer of the same length at the same
+ * place: a treebank lays its parts of speech along its words that way. A value of the role kind's bank there is one
+ * reading; the reading most of them give is the word's, and the firmware's weight for it is how hard the word pulls.
+ * What a word is said to be with no place (an exception list's noun, a tag claimed of the word) takes no part.
+ * out[i] is -1 where no observation of the run gives one reading, or the firmware names no weight for it: the word
+ * stays an obligation, at the weight its caller gives a word nothing says. reading/votes/seen (each may be NULL): the
+ * reading taken, the observations that give it, and the observations that give any. Three round trips a sequence. */
+typedef struct { size_t obs; int pos, occ; } RoleSpot;
+typedef struct { size_t obs, sib; } RoleLink;
+typedef struct { lp_id v; int n; } RoleTally;
+static int spot_order(const void *a, const void *b){
+    const RoleSpot *x = a, *y = b;
+    if (x->occ != y->occ) return x->occ < y->occ ? -1 : 1;
+    if (x->obs != y->obs) return x->obs < y->obs ? -1 : 1;
+    return x->pos < y->pos ? -1 : x->pos > y->pos;
+}
+static int link_order(const void *a, const void *b){ const RoleLink *x = a, *y = b; return x->obs < y->obs ? -1 : x->obs > y->obs; }
+static int is_word(const lp_id *id, const lp_layout *fl, const lp_field *alpha, const lp_field *gc, int32_t nd){
+    int64_t cp = lp_tier0_codepoint(T0, id); if (cp < 0) return 1;            /* a composition is a word; a letter or digit is one */
+    return (alpha && lp_flags_get(fl, (uint32_t)cp, alpha)) || (gc && nd >= 0 && lp_flags_get(fl, (uint32_t)cp, gc) == (uint32_t)nd);
+}
+void roles_of(PGconn *pg, Firmware *fw, const lp_id *seq, const uint8_t *word, int n, double *out, lp_id *reading, int *votes, int *seen, uint64_t *trips){
+    for (int i = 0; i < n; i++) { out[i] = -1.0; if (reading) memset(&reading[i], 0, sizeof(lp_id)); if (votes) votes[i] = 0; if (seen) seen[i] = 0; }
     if (!n || !fw->role_by[0]) return;
     firmware_ids(fw);
-    if (!fw->nrole) return;
     char bank_name[96]; size_t b = 0;
     for (; fw->role_by[b] && b + 1 < sizeof bank_name; b++) {
         unsigned char ch = (unsigned char)fw->role_by[b]; bank_name[b] = ch >= 'A' && ch <= 'Z' ? (char)(ch + 'a' - 'A') : (char)ch;
     }
     bank_name[b] = 0; const lp_highway *highway = lp_highway_map(NULL);
     const lp_bank *bank = highway ? lp_highway_bank(highway, bank_name) : NULL;
-    if (bank) {
-        uint8_t *wb = malloc(20 + 20 * (size_t)n), *rb = malloc(20 + 20 * (size_t)fw->nrole);
-        size_t wl = ids_param(pg, wb, words, (uint32_t)n), rl_role = ids_param(pg, rb, fw->id.role, (uint32_t)fw->nrole);
-        int rl_ref = 0; const char *ref_p = refuse_param(pg, &rl_ref);
-        const char *v[4] = { (const char *)wb, CLAIM_BITS, ref_p, (const char *)rb };
-        int l[4] = { (int)wl, 0, rl_ref, (int)rl_role }, f[4] = { 1, 0, 1, 1 };
-        PGresult *q = db_ask(pg,
-            "SELECT i, path, rating, deviation, volatility FROM @extschema@.laplace_claims_each("
-            "$1::@extschema@.blake3[], NULL::bigint, $2::smallint[], $3::@extschema@.blake3[], "
-            "1::smallint, NULL::@extschema@.blake3[], 2::bigint, $4::@extschema@.blake3[])", 4, v, l, f);
-        if (trips) (*trips)++;
-        if (PQresultStatus(q) == PGRES_TUPLES_OK) {
-            double *best = malloc(sizeof(double) * (size_t)n);
-            int *best_z = malloc(sizeof(int) * (size_t)n);
-            for (int i = 0; i < n; i++) { best[i] = -INFINITY; best_z[i] = fw->nrole; }
-            int rows = PQntuples(q);
-            for (int r = 0; r < rows; r++) {
-                uint64_t o; memcpy(&o, PQgetvalue(q, r, 0), 8);
-                int idx = (int)(__builtin_bswap64(o) - 1);
-                if (idx < 0 || idx >= n) continue;
-                lp_id pair[3]; size_t np = lp_path_ids((const uint8_t *)PQgetvalue(q, r, 1), (size_t)PQgetlength(q, r, 1), pair, 3);
-                if (np != 2 || !lp_id_eq(&pair[0], &words[idx]) || lp_highway_slot(highway, bank->list, &pair[1]) < 0) continue;
-                lp_rating rt = { lp_be_f64(PQgetvalue(q, r, 2)), lp_be_f64(PQgetvalue(q, r, 3)), lp_be_f64(PQgetvalue(q, r, 4)) };
-                double conf = lp_confidence(&rt, fw->k);
-                for (int z = 0; z < fw->nrole; z++) if (lp_id_eq(&pair[1], &fw->id.role[z])
-                        && (conf > best[idx] || (conf == best[idx] && z < best_z[idx]))) {
-                    best[idx] = conf; best_z[idx] = z; out[idx] = fw->role[z];
+    if (!bank) return;                                                        /* a role kind no bank types: nothing can be read as one of its values */
+    const lp_layout *fl = lp_flags_map(NULL); const lp_field *alpha = fl ? lp_flags_field(fl, "Alphabetic") : NULL, *gc = fl ? lp_flags_field(fl, "General_Category") : NULL;
+    int32_t nd = gc ? lp_flags_value(fl, gc, "Nd") : -1;
+    int *at = malloc(sizeof(int) * (size_t)n), nw = 0; for (int i = 0; i < n; i++) if (word[i]) at[nw++] = i;
+    if (!nw) { free(at); return; }
+    /* the junctions: each word with the word after it; a word alone is its own */
+    int np = nw > 1 ? nw - 1 : 1; lp_id *left = malloc(sizeof(lp_id) * (size_t)np), *right = malloc(sizeof(lp_id) * (size_t)np);
+    for (int k = 0; k < np; k++) { left[k] = seq[at[k]]; right[k] = seq[at[nw > 1 ? k + 1 : 0]]; }
+    Args q = { 0 }; arg_ids(&q, left, (size_t)np); arg_ids(&q, right, (size_t)np); arg_int(&q, fw->fan);
+    PGresult *r1 = ask(pg, "SELECT p.k, h.entity, h.path FROM unnest($1::@extschema@.blake3[], $2::@extschema@.blake3[]) WITH ORDINALITY AS p(a, b, k)"
+                           " CROSS JOIN LATERAL @extschema@.laplace_holders(ARRAY[p.a], ARRAY[p.b], true, -1::smallint, $3::bigint, 2::smallint) h"
+                           " WHERE NOT h.hub ORDER BY p.k, h.entity", &q);
+    if (trips) (*trips)++;
+    lp_idmap *obs = lp_idmap_new(); lp_vec(Run) runs = { 0 }; lp_vec(RoleSpot) spots = { 0 };
+    for (int row = 0; row < PQntuples(r1); row++) {
+        int k = (int)col_int(r1, row, 0) - 1; if (k < 0 || k >= np) continue;
+        bool fresh; size_t oi = lp_idmap_put(obs, col_id(r1, row, 1), &fresh);
+        if (fresh) lp_push(&runs, run_of((const uint8_t *)PQgetvalue(r1, row, 2), (size_t)PQgetlength(r1, row, 2)));
+        const Run *rn = &runs.v[oi];
+        for (int p = 0; p < rn->n; p++) {
+            if (!lp_id_eq(&rn->id[p], &left[k])) continue;
+            if (nw == 1) { lp_push(&spots, (RoleSpot){ oi, p, at[0] }); continue; }
+            int nx = p + 1; while (nx < rn->n && !is_word(&rn->id[nx], fl, alpha, gc, nd)) nx++;   /* the next word, past a space or a mark */
+            if (nx < rn->n && lp_id_eq(&rn->id[nx], &right[k])) { lp_push(&spots, (RoleSpot){ oi, p, at[k] }); lp_push(&spots, (RoleSpot){ oi, nx, at[k + 1] }); }
+        }
+    }
+    PQclear(r1); args_free(&q);
+    /* the records that hold those observations (a record says claims of its own, so either kind), and the other layers they hold */
+    lp_vec(RoleLink) links = { 0 }; lp_idmap *sib = lp_idmap_new(); size_t nobs = lp_idmap_count(obs);
+    if (spots.n) {
+        for (size_t begin = 0; begin < nobs; ) {
+            size_t amount = nobs - begin; if (amount > DB_ID_WINDOW) amount = DB_ID_WINDOW;
+            Args q2 = { 0 }; arg_ids(&q2, lp_idmap_keys(obs) + begin, amount); arg_int(&q2, fw->fan);
+            PGresult *r2 = ask(pg, "SELECT h.ordinal, h.path FROM @extschema@.laplace_holders($1::@extschema@.blake3[], '{}'::@extschema@.blake3[], true,"
+                                   " -1::smallint, $2::bigint, 3::smallint) h WHERE NOT h.hub", &q2);
+            if (trips) (*trips)++;
+            for (int row = 0; row < PQntuples(r2); row++) {
+                size_t oi = begin + (size_t)col_int(r2, row, 0) - 1; if (oi >= nobs) continue;
+                Run rec = run_of((const uint8_t *)PQgetvalue(r2, row, 1), (size_t)PQgetlength(r2, row, 1)); lp_idmap *once = lp_idmap_new();
+                for (int c = 0; c < rec.n; c++) {
+                    if (lp_id_eq(&rec.id[c], lp_idmap_key(obs, oi))) continue;
+                    bool fresh; lp_idmap_put(once, &rec.id[c], &fresh); if (!fresh) continue;
+                    lp_push(&links, (RoleLink){ oi, lp_idmap_put(sib, &rec.id[c], &fresh) });
                 }
+                lp_idmap_free(once); free(rec.id);
             }
-            free(best); free(best_z);
+            PQclear(r2); args_free(&q2); begin += amount;
         }
-        PQclear(q); free(wb); free(rb);
     }
-    lp_id *rem = malloc(sizeof(lp_id) * (size_t)n); int *rem_idx = malloc(sizeof(int) * (size_t)n), nrem = 0;
-    for (int i = 0; i < n; i++) if (out[i] < 0) { rem[nrem] = words[i]; rem_idx[nrem++] = i; }
-    if (nrem) {
-        int nc = 0, *src = NULL;
-        Claim *cl = claims_each(pg, rem, nrem, &fw->id.role_by, CLAIM_FIRST, fw->fan, fw->k, &nc, &src);
-        if (trips) (*trips)++;
-        for (int q = 0; q < nc; q++) {
-            int i = rem_idx[src[q]]; if (out[i] >= 0) continue;
-            for (int z = 0; z < fw->nrole; z++) if (lp_id_eq(&cl[q].part[cl[q].np - 1], &fw->id.role[z])) { out[i] = fw->role[z]; break; }
+    size_t nsib = lp_idmap_count(sib); Run *sruns = calloc(nsib ? nsib : 1, sizeof(Run));
+    if (nsib) {
+        int nh = 0; Hold *h = paths_of(pg, lp_idmap_keys(sib), (int)nsib, &nh); if (trips) (*trips)++;
+        for (int i = 0; i < nh; i++) if (h[i].src >= 0 && (size_t)h[i].src < nsib && !sruns[h[i].src].id) sruns[h[i].src] = run_of(h[i].path, (size_t)h[i].path_len);
+        holds_free(h, nh);
+    }
+    /* each observation of the run, at the word's place, in each layer laid along it: one reading */
+    if (spots.n > 1) qsort(spots.v, spots.n, sizeof(RoleSpot), spot_order);
+    if (links.n > 1) qsort(links.v, links.n, sizeof(RoleLink), link_order);
+    RoleTally tally[16]; int nt = 0, occ = -1;
+    for (size_t s = 0; s <= spots.n; s++) {
+        if (s == spots.n || spots.v[s].occ != occ) {                          /* a word's readings are all in: take the one most give */
+            if (occ >= 0 && nt) { int best = 0, tied = 0, all = 0;
+                for (int t = 0; t < nt; t++) { all += tally[t].n; if (tally[t].n > tally[best].n) { best = t; tied = 0; } else if (t != best && tally[t].n == tally[best].n) tied = 1; }
+                if (seen) seen[occ] = all;
+                if (!tied) { if (reading) reading[occ] = tally[best].v; if (votes) votes[occ] = tally[best].n;
+                    for (int z = 0; z < fw->nrole; z++) if (lp_id_eq(&tally[best].v, &fw->id.role[z])) { out[occ] = fw->role[z]; break; } } }
+            if (s == spots.n) break;
+            occ = spots.v[s].occ; nt = 0;
         }
-        free(cl); free(src);
+        if (s > 0 && !spot_order(&spots.v[s], &spots.v[s - 1])) continue;    /* one place of one observation, reached from both its junctions */
+        const RoleSpot *sp = &spots.v[s]; const Run *o = &runs.v[sp->obs];
+        size_t lo = 0, hi = links.n; while (lo < hi) { size_t mid = (lo + hi) / 2; if (links.v[mid].obs < sp->obs) lo = mid + 1; else hi = mid; }
+        for (size_t l = lo; l < links.n && links.v[l].obs == sp->obs; l++) {
+            const Run *layer = &sruns[links.v[l].sib]; if (!layer->id || layer->n != o->n) continue;
+            const lp_id *v = &layer->id[sp->pos]; if (lp_highway_slot(highway, bank->list, v) < 0) continue;
+            int t = 0; while (t < nt && !lp_id_eq(&tally[t].v, v)) t++;
+            if (t == nt) { if (nt == 16) continue; tally[nt++] = (RoleTally){ *v, 0 }; }
+            tally[t].n++;
+        }
     }
-    free(rem); free(rem_idx);
-}
-double role_of(PGconn *pg, Firmware *fw, const lp_id *word){
-    double w = -1.0; roles_of(pg, fw, word, 1, &w, NULL); return w;
+    for (size_t i = 0; i < runs.n; i++) free(runs.v[i].id); lp_vec_free(&runs);
+    for (size_t i = 0; i < nsib; i++) free(sruns[i].id); free(sruns);
+    lp_vec_free(&spots); lp_vec_free(&links); lp_idmap_free(obs); lp_idmap_free(sib); free(left); free(right); free(at);
 }
 /* The strands of a set a firmware takes: the top n, or, when the firmware says how near a tie has to be, any strand
  * that near the one above it may be taken in its place. */
