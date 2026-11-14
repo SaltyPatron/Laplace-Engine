@@ -5,7 +5,8 @@
  *   moves FEN                  -> position ID, then \t SAN \t position ID a legal move (lp_chess_successors)
  *   law NAME\tFEN              -> the ID of the position a FEN gives under the law NAME (LAPLACE_CHESS_FIRMWARE)
  *   perft NAME\tDEPTH\tFEN     -> the count of legal move sequences DEPTH plies long from the FEN under the law NAME
- *   game PATH                  ->the ID of the position a PGN file's game ends in \t its plies, under its Variant's law
+ *   game PATH                  -> the ID of the position a PGN file's game ends in, its plies and its result by its
+ *                                 law alone (lp_chess_result; * while play goes on), under its Variant's law
  * The record ID is what an opening book row of those three fields is (recipes/openings): [line, [P, "opening name",
  * NAME], [P, "Encyclopaedia of Chess Openings code", ECO]], P the position the line ends in; its texts composed by
  * Native's text (LAPLACE_TIER0). tests/opening-lines.sh compares each with the ingest's. */
@@ -51,9 +52,10 @@ int main(void){
             if (!games) games = language("pgn");
             FILE *f = fopen(input + 5, "rb"); if (!f) { puts("-"); continue; }
             static char pgn[1 << 20]; size_t got = fread(pgn, 1, sizeof pgn - 1, f); fclose(f); pgn[got] = 0;
-            static lp_id positions[4096]; lp_id line; size_t count = lp_chess_pgn_positions(games, pgn, got, positions, 4096, &line);
+            static lp_id positions[4096]; Bd end; size_t count = lp_chess_pgn_end(games, pgn, got, positions, 4096, &end);
             if (!count) { puts("-"); continue; }
-            lp_id_hex(&positions[count - 1], hex); printf("%s\t%zu\n", hex, count - 1); continue; }
+            static const char *const RESULT[] = { "*", "1-0", "0-1", "1/2-1/2" };
+            lp_id_hex(&positions[count - 1], hex); printf("%s\t%zu\t%s\n", hex, count - 1, RESULT[lp_chess_result(&end)]); continue; }
         if (!strncmp(input, "moves ", 6)) {
             LpChessSuccessor next[256]; lp_id p; int k = lp_chess_successors(input + 6, n - 6, &p, next, 256); if (k < 0) { puts("-"); continue; }
             lp_id_hex(&p, hex); fputs(hex, stdout); for (int i = 0; i < k; i++) { lp_id_hex(&next[i].position, hex); printf("\t%s\t%s", next[i].san, hex); } putchar('\n'); continue; }

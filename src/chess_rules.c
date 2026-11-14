@@ -136,6 +136,23 @@ static int ended(const Bd *b){
 }
 /* Every legal move, castling as each rook the side may castle with (Chess960's rule holds Standard's). */
 int gen(const Bd *b, Mv *out){ return ended(b) ? 0 : legal(b, out); }
+static int pieces_of(const Bd *b, int c){ int n = 0; for (int s = 0; s < 64; s++) n += b->sq[s] && colour_of(b->sq[s]) == c; for (int k = PAWN; k <= QUEEN; k++) n += b->hand[c][k]; return n; }
+int lp_chess_result(const Bd *b){
+    const LpChessLaw *w = b->law; int c = b->side;
+    if (ended(b)) {
+        if (w->checks && b->checks[0] >= w->checks) return LP_CHESS_WHITE;
+        if (w->checks && b->checks[1] >= w->checks) return LP_CHESS_BLACK;
+        if (w->explodes && king_sq(b, 0) < 0) return LP_CHESS_BLACK;
+        if (w->explodes && king_sq(b, 1) < 0) return LP_CHESS_WHITE;
+        int g0 = on_goal(b, 0), g1 = on_goal(b, 1);
+        if (g0 && g1) return LP_CHESS_DRAW;
+        return g1 ? LP_CHESS_BLACK : LP_CHESS_WHITE; }
+    Mv m[LP_CHESS_MOVES]; if (legal(b, m)) return LP_CHESS_ON;
+    if (w && w->unroyal) return c ? LP_CHESS_BLACK : LP_CHESS_WHITE;               /* no move left: the side to move has won */
+    if (!pieces_of(b, c)) return c ? LP_CHESS_WHITE : LP_CHESS_BLACK;              /* nothing left to move (Horde's White) */
+    if (in_check(b, c)) return c ? LP_CHESS_WHITE : LP_CHESS_BLACK;                /* mate */
+    return LP_CHESS_DRAW;                                                          /* stalemate */
+}
 /* SAN, as the PGN standard writes it (8.2.3), its check or mate mark with it when check is set; a drop as P@e4. */
 void san_of(const Bd *b, const Mv *m, const Mv *all, int nall, int check, char *out){
     char *o = out; int8_t p = b->sq[m->from]; int a = abs(p);
@@ -378,7 +395,7 @@ int lp_chess_fen_position(const char *fen, size_t n, lp_id *out){
 }
 /* The main line of the first game the text holds: its tag pairs (FEN, Variant) and its SAN in order. The grammar's own
  * symbols are found by name in the language given, as chess.c's recipe finds them; nothing here scans the bytes. */
-size_t lp_chess_pgn_positions(const void *ts_language, const char *text, size_t n, lp_id *positions, size_t cap, lp_id *line){
+static size_t pgn_replay(const void *ts_language, const char *text, size_t n, lp_id *positions, size_t cap, lp_id *line, Bd *end){
     const TSLanguage *language = ts_language; if (!language || !text || !cap || n > UINT32_MAX) return 0;
     TSSymbol game = ts_language_symbol_for_name(language, "game", 4, true), tag = ts_language_symbol_for_name(language, "tag_pair", 8, true),
              san = ts_language_symbol_for_name(language, "san", 3, true);
@@ -407,7 +424,10 @@ size_t lp_chess_pgn_positions(const void *ts_language, const char *text, size_t 
         if (k < 0) { written = 0; break; }
         id_move(&b, &all[k], &traj[nt++]); make(&b, &all[k]); id_position(&b, &positions[written]); traj[nt++] = positions[written++]; }
     if (written && line) lp_id_compose(traj, nt, line);
+    if (written && end) *end = b;
     free(traj);
 done:
     ts_tree_delete(tree); return written;
 }
+size_t lp_chess_pgn_positions(const void *ts_language, const char *text, size_t n, lp_id *positions, size_t cap, lp_id *line){ return pgn_replay(ts_language, text, n, positions, cap, line, NULL); }
+size_t lp_chess_pgn_end(const void *ts_language, const char *text, size_t n, lp_id *positions, size_t cap, Bd *end){ return pgn_replay(ts_language, text, n, positions, cap, NULL, end); }
