@@ -85,7 +85,9 @@ void lp_chess_id_board(const Bd *b, lp_id *out);
 /* Whether colour c's king is attacked where it stands. */
 int lp_chess_in_check(const Bd *b, int c);
 /* A position's FEN, its first four fields (board, side, castling, the en passant square only where a legal capture
- * takes on it, as a position's ID has it): what board_fen reads back to the same position. out: at least 96 bytes. */
+ * takes on it, as a position's ID has it), with a promoted piece marked ~ and the hands [inside brackets] where pieces
+ * are dropped: what board_law_fen reads back to the same position. out: at least LP_CHESS_FEN bytes. */
+#define LP_CHESS_FEN 160
 size_t lp_chess_fen_of(const Bd *b, char *out);
 
 /* ---- for readers: a position named by a FEN, and the positions a game plays */
