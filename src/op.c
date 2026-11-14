@@ -24,6 +24,10 @@ static const Param
     OUT_FL   = { "output", "-o", ARG_PATH, "LAPLACE_FLAGS, else tier 0's path with .flags", "tier0.flags" },
     OUT_HW   = { "output", "-o", ARG_PATH, "LAPLACE_HIGHWAY, else tier 0's path with .highway", "highway.bin" },
     FINGERPRINT = { "fingerprint", "--fingerprint", ARG_FLAG, NULL, "read the existing highway fingerprint without generation" },
+    OUT_CH   = { "output", "-o", ARG_PATH, "LAPLACE_CHESS, else tier 0's path with .chess", "chess.bin" },
+    CH_PRINT = { "fingerprint", "--fingerprint", ARG_FLAG, NULL, "read the existing chess perf-cache's fingerprint and counts without generation" },
+    CH_VERIFY = { "verify", "--verify", ARG_FLAG, NULL, "recompute every record of the existing chess perf-cache: the vocabulary from the law, every move it holds replayed from the standard start" },
+    CH_WHAT  = { "what", NULL, ARG_TEXT, "none: the vocabulary alone", "the sources (or files) whose played positions and moves are admitted, read as laplace ingest --no-load reads them" },
     IDENTITIES = { "identities", "--identities", ARG_FLAG, NULL, "report stored and canonical highway identifier IDs as TSV, without changing the registry" },
     FIRMWARE = { "firmware", "--firmware", ARG_PATH, "LAPLACE_FIRMWARE", "the firmware: how a standing is read, how far a search walks, how many claims are read and what is refused" },
     FW_OPERATION = { "operation", "--operation", ARG_TEXT, "pull", "hop, search, translate, follows or pull" },
@@ -99,6 +103,7 @@ static const Arg A_SOURCES[] = { O(CATALOG), END };
 static const Arg A_TIER0[] = { O(UCD), O(OUT_T0), END };
 static const Arg A_FLAGS[] = { O(UCD), O(OUT_FL), END };
 static const Arg A_HIGHWAY[] = { O(OUT_HW), O(FINGERPRINT), O(IDENTITIES), END };
+static const Arg A_CHESS[] = { O(OUT_CH), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(CH_VERIFY), O(CH_PRINT), { &CH_WHAT, ARG_MANY, NULL, NULL }, END };
 static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(HIGHWAY), O(WHOLE), O(NO_LOAD), O(PLAN), O(CATALOG), O(LIST_SOURCES), O(CLAIMS), O(CLAIMS_TSV), O(ENTITIES),
                                 { &WHAT, ARG_MANY, NULL, NULL }, END };
 static const Arg A_WITNESS[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), { &WITNESS_AS, ARG_REQUIRED, NULL, NULL }, { &CLASS, ARG_REQUIRED, NULL, NULL }, O(LINEAGE), O(WITNESS_ROOT), O(NO_LOAD), O(CLAIMS),
@@ -136,7 +141,8 @@ const Op OPS[] = {
     { "tier0",     cmd_tier0,     "generate tier 0 from the Unicode data", A_TIER0, W_F, "tier 0's fingerprint" },
     { "flags",     cmd_flags,     "generate the flags that go with tier 0, from the standard's own lists", A_FLAGS, W_F, "text" },
     { "highway",   cmd_highway,   "generate the highway: the types, from the resources that list them, and the mappings between them", A_HIGHWAY, W_F, "text" },
-    { "deploy",    cmd_deploy,    "make a database a Laplace database", A_NONE, W_DB | R_F, "text" },
+    { "chess",     cmd_chess,     "generate the chess perf-cache: the complete piece, square, castling and move vocabulary, and the positions and moves the sources named play", A_CHESS, W_F, "the chess perf-cache's fingerprint" },
+    { "deploy",    cmd_deploy,   "make a database a Laplace database", A_NONE, W_DB | R_F, "text" },
     { "sources",   cmd_sources,   "the sources there are recipes for, in the order they go in", A_SOURCES, R_DB | R_F, "text" },
     { "ingest",    cmd_ingest,    "a source by its name, or files, through their recipes", A_INGEST, W_DB | R_F, "text" },
     { "witness",   cmd_witness,   "what a witness named at run time states, recorded as a source is: its files through their recipes, its trunk the witness of what they attest", A_WITNESS, W_DB | R_F, "text" },

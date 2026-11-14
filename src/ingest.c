@@ -6,6 +6,7 @@
  * trunk in the DAG, over its metadata and its content (file.c); a file whose trunk is recorded already is recorded,
  * and nothing of it is written again. Then new nodes are written, and what was attested is played and recorded. Live counters go to stderr, phase times to stdout. */
 #include "ingest_internal.h"
+#include "chess_cache.h"
 #include <sys/wait.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -387,7 +388,7 @@ int cmd_ingest(int argc, char **argv){
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
         size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
     if (progress_open(files, nfiles, &st)) return 1;
-    if(do_load)load_begin(conninfo,threads);
+    if(do_load){load_begin(conninfo,threads);chess_cache_database(conninfo);}   /* what of the chess perf-cache it holds: asked once, when chess first wants it */
     #define SHOW(F) do { if (show_claims) show_record_events(F); } while (0)
     /* What was read of a file is kept for its content; a file read to its end gets its trunk. */
     #define WHOLE(F) do { File *f_ = (F); if (!f_->partial) file_close(f_); } while (0)

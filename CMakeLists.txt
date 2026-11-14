@@ -42,6 +42,7 @@ set(ENGINE_SOURCES
     src/main.c
     src/op.c
     src/chess.c
+    src/chess_cache.c
     src/chess_pgn.c
     src/chess_syzygy.c
     src/table.c

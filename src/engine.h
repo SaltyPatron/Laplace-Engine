@@ -51,6 +51,7 @@ int cmd_replay(int argc, char **argv);                                /* provena
 int cmd_structure(int argc, char **argv);
 int cmd_pgn(int argc, char **argv);                  /* chess.c: a PGN file's records written again from the database alone */
 int cmd_tablebase(int argc, char **argv);            /* chess_syzygy.c: a position's tablebase verdict, its moves ranked, its best-play line */
+int cmd_chess(int argc, char **argv);                /* chess_cache.c: the chess perf-cache generated, verified or fingerprinted */
 const char *ingest_database(void);                   /* the database the ingest running loads into (its -d, else LAPLACE_CONNINFO) */
 
 /* ---- the bits a row must have (physicality.mask): what it is, by LP_KIND_*; as the text of a smallint[] parameter */

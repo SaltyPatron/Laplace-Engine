@@ -5,6 +5,7 @@
  *   laplace index  [-d conninfo]     the indexes again, after one was dropped
  *   laplace status [-d conninfo]     what it holds */
 #include "engine.h"
+#include "chess_cache.h"
 #include <locale.h>
 #include <omp.h>
 #include <stdio.h>
@@ -127,11 +128,11 @@ int cmd_deploy(int argc, char **argv){
     /* Only a host installer may select server-local cache paths. A remote
      * extension install/upgrade preserves the server's existing configuration. */
     if(configure_cache){
-        const char *names[]={"laplace.tier0","laplace.flags","laplace.highway"};
-        const char *paths[]={lp_tier0_path(),lp_flags_path(),lp_highway_path()};
+        const char *names[]={"laplace.tier0","laplace.flags","laplace.highway","laplace.chess"};
+        const char *paths[]={lp_tier0_path(),lp_flags_path(),lp_highway_path(),chess_cache_path()};
         char *db=PQescapeIdentifier(pg,PQdb(pg),strlen(PQdb(pg)));
         if(!run(pg,"BEGIN","server cache configuration")){PQfreemem(db);PQfinish(pg);return 1;}
-        for(size_t i=0;i<3;i++){
+        for(size_t i=0;i<sizeof names/sizeof *names;i++){
             char *value=PQescapeLiteral(pg,paths[i],strlen(paths[i]));
             size_t bytes=strlen(db)+strlen(names[i])+strlen(value)+32;char *sql=malloc(bytes);
             if(!sql){perror("server cache configuration");PQfreemem(value);PQfreemem(db);PQfinish(pg);return 1;}
@@ -178,6 +179,13 @@ int cmd_status(int argc, char **argv){
                       int differs=strcmp(hex,hfp);compatible&=!differs;
                       printf("           %s\n", differs ? "DIFFERS from this engine's highway: the two would give a type different slots" : "the same as this engine's"); }
       free(hw); free(hfp); }
+    { char *ch = one(pg, "SELECT current_setting('laplace.chess', true)"), *cfp = one(pg, "SELECT @extschema@.laplace_chess_fingerprint()");
+      const lp_perfcache *c = chess_cache();
+      printf("chess      %s\n           %s\n", ch && *ch ? ch : "(the extension's default)", cfp ? cfp : "(not generated: laplace chess)");
+      if (c && cfp) { uint8_t b[32]; char hex[65]; lp_perfcache_fingerprint(c, b); lp_hex(b, 32, hex);
+                      int differs=strcmp(hex,cfp);compatible&=!differs;
+                      printf("           %s\n", differs ? "DIFFERS from this engine's chess perf-cache: the two hold other positions or another vocabulary" : "the same as this engine's"); }
+      free(ch); free(cfp); }
 
     /* the tier is a column, not a partition: counted from a 1% sample of the rows, the size from the partitions */
     PGresult *r = status_query(pg, "SELECT tier, (count(*) * 100)::bigint FROM @extschema@.entity TABLESAMPLE SYSTEM (1) GROUP BY 1 ORDER BY 1");
