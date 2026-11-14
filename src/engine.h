@@ -143,6 +143,7 @@ typedef struct {
     struct { char preferred[128], fallback[128]; } prefer[8]; int nprefer; /* sibling representations, preferred when present */
     char files[16][512]; int nfiles;                  /* the files it is, by pattern, when it is not everything under a root; a directory is every file under it */
     int supersede;                                    /* supersede: a whole reading of it replaces the readings before it (a working tree, not an edition) */
+    int sniff;                                        /* a file no pattern matches is read by what it holds, through the recipes it reads */
     char ignore[64];                                  /* ignore NAME: files of that name, found while walking, say in gitignore's notation which files under them are not the source */
     char reads[32][64]; int nreads;                   /* formats its files are read as (recipes that belong to no source) */
     char found[1024];                                 /* where it is */

@@ -22,4 +22,7 @@ ignore .gitignore
 supersede
 # Text leaves and code identities come from the installed perf-caches; no
 # Unicode corpus ingestion is needed to read the workspace's declarations.
-reads text json xml cuda javascript tsx bash powershell css html cmake make dockerfile rust go java ruby
+reads text json xml cuda javascript tsx bash powershell css html cmake make dockerfile rust go java ruby csv tsv psv pgn turtle
+# a file no pattern matches (a script named by its interpreter, a PlantUML diagram, a fixture's text) is read by what it
+# holds, through the recipes above; a file with NUL bytes is not text, and is not read
+sniff
