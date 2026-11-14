@@ -499,9 +499,18 @@ def main():
                            '1. e4 e5 2. N@f3 B@g2 *\n', encoding='utf-8')
         rejected = run('ingest', '--no-load', '-s', 'chess-com', variant, expected=1,
                        extra={'LAPLACE_RECORD_WINDOW_BYTES': '29'})
-        assert 'variant Crazyhouse is in no rules' in rejected and '1 kept as text' in rejected, rejected
+        # Crazyhouse is a law (firmware/chess.firmware): this game drops a knight White never took, so it is no game the
+        # law plays, and is kept as its text, said, and the source is not published
+        assert 'N@f3 is no legal move at ply 3' in rejected and '1 kept as text' in rejected, rejected
         assert 'invalid PGN packaging' not in rejected, rejected
-        print('PASS PGN grammar boundaries retain every game; unsupported drop variants parse and remain explicit')
+        unread = root / 'bughouse.pgn'
+        unread.write_text('[Event "Drop syntax"]\n[Variant "Bughouse"]\n[Result "*"]\n\n'
+                          '1. e4 e5 2. N@f3 B@g2 *\n', encoding='utf-8')
+        rejected = run('ingest', '--no-load', '-s', 'chess-com', unread, expected=1,
+                       extra={'LAPLACE_RECORD_WINDOW_BYTES': '29'})
+        assert 'variant Bughouse is in no rules' in rejected and '1 kept as text' in rejected, rejected
+        assert 'invalid PGN packaging' not in rejected, rejected
+        print('PASS PGN grammar boundaries retain every game; drops illegal under their law and variants no law names parse and remain explicit')
 
         missing_move = root / 'twic-missing-move.pgn'
         missing_move.write_text('[Event "Missing move fixture"]\n[Result "1-0"]\n\n1. e4 -- 2. Nf3 1-0\n', encoding='utf-8')
