@@ -3,5 +3,6 @@ name powershell
 # tools/build_grammars.sh): each node the composition of its children with the bytes between them, so the file
 # recomposes byte for byte; leaves are text.
 match *.ps1 *.psm1 *.psd1
+interpreter pwsh powershell
 class UserCuratedResource
 grammar powershell

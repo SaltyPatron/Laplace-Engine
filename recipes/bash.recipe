@@ -3,5 +3,6 @@ name bash
 # tools/build_grammars.sh): each node the composition of its children with the bytes between them, so the file
 # recomposes byte for byte; leaves are text.
 match *.sh *.bash
+interpreter bash sh dash
 class UserCuratedResource
 grammar bash

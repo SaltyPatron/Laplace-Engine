@@ -104,6 +104,7 @@ typedef struct TSLanguage TSLanguage;
 typedef struct {
     char name[64];
     char match[64][256]; int nmatch;                 /* filename globs; fail explicitly if the declaration exceeds this capacity */
+    char interpreter[8][32]; int ninterpreter;       /* the commands a script's #! line names to run what this recipe reads */
     char grammar[64];                                 /* "text" (UAX #29), "layout" (the recipe's tiers), or a tree-sitter grammar name */
     const TSLanguage *lang;
     double trust;                                    /* the witness's trust, -1 .. 1 */
