@@ -169,6 +169,7 @@ int cmd_status(int argc, char **argv){
     printf("\ndatabase   %s, %s\nserver     %s\nextension  laplace %s; %s\n", PQdb(pg), size ? size : "?", srv ? srv : "?", ver ? ver : "(not installed)", isa ? isa : "");
     printf("tier 0     %s\n           %s\n", t0 && *t0 ? t0 : "(the extension's default)", fp ? fp : "(fingerprint unavailable)");
     const lp_tier0_record *mine = lp_tier0_map(NULL);
+    if (mine && !T0) T0 = mine;   /* the process's tier 0: the chess cache below is bound to it, never to none */
     if (mine && fp) { uint8_t h[32]; char hex[65]; lp_tier0_fingerprint(mine, h); lp_hex(h, 32, hex);
                       int differs=strcmp(hex,fp);compatible&=!differs;
                       printf("           %s\n", differs ? "DIFFERS from this engine's tier 0: the two would give the same content different coordinates" : "the same as this engine's"); }
@@ -180,7 +181,7 @@ int cmd_status(int argc, char **argv){
                       printf("           %s\n", differs ? "DIFFERS from this engine's highway: the two would give a type different slots" : "the same as this engine's"); }
       free(hw); free(hfp); }
     { char *ch = one(pg, "SELECT current_setting('laplace.chess', true)"), *cfp = one(pg, "SELECT @extschema@.laplace_chess_fingerprint()");
-      const lp_perfcache *c = chess_cache();
+      const lp_perfcache *c = T0 ? chess_cache() : NULL;   /* without a tier 0 there is nothing to bind it to */
       printf("chess      %s\n           %s\n", ch && *ch ? ch : "(the extension's default)", cfp ? cfp : "(not generated: laplace chess)");
       if (c && cfp) { uint8_t b[32]; char hex[65]; lp_perfcache_fingerprint(c, b); lp_hex(b, 32, hex);
                       int differs=strcmp(hex,cfp);compatible&=!differs;
