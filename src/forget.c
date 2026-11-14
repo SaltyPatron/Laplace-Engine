@@ -14,17 +14,26 @@ static void candidates_open(PGconn *pg){
         " INSERT INTO forget_stats VALUES(0)");
 }
 static uint64_t sweep_candidates(PGconn *pg){
-    exec(pg,"DO $sweep$ DECLARE n bigint; c_cnt bigint; BEGIN LOOP"
+    /* Who still holds a candidate is asked of the containment index (laplace_holders), 4096 candidates a call, unless
+     * the candidates are a large share of what physicality holds (a sweep of every entity): then one pass over every
+     * path is cheaper. A whole-table pass per round for the closure of one small source made forgetting it take as
+     * long as reading every path of a populated database, once for each round of the sweep. */
+    exec(pg,"DO $sweep$ DECLARE n bigint; c_cnt bigint; total bigint; ids @extschema@.blake3[]; BEGIN"
+        " SELECT coalesce(sum(c.reltuples), 0)::bigint INTO total FROM pg_catalog.pg_inherits i"
+        " JOIN pg_catalog.pg_class c ON c.oid = i.inhrelid WHERE i.inhparent = '@extschema@.physicality'::regclass;"
+        " LOOP"
         " TRUNCATE forget_round;"
         " SELECT count(*) INTO c_cnt FROM forget_candidates;"
         " IF c_cnt = 0 THEN EXIT; END IF;"
-        " IF c_cnt <= 4096 THEN"
-        "   WITH ord AS MATERIALIZED (SELECT id, row_number() OVER (ORDER BY id) AS rn FROM forget_candidates),"
-        "        h AS MATERIALIZED (SELECT ordinal, entity, hub FROM @extschema@.laplace_holders(ARRAY(SELECT id FROM ord ORDER BY rn), '{}'::@extschema@.blake3[], true, -1::smallint, 2::bigint, 3::smallint)),"
-        "        referenced AS MATERIALIZED (SELECT DISTINCT o.id FROM ord o JOIN h ON h.ordinal = o.rn WHERE h.hub OR h.entity OPERATOR(@extschema@.<>) o.id)"
-        "   INSERT INTO forget_round SELECT c.id FROM forget_candidates c"
+        " IF c_cnt <= 4096 OR c_cnt * 64 < total THEN"
+        "  FOR ids IN SELECT array_agg(s.id ORDER BY s.id) FROM (SELECT id, (row_number() OVER (ORDER BY id) - 1) / 4096 AS g"
+        "   FROM forget_candidates) s GROUP BY s.g LOOP"
+        "   WITH h AS MATERIALIZED (SELECT ordinal, entity, hub FROM @extschema@.laplace_holders(ids, '{}'::@extschema@.blake3[], true, -1::smallint, 2::bigint, 3::smallint)),"
+        "        referenced AS MATERIALIZED (SELECT DISTINCT ids[h.ordinal::integer] AS id FROM h WHERE h.hub OR h.entity OPERATOR(@extschema@.<>) ids[h.ordinal::integer])"
+        "   INSERT INTO forget_round SELECT c.id FROM unnest(ids) c(id)"
         "   WHERE NOT EXISTS(SELECT FROM @extschema@.attestation w WHERE w.witness OPERATOR(@extschema@.=) c.id OR w.lineage OPERATOR(@extschema@.=) c.id)"
         "   AND NOT EXISTS(SELECT FROM referenced r WHERE r.id OPERATOR(@extschema@.=) c.id);"
+        "  END LOOP;"
         " ELSE"
         "   WITH referenced AS MATERIALIZED (SELECT DISTINCT v.id FROM @extschema@.physicality p"
         "   CROSS JOIN LATERAL unnest(@extschema@.laplace_vertex_ids(p.path)) v(id)"
@@ -33,7 +42,7 @@ static uint64_t sweep_candidates(PGconn *pg){
         "   WHERE NOT EXISTS(SELECT FROM @extschema@.attestation w WHERE w.witness OPERATOR(@extschema@.=) c.id OR w.lineage OPERATOR(@extschema@.=) c.id)"
         "   AND NOT EXISTS(SELECT FROM referenced r WHERE r.id OPERATOR(@extschema@.=) c.id);"
         " END IF;"
-        " GET DIAGNOSTICS n=ROW_COUNT; EXIT WHEN n=0;"
+        " SELECT count(*) INTO n FROM forget_round; EXIT WHEN n=0;"
         " DELETE FROM @extschema@.consensus c USING forget_round d WHERE c.claim OPERATOR(@extschema@.=) d.id;"
         " DELETE FROM @extschema@.physicality p USING forget_round d WHERE p.entity OPERATOR(@extschema@.=) d.id;"
         " DELETE FROM @extschema@.entity e USING forget_round d WHERE e.id OPERATOR(@extschema@.=) d.id;"
