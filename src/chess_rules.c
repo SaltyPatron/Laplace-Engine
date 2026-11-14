@@ -136,6 +136,7 @@ static int ended(const Bd *b){
 }
 /* Every legal move, castling as each rook the side may castle with (Chess960's rule holds Standard's). */
 int gen(const Bd *b, Mv *out){ return ended(b) ? 0 : legal(b, out); }
+int lp_chess_pseudo(const Bd *b, Mv *out){ return ended(b) ? 0 : pseudo(b, out); }
 static int pieces_of(const Bd *b, int c){ int n = 0; for (int s = 0; s < 64; s++) n += b->sq[s] && colour_of(b->sq[s]) == c; for (int k = PAWN; k <= QUEEN; k++) n += b->hand[c][k]; return n; }
 int lp_chess_result(const Bd *b){
     const LpChessLaw *w = b->law; int c = b->side;

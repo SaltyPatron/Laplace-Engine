@@ -48,6 +48,8 @@ static inline uint32_t piece_cp(int8_t p){ char c = PIECES[abs(p)]; return (uint
 
 void lp_chess_make(Bd *b, const Mv *m);
 int lp_chess_gen(const Bd *b, Mv *out);
+/* Every move before whether it leaves the mover's own king attacked (castling's transit squares still checked). */
+int lp_chess_pseudo(const Bd *b, Mv *out);
 void lp_chess_san_of(const Bd *b, const Mv *m, const Mv *all, int nall, int check, char *out);
 /* The legal move of all (gen's) a SAN token names, its check or mate mark and suffix annotations (! ?) taken off as
  * written, or -1. The import format's over-specified squares and promotions without = are read too. */
