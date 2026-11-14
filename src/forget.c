@@ -54,10 +54,11 @@ static uint64_t sweep_candidates(PGconn *pg){
 static int forget_ids(PGconn *pg,const lp_id *roots,size_t n){
     if(!n)return 1;
     candidates_open(pg);Args args={0};arg_ids(&args,roots,n);
-    PQclear(ask_once(pg,"WITH RECURSIVE below(id) AS (SELECT unnest($1::@extschema@.blake3[]) UNION"
-        " SELECT child FROM below b JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) b.id"
-        " CROSS JOIN LATERAL unnest(@extschema@.laplace_vertex_ids(p.path)) child)"
-        " INSERT INTO forget_candidates SELECT b.id FROM below b JOIN @extschema@.entity e ON e.id OPERATOR(@extschema@.=) b.id",&args));
+    /* The roots' closure, read down by the Native walk (laplace_below: every parent expanded once, one path read a
+     * depth), never by a recursive query in SQL. */
+    PQclear(ask_once(pg,"INSERT INTO forget_candidates SELECT x.id FROM (SELECT unnest($1::@extschema@.blake3[]) AS id"
+        " UNION SELECT b.child FROM @extschema@.laplace_below($1::@extschema@.blake3[], 2147483647) b) x"
+        " JOIN @extschema@.entity e ON e.id OPERATOR(@extschema@.=) x.id",&args));
     PGresult *q=ask_once(pg,"SELECT p.entity FROM @extschema@.physicality p JOIN forget_candidates c ON c.id OPERATOR(@extschema@.=) p.entity"
         " WHERE @extschema@.laplace_mask_has_value(p.mask,'kind','claim') AND @extschema@.laplace_path_length(p.path)>=2"
         " UNION SELECT s.claim FROM @extschema@.consensus s JOIN forget_candidates c ON c.id OPERATOR(@extschema@.=) s.claim",NULL);
