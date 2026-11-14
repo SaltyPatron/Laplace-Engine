@@ -241,7 +241,8 @@ static int source_parse(const char *path, Source *s, int metadata){
             if (metadata) snprintf(s->files[s->nfiles++], 512, "%s", tok);
             else if (!path_expand(tok, s->files[s->nfiles++], 512, s->unset, sizeof s->unset)) s->nfiles--; } }
         else if (!strcmp(tok, "room")) { tok = strtok(NULL, " \t\r\n"); if (tok) s->room = atof(tok); }
-        else if (!strcmp(tok, "supersede")) s->supersede = 1;               /* its newest whole reading is what it says: the earlier ones go */
+        else if (!strcmp(tok, "supersede")) s->supersede = 1;
+        else if (!strcmp(tok, "sniff")) s->sniff = 1;                       /* a file no pattern matches is read by what it holds */               /* its newest whole reading is what it says: the earlier ones go */
         else if (!strcmp(tok, "tier0")) s->tier0 = 1;                       /* it records every codepoint, tier 0, as its ingest's first act */
         else if (!strcmp(tok, "held")) rest_of(s->held, sizeof s->held);
         else if (!strcmp(tok, "called")) { char *v = strtok(NULL, "\r\n"); while (v && (*v == ' ' || *v == '\t')) v++; if (v) snprintf(s->called, sizeof s->called, "%s", v); }
@@ -528,6 +529,14 @@ static Recipe *sniff_generic_recipe(Recipe *r, int n, const char *path){
     size_t i = 0; if (m >= 3 && buf[0] == 0xEF && buf[1] == 0xBB && buf[2] == 0xBF) i = 3;
     while (i < m && (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\r' || buf[i] == '\n')) i++;
     if (i < m) {
+        if (m - i >= 2 && buf[i] == '#' && buf[i + 1] == '!') {             /* a script names its interpreter */
+            const uint8_t *eol = memchr(buf + i, '
+', m - i); size_t l = eol ? (size_t)(eol - (buf + i)) : m - i;
+            char line[256]; snprintf(line, sizeof line, "%.*s", (int)(l < sizeof line - 1 ? l : sizeof line - 1), (const char *)buf + i);
+            if (strstr(line, "pwsh") || strstr(line, "powershell")) return by_recipe_name(r, n, "powershell");
+            if (strstr(line, "python")) return by_recipe_name(r, n, "python");
+            if (strstr(line, "bash") || strstr(line, "/sh") || strstr(line, " sh")) return by_recipe_name(r, n, "bash");
+        }
         if (buf[i] == '{' || buf[i] == '[') return by_recipe_name(r, n, "json");
         if (m - i >= 5 && !strncasecmp((const char *)buf + i, "<?xml", 5)) return by_recipe_name(r, n, "xml");
         if (m - i >= 9 && !strncasecmp((const char *)buf + i, "<!doctype", 9)) return by_recipe_name(r, n, "html");
@@ -578,6 +587,11 @@ Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, Reci
         }
     }
     if (!best && (!of || of->runtime)) best = sniff_generic_recipe(r, n, path);
+    else if (!best && of->sniff) {                                          /* what it holds, through what the source reads */
+        Recipe *held = sniff_generic_recipe(r, n, path);                   /* NULL: binary, no text recipe reads it */
+        if (held && !reads(of, held)) { Recipe *text = by_recipe_name(r, n, "text"); held = text && reads(of, text) ? text : NULL; }
+        best = held;
+    }
     if (best && !best->curated && best->grammar[0] && strcmp(best->grammar, "text") != 0 && !best->lang) {
         best->lang = grammar_load(best->grammar);
         if (!best->lang) { fprintf(stderr, "recipe %s: required grammar %s is unavailable for %s\n", best->name, best->grammar, path); exit(2); }
