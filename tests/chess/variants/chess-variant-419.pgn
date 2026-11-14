@@ -1,0 +1,28 @@
+[Event "Live Chess - Crazyhouse"]
+[Site "Chess.com"]
+[Date "2016.05.20"]
+[Round "-"]
+[White "RoepStoep"]
+[Black "Hikaru"]
+[Result "1-0"]
+[Variant "Crazyhouse"]
+[SetUp "1"]
+[FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR/ w KQkq - 0 1"]
+[CurrentPosition "r4qk1/ppp1b2p/3pN1pP/3P1b2/8/3P4/PP3PPP/R1Bb1RK1 b - -"]
+[Timezone "UTC"]
+[ECO "C00"]
+[ECOUrl "https://www.chess.com/openings/French-Defense-Normal-Variation"]
+[UTCDate "2016.05.20"]
+[UTCTime "18:07:02"]
+[WhiteElo "2184"]
+[BlackElo "2603"]
+[TimeControl "180"]
+[Termination "RoepStoep won - game abandoned"]
+[StartTime "18:07:02"]
+[EndDate "2016.05.20"]
+[EndTime "18:11:26"]
+[Link "https://www.chess.com/game/live/1585666303"]
+
+1. e4 {[%clk 0:02:58.1]} 1... e6 {[%clk 0:02:59.9]} 2. d4 {[%clk 0:02:55.6]} 2... Ne7 {[%clk 0:02:59.8]} 3. Nf3 {[%clk 0:02:51.3]} 3... Ng6 {[%clk 0:02:59]} 4. Bd3 {[%clk 0:02:50.1]} 4... d6 {[%clk 0:02:56.6]} 5. O-O {[%clk 0:02:47.1]} 5... Be7 {[%clk 0:02:55.6]} 6. Nc3 {[%clk 0:02:41.7]} 6... O-O {[%clk 0:02:54.2]} 7. Ne2 {[%clk 0:02:41]} 7... Nc6 {[%clk 0:02:51.7]} 8. Ng3 {[%clk 0:02:36.7]} 8... e5 {[%clk 0:02:46.7]} 9. d5 {[%clk 0:02:31.4]} 9... Nb4 {[%clk 0:02:44.2]} 10. Nh5 {[%clk 0:02:28.2]} 10... Nxd3 {[%clk 0:02:36.7]} 11. cxd3 {[%clk 0:02:19.1]} 11... B@g4 {[%clk 0:02:34.6]} 12. Nxg7 {[%clk 0:02:15.9]} 12... Kxg7 {[%clk 0:02:34.5]} 13. N@f5+ {[%clk 0:02:09.1]} 13... Bcxf5 {[%clk 0:02:32.6]} 14. exf5 {[%clk 0:02:09]} 14... Bxf5 {[%clk 0:02:31.9]} 15. B@h6+ {[%clk 0:02:03.6]} 15... Kg8 {[%clk 0:02:30.5]} 16. Bxf8 {[%clk 0:01:42.6]} 16... Qxf8 {[%clk 0:02:30.4]} 17. @h6 {[%clk 0:01:38.7]} 17... B@h5 {[%clk 0:02:16.6]} 18. Nxe5 {[%clk 0:01:25]} 18... Bxd1 {[%clk 0:02:05.7]} 19. Nxg6 {[%clk 0:01:02.8]} 19... fxg6 {[%clk 0:01:49.8]} 20. N@e6 {[%clk 0:00:53.7]} 1-0
+
+

@@ -45,10 +45,21 @@ static int text_into(Db *d, const lp_id *id, Str *o, int depth){
 }
 /* a text of one word: a codepoint, or a composition of codepoints alone (a tag's name) */
 static int one_word(Db *d, const lp_id *id){ if (is_cp(id)) return 1; const lp_id *k; size_t n = kids(d, id, &k); if (!n) return 0; for (size_t i = 0; i < n; i++) if (!is_cp(&k[i])) return 0; return 1; }
-/* A position from its content; 0 when it is none. */
-static int pos_decode(Db *d, const lp_id *id, Bd *b){
-    const lp_id *k; if (kids(d, id, &k) != 4) return 0; int64_t side = lp_tier0_codepoint(T0, &k[1]); if (side != 'w' && side != 'b') return 0;
-    memset(b, 0, sizeof *b); b->side = side == 'b'; b->ep = -1;
+/* What a position holds beyond its four parts (chess_rules.h LpChessExtra), each told by its content: the checks given
+ * (+W+B), the pieces in hand (piece letters), or the promoted squares. 0: a part that is none of these. */
+static int extra_decode(Db *d, const lp_id *id, Bd *b){
+    Str t = { 0 }; if (!text_into(d, id, &t, 0) || !t.n) { free(t.b); return 0; }
+    int ok = 1;
+    if (t.b[0] == '+') { unsigned w, k; ok = sscanf(t.b, "+%u+%u", &w, &k) == 2 && w < 256 && k < 256; if (ok) { b->checks[0] = (uint8_t)w; b->checks[1] = (uint8_t)k; } }
+    else if (strspn(t.b, "QRBNPqrbnp") == t.n) { for (size_t i = 0; i < t.n; i++) { int kind = (int)(strchr(PIECES, toupper((unsigned char)t.b[i])) - PIECES); b->hand[islower((unsigned char)t.b[i]) ? 1 : 0][kind]++; } }
+    else { if (t.n % 2) ok = 0; for (size_t i = 0; ok && i < t.n; i += 2) { if (t.b[i] < 'a' || t.b[i] > 'h' || t.b[i + 1] < '1' || t.b[i + 1] > '8') ok = 0; else b->promoted |= (uint64_t)1 << ((t.b[i] - 'a') + 8 * (t.b[i + 1] - '1')); } }
+    free(t.b); return ok;
+}
+/* A position from its content, under the law it is played under; 0 when it is none. */
+static int pos_decode_law(Db *d, const lp_id *id, Bd *b, const LpChessLaw *law){
+    const lp_id *k; size_t nk = kids(d, id, &k); if (nk < 4 || nk > 7) return 0; int64_t side = lp_tier0_codepoint(T0, &k[1]); if (side != 'w' && side != 'b') return 0;
+    memset(b, 0, sizeof *b); b->side = side == 'b'; b->ep = -1; b->law = law; b->c960 = (uint8_t)(law && law->c960);
+    for (size_t i = 4; i < nk; i++) if (!extra_decode(d, &k[i], b)) return 0;
     const lp_id *ps; size_t np = kids(d, &k[0], &ps); if (np < 2) return 0;
     for (size_t i = 0; i < np; i++) { const lp_id *two, *sq; if (kids(d, &ps[i], &two) != 2 || kids(d, &two[1], &sq) != 2) return 0; int64_t pc = lp_tier0_codepoint(T0, &two[0]);
         int64_t fch = lp_tier0_codepoint(T0, &sq[0]), rch = lp_tier0_codepoint(T0, &sq[1]); const char *w = pc > 0 && pc < 128 && pc != '.' ? strchr(PIECES, toupper((int)pc)) : NULL;
@@ -60,13 +71,14 @@ static int pos_decode(Db *d, const lp_id *id, Bd *b){
     const lp_id *e; if (kids(d, &k[3], &e) == 2) b->ep = (int8_t)((lp_tier0_codepoint(T0, &e[0]) - 'a') + 8 * (lp_tier0_codepoint(T0, &e[1]) - '1'));
     return 1;
 }
+static int pos_decode(Db *d, const lp_id *id, Bd *b){ return pos_decode_law(d, id, b, NULL); }
 /* A line's positions and moves: P0 alone for a line of no moves (it is its start position). */
 static size_t line_of(Db *d, const lp_id *id, const lp_id **L, const lp_id **P0){
     Bd x; const lp_id *k; size_t n = kids(d, id, &k);
-    if (n == 4 && pos_decode(d, id, &x)) { *L = id; *P0 = id; return 0; }
+    if (n >= 4 && n <= 7 && pos_decode(d, id, &x)) { *L = id; *P0 = id; return 0; }
     *L = k; *P0 = k; return n >= 3 && n % 2 == 1 ? (n - 1) / 2 : 0;
 }
-static int is_line(Db *d, const lp_id *id){ Bd x; const lp_id *k; size_t n = kids(d, id, &k); if (n == 4 && pos_decode(d, id, &x)) return 1; return n >= 3 && n % 2 == 1 && pos_decode(d, &k[0], &x); }
+static int is_line(Db *d, const lp_id *id){ Bd x; const lp_id *k; size_t n = kids(d, id, &k); if (n >= 4 && n <= 7 && pos_decode(d, id, &x)) return 1; return n >= 3 && n % 2 == 1 && pos_decode(d, &k[0], &x); }
 typedef struct { uint64_t records, zero, plies, replay_bad, ids, id_bad, leaves, leaf_bad, dangling, c960, c960_start, c960_castles, castles, positions, arrivals, transposed, multi, splits, text_kept, nags, comments, variations; } Stat;
 static int nag_text(const char *s){ if (*s == '$') { for (s++; *s; s++) if (!isdigit((unsigned char)*s)) return 0; return 1; } if (!*s) return 0; for (; *s; s++) if (*s != '!' && *s != '?') return 0; return 1; }
 typedef struct { lp_idmap *first, *edge; lp_strmap *key; } Seen;     /* first: each position's first way in; edge: each way in; key: each position's FEN-like key, to its ID */
@@ -91,6 +103,8 @@ static int anns(Db *d, const lp_id *k, size_t n, const lp_id *Pbefore, const Bd 
 static void pos_key(const Bd *b, char *out){
     char *o = out; for (int s = 0; s < 64; s++) *o++ = b->sq[s] ? (char)piece_cp(b->sq[s]) : '.';
     o += sprintf(o, " %c %u %u %d", b->side ? 'b' : 'w', castle_mask(b, 0), castle_mask(b, 1), ep_square(b));
+    LpChessExtra x; lp_chess_extra(b, &x); *o++ = ' '; for (int i = 0; i < x.nhand; i++) *o++ = (char)x.hand[i];
+    for (int i = 0; i < x.npromoted; i++) o += sprintf(o, " %d", x.promoted[i]); *o++ = ' '; for (int i = 0; i < x.nchecks; i++) *o++ = (char)x.checks[i]; *o = 0;
 }
 /* A line's movetext, its layer's annotations in their places; the line's positions checked against what each move
  * makes of the one before. */
@@ -108,11 +122,15 @@ static void movetext(Db *d, const lp_id *lineid, const lp_id *layerid, Bd b, int
             if (t.n) { size_t sk = t.b[0] == ' '; sput(o, t.b + sk, t.n - sk); first = 0; } free(t.b); } }
     for (size_t i = 0; i < nply; i++) {
         const lp_id *Pb = &L[2 * i], *M = &L[2 * i + 1], *Pa = &L[2 * i + 2];
-        const lp_id *mk; size_t nm = kids(d, M, &mk); Mv all[256]; int na = gen(&b, all), hit = -1;
-        if (nm >= 3) { const lp_id *f2, *t2; if (kids(d, &mk[1], &f2) == 2 && kids(d, &mk[2], &t2) == 2) {
+        const lp_id *mk; size_t nm = kids(d, M, &mk); Mv all[LP_CHESS_MOVES]; int na = gen(&b, all), hit = -1;
+        if (nm == 3 && lp_tier0_codepoint(T0, &mk[1]) == '@') { const lp_id *t2; int64_t pc = lp_tier0_codepoint(T0, &mk[0]);         /* a drop [piece, @, to] */
+            const char *w = pc > 0 && pc < 128 && pc != '.' ? strchr(PIECES, toupper((int)pc)) : NULL;
+            if (w && kids(d, &mk[2], &t2) == 2) { int to = (int)(lp_tier0_codepoint(T0, &t2[0]) - 'a') + 8 * (int)(lp_tier0_codepoint(T0, &t2[1]) - '1');
+                for (int z = 0; z < na; z++) if (all[z].drop == (int)(w - PIECES) && all[z].to == to) { hit = z; break; } } }
+        else if (nm >= 3) { const lp_id *f2, *t2; if (kids(d, &mk[1], &f2) == 2 && kids(d, &mk[2], &t2) == 2) {
             int from = (int)(lp_tier0_codepoint(T0, &f2[0]) - 'a') + 8 * (int)(lp_tier0_codepoint(T0, &f2[1]) - '1'), to = (int)(lp_tier0_codepoint(T0, &t2[0]) - 'a') + 8 * (int)(lp_tier0_codepoint(T0, &t2[1]) - '1');
             int promo = 0; if (nm == 4) { int64_t pc = lp_tier0_codepoint(T0, &mk[3]); const char *w = pc > 0 && pc < 128 ? strchr(PIECES, toupper((int)pc)) : NULL; promo = w ? (int)(w - PIECES) : 0; }
-            for (int z = 0; z < na; z++) if (all[z].from == from && all[z].to == to && all[z].promo == promo) { hit = z; break; } } }
+            for (int z = 0; z < na; z++) if (!all[z].drop && all[z].from == from && all[z].to == to && all[z].promo == promo) { hit = z; break; } } }
         if (hit < 0) { st->replay_bad++; sputs(o, " ?"); return; }
         lp_id want; id_move(&b, &all[hit], &want); if (!lp_id_eq(&want, M)) st->replay_bad++;
         char san[16], num[32]; san_of(&b, &all[hit], all, na, 1, san);
@@ -125,7 +143,7 @@ static void movetext(Db *d, const lp_id *lineid, const lp_id *layerid, Bd b, int
         lp_id pa; id_position(&b, &pa); if (!lp_id_eq(&pa, Pa)) st->replay_bad++;
         if (sn) { lp_id e2[2] = { *Pb, *M }, edge; lp_id_compose(e2, 2, &edge); st->arrivals++;
             bool fresh; lp_id *fst = lp_idmap_get(sn->first, Pa, &fresh);
-            if (fresh) { *fst = edge; st->positions++; char key[96]; pos_key(&b, key); bool kf; lp_id *kid = lp_strmap_get(sn->key, key, strlen(key), &kf); if (kf) *kid = *Pa; else if (!lp_id_eq(kid, Pa)) st->splits++; }
+            if (fresh) { *fst = edge; st->positions++; char key[256]; pos_key(&b, key); bool kf; lp_id *kid = lp_strmap_get(sn->key, key, strlen(key), &kf); if (kf) *kid = *Pa; else if (!lp_id_eq(kid, Pa)) st->splits++; }
             else if (!lp_id_eq(fst, &edge)) { st->transposed++; lp_id pe[2] = { *Pa, edge }, key2; lp_id_compose(pe, 2, &key2); bool f2; lp_idmap_put(sn->edge, &key2, &f2); if (f2) st->multi++; } }
         brk = 0;
         if (Y && i + (size_t)lead >= ny) st->replay_bad++;                     /* a layer shorter than its line */
@@ -161,9 +179,9 @@ static void record_pgn(Db *d, const lp_id *rec, Str *o, Stat *st, Seen *sn){
     sputs(o, "\n");
     if (text) { Str t = { 0 }; text_into(d, text, &t, 0); if (t.b) sput(o, t.b, t.n); free(t.b); sputs(o, "\n\n"); return; }
     const Rules *ru = rules_named(variant[0] ? variant : NULL, strlen(variant)); Bd b; int fullmove = 1, c960 = ru && ru->c960;
-    if (fen[0]) { board_fen(&b, fen, strlen(fen), c960); const char *sp = fen; for (int f = 0; f < 5 && sp; f++) { sp = strchr(sp, ' '); if (sp) sp++; } if (sp) fullmove = atoi(sp); if (fullmove < 1) fullmove = 1; }
-    else board_start(&b);
-    b.c960 = (uint8_t)c960;
+    if (!ru) { st->replay_bad++; return; }                                    /* a replayed line under a law the firmware no longer names */
+    if (fen[0]) { board_law_fen(&b, fen, strlen(fen), ru); const char *sp = fen; for (int f = 0; f < 5 && sp; f++) { sp = strchr(sp, ' '); if (sp) sp++; } if (sp) fullmove = atoi(sp); if (fullmove < 1) fullmove = 1; }
+    else board_law_start(&b, ru);
     const lp_id *L, *P0; size_t nply = line_of(d, line, &L, &P0);
     { lp_id want; id_position(&b, &want); if (!lp_id_eq(&want, P0)) st->replay_bad++; else if (c960 && fen[0]) st->c960_start++; if (c960) st->c960++; }
     if (!nply) st->zero++;

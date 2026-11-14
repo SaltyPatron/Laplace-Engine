@@ -7,7 +7,8 @@
 #include "blake3.h"
 #include "chess_rules.h"
 
-typedef struct { char name[64]; int c960; } Rules;
+/* A ruleset is a law (chess_rules.h): firmware/chess.firmware declares each, chess_rules.c holds them. */
+typedef LpChessLaw Rules;
 
 void lp_chess_rules_load(void);
 const Rules *lp_chess_rules_named(const char *v, size_t l);

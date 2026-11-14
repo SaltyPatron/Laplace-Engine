@@ -1,18 +1,45 @@
-# The rules a PGN record is replayed under (Sequence 28, Games: game rules are firmware; Sequence 27.1). They are
-# decisions read from this file, never records: which variant a record's Variant tag names, and how that variant
-# castles. A ruleset governs which moves are legal; it is in no position's ID, and the same position reached under
-# two rulesets is one position. Read by chess.c (LAPLACE_CHESS_FIRMWARE names another file).
+# The laws a PGN record is replayed under (Sequence 28, Games: game rules are firmware; Sequence 27.1). They are
+# decisions read from this file, never records: which variant a record's Variant tag names, and its law. A law governs
+# which moves are legal and what a move does; it is in no position's ID, and the same position reached under two laws
+# is one position. What a law adds to a position (pieces in hand, promoted pieces, checks given) is in the position,
+# present only when there is any. Read by chess_rules.c (lp_chess_laws_load; LAPLACE_CHESS_FIRMWARE names another file).
 #
-#   variant NAME castling standard | chess960
-#                              a variant a Variant tag can name (as the tag writes it; "Two Words" quoted).
+#   variant NAME AXIS...       a variant a Variant tag can name, as the tag writes it ("Two Words" quoted; each way a
+#                              source writes a name is its own line), and the axes of its law; an axis not said is
+#                              Standard's:
+#     castling standard | chess960 | none
 #                              standard: the king castles from e with the rooks of a and h, and a FEN's KQkq name
 #                              them. chess960: the king castles from wherever it starts with either rook it stands
 #                              between, ending on g or c with the rook beside it on f or d (Chess960's rule, which
 #                              holds standard's); a FEN's KQkq name the outermost rook on that side, a file letter
-#                              (Shredder-FEN) that file's rook
+#                              (Shredder-FEN) that file's rook. none: no castling
+#     drops                    a piece taken goes to its taker's hand (a promoted piece as a pawn) and is put from hand
+#                              onto an empty square as a move (a pawn never onto the first or last rank)
+#     explodes                 a capture removes the taker too and every piece but a pawn on the squares beside where
+#                              it took; a king may not take, kings side by side give no check, and the game ends when a
+#                              king is gone
+#     captures forced          a side that can capture must
+#     king unroyal             the king is a piece as any other: no check, no mate
+#     king promotes            a pawn may become a king
+#     pawns double first       a pawn on its side's first rank steps one or two
+#     check forbidden          a move that gives check is not legal
+#     checks N                 the game ends when a side has given N checks
+#     goal SQUARE... [answered]
+#                              the game ends when a king stands on one of these squares; answered: a White king there
+#                              ends it only once Black's king cannot reach one with its move
+#     start FEN                the position the variant starts from (quoted); else Standard's
 #   default NAME               the variant of a record that names none (the PGN standard: standard chess)
 #
 # A record whose Variant no line here names is not replayed: its movetext is kept as its text and said.
 default Standard
 variant Standard castling standard
+variant "From Position" castling standard
 variant Chess960 castling chess960
+variant Crazyhouse castling standard drops
+variant "King of the Hill" castling standard goal d4 e4 d5 e5
+variant Three-check castling standard checks 3
+variant 3-check castling standard checks 3
+variant Atomic castling standard explodes
+variant Antichess castling none captures forced king unroyal king promotes
+variant Horde castling standard pawns double first start "rnbqkbnr/pppppppp/8/1PP2PP1/PPPPPPPP/PPPPPPPP/PPPPPPPP/PPPPPPPP w kq - 0 1"
+variant "Racing Kings" castling none check forbidden goal a8 b8 c8 d8 e8 f8 g8 h8 answered start "8/8/8/8/8/8/krbnNBRK/qrbnNBRQ w - - 0 1"

@@ -13,12 +13,13 @@ export LAPLACE_WORK=$scratch LAPLACE_DATA=$scratch
 fail(){ echo "chess-cache: $*" >&2; exit 1; }
 fingerprint(){ awk '/^fingerprint/ { print $NF }' <<<"$1"; }
 
-# the vocabulary alone: complete, and each record the law's
+# the vocabulary alone: complete, and each record the law's (8544 moves: 7832 a piece makes under Standard, 44 promotions
+# to a king, 60 first-rank pawn steps and captures, 608 drops)
 out=$("$L" chess -o "$scratch/vocabulary.chess" 2>&1 | tr -d '\r') || fail "the vocabulary was not written: $out"
-grep -qF '16164 vocabulary: 64 squares, 768 piece-squares, 256 numbers, 7225 castlings, 17 en passant fields, 7832 moves; 0 boards, 0 positions, 0 transitions' <<<"$out" \
+grep -qF '16876 vocabulary: 64 squares, 768 piece-squares, 256 numbers, 7225 castlings, 17 en passant fields, 8544 moves; 0 boards, 0 positions, 0 transitions' <<<"$out" \
   || fail "the vocabulary is not the law's domains: $out"
 check=$("$L" chess -o "$scratch/vocabulary.chess" --verify 2>&1 | tr -d '\r') || fail "the vocabulary does not verify: $check"
-grep -qF 'verified: 16164 dense records' <<<"$check" || fail "not every vocabulary record was recomputed: $check"
+grep -qF 'verified: 16876 dense records' <<<"$check" || fail "not every vocabulary record was recomputed: $check"
 
 # a source's games: every position and move they play, admitted, and replayed from the start under the rules
 games=$scratch/games.chess

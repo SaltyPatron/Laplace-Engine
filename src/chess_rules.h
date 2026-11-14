@@ -12,8 +12,34 @@
 #include <stdlib.h>
 
 enum { PAWN = 1, KNIGHT, BISHOP, ROOK, QUEEN, KING };
-typedef struct { int8_t sq[64]; uint8_t side, rights[2]; int8_t ep; uint8_t c960; } Bd;
-typedef struct { uint8_t from, to, promo, castle, ep; } Mv;
+/* The most legal moves a position has under any law: its pieces' moves and, where pieces are dropped, every piece in
+ * hand onto every empty square (5 kinds onto at most 62 squares). Every move list is this long. */
+#define LP_CHESS_MOVES 1024
+/* A law: the rules a game is played under, as firmware/chess.firmware declares it (Sequence 28, Games). A law governs
+ * which moves are legal and what a move does; it is in no position's ID. Standard is all zero but castles. */
+typedef struct LpChessLaw {
+    char name[64];                 /* as a Variant tag writes it */
+    uint8_t castles;               /* castling at all */
+    uint8_t c960;                  /* castling as Chess960's rule (which holds Standard's) */
+    uint8_t drops;                 /* a piece taken goes to its taker's hand (a promoted piece as a pawn) and is dropped as a move */
+    uint8_t explodes;              /* a capture removes the taker and every piece but a pawn next to where it took */
+    uint8_t forced;                /* a side that can capture must */
+    uint8_t unroyal;               /* the king is a piece as any other: it is never in check */
+    uint8_t king_promotes;         /* a pawn may become a king */
+    uint8_t first_double;          /* a pawn on its side's first rank steps one or two */
+    uint8_t no_check;              /* a move that gives check is not legal */
+    uint8_t checks;                /* the checks given that end the game; 0 none */
+    uint8_t goal_answered;         /* a White king on the goal ends the game only once Black cannot answer with its own */
+    uint64_t goal;                 /* bit s: a king of either side on square s ends the game */
+    char start[100];               /* the position it starts from, a FEN; empty: Standard's */
+} LpChessLaw;
+/* A position: the board, the side to move, castling rights (bit f: the rook on file f), the en passant square, and what
+ * a law adds: the pieces in each side's hand (by kind), the squares whose piece was promoted (drops: taken, it goes to
+ * hand as a pawn) and the checks each side has given. law: the rules it is played under; NULL is Standard. */
+typedef struct { int8_t sq[64]; uint8_t side, rights[2]; int8_t ep; uint8_t c960; uint8_t hand[2][7]; uint8_t checks[2]; uint64_t promoted; const LpChessLaw *law; } Bd;
+/* A move: from and to, the piece promoted to, a castling (the king onto its own rook), an en passant capture, or a drop
+ * (the kind of piece put from hand onto to; from is to). */
+typedef struct { uint8_t from, to, promo, castle, ep, drop; } Mv;
 
 static const char PIECES[] = ".PNBRQK";
 static inline int colour_of(int8_t p){ return p > 0 ? 0 : 1; }
@@ -28,6 +54,20 @@ void lp_chess_san_of(const Bd *b, const Mv *m, const Mv *all, int nall, int chec
 int lp_chess_san_match(const Bd *b, const char *tok, size_t n, const Mv *all, int nall);
 void lp_chess_board_start(Bd *b);
 int lp_chess_board_fen(Bd *b, const char *fen, size_t n, int c960);
+/* The position a law starts from (its start FEN, else Standard's), and a FEN read under a law: its board (a piece
+ * marked ~ promoted; the pieces in hand after the board, [inside brackets] or as a ninth rank), side, castling, en
+ * passant square, and the checks given (+W+B) or still to give (W+B). 0: it is no FEN. law NULL: Standard. */
+int lp_chess_board_law_start(Bd *b, const LpChessLaw *law);
+int lp_chess_board_law_fen(Bd *b, const char *fen, size_t n, const LpChessLaw *law);
+/* The laws firmware/chess.firmware declares (path), read once; the law a Variant tag names (as written), or the
+ * default law when v is NULL; NULL when no law has that name. Thread-safe. */
+int lp_chess_laws_load(const char *path);
+const LpChessLaw *lp_chess_law_named(const char *v, size_t n);
+/* What a position holds beyond [board, side, castling, en passant], each present only when there is any: the pieces in
+ * hand as FEN writes them (White's Q R B N P, then Black's), the promoted squares in square order, and the checks
+ * given as +W+B. A position's ID is [board, side, castling, en passant, these...]. */
+typedef struct { uint32_t hand[64]; int nhand; uint8_t promoted[64]; int npromoted; uint32_t checks[16]; int nchecks; } LpChessExtra;
+void lp_chess_extra(const Bd *b, LpChessExtra *out);
 unsigned lp_chess_castle_mask(const Bd *b, int c);
 int lp_chess_ep_square(const Bd *b);
 void lp_chess_id_position(const Bd *b, lp_id *out);
@@ -56,8 +96,9 @@ int lp_chess_fen_position(const char *fen, size_t n, lp_id *out);
 typedef struct { char san[16]; lp_id position; uint8_t zeroing; } LpChessSuccessor;      /* zeroing: a capture or a pawn move (the 50-move rule starts again) */
 int lp_chess_successors(const char *fen, size_t n, lp_id *position, LpChessSuccessor *out, int cap);
 /* A game as PGN (tag pairs, movetext, a result) or movetext alone (an opening book's line), parsed by the tree-sitter
- * language given (the engine's grammars pgn or pgn_moves: LAPLACE_GRAMMARS), its main line replayed under Standard
- * rules from its FEN tag's position or the standard start: positions[i] the position after ply i (positions[0] the
+ * language given (the engine's grammars pgn or pgn_moves: LAPLACE_GRAMMARS), its main line replayed under the law its
+ * Variant tag names (lp_chess_law_named; no tag: the default law, Standard when no laws are loaded) from its FEN tag's
+ * position or the law's start: positions[i] the position after ply i (positions[0] the
  * one it starts in), and line the ID of [P0, M0, P1, ..., Pn] (a line of no moves is its position). Variations,
  * comments and NAGs are annotations, not the line. Returns n + 1, the positions written (at most cap; a longer game
  * stops there), or 0 when the text does not parse or a move is not legal where it is played. */
@@ -69,6 +110,8 @@ size_t lp_chess_pgn_positions(const void *ts_language, const char *text, size_t 
 #define san_match lp_chess_san_match
 #define board_start lp_chess_board_start
 #define board_fen lp_chess_board_fen
+#define board_law_fen lp_chess_board_law_fen
+#define board_law_start lp_chess_board_law_start
 #define castle_mask lp_chess_castle_mask
 #define ep_square lp_chess_ep_square
 #define id_position lp_chess_id_position

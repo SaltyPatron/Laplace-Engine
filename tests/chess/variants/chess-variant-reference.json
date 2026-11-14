@@ -1,0 +1,80 @@
+[
+  {
+    "file": "chess-variant-419.pgn",
+    "variant": "Crazyhouse",
+    "finalFen": "r4qk1/ppp1b2p/3pN1pP/3P1b2/8/3P4/PP3PPP/R1Bb1RK1[RPqnnnp] b - - 1 20",
+    "plies": 39
+  },
+  {
+    "file": "chess-variant-420.pgn",
+    "variant": "Crazyhouse",
+    "finalFen": "r1b2r2/ppp1qpkp/4pP2/8/4BB2/2P1P3/PP3PPP/R2QK2R[NNbnnpp] b KQ - 1 16",
+    "plies": 31
+  },
+  {
+    "file": "chess-variant-421.pgn",
+    "variant": "Crazyhouse",
+    "finalFen": "r1bk3r/ppp2ppp/2pp1N2/1B6/4P3/5bBn/PPP2PpP/R4RK1[QQNnp] w - - 2 24",
+    "plies": 46
+  },
+  {
+    "file": "chess-variant-422.pgn",
+    "variant": "Crazyhouse",
+    "finalFen": "r1b2Q2/ppp2b1p/4pkpR/4Pp1p/3n1P2/3B1P2/PPP3PP/R4RK1[qbnnn] b - - 3 25",
+    "plies": 49
+  },
+  {
+    "file": "chess-variant-423.pgn",
+    "variant": "Crazyhouse",
+    "finalFen": "r2q1rk1/p1pbbppp/6n1/5P2/1pPPP3/nBb2Q2/Pp3PPP/2KR3R[NPn] w - - 3 30",
+    "plies": 58
+  },
+  {
+    "file": "chess-variant-424.pgn",
+    "variant": "Crazyhouse",
+    "finalFen": "r1b5/pp4Q1/2nppk1P/6Np/3P3n/2P3P1/PP3PP1/R2Q1RK1[NPPrbbbp] b - - 0 24",
+    "plies": 47
+  },
+  {
+    "file": "chess-variant-526.pgn",
+    "variant": "Crazyhouse",
+    "finalFen": "r1b2rk1/pp3p2/5ppb/4p3/2n5/2PBP1P1/PP1rN3/1K5q~[QQBNPrnppp] w - - 0 33",
+    "plies": 64
+  },
+  {
+    "file": "chess-variant-527.pgn",
+    "variant": "Crazyhouse",
+    "finalFen": "r6r/p2np3/1pppNb1p/5k2/2P3Q1/4P2P/PP3PPB/R4RK1[BNPqbnpp] b - - 1 31",
+    "plies": 61
+  },
+  {
+    "file": "chess-variant-528.pgn",
+    "variant": "3-check",
+    "finalFen": "r5k1/ppp2rpp/8/4p1B1/6n1/2Nq4/PP1Q2P1/nK5R w - - 2+0 0 19",
+    "plies": 36
+  },
+  {
+    "file": "chess-variant-529.pgn",
+    "variant": "3-check",
+    "finalFen": "8/p3Rk1p/1pP5/1P3p2/4pP2/P5P1/2P4P/2K5 b - - 0+3 0 32",
+    "plies": 63
+  },
+  {
+    "file": "chess-variant-530.pgn",
+    "variant": "King of the Hill",
+    "finalFen": "1r4k1/2q3pp/2p1b3/3p1pb1/rP1P3P/2QB3K/2P1NnP1/1R5R w - - 5 26",
+    "plies": 50
+  },
+  {
+    "file": "chess-variant-531.pgn",
+    "variant": "King of the Hill",
+    "finalFen": "2rrk3/pp2p2p/8/4n1N1/5K2/4BP2/P5P1/2R4R b - - 1 29",
+    "plies": 57
+  },
+  {
+    "file": "chess-variant-532.pgn",
+    "variant": "King of the Hill",
+    "finalFen": "r4k1r/1p1bq3/p4p2/P1pPp3/4K2p/2QN1P2/1PP4B/6R1 b - - 1 30",
+    "plies": 59
+  }
+]

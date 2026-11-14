@@ -1,0 +1,26 @@
+[Event "Live Chess - King of the Hill"]
+[Site "Chess.com"]
+[Date "2016.05.16"]
+[Round "-"]
+[White "DanielRensch"]
+[Black "Hikaru"]
+[Result "0-1"]
+[Variant "King of the Hill"]
+[CurrentPosition "1r4k1/2q3pp/2p1b3/3p1pb1/rP1P3P/2QB3K/2P1NnP1/1R5R w - -"]
+[Timezone "UTC"]
+[ECO "D00"]
+[ECOUrl "https://www.chess.com/openings/Richter-Veresov-Attack-3...c6-4.Qd3"]
+[UTCDate "2016.05.16"]
+[UTCTime "22:33:16"]
+[WhiteElo "2492"]
+[BlackElo "2764"]
+[TimeControl "180"]
+[Termination "Hikaru won by checkmate"]
+[StartTime "22:33:16"]
+[EndDate "2016.05.16"]
+[EndTime "22:37:48"]
+[Link "https://www.chess.com/game/live/1580868498"]
+
+1. d4 {[%clk 0:02:57.1]} 1... Nf6 {[%clk 0:02:57.6]} 2. Nc3 {[%clk 0:02:55.7]} 2... d5 {[%clk 0:02:56.5]} 3. Bg5 {[%clk 0:02:54.4]} 3... c6 {[%clk 0:02:55.6]} 4. Qd3 {[%clk 0:02:53.2]} 4... Qa5 {[%clk 0:02:47.8]} 5. f3 {[%clk 0:02:50.6]} 5... b5 {[%clk 0:02:45.4]} 6. e4 {[%clk 0:02:30.5]} 6... b4 {[%clk 0:02:33.8]} 7. Kd2 {[%clk 0:02:01.1]} 7... bxc3+ {[%clk 0:02:26.8]} 8. Qxc3 {[%clk 0:02:00.2]} 8... Qb6 {[%clk 0:02:21]} 9. Bxf6 {[%clk 0:01:51.9]} 9... exf6 {[%clk 0:02:19.7]} 10. a3 {[%clk 0:01:47.3]} 10... Be6 {[%clk 0:02:12.1]} 11. Ne2 {[%clk 0:01:44.2]} 11... Bd6 {[%clk 0:02:09.9]} 12. e5 {[%clk 0:01:33.9]} 12... Be7 {[%clk 0:02:08.9]} 13. f4 {[%clk 0:01:29.8]} 13... Nd7 {[%clk 0:02:06.6]} 14. Ng3 {[%clk 0:01:27.4]} 14... fxe5 {[%clk 0:02:04.4]} 15. fxe5 {[%clk 0:01:24.2]} 15... f5 {[%clk 0:01:57.1]} 16. Bd3 {[%clk 0:01:21.1]} 16... O-O {[%clk 0:01:56]} 17. b4 {[%clk 0:01:11.6]} 17... a5 {[%clk 0:01:51.8]} 18. Rab1 {[%clk 0:01:10.3]} 18... axb4 {[%clk 0:01:50.8]} 19. axb4 {[%clk 0:01:09.3]} 19... Ra4 {[%clk 0:01:50.1]} 20. Ne2 {[%clk 0:00:08.7]} 20... Bg5+ {[%clk 0:01:46.5]} 21. Ke1 {[%clk 0:00:06.8]} 21... Rb8 {[%clk 0:01:45.2]} 22. Kf2 {[%clk 0:00:06.2]} 22... Nxe5 {[%clk 0:01:42.5]} 23. h4 {[%clk 0:00:03.2]} 23... Ng4+ {[%clk 0:01:41.5]} 24. Kg3 {[%clk 0:00:02.5]} 24... Qc7+ {[%clk 0:01:40.6]} 25. Kh3 {[%clk 0:00:01.2]} 25... Nf2# {[%clk 0:01:39.7]} 0-1
+
+
