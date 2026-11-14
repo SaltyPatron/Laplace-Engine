@@ -1,5 +1,6 @@
 name julia
 # Packaging syntax; leaves retain the original bytes.
 match *.jl
+interpreter julia
 class UserCuratedResource
 grammar julia

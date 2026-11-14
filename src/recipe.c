@@ -162,6 +162,12 @@ static int recipe_parse(const char *path, Recipe *r, int metadata){
             }
             snprintf(r->match[r->nmatch++], sizeof r->match[0], "%s", tok);
         }
+        else if (!strcmp(tok, "interpreter")) while ((tok = strtok(NULL, " \t\r\n"))) {
+            if (r->ninterpreter == (int)(sizeof r->interpreter / sizeof r->interpreter[0]) || strlen(tok) >= sizeof r->interpreter[0]) {
+                fprintf(stderr, "%s: too many or overlong interpreters\n", path); fclose(f); r->program_state = NULL; return 0;
+            }
+            snprintf(r->interpreter[r->ninterpreter++], sizeof r->interpreter[0], "%s", tok);
+        }
         else if (!strcmp(tok, "grammar")) { tok = strtok(NULL, " \t\r\n"); if (tok) snprintf(r->grammar, sizeof r->grammar, "%s", tok); r->native = native_grammar(r->grammar); }
         else if (!strcmp(tok, "class")) r->trust = class_trust(path, strtok(NULL, " \t\r\n"));
         else if (!strcmp(tok, "trust") || !strcmp(tok, "deviation")) trust_by_number(path, tok);
@@ -521,7 +527,35 @@ static Recipe *by_recipe_name(Recipe *r, int n, const char *name){
     for (int i = 0; i < n; i++) if (r[i].source < 0 && !r[i].broken && !strcmp(r[i].name, name)) return &r[i];
     return NULL;
 }
-static Recipe *sniff_generic_recipe(Recipe *r, int n, const char *path){
+/* The command a script's #! line runs, as the kernel reads the line: the interpreter's path, or through env
+ * (#!/usr/bin/env [-S] [NAME=VALUE...] COMMAND) the command env runs; its name is the path's last component. 0: the
+ * line names none. */
+static int shebang_command(const uint8_t *line, size_t n, char *out, size_t cap){
+    char word[8][256]; int nw = 0; size_t i = 2;
+    while (nw < 8) {
+        while (i < n && (line[i] == ' ' || line[i] == '\t')) i++;
+        if (i >= n || line[i] == '\r') break;
+        size_t s = i; while (i < n && line[i] != ' ' && line[i] != '\t' && line[i] != '\r') i++;
+        snprintf(word[nw++], sizeof word[0], "%.*s", (int)(i - s < sizeof word[0] - 1 ? i - s : sizeof word[0] - 1), (const char *)line + s); }
+    if (!nw) return 0;
+    const char *cmd = word[0], *base = strrchr(cmd, '/'); base = base ? base + 1 : cmd;
+    if (!strcmp(base, "env")) {                                             /* env: its options and assignments, then the command */
+        int k = 1; while (k < nw && (word[k][0] == '-' || strchr(word[k], '='))) k++;
+        if (k >= nw) return 0;
+        cmd = word[k]; base = strrchr(cmd, '/'); base = base ? base + 1 : cmd; }
+    snprintf(out, cap, "%s", base); return out[0] != 0;
+}
+/* The recipe that declares the interpreter a script's #! line runs: of those the source reads (its own first), or
+ * any generic recipe when there is no source. */
+static Recipe *interpreted_by(Recipe *r, int n, const char *command, const Source *of){
+    for (int pass = 0; pass < 2; pass++) for (int i = 0; i < n; i++) {
+        if (r[i].broken) continue;
+        if (of && !of->runtime) { int own = r[i].source >= 0 && &sources[r[i].source] == of; if (pass == 0 ? !own : !(r[i].source < 0 && reads(of, &r[i]))) continue; }
+        else if (pass == 1 || r[i].source >= 0) continue;
+        for (int k = 0; k < r[i].ninterpreter; k++) if (!strcmp(r[i].interpreter[k], command)) return &r[i]; }
+    return NULL;
+}
+static Recipe *sniff_generic_recipe(Recipe *r, int n, const char *path, const Source *of){
     FILE *fp = fopen(path, "rb"); if (!fp) return NULL;
     uint8_t buf[4096]; size_t m = fread(buf, 1, sizeof buf, fp); fclose(fp);
     if (!m) return by_recipe_name(r, n, "text");
@@ -529,12 +563,9 @@ static Recipe *sniff_generic_recipe(Recipe *r, int n, const char *path){
     size_t i = 0; if (m >= 3 && buf[0] == 0xEF && buf[1] == 0xBB && buf[2] == 0xBF) i = 3;
     while (i < m && (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\r' || buf[i] == '\n')) i++;
     if (i < m) {
-        if (m - i >= 2 && buf[i] == '#' && buf[i + 1] == '!') {             /* a script names its interpreter */
-            const uint8_t *eol = memchr(buf + i, '\n', m - i); size_t l = eol ? (size_t)(eol - (buf + i)) : m - i;
-            char line[256]; snprintf(line, sizeof line, "%.*s", (int)(l < sizeof line - 1 ? l : sizeof line - 1), (const char *)buf + i);
-            if (strstr(line, "pwsh") || strstr(line, "powershell")) return by_recipe_name(r, n, "powershell");
-            if (strstr(line, "python")) return by_recipe_name(r, n, "python");
-            if (strstr(line, "bash") || strstr(line, "/sh") || strstr(line, " sh")) return by_recipe_name(r, n, "bash");
+        if (m - i >= 2 && buf[i] == '#' && buf[i + 1] == '!') {             /* a script names its interpreter: the recipe that declares it */
+            const uint8_t *eol = memchr(buf + i, '\n', m - i); size_t l = eol ? (size_t)(eol - (buf + i)) : m - i; char command[256];
+            if (shebang_command(buf + i, l, command, sizeof command)) { Recipe *by = interpreted_by(r, n, command, of); if (by) return by; }
         }
         if (buf[i] == '{' || buf[i] == '[') return by_recipe_name(r, n, "json");
         if (m - i >= 5 && !strncasecmp((const char *)buf + i, "<?xml", 5)) return by_recipe_name(r, n, "xml");
@@ -585,10 +616,10 @@ Recipe *recipe_select(Recipe *r, int n, const char *path, const Source *of, Reci
             if (!best || lit > best_lit) { best = &r[i]; best_lit = lit; }
         }
     }
-    if (!best && (!of || of->runtime)) best = sniff_generic_recipe(r, n, path);
+    if (!best && (!of || of->runtime)) best = sniff_generic_recipe(r, n, path, NULL);
     else if (!best && of->sniff) {                                          /* what it holds, through what the source reads */
-        Recipe *held = sniff_generic_recipe(r, n, path);                   /* NULL: binary, no text recipe reads it */
-        if (held && !reads(of, held)) { Recipe *text = by_recipe_name(r, n, "text"); held = text && reads(of, text) ? text : NULL; }
+        Recipe *held = sniff_generic_recipe(r, n, path, of);               /* NULL: binary, no text recipe reads it */
+        if (held && held->source < 0 && !reads(of, held)) { Recipe *text = by_recipe_name(r, n, "text"); held = text && reads(of, text) ? text : NULL; }
         best = held;
     }
     if (best && !best->curated && best->grammar[0] && strcmp(best->grammar, "text") != 0 && !best->lang) {

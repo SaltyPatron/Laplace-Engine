@@ -3,5 +3,6 @@ name javascript
 # tools/build_grammars.sh): each node the composition of its children with the bytes between them, so the file
 # recomposes byte for byte; leaves are text.
 match *.js *.mjs *.cjs *.jsx
+interpreter node nodejs
 class UserCuratedResource
 grammar javascript
