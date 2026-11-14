@@ -109,8 +109,15 @@ generate() {
     if [[ -z "$generator" ]] || ! "$generator" --version >/dev/null 2>&1; then
       runtime=${LAPLACE_TREESITTER:-${LAPLACE_DEPSRC:?Declare pinned dependency sources}/tree-sitter}
       target="${LAPLACE_BUILD:?Declare the build root}/deps/tree-sitter-cli"
-      cargo build --locked --release --package tree-sitter-cli --manifest-path "$runtime/Cargo.toml" --target-dir "$target"
       generator="$target/release/tree-sitter"
+      # The build root is shared by every account that builds here (an operator, the CI runner): a CLI already built
+      # from the pinned source's version is used as it is, so only the account that builds a new version needs Rust.
+      wanted=$(sed -n '0,/^version *= *"\([^"]*\)".*/s//\1/p' "$runtime/Cargo.toml")
+      if [[ -z "$wanted" || "$("$generator" --version 2>/dev/null)" != "tree-sitter $wanted" ]]; then
+        command -v cargo >/dev/null ||
+          { echo "No tree-sitter CLI $wanted at $generator, and no cargo to build it from $runtime: set LAPLACE_TREESITTER_CLI or install Rust for $(id -un)" >&2; exit 1; }
+        cargo build --locked --release --package tree-sitter-cli --manifest-path "$runtime/Cargo.toml" --target-dir "$target"
+      fi
     fi
     generator_identity=$("$generator" --version)
   fi
