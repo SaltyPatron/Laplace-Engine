@@ -281,7 +281,7 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/recipes/vocabularies/"
         FILES_MATCHING PATTERN "*.tsv")
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/grammar-sources.tsv"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/laplace" COMPONENT LaplaceRecipeRuntime)
-install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/firmware/program.firmware"
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/firmware/program.firmware" "${CMAKE_CURRENT_SOURCE_DIR}/firmware/chess.firmware"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/laplace/firmware" COMPONENT LaplaceRecipeRuntime)
 install(CODE "
   foreach(_grammar xml lp_words)
