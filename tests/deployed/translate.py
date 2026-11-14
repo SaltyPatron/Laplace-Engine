@@ -130,10 +130,12 @@ ISO = ('Id\tPart2b\tPart2t\tPart1\tScope\tLanguage_Type\tRef_Name\tComment\n'
        'eng\teng\teng\ten\tI\tL\tEnglish\t\nfra\tfre\tfra\tfr\tI\tL\tFrench\t\n')
 # WordNet 3.0's cntlist, dog's and game's lines as it writes them: "tag_cnt sense_key sense_number".
 CNTLIST = '42 dog%1:05:00:: 1\n38 game%1:04:00:: 1\n26 game%1:04:03:: 2\n14 game%1:04:01:: 3\n'
-CONLLU = ('# text = game is played\n'
-          '1\tgame\tgame\tNOUN\t_\t_\t3\tnsubj\t_\t_\n'
-          '2\tis\tbe\tAUX\t_\t_\t3\taux\t_\t_\n'
-          '3\tplayed\tplay\tVERB\t_\t_\t0\troot\t_\t_\n\n')
+# The roles check's words are attested by no corpus, so the sentence below is their only UPOS evidence in the deployed
+# database: a corpus that tags "is" NOUN as often as this sentence tags it AUX ties them (Brown, 2026-11-14).
+CONLLU = ('# text = zqgame zqis zqplayed\n'
+          '1\tzqgame\tzqgame\tNOUN\t_\t_\t3\tnsubj\t_\t_\n'
+          '2\tzqis\tzqbe\tAUX\t_\t_\t3\taux\t_\t_\n'
+          '3\tzqplayed\tzqplay\tVERB\t_\t_\t0\troot\t_\t_\n\n')
 ROLE_FIRMWARE = 'role by UPOS\nrole 1 NOUN\nrole 0 AUX\nfor pull\nwalks 0\nnearest 0\nemit 0\n'
 DOG = 'a member of the genus Canis'
 MAN = 'informal term for a man'
@@ -273,8 +275,8 @@ def main():
         fixture.run('ingest', '-j', '2', ud, env={'LAPLACE_INGEST_ONE': '1'})
         roles = fixture.scratch / 'roles.firmware'
         roles.write_text(ROLE_FIRMWARE, encoding='utf-8', newline='\n')
-        read = fixture.run('turn', '--read', '--firmware', roles, 'game is', check=False)
-        if read.returncode or not re.search(r'game\(1\.00\).*is~\(0\.00\)', read.stdout + read.stderr):
+        read = fixture.run('turn', '--read', '--firmware', roles, 'zqgame zqis', check=False)
+        if read.returncode or not re.search(r'zqgame\(1\.00\).*zqis~\(0\.00\)', read.stdout + read.stderr):
             fail('typed UPOS salience was not read', read.stdout + read.stderr)
         print('query roles: Native UD value claims drive NOUN/AUX salience without changing standings')
         result = fixture.run('pull', '--firmware', firmware, '--seed', '0', 'dog', check=False)
