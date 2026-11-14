@@ -274,12 +274,28 @@ static int source_parse(const char *path, Source *s, int metadata){
     }
     if (metadata) return s->name[0] != 0;
     if (s->unset[0]) { s->nroot = s->nfiles = 0; return s->name[0] != 0; }   /* a root it names is not set: it is at none, and says why (source_unset) */
-    if (s->nfiles) { os_list g; os_glob(s->files[0], &g); if (g.n) snprintf(s->found, sizeof s->found, "%s", s->files[0]); os_list_free(&g); }
-    /* the first root that is there; of a pattern, the newest directory: an archive or a checksum kept beside the
-     * directory it was opened into matches the pattern too, and is not where the source is */
+    /* Where the source is, which its files' pathnames are from (file_metadata.c within_source): its root, when it names
+     * one. The first root that is there; of a pattern, the newest directory: an archive or a checksum kept beside the
+     * directory it was opened into matches the pattern too, and is not where the source is. Its files entries say
+     * which files under it it is, never where it is: a first entry taken as the place left every file under a sibling
+     * entry, and every file of a pattern entry, named by the host's directories above the source. */
     for (int i = 0; i < s->nroot && !s->found[0]; i++) {
         os_list g; os_glob(s->root[i], &g);
         for (size_t j = g.n; j > 0; j--) if (os_is_dir(g.item[j - 1]) && !s->nfound++) snprintf(s->found, sizeof s->found, "%s", g.item[j - 1]);
+        os_list_free(&g);
+    }
+    /* A source that names no root is where its first files entry is, when anything is there: that directory, or the
+     * directory above it (a file), or of a pattern the directory above its first wildcard. */
+    if (!s->nroot && s->nfiles) {
+        os_list g; os_glob(s->files[0], &g);
+        if (g.n) {
+            char at[sizeof s->found]; snprintf(at, sizeof at, "%s", s->files[0]);
+            char *wild = strpbrk(at, "*?[");
+            if (wild) *wild = 0;
+            if (wild || !os_is_dir(at)) { char *cut = NULL; for (char *q = at; *q; q++) if (*q == '/' || *q == '\\') cut = q; if (cut) *cut = 0; else at[0] = 0; }
+            size_t l = strlen(at); while (l > 1 && (at[l - 1] == '/' || at[l - 1] == '\\')) at[--l] = 0;
+            if (at[0]) snprintf(s->found, sizeof s->found, "%s", at);
+        }
         os_list_free(&g);
     }
     return s->name[0] != 0;
