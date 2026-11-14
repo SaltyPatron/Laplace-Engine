@@ -530,8 +530,7 @@ static Recipe *sniff_generic_recipe(Recipe *r, int n, const char *path){
     while (i < m && (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\r' || buf[i] == '\n')) i++;
     if (i < m) {
         if (m - i >= 2 && buf[i] == '#' && buf[i + 1] == '!') {             /* a script names its interpreter */
-            const uint8_t *eol = memchr(buf + i, '
-', m - i); size_t l = eol ? (size_t)(eol - (buf + i)) : m - i;
+            const uint8_t *eol = memchr(buf + i, '\n', m - i); size_t l = eol ? (size_t)(eol - (buf + i)) : m - i;
             char line[256]; snprintf(line, sizeof line, "%.*s", (int)(l < sizeof line - 1 ? l : sizeof line - 1), (const char *)buf + i);
             if (strstr(line, "pwsh") || strstr(line, "powershell")) return by_recipe_name(r, n, "powershell");
             if (strstr(line, "python")) return by_recipe_name(r, n, "python");
