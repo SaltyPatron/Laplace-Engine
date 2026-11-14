@@ -229,7 +229,9 @@ def main():
 
         # By observed usages (Sequence/Web.md 15.6: "ordered by observed usages, then the witness's sense order, then
         # standing"): game's senses as cntlist counts them, before the adjective senses the witness lists first.
-        out, _ = tl('game', 'en', 'en')
+        # Every sense of game: a database other witnesses of game read into has observed senses of its own, and the
+        # default four would end before the fixture's unobserved one.
+        out, _ = tl('-n', '64', 'game', 'en', 'en')
         order = headers(out)
         first = [next((i for i, h in enumerate(order) if ili in h), None) for ili in ('i37810', 'i37811', 'i37661', 'i5573')]
         counts = [observed(order[i]) if i is not None else None for i in first[:3]]
