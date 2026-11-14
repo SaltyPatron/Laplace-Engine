@@ -276,6 +276,14 @@ void lp_chess_extra(const Bd *b, LpChessExtra *x){
 /* Read once: 0 not yet, 1 being read (another caller waits), 2 read. No platform lock, so this file needs only Native
  * and Tree-sitter wherever it is built (the Engine, its readers, the monorepo's core). */
 static LpChessLaw LAWS[32]; static int NLAWS = 0, laws_state = 0; static char LDEFAULT[64] = "Standard";
+/* Every name a law goes by, as each source writes it (a PGN Variant tag, Lichess's API key, a UCI_Variant value), the
+ * law's own name first: name i is the law at NAME_LAW[i]. */
+static char NAMES[128][64]; static int NAME_LAW[128], NNAMES = 0;
+static int name_add(const char *name, int law){
+    if (NNAMES == 128) return 0;
+    for (int i = 0; i < NNAMES; i++) if (!strcmp(NAMES[i], name)) return 0;           /* each name is one law's */
+    snprintf(NAMES[NNAMES], sizeof NAMES[0], "%s", name); NAME_LAW[NNAMES++] = law; return 1;
+}
 /* The next word of a firmware line, "Two Words" quoted; 0 at its end. */
 static int word(char **at, char *out, size_t cap){
     char *c = *at; while (*c == ' ' || *c == '\t') c++; if (!*c || *c == '\r' || *c == '\n') { *at = c; return 0; }
@@ -291,7 +299,7 @@ int lp_chess_laws_load(const char *path){
     FILE *f = path ? fopen(path, "r") : NULL; int n = 0;
     if (!f) { if (path) fprintf(stderr, "chess: %s: no laws (LAPLACE_CHESS_FIRMWARE names them): records are read under Standard and Chess960 alone\n", path);
         memset(LAWS, 0, sizeof LAWS[0] * 2); snprintf(LAWS[0].name, sizeof LAWS[0].name, "Standard"); LAWS[0].castles = 1; LAWS[1] = CHESS960;
-        NLAWS = 2; __atomic_store_n(&laws_state, 2, __ATOMIC_RELEASE); return NLAWS; }
+        NLAWS = 2; name_add("Standard", 0); name_add("Chess960", 1); __atomic_store_n(&laws_state, 2, __ATOMIC_RELEASE); return NLAWS; }
     char line[1024];
     while (fgets(line, sizeof line, f)) {
         char *h = strchr(line, '#'); if (h) *h = 0; char *c = line, w[128];
@@ -299,7 +307,7 @@ int lp_chess_laws_load(const char *path){
         if (!strcmp(w, "default")) { if (word(&c, w, sizeof w)) snprintf(LDEFAULT, sizeof LDEFAULT, "%s", w); continue; }
         if (strcmp(w, "variant")) { fprintf(stderr, "chess: %s: \"%s\" is not something the chess firmware says\n", path, w); continue; }
         if (n >= 32) { fprintf(stderr, "chess: %s: more than 32 variants\n", path); break; }
-        LpChessLaw x; memset(&x, 0, sizeof x); x.castles = 1; int bad = 0;
+        LpChessLaw x; memset(&x, 0, sizeof x); x.castles = 1; int bad = 0; char also[16][64]; int nalso = 0;
         if (!word(&c, x.name, sizeof x.name)) continue;
         while (!bad && word(&c, w, sizeof w)) {
             char v[128] = "";
@@ -315,9 +323,12 @@ int lp_chess_laws_load(const char *path){
                 while (word(&c, v, sizeof v)) { if (!strcmp(v, "answered")) { x.goal_answered = 1; back = c; continue; } if (!square_word(v)) { c = back; break; } x.goal |= bit((v[0] - 'a') + 8 * (v[1] - '1')); any = 1; back = c; }
                 if (!any) bad = 1; }
             else if (!strcmp(w, "start")) { if (!word(&c, x.start, sizeof x.start)) bad = 1; }
+            else if (!strcmp(w, "also")) { while (nalso < 16 && word(&c, also[nalso], sizeof also[0])) nalso++; if (!nalso) bad = 1; }
             else bad = 1; }
         if (bad) { fprintf(stderr, "chess: %s: variant %s: \"%s\" is not something a variant says\n", path, x.name, w); continue; }
         if (x.start[0]) { Bd t; if (!board_law_fen(&t, x.start, strlen(x.start), &x)) { fprintf(stderr, "chess: %s: variant %s: its start is no FEN\n", path, x.name); continue; } }
+        if (!name_add(x.name, n)) { fprintf(stderr, "chess: %s: variant %s: its name is another law's\n", path, x.name); continue; }
+        for (int k = 0; k < nalso; k++) if (!name_add(also[k], n)) fprintf(stderr, "chess: %s: variant %s: \"%s\" is another law's name\n", path, x.name, also[k]);
         LAWS[n++] = x; }
     fclose(f); NLAWS = n; __atomic_store_n(&laws_state, 2, __ATOMIC_RELEASE); return n;
 }
@@ -328,9 +339,10 @@ const LpChessLaw *lp_chess_law_named(const char *v, size_t l){
         else if (pf && *pf) { snprintf(p, sizeof p, "%s", pf); char *s = strrchr(p, '/'), *b = strrchr(p, '\\'); if (b > s) s = b; if (s) snprintf(s + 1, sizeof p - (size_t)(s + 1 - p), "chess.firmware"); else p[0] = 0; }
         lp_chess_laws_load(p[0] ? p : NULL); }
     if (!v) { v = LDEFAULT; l = strlen(v); }
-    for (int i = 0; i < NLAWS; i++) if (strlen(LAWS[i].name) == l && !memcmp(LAWS[i].name, v, l)) return &LAWS[i];
+    for (int i = 0; i < NNAMES; i++) if (strlen(NAMES[i]) == l && !memcmp(NAMES[i], v, l)) return &LAWS[NAME_LAW[i]];
     return NULL;
 }
+const char *lp_chess_law_name(int i){ lp_chess_law_named(NULL, 0); return i >= 0 && i < NNAMES ? NAMES[i] : NULL; }
 
 /* ---- chess as content: the IDs a client computes from tier 0 alone (Native's lp_id_*), and the same as Refs in the
  * node table when a file is read (compose) */

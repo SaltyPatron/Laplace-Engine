@@ -53,6 +53,19 @@ perft=$(printf '%s\n' \
   $'perft King of the Hill\t4\trnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1' \
   $'perft Three-check\t4\trnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 3+3 0 1' | "$P" | tr -d '\r' | paste -sd' ')
 [ "$perft" = "197281 97862 197326 153299 23310 296242 197281 197281 197281" ] || fail "a law's moves are not the published perft counts: $perft"
+# a law's other names (Lichess's API key, a UCI_Variant value) are the same law: the same counts three plies deep
+again=$(printf '%s\n' \
+  $'perft atomic\t3\trnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1' \
+  $'perft antichess\t3\trnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1' \
+  $'perft horde\t3\trnbqkbnr/pppppppp/8/1PP2PP1/PPPPPPPP/PPPPPPPP/PPPPPPPP/PPPPPPPP w kq - 0 1' \
+  $'perft racingKings\t3\t8/8/8/8/8/8/krbnNBRK/qrbnNBRQ w - - 0 1' \
+  $'perft racingkings\t3\t8/8/8/8/8/8/krbnNBRK/qrbnNBRQ w - - 0 1' \
+  $'perft Atomic\t3\trnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1' \
+  $'perft Antichess\t3\trnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w - - 0 1' \
+  $'perft Horde\t3\trnbqkbnr/pppppppp/8/1PP2PP1/PPPPPPPP/PPPPPPPP/PPPPPPPP/PPPPPPPP w kq - 0 1' \
+  $'perft Racing Kings\t3\t8/8/8/8/8/8/krbnNBRK/qrbnNBRQ w - - 0 1' \
+  $'perft Racing Kings\t3\t8/8/8/8/8/8/krbnNBRK/qrbnNBRQ w - - 0 1' | "$P" | tr -d '\r' | paste -sd' ')
+set -- $again; [ "$1 $2 $3 $4 $5" = "$6 $7 $8 $9 ${10}" ] && [ "$1" != "-" ] || fail "a law's other names are not that law: $again"
 
 # the ingest replays every game as played, and its lines end where the reader's do
 out=$(LAPLACE_DATA=$scratch "$L" ingest --claims-tsv -s chess-com "$dir"/chess-variant-*.pgn 2>&1 | tr -d '\r') || fail "the ingest did not read the variant games: $out"

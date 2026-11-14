@@ -4,6 +4,7 @@
  *   MOVETEXT[\tNAME\tECO]      -> line ID \t final position ID [\t record ID]
  *   moves FEN                  -> position ID, then \t SAN \t position ID a legal move (lp_chess_successors)
  *   law NAME\tFEN              -> the ID of the position a FEN gives under the law NAME (LAPLACE_CHESS_FIRMWARE)
+ *   names                      -> every name a law goes by (lp_chess_law_name), one a line, then .
  *   perft NAME\tDEPTH\tFEN     -> the count of legal move sequences DEPTH plies long from the FEN under the law NAME
  *   game PATH                  -> the ID of the position a PGN file's game ends in, its plies and its result by its
  *                                 law alone (lp_chess_result; * while play goes on), under its Variant's law
@@ -39,6 +40,9 @@ int main(void){
     const void *moves = language("pgn_moves"), *games = NULL; lp_text *text = NULL; char input[8192];
     while (fgets(input, sizeof input, stdin)) {
         size_t n = strcspn(input, "\r\n"); input[n] = 0; char hex[33];
+        if (!strcmp(input, "names")) {                                      /* names: every name a law goes by, one a line */
+            for (int i = 0; lp_chess_law_name(i); i++) puts(lp_chess_law_name(i));
+            puts("."); continue; }
         if (!strncmp(input, "law ", 4)) {                                      /* law NAME\tFEN: the position a FEN gives under that law */
             char *fen = strchr(input + 4, '\t'); Bd b; lp_id p; const LpChessLaw *law = fen ? lp_chess_law_named(input + 4, (size_t)(fen - input - 4)) : NULL;
             if (!law || !lp_chess_board_law_fen(&b, fen + 1, strlen(fen + 1), law)) { puts("-"); continue; }

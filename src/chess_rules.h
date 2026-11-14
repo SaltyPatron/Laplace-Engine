@@ -66,6 +66,8 @@ int lp_chess_board_law_fen(Bd *b, const char *fen, size_t n, const LpChessLaw *l
  * LAPLACE_CHESS_FIRMWARE, else chess.firmware beside LAPLACE_FIRMWARE, else knows Standard and Chess960 alone. */
 int lp_chess_laws_load(const char *path);
 const LpChessLaw *lp_chess_law_named(const char *v, size_t n);
+/* The i-th name a law goes by (a law's own name, then those it is also called), or NULL past the last. */
+const char *lp_chess_law_name(int i);
 /* What a position holds beyond [board, side, castling, en passant], each present only when there is any: the pieces in
  * hand as FEN writes them (White's Q R B N P, then Black's), the promoted squares in square order, and the checks
  * given as +W+B. A position's ID is [board, side, castling, en passant, these...]. */
