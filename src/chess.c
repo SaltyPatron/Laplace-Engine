@@ -16,9 +16,14 @@
  *   position     [board, side, castling, en passant]   side w or b; en passant the square a pawn can be taken on
  *                                                      by a legal capture this move, else -. Nothing that happened
  *                                                      before the position (its clocks, its move number, how it was
- *                                                      reached) is part of it, and no ruleset is
+ *                                                      reached) is part of it, and no ruleset is. What a law adds
+ *                                                      follows, each only where there is any: the pieces in hand
+ *                                                      as FEN writes them (QRBNP then qrbnp), the promoted pieces'
+ *                                                      squares, the checks given (+W+B). A crazyhouse position with
+ *                                                      empty hands is the Standard position it looks like
  *   move         [piece, from, to] or [piece, from, to, promoted piece]; a castling is [king, king's square, its
- *                rook's square], the king onto its own rook, so a Chess960 castling is never a king's step
+ *                rook's square], the king onto its own rook, so a Chess960 castling is never a king's step; a
+ *                drop is [piece, @, square]
  *   line         [P0, M0, P1, M1, ..., Pn]             the trajectory, shared by every record that plays it. A line
  *                                                      of no moves is its start position: a one-child composition is
  *                                                      its child, so a game of no moves holds a position, and
@@ -51,7 +56,8 @@
  * A record is never the subject of a claim: its line, its tags (the players, their ratings, the clocks, the date, the
  * event, the result) and its layer are its content, the trajectory of the game, and are not claimed again as [record, field].
  * The rules a record is replayed under are firmware (Sequence 28, Games): firmware/chess.firmware names each variant
- * a Variant tag can name and how it castles; the variant governs which moves are legal and is in no position's ID.
+ * a Variant tag can name and the axes of its law (chess_rules.h LpChessLaw); the law governs which moves are legal
+ * and what a move does, and is in no position's ID.
  *
  *   laplace pgn [-d conninfo] [--verify] [-o file] ID...
  *                    a file's (or a record's) PGN written again from the database alone; --verify recomputes every
@@ -64,34 +70,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ---- the rules: firmware/chess.firmware */
-static Rules RULES[32]; static int NRULES = -1; static char RDEFAULT[64] = "Standard";
-static pthread_mutex_t rules_mu = PTHREAD_MUTEX_INITIALIZER;
+/* ---- the rules: firmware/chess.firmware (LAPLACE_CHESS_FIRMWARE, else beside the program firmware), read by
+ * chess_rules.c, the one reader of laws every reader shares */
 void rules_load(void){
-    pthread_mutex_lock(&rules_mu);
-    if (NRULES >= 0) { pthread_mutex_unlock(&rules_mu); return; }
+    static int loaded; if (__atomic_load_n(&loaded, __ATOMIC_ACQUIRE)) return;
     char p[4300]; const char *e = getenv("LAPLACE_CHESS_FIRMWARE");
     if (e && *e) snprintf(p, sizeof p, "%s", e);
     else { snprintf(p, sizeof p, "%s", firmware_path()); char *s = strrchr(p, '/'), *b = strrchr(p, '\\'); if (b > s) s = b; if (s) snprintf(s + 1, sizeof p - (size_t)(s + 1 - p), "chess.firmware"); }
-    FILE *f = fopen(p, "r"); int n = 0;
-    if (!f) { fprintf(stderr, "chess: %s: no rules (LAPLACE_CHESS_FIRMWARE names them): every record is read under Standard alone\n", p); snprintf(RULES[0].name, 64, "Standard"); NRULES = 1; pthread_mutex_unlock(&rules_mu); return; }
-    char line[512];
-    while (fgets(line, sizeof line, f)) { comment_off(line); char *c = line; while (*c == ' ' || *c == '\t') c++; if (!*c || *c == '\n' || *c == '\r') continue;
-        char name[64] = "", *q;
-        if (!strncmp(c, "default", 7)) { c += 7; while (*c == ' ') c++; if (*c == '"') { c++; q = strchr(c, '"'); } else q = c + strcspn(c, " \t\r\n"); if (q) snprintf(RDEFAULT, sizeof RDEFAULT, "%.*s", (int)(q - c), c); continue; }
-        if (strncmp(c, "variant", 7)) { fprintf(stderr, "chess: %s: \"%s\" is not something the chess firmware says\n", p, c); continue; }
-        c += 7; while (*c == ' ' || *c == '\t') c++;
-        if (*c == '"') { c++; q = strchr(c, '"'); if (!q) continue; snprintf(name, sizeof name, "%.*s", (int)(q - c), c); c = q + 1; }
-        else { q = c + strcspn(c, " \t\r\n"); snprintf(name, sizeof name, "%.*s", (int)(q - c), c); c = q; }
-        int c960 = strstr(c, "castling chess960") != NULL;
-        if (n < 32) { snprintf(RULES[n].name, 64, "%s", name); RULES[n++].c960 = c960; } }
-    fclose(f); NRULES = n; pthread_mutex_unlock(&rules_mu);
+    lp_chess_laws_load(p); __atomic_store_n(&loaded, 1, __ATOMIC_RELEASE);
 }
-const Rules *rules_named(const char *v, size_t l){
-    rules_load(); if (!v) { v = RDEFAULT; l = strlen(v); }
-    for (int i = 0; i < NRULES; i++) if (strlen(RULES[i].name) == l && !memcmp(RULES[i].name, v, l)) return &RULES[i];
-    return NULL;
-}
+const Rules *rules_named(const char *v, size_t l){ rules_load(); return lp_chess_law_named(v, l); }
 
 
 /* ---- reading a file: the node table */
@@ -114,11 +102,17 @@ static Ref r_position(RefCache *rc, const Bd *b){
     unsigned wm = castle_mask(b, 0), bm = castle_mask(b, 1);
     if (!chess_castling(wm, bm, &part[2])) { Ref cm[2] = { r_number(wm), r_number(bm) }; part[2] = compose(cm, 2, ref_above(cm, 2)); }
     int ep = ep_square(b); part[3] = ep >= 0 ? r_sq(rc, ep) : atom('-');
-    for (int i = 0; i < 4; i++) part[i].said = 0;
-    Ref p = compose(part, 4, ref_above(part, 4)); p.said = 0; return p;
+    Ref full[7]; uint32_t np = 4; memcpy(full, part, sizeof part);
+    LpChessExtra x; lp_chess_extra(b, &x); Ref k[64];                          /* what the law adds: the hand, the promoted squares, the checks given */
+    if (x.nhand) { for (int i = 0; i < x.nhand; i++) k[i] = atom(x.hand[i]); full[np++] = x.nhand == 1 ? k[0] : compose(k, (uint32_t)x.nhand, ref_above(k, (size_t)x.nhand)); }
+    if (x.npromoted) { for (int i = 0; i < x.npromoted; i++) k[i] = r_sq(rc, x.promoted[i]); full[np++] = x.npromoted == 1 ? k[0] : compose(k, (uint32_t)x.npromoted, ref_above(k, (size_t)x.npromoted)); }
+    if (x.nchecks) { for (int i = 0; i < x.nchecks; i++) k[i] = atom(x.checks[i]); full[np++] = compose(k, (uint32_t)x.nchecks, ref_above(k, (size_t)x.nchecks)); }
+    for (uint32_t i = 0; i < np; i++) full[i].said = 0;
+    Ref p = compose(full, np, ref_above(full, np)); p.said = 0; return p;
 }
 static Ref r_move(RefCache *rc, const Bd *b, const Mv *m){
     { Ref r; if (chess_move(b, m, &r)) { r.said = 0; return r; } }
+    if (m->drop) { Ref d[3] = { atom(piece_cp((int8_t)(b->side ? -m->drop : m->drop))), atom('@'), r_sq(rc, m->to) }; Ref r = compose(d, 3, ref_above(d, 3)); r.said = 0; return r; }
     Ref k[4]; uint32_t n = 3; k[0] = atom(piece_cp(b->sq[m->from])); k[1] = r_sq(rc, m->from); k[2] = r_sq(rc, m->to);
     if (m->promo) { k[3] = atom(piece_cp((int8_t)(b->side ? -m->promo : m->promo))); n = 4; }
     Ref r = compose(k, n, ref_above(k, n)); r.said = 0; return r;
@@ -206,7 +200,7 @@ static int replay(Rd *r, const Line *L, const Bd *b0, Ref *line, Ref *layer, int
         for (int j = 0; j < L->nlead; j++) { const Ann *x = &L->lead[j]; if (x->kind == 3) continue; rv(&e, r_text((const uint8_t *)x->t, x->n)); }
         rv(&lay, comp(e.c, e.n)); }
     for (int i = 0; i < L->n; i++) { const Ply *p = &L->p[i];
-        Mv all[256]; int na = gen(&b, all); int k = san_match(&b, p->san, p->n, all, na);
+        Mv all[LP_CHESS_MOVES]; int na = gen(&b, all); int k = san_match(&b, p->san, p->n, all, na);
         if (k < 0) { snprintf(r->err, sizeof r->err, "%.*s is no legal move at ply %d", (int)p->n, p->san, i + 1); return 0; }
         Ref M = r_move(r->rc, &b, &all[k]); Bd before = b; Ref Pb = P; make(&b, &all[k]); P = r_position(r->rc, &b); rv(&traj, M); rv(&traj, P); r->plies++; r->castles += all[k].castle;
         if (chess_capture) chess_capture(&before, &all[k], &b, &Pb, &M, &P);
@@ -239,7 +233,7 @@ static int game_content(Rd *rd, const Game *g, Start *st, Ref *rec){
         Ref two[2] = { nm, r_text((const uint8_t *)t->val, t->vl) }; Ref pr = compose(two, 2, ref_above(two, 2)); pr.said = LP_SAID_TUPLE; rv(&tags, pr); }
     Ref T = tags.n ? (tags.n == 1 ? tags.c[0] : compose(tags.c, (uint32_t)tags.n, ref_above(tags.c, tags.n))) : atom('-'); T.said = 0;
     st->rules = rules_named(st->variant, st->vl); st->ok = st->rules != NULL;
-    if (st->ok) { if (st->fen) st->ok = board_fen(&st->b0, st->fen, st->fl, st->rules->c960); else board_start(&st->b0); }
+    if (st->ok) st->ok = st->fen ? board_law_fen(&st->b0, st->fen, st->fl, st->rules) : board_law_start(&st->b0, st->rules);
     Ref layer; int has_layer = 0; rd->nags.n = rd->transitions.n = 0;
     if (st->ok && !g->bad) st->ok = replay(rd, &g->main, &st->b0, &st->line, &layer, &has_layer, &st->end); else if (st->ok) { st->ok = 0; snprintf(rd->err, sizeof rd->err, "its variations are not closed"); }
     else if (!st->rules) snprintf(rd->err, sizeof rd->err, "its variant %.*s is in no rules (firmware/chess.firmware)", (int)st->vl, st->variant); else snprintf(rd->err, sizeof rd->err, "its FEN is no position");

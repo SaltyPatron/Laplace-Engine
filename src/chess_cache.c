@@ -13,9 +13,12 @@
  *                        castle with, Standard and Chess960      [White's mask, Black's mask]
  *   en_passant    17     0 -, then a3..h3, a6..h6               a square or -
  *   move          every [piece, from, to] or [piece, from, to, promoted] a piece of either colour can be moved by on
- *                 some board: its steps, slides and jumps, a pawn's push, double push, capture and promotion from
- *                 ranks 2 to 7 of its side, and a king onto any square of its own back rank (castling is the king
- *                 onto its own rook). Its address is the enumeration (piece, from, to, promotion) in that order.
+ *                 some board under any law: its steps, slides and jumps, a pawn's push, double push, capture and
+ *                 promotion (to a king too, where a law promotes to one) from any rank of its side but its last (a
+ *                 pawn on its first rank steps two where a law says so), and a king onto any square of its own back
+ *                 rank (castling is the king onto its own rook), in the enumeration (piece, from, to, promotion);
+ *                 then every drop [piece, @, to], a pawn, knight, bishop, rook or queen of either colour put from hand
+ *                 onto a square (a pawn not onto its first or last rank), in the enumeration (piece, to).
  * Sparse, admitted: the positions, their boards and the [P, M, P'] transitions of every move the sources named play,
  * as chess.c composes them when it reads them, sorted by ID (lookup O(1) expected through the module's ID index), and
  * the deterministic (P, M) -> P' as a pair table (O(log n) binary search on the full key). A miss is no absence: the
@@ -42,8 +45,8 @@ static int piece_index(int8_t p){ return p > 0 ? p - 1 : 5 - p; }
 #define NMASKS 85
 static int mask_place[256]; static unsigned mask_value[NMASKS];
 static int popcount8(unsigned m){ int c = 0; for (; m; m &= m - 1) c++; return c; }
-/* A promotion as its index: 0 none, 1..4 a knight, bishop, rook or queen. */
-static int promo_index(uint8_t promo){ return promo >= KNIGHT && promo <= QUEEN ? promo - 1 : 0; }
+/* A promotion as its index: 0 none, 1..5 a knight, bishop, rook, queen or king. */
+static int promo_index(uint8_t promo){ return promo >= KNIGHT && promo <= KING ? promo - 1 : 0; }
 static int move_shape(int pi, int from, int to, int pr){
     int8_t p = piece_at(pi); int a = abs(p), white = p > 0;
     if (from == to) return 0;
@@ -56,17 +59,19 @@ static int move_shape(int pi, int from, int to, int pr){
         case QUEEN:  return adf == adr || !df || !dr;
         case KING:   return (adf <= 1 && adr <= 1) || (!dr && (from >> 3) == (white ? 0 : 7));
         default: {
-            int fr = from >> 3, fwd = white ? 1 : -1, last = white ? 7 : 0;
-            if (fr == 0 || fr == 7) return 0;
-            int ok = (!df && dr == fwd) || (!df && dr == 2 * fwd && fr == (white ? 1 : 6)) || (adf == 1 && dr == fwd);
+            int fr = from >> 3, fwd = white ? 1 : -1, last = white ? 7 : 0, first = white ? 0 : 7;
+            if (fr == last) return 0;
+            int ok = (!df && dr == fwd) || (!df && dr == 2 * fwd && (fr == (white ? 1 : 6) || fr == first)) || (adf == 1 && dr == fwd);
             if (!ok) return 0;
             return (to >> 3) == last ? pr != 0 : pr == 0;
         }
     }
 }
-static uint16_t move_slot[12][64][64][5];         /* slot + 1; 0: no such move */
+static uint16_t move_slot[12][64][64][6];         /* slot + 1; 0: no such move */
+static uint16_t drop_slot[12][64];                /* a drop's slot + 1 by piece and square; 0: no such drop */
 static uint32_t NMOVES;
-typedef struct { int8_t piece; uint8_t from, to, promo; } MoveShape;
+typedef struct { int8_t piece; uint8_t from, to, promo, drop; } MoveShape;
+static int drop_shape(int pi, int to){ int8_t p = piece_at(pi); int a = abs(p); return a >= PAWN && a <= QUEEN && (a != PAWN || ((to >> 3) != 0 && (to >> 3) != 7)); }
 static MoveShape *MOVES;
 /* Once, for every thread (pthread_once is not on every platform os.h serves): the flag read without the lock once set. */
 #define ONCE(flag, mu, fn) do { if (!__atomic_load_n(&(flag), __ATOMIC_ACQUIRE)) { pthread_mutex_lock(&(mu)); if (!(flag)) { fn(); __atomic_store_n(&(flag), 1, __ATOMIC_RELEASE); } pthread_mutex_unlock(&(mu)); } } while (0)
@@ -75,8 +80,10 @@ static void law_build(void){
     int n = 0; for (unsigned m = 0; m < 256; m++) { int c = popcount8(m); mask_place[m] = -1; if (c == 0 || c == 2 || c == 3) { mask_value[n] = m; mask_place[m] = n++; } }
     if (n != NMASKS) { fputs("chess cache: the castling domain is not 85 masks\n", stderr); exit(2); }
     uint32_t k = 0; MOVES = malloc(sizeof *MOVES * 12 * 64 * 64); if (!MOVES) { perror("chess cache"); exit(1); }
-    for (int pi = 0; pi < 12; pi++) for (int f = 0; f < 64; f++) for (int t = 0; t < 64; t++) for (int pr = 0; pr < 5; pr++)
-        if (move_shape(pi, f, t, pr)) { move_slot[pi][f][t][pr] = (uint16_t)(k + 1); MOVES[k++] = (MoveShape){ piece_at(pi), (uint8_t)f, (uint8_t)t, (uint8_t)(pr ? pr + 1 : 0) }; }
+    for (int pi = 0; pi < 12; pi++) for (int f = 0; f < 64; f++) for (int t = 0; t < 64; t++) for (int pr = 0; pr < 6; pr++)
+        if (move_shape(pi, f, t, pr)) { move_slot[pi][f][t][pr] = (uint16_t)(k + 1); MOVES[k++] = (MoveShape){ piece_at(pi), (uint8_t)f, (uint8_t)t, (uint8_t)(pr ? pr + 1 : 0), 0 }; }
+    for (int pi = 0; pi < 12; pi++) for (int t = 0; t < 64; t++)
+        if (drop_shape(pi, t)) { drop_slot[pi][t] = (uint16_t)(k + 1); MOVES[k++] = (MoveShape){ piece_at(pi), (uint8_t)t, (uint8_t)t, 0, (uint8_t)abs(piece_at(pi)) }; }
     NMOVES = k;
 }
 static void law(void){ ONCE(law_done, law_mu, law_build); }
@@ -98,16 +105,25 @@ static Ref number_ref(unsigned v){ char d[8]; int l = snprintf(d, sizeof d, "%u"
 static Ref piece_square_ref(int8_t p, int s){ Ref k[2] = { cp(piece_cp(p)), square_ref(s) }; return comp(k, 2); }
 static Ref castling_ref(unsigned w, unsigned b){ Ref k[2] = { number_ref(w), number_ref(b) }; return comp(k, 2); }
 static Ref en_passant_ref(int ep){ return ep >= 0 ? square_ref(ep) : cp('-'); }
-static Ref move_ref(int8_t p, int from, int to, uint8_t promo){
+static Ref move_ref(int8_t p, int from, int to, uint8_t promo, uint8_t drop){
+    if (drop) { Ref d[3] = { cp(piece_cp(p)), cp('@'), square_ref(to) }; return comp(d, 3); }
     Ref k[4] = { cp(piece_cp(p)), square_ref(from), square_ref(to) }; size_t n = 3;
     if (promo) { k[3] = cp(piece_cp((int8_t)(p > 0 ? promo : -(int)promo))); n = 4; }
     return comp(k, n);
 }
 static Ref board_ref(const Bd *b){ Ref ps[64]; size_t n = 0; for (int s = 0; s < 64; s++) if (b->sq[s]) ps[n++] = piece_square_ref(b->sq[s], s); return comp(ps, n); }
+/* A move as chess.c composes it: the piece is the one on from, or the one dropped. */
+static Ref move_of(const Bd *b, const Mv *m){
+    int8_t p = m->drop ? (int8_t)(b->side ? -m->drop : m->drop) : b->sq[m->from]; return move_ref(p, m->from, m->to, m->promo, m->drop);
+}
 static Ref position_ref(const Bd *b, Ref *board){
-    Ref part[4] = { board_ref(b), cp(b->side ? 'b' : 'w'), castling_ref(castle_mask(b, 0), castle_mask(b, 1)), en_passant_ref(ep_square(b)) };
+    Ref part[7] = { board_ref(b), cp(b->side ? 'b' : 'w'), castling_ref(castle_mask(b, 0), castle_mask(b, 1)), en_passant_ref(ep_square(b)) }; size_t n = 4;
+    LpChessExtra x; lp_chess_extra(b, &x); Ref k[64];                          /* what the law adds (chess_rules.h) */
+    if (x.nhand) { for (int i = 0; i < x.nhand; i++) k[i] = cp(x.hand[i]); part[n++] = comp(k, (size_t)x.nhand); }
+    if (x.npromoted) { for (int i = 0; i < x.npromoted; i++) k[i] = square_ref(x.promoted[i]); part[n++] = comp(k, (size_t)x.npromoted); }
+    if (x.nchecks) { for (int i = 0; i < x.nchecks; i++) k[i] = cp(x.checks[i]); part[n++] = comp(k, (size_t)x.nchecks); }
     if (board) *board = part[0];
-    return comp(part, 4);
+    return comp(part, n);
 }
 static Bd lone(int8_t p, int s){ Bd b; memset(&b, 0, sizeof b); b.ep = -1; b.sq[s] = p; b.side = p > 0 ? 0 : 1; return b; }
 
@@ -129,8 +145,8 @@ static Ref dense_ref(int s, uint32_t slot, int *rules){
         case S_NUMBER: r = number_ref(slot); lp_chess_id_number(slot, &want); break;
         case S_CASTLING: { unsigned w = mask_value[slot / NMASKS], b = mask_value[slot % NMASKS]; r = castling_ref(w, b); lp_chess_id_castling(w, b, &want); break; }
         case S_EN_PASSANT: { int ep = !slot ? -1 : slot <= 8 ? 16 + (int)slot - 1 : 40 + (int)slot - 9; r = en_passant_ref(ep); lp_chess_id_en_passant(ep, &want); break; }
-        default: { const MoveShape *m = &MOVES[slot]; r = move_ref(m->piece, m->from, m->to, m->promo);
-                   Bd b = lone(m->piece, m->from); Mv mv = { m->from, m->to, m->promo, 0, 0 }; lp_chess_id_move(&b, &mv, &want); break; }
+        default: { const MoveShape *m = &MOVES[slot]; r = move_ref(m->piece, m->from, m->to, m->promo, m->drop);
+                   Bd b = lone(m->piece, m->from); if (m->drop) b.sq[m->from] = 0; Mv mv = { m->from, m->to, m->promo, 0, 0, m->drop }; lp_chess_id_move(&b, &mv, &want); break; }
     }
     *rules = lp_id_eq(&want, &r.id); return r;
 }
@@ -205,20 +221,25 @@ int chess_castling(unsigned w, unsigned b, Ref *out){
 }
 int chess_en_passant(int ep, Ref *out){ return ep < 64 && vocabulary(S_EN_PASSANT, ep_slot(ep), out); }
 int chess_move(const Bd *b, const Mv *m, Ref *out){
-    law(); int8_t p = b->sq[m->from]; if (!p || m->to > 63) return 0;
+    law(); if (m->to > 63) return 0;
+    if (m->drop) { if (m->drop < PAWN || m->drop > QUEEN) return 0; uint16_t d = drop_slot[piece_index((int8_t)(b->side ? -m->drop : m->drop))][m->to]; return d && vocabulary(S_MOVE, d - 1, out); }
+    int8_t p = b->sq[m->from]; if (!p) return 0;
     uint16_t k = move_slot[piece_index(p)][m->from][m->to][promo_index(m->promo)];
     return k && vocabulary(S_MOVE, k - 1, out);
 }
 ChessCapture chess_capture;
 
 /* ---- laplace chess: the generator */
-typedef struct { Bd before, after; Mv m; Ref p, move, next; } Played;
+/* neutral: the move makes the same position under every law (Standard's make of it gives it), so (P, M) -> P' holds
+ * whatever game plays it; a capture where pieces go to hand or explode, or a check counted, is not. */
+typedef struct { Bd before, after; Mv m; Ref p, move, next; uint8_t neutral; } Played;
 static lp_idmap *played; static pthread_mutex_t played_mu = PTHREAD_MUTEX_INITIALIZER;
 static void capture(const Bd *before, const Mv *m, const Bd *after, const Ref *p, const Ref *move, const Ref *next){
     lp_id t[3] = { p->id, move->id, next->id }, id; lp_id_compose(t, 3, &id);
     pthread_mutex_lock(&played_mu); bool fresh;
     size_t at = lp_idmap_put(played, &id, &fresh);
-    if (fresh) { Played *x = lp_idmap_at(played, at); x->before = *before; x->after = *after; x->m = *m; x->p = *p; x->move = *move; x->next = *next; }
+    if (fresh) { Played *x = lp_idmap_at(played, at); x->before = *before; x->after = *after; x->m = *m; x->p = *p; x->move = *move; x->next = *next;
+        Bd plain = *before; plain.law = NULL; make(&plain, m); lp_id was, is; id_position(after, &was); id_position(&plain, &is); x->neutral = lp_id_eq(&was, &is); }
     pthread_mutex_unlock(&played_mu);
 }
 typedef lp_vec(lp_tier0_record) Records;
@@ -253,9 +274,9 @@ static int verify(const lp_perfcache *pc, const lp_section **sec){
             if (!record_is(xp, &p) || !xb || !record_is(xb, &board)) { bad++; continue; }
             positions++;
         } else if (at) { bad++; continue; }                     /* a position a held move makes is held */
-        Mv all[256]; int n = gen(&o.b, all);
+        Mv all[LP_CHESS_MOVES]; int n = gen(&o.b, all);
         for (int i = 0; i < n; i++) {
-            Ref mv = move_ref(o.b.sq[all[i].from], all[i].from, all[i].to, all[i].promo);
+            Ref mv = move_of(&o.b, &all[i]);
             const lp_pair *pr = lp_perfcache_pair(pc, sec[S_NEXT], &p.id, &mv.id); if (!pr) continue;
             Bd t = o.b; make(&t, &all[i]); Ref next = position_ref(&t, NULL); lp_id rules_next, rules_move;
             id_position(&t, &rules_next); id_move(&o.b, &all[i], &rules_move);
@@ -330,13 +351,13 @@ int cmd_chess(int argc, char **argv){
     Records board = { 0 }, position = { 0 }, transition = { 0 }; lp_vec(lp_pair) next = { 0 };
     for (size_t i = 0; i < lp_idmap_count(played); i++) {
         const Played *x = lp_idmap_at(played, i); Ref b0, b1; lp_id rp, rn, rm;
-        Ref p = position_ref(&x->before, &b0), q = position_ref(&x->after, &b1), mv = move_ref(x->before.sq[x->m.from], x->m.from, x->m.to, x->m.promo);
+        Ref p = position_ref(&x->before, &b0), q = position_ref(&x->after, &b1), mv = move_of(&x->before, &x->m);
         id_position(&x->before, &rp); id_position(&x->after, &rn); id_move(&x->before, &x->m, &rm);
         Ref tr[3] = { p, mv, q }; Ref t = comp(tr, 3);
         if (!same(&p, &x->p) || !same(&q, &x->next) || !same(&mv, &x->move) || !lp_id_eq(&rp, &p.id) || !lp_id_eq(&rn, &q.id) || !lp_id_eq(&rm, &mv.id)) { bad++; continue; }
         lp_push(&board, record_of(b0, 0)); lp_push(&board, record_of(b1, 0));
         lp_push(&position, record_of(p, 0)); lp_push(&position, record_of(q, 0));
-        lp_push(&transition, record_of(t, 0)); lp_push(&next, ((lp_pair){ p.id, mv.id, q.id }));
+        lp_push(&transition, record_of(t, 0)); if (x->neutral) lp_push(&next, ((lp_pair){ p.id, mv.id, q.id }));
     }
     if (fail("played moves the decomposer composed otherwise than the law and chess_rules", bad)) return 1;
     admitted(&board); admitted(&position); admitted(&transition);

@@ -13,7 +13,7 @@ module.exports = grammar({
     move_number: $ => token(seq(/[0-9]+/, choice('...', '.'))),
     san: $ => token(choice(
       /(?:O-O(?:-O)?|0-0(?:-0)?)[+#]?[!?]{0,2}/,
-      /[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?[!?]{0,2}/,
+      /[KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBNK])?[+#]?[!?]{0,2}/,
       // Variant packaging still has to parse before chess rules decide
       // whether to replay it or retain the unsupported game as source text.
       /[PNBRQK]?@[a-h][1-8][+#]?[!?]{0,2}/,
