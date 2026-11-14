@@ -26,12 +26,19 @@ while IFS=$'\t' read -r file variant fen plies; do
   printf 'game %s\nlaw %s\t%s\n' "$native/$file" "$variant" "$fen" >>"$queries"
 done <"$scratch/reference.tsv"
 answers=$("$P" <"$queries" | tr -d '\r') || fail "chess_positions did not answer"
-i=0
+i=0; by_law=0
 while IFS=$'\t' read -r file variant fen plies; do
   i=$((i + 1)); game=$(sed -n "$((2 * i - 1))p" <<<"$answers"); want=$(sed -n "$((2 * i))p" <<<"$answers")
   [ "$want" != "-" ] || fail "$file: the reference FEN is no position under $variant"
+  ended=${game##*$'\t'}; game=${game%$'\t'*}
   [ "$game" = "$want	$plies" ] || fail "$file ($variant): ends at $game, the reference at $want in $plies plies"
+  # the law's own verdict where the game ended by it (mate, the third check, the hill), else play goes on (*): never
+  # another result than the game's Result tag
+  tag=$(tr -d '\r' <"$dir/$file" | sed -n 's/^\[Result "\(.*\)"\]$/\1/p')
+  [ "$ended" = "*" ] || [ "$ended" = "$tag" ] || fail "$file ($variant): its law says $ended, its Result $tag"
+  [ "$ended" = "*" ] || by_law=$((by_law + 1))
 done <"$scratch/reference.tsv"
+[ "$by_law" -eq 8 ] || fail "$by_law games end by their law; their Terminations say 8 (checkmate, the third check, the hill)"
 
 # the laws no held game plays: every legal sequence four plies deep from each start, against the published perft
 # counts the open variant engines (python-chess, Fairy-Stockfish) test themselves with
@@ -51,4 +58,4 @@ perft=$(printf '%s\n' \
 out=$(LAPLACE_DATA=$scratch "$L" ingest --claims-tsv -s chess-com "$dir"/chess-variant-*.pgn 2>&1 | tr -d '\r') || fail "the ingest did not read the variant games: $out"
 grep -q 'kept as its text' <<<"$out" && fail "a variant game was kept as text: $(grep 'kept as its text' <<<"$out")"
 [ "$(grep -c '1 played, 0 studies, 0 puzzles, 0 kept as text' <<<"$out")" -eq 13 ] || fail "not every variant game was read as played"
-echo "chess-variants: 13 games under Crazyhouse, 3-check and King of the Hill replay to their reference positions; every law gives the published perft counts"
+echo "chess-variants: 13 games under Crazyhouse, 3-check and King of the Hill replay to their reference positions, each of the 8 that ended by its law with its Result; every law gives the published perft counts"

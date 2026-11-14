@@ -48,6 +48,8 @@ static inline uint32_t piece_cp(int8_t p){ char c = PIECES[abs(p)]; return (uint
 
 void lp_chess_make(Bd *b, const Mv *m);
 int lp_chess_gen(const Bd *b, Mv *out);
+/* Every move before whether it leaves the mover's own king attacked (castling's transit squares still checked). */
+int lp_chess_pseudo(const Bd *b, Mv *out);
 void lp_chess_san_of(const Bd *b, const Mv *m, const Mv *all, int nall, int check, char *out);
 /* The legal move of all (gen's) a SAN token names, its check or mate mark and suffix annotations (! ?) taken off as
  * written, or -1. The import format's over-specified squares and promotions without = are read too. */
@@ -82,6 +84,12 @@ void lp_chess_id_piece_square(int8_t p, int s, lp_id *out);
 void lp_chess_id_castling(unsigned white, unsigned black, lp_id *out);
 void lp_chess_id_en_passant(int ep, lp_id *out);
 void lp_chess_id_board(const Bd *b, lp_id *out);
+/* How a position stands by its law alone, its clocks and history aside (the fifty-move rule, repetition and material
+ * are the caller's): play goes on, or White or Black has won (mate; Antichess's side with no move; the side left with
+ * nothing; the hill or the goal reached; the checks given; the other king exploded), or it is drawn (stalemate; both
+ * kings on the goal). */
+enum { LP_CHESS_ON = 0, LP_CHESS_WHITE, LP_CHESS_BLACK, LP_CHESS_DRAW };
+int lp_chess_result(const Bd *b);
 /* Whether colour c's king is attacked where it stands. */
 int lp_chess_in_check(const Bd *b, int c);
 /* A position's FEN, its first four fields (board, side, castling, the en passant square only where a legal capture
@@ -106,6 +114,8 @@ int lp_chess_successors(const char *fen, size_t n, lp_id *position, LpChessSucce
  * comments and NAGs are annotations, not the line. Returns n + 1, the positions written (at most cap; a longer game
  * stops there), or 0 when the text does not parse or a move is not legal where it is played. */
 size_t lp_chess_pgn_positions(const void *ts_language, const char *text, size_t n, lp_id *positions, size_t cap, lp_id *line);
+/* The same replay, with the position the line ends in as a board (its law with it), for lp_chess_result. */
+size_t lp_chess_pgn_end(const void *ts_language, const char *text, size_t n, lp_id *positions, size_t cap, Bd *end);
 
 #define make lp_chess_make
 #define gen lp_chess_gen

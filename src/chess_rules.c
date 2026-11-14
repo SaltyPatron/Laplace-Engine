@@ -6,7 +6,6 @@
  * One implementation of every law firmware/chess.firmware declares: a law is its axes (chess_rules.h LpChessLaw), never
  * a name this code branches on. Standard is the law of all axes off but castling; a NULL law is Standard. */
 #include "chess_rules.h"
-#include "os.h"
 #include <stdio.h>
 #include <string.h>
 #include <tree_sitter/api.h>
@@ -136,6 +135,24 @@ static int ended(const Bd *b){
 }
 /* Every legal move, castling as each rook the side may castle with (Chess960's rule holds Standard's). */
 int gen(const Bd *b, Mv *out){ return ended(b) ? 0 : legal(b, out); }
+int lp_chess_pseudo(const Bd *b, Mv *out){ return ended(b) ? 0 : pseudo(b, out); }
+static int pieces_of(const Bd *b, int c){ int n = 0; for (int s = 0; s < 64; s++) n += b->sq[s] && colour_of(b->sq[s]) == c; for (int k = PAWN; k <= QUEEN; k++) n += b->hand[c][k]; return n; }
+int lp_chess_result(const Bd *b){
+    const LpChessLaw *w = b->law; int c = b->side;
+    if (ended(b)) {
+        if (w->checks && b->checks[0] >= w->checks) return LP_CHESS_WHITE;
+        if (w->checks && b->checks[1] >= w->checks) return LP_CHESS_BLACK;
+        if (w->explodes && king_sq(b, 0) < 0) return LP_CHESS_BLACK;
+        if (w->explodes && king_sq(b, 1) < 0) return LP_CHESS_WHITE;
+        int g0 = on_goal(b, 0), g1 = on_goal(b, 1);
+        if (g0 && g1) return LP_CHESS_DRAW;
+        return g1 ? LP_CHESS_BLACK : LP_CHESS_WHITE; }
+    Mv m[LP_CHESS_MOVES]; if (legal(b, m)) return LP_CHESS_ON;
+    if (w && w->unroyal) return c ? LP_CHESS_BLACK : LP_CHESS_WHITE;               /* no move left: the side to move has won */
+    if (!pieces_of(b, c)) return c ? LP_CHESS_WHITE : LP_CHESS_BLACK;              /* nothing left to move (Horde's White) */
+    if (in_check(b, c)) return c ? LP_CHESS_WHITE : LP_CHESS_BLACK;                /* mate */
+    return LP_CHESS_DRAW;                                                          /* stalemate */
+}
 /* SAN, as the PGN standard writes it (8.2.3), its check or mate mark with it when check is set; a drop as P@e4. */
 void san_of(const Bd *b, const Mv *m, const Mv *all, int nall, int check, char *out){
     char *o = out; int8_t p = b->sq[m->from]; int a = abs(p);
@@ -256,8 +273,9 @@ void lp_chess_extra(const Bd *b, LpChessExtra *x){
 }
 
 /* ---- the laws: firmware/chess.firmware */
-static LpChessLaw LAWS[32]; static int NLAWS = -1; static char LDEFAULT[64] = "Standard";
-static pthread_mutex_t laws_mu = PTHREAD_MUTEX_INITIALIZER;
+/* Read once: 0 not yet, 1 being read (another caller waits), 2 read. No platform lock, so this file needs only Native
+ * and Tree-sitter wherever it is built (the Engine, its readers, the monorepo's core). */
+static LpChessLaw LAWS[32]; static int NLAWS = 0, laws_state = 0; static char LDEFAULT[64] = "Standard";
 /* The next word of a firmware line, "Two Words" quoted; 0 at its end. */
 static int word(char **at, char *out, size_t cap){
     char *c = *at; while (*c == ' ' || *c == '\t') c++; if (!*c || *c == '\r' || *c == '\n') { *at = c; return 0; }
@@ -266,12 +284,14 @@ static int word(char **at, char *out, size_t cap){
 }
 static int square_word(const char *w){ return strlen(w) == 2 && w[0] >= 'a' && w[0] <= 'h' && w[1] >= '1' && w[1] <= '8'; }
 int lp_chess_laws_load(const char *path){
-    pthread_mutex_lock(&laws_mu);
-    if (NLAWS >= 0) { pthread_mutex_unlock(&laws_mu); return NLAWS; }
+    int expect = 0;
+    if (!__atomic_compare_exchange_n(&laws_state, &expect, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        while (__atomic_load_n(&laws_state, __ATOMIC_ACQUIRE) != 2) ;
+        return NLAWS; }
     FILE *f = path ? fopen(path, "r") : NULL; int n = 0;
     if (!f) { if (path) fprintf(stderr, "chess: %s: no laws (LAPLACE_CHESS_FIRMWARE names them): records are read under Standard and Chess960 alone\n", path);
         memset(LAWS, 0, sizeof LAWS[0] * 2); snprintf(LAWS[0].name, sizeof LAWS[0].name, "Standard"); LAWS[0].castles = 1; LAWS[1] = CHESS960;
-        NLAWS = 2; pthread_mutex_unlock(&laws_mu); return NLAWS; }
+        NLAWS = 2; __atomic_store_n(&laws_state, 2, __ATOMIC_RELEASE); return NLAWS; }
     char line[1024];
     while (fgets(line, sizeof line, f)) {
         char *h = strchr(line, '#'); if (h) *h = 0; char *c = line, w[128];
@@ -299,10 +319,10 @@ int lp_chess_laws_load(const char *path){
         if (bad) { fprintf(stderr, "chess: %s: variant %s: \"%s\" is not something a variant says\n", path, x.name, w); continue; }
         if (x.start[0]) { Bd t; if (!board_law_fen(&t, x.start, strlen(x.start), &x)) { fprintf(stderr, "chess: %s: variant %s: its start is no FEN\n", path, x.name); continue; } }
         LAWS[n++] = x; }
-    fclose(f); NLAWS = n; pthread_mutex_unlock(&laws_mu); return n;
+    fclose(f); NLAWS = n; __atomic_store_n(&laws_state, 2, __ATOMIC_RELEASE); return n;
 }
 const LpChessLaw *lp_chess_law_named(const char *v, size_t l){
-    if (__atomic_load_n(&NLAWS, __ATOMIC_ACQUIRE) < 0) {                       /* a reader's: LAPLACE_CHESS_FIRMWARE, else chess.firmware beside LAPLACE_FIRMWARE */
+    if (__atomic_load_n(&laws_state, __ATOMIC_ACQUIRE) != 2) {                       /* a reader's: LAPLACE_CHESS_FIRMWARE, else chess.firmware beside LAPLACE_FIRMWARE */
         const char *e = getenv("LAPLACE_CHESS_FIRMWARE"), *pf = getenv("LAPLACE_FIRMWARE"); char p[4300] = "";
         if (e && *e) snprintf(p, sizeof p, "%s", e);
         else if (pf && *pf) { snprintf(p, sizeof p, "%s", pf); char *s = strrchr(p, '/'), *b = strrchr(p, '\\'); if (b > s) s = b; if (s) snprintf(s + 1, sizeof p - (size_t)(s + 1 - p), "chess.firmware"); else p[0] = 0; }
@@ -378,7 +398,7 @@ int lp_chess_fen_position(const char *fen, size_t n, lp_id *out){
 }
 /* The main line of the first game the text holds: its tag pairs (FEN, Variant) and its SAN in order. The grammar's own
  * symbols are found by name in the language given, as chess.c's recipe finds them; nothing here scans the bytes. */
-size_t lp_chess_pgn_positions(const void *ts_language, const char *text, size_t n, lp_id *positions, size_t cap, lp_id *line){
+static size_t pgn_replay(const void *ts_language, const char *text, size_t n, lp_id *positions, size_t cap, lp_id *line, Bd *end){
     const TSLanguage *language = ts_language; if (!language || !text || !cap || n > UINT32_MAX) return 0;
     TSSymbol game = ts_language_symbol_for_name(language, "game", 4, true), tag = ts_language_symbol_for_name(language, "tag_pair", 8, true),
              san = ts_language_symbol_for_name(language, "san", 3, true);
@@ -407,7 +427,10 @@ size_t lp_chess_pgn_positions(const void *ts_language, const char *text, size_t 
         if (k < 0) { written = 0; break; }
         id_move(&b, &all[k], &traj[nt++]); make(&b, &all[k]); id_position(&b, &positions[written]); traj[nt++] = positions[written++]; }
     if (written && line) lp_id_compose(traj, nt, line);
+    if (written && end) *end = b;
     free(traj);
 done:
     ts_tree_delete(tree); return written;
 }
+size_t lp_chess_pgn_positions(const void *ts_language, const char *text, size_t n, lp_id *positions, size_t cap, lp_id *line){ return pgn_replay(ts_language, text, n, positions, cap, line, NULL); }
+size_t lp_chess_pgn_end(const void *ts_language, const char *text, size_t n, lp_id *positions, size_t cap, Bd *end){ return pgn_replay(ts_language, text, n, positions, cap, NULL, end); }
