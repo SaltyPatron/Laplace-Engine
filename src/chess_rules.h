@@ -60,7 +60,8 @@ int lp_chess_board_fen(Bd *b, const char *fen, size_t n, int c960);
 int lp_chess_board_law_start(Bd *b, const LpChessLaw *law);
 int lp_chess_board_law_fen(Bd *b, const char *fen, size_t n, const LpChessLaw *law);
 /* The laws firmware/chess.firmware declares (path), read once; the law a Variant tag names (as written), or the
- * default law when v is NULL; NULL when no law has that name. Thread-safe. */
+ * default law when v is NULL; NULL when no law has that name. Thread-safe. A reader that loads none reads
+ * LAPLACE_CHESS_FIRMWARE, else chess.firmware beside LAPLACE_FIRMWARE, else knows Standard and Chess960 alone. */
 int lp_chess_laws_load(const char *path);
 const LpChessLaw *lp_chess_law_named(const char *v, size_t n);
 /* What a position holds beyond [board, side, castling, en passant], each present only when there is any: the pieces in

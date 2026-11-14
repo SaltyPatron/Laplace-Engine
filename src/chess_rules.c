@@ -302,7 +302,11 @@ int lp_chess_laws_load(const char *path){
     fclose(f); NLAWS = n; pthread_mutex_unlock(&laws_mu); return n;
 }
 const LpChessLaw *lp_chess_law_named(const char *v, size_t l){
-    if (__atomic_load_n(&NLAWS, __ATOMIC_ACQUIRE) < 0) { const char *e = getenv("LAPLACE_CHESS_FIRMWARE"); lp_chess_laws_load(e && *e ? e : NULL); }
+    if (__atomic_load_n(&NLAWS, __ATOMIC_ACQUIRE) < 0) {                       /* a reader's: LAPLACE_CHESS_FIRMWARE, else chess.firmware beside LAPLACE_FIRMWARE */
+        const char *e = getenv("LAPLACE_CHESS_FIRMWARE"), *pf = getenv("LAPLACE_FIRMWARE"); char p[4300] = "";
+        if (e && *e) snprintf(p, sizeof p, "%s", e);
+        else if (pf && *pf) { snprintf(p, sizeof p, "%s", pf); char *s = strrchr(p, '/'), *b = strrchr(p, '\\'); if (b > s) s = b; if (s) snprintf(s + 1, sizeof p - (size_t)(s + 1 - p), "chess.firmware"); else p[0] = 0; }
+        lp_chess_laws_load(p[0] ? p : NULL); }
     if (!v) { v = LDEFAULT; l = strlen(v); }
     for (int i = 0; i < NLAWS; i++) if (strlen(LAWS[i].name) == l && !memcmp(LAWS[i].name, v, l)) return &LAWS[i];
     return NULL;
