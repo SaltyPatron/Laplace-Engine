@@ -124,6 +124,27 @@ int cmd_deploy(int argc, char **argv){
         }
         PQclear(v);
     }
+    {   /* The module generation the installed control names (its module_pathname), read where the server finds the
+         * control: a module rebuilt under the same version is another generation, and the bindings are restored by
+         * that generation's own restore, so every C function comes to it. A server whose control cannot be read here
+         * keeps the generation its functions name, and says so. */
+        PGresult *m = db_exec(pg,
+            "WITH paths AS (SELECT p, o FROM pg_catalog.unnest(pg_catalog.string_to_array(pg_catalog.current_setting('extension_control_path'),"
+            "  CASE WHEN pg_catalog.current_setting('data_directory') ~ '^[A-Za-z]:' THEN ';' ELSE ':' END)) WITH ORDINALITY AS u(p, o)),"
+            " controls AS (SELECT CASE WHEN p = '$system' THEN (SELECT setting FROM pg_catalog.pg_config WHERE name = 'SHAREDIR') ELSE p END"
+            "  || '/extension/laplace.control' AS f, o FROM paths)"
+            " SELECT pg_catalog.substring(pg_catalog.pg_read_file(f), 'module_pathname\\s*=\\s*''([^'']*)''') FROM controls"
+            " WHERE (pg_catalog.pg_stat_file(f, true)).size IS NOT NULL ORDER BY o LIMIT 1");
+        if (PQresultStatus(m) == PGRES_TUPLES_OK && PQntuples(m) == 1 && !PQgetisnull(m, 0, 0)) {
+            const char *module = PQgetvalue(m, 0, 0); char *literal = PQescapeLiteral(pg, module, strlen(module)), sql[1024];
+            snprintf(sql, sizeof sql, "CREATE OR REPLACE FUNCTION @extschema@.laplace_restore_function_bindings() RETURNS void"
+                                      " AS %s, 'laplace_restore_function_bindings' LANGUAGE C VOLATILE PARALLEL UNSAFE", literal);
+            PQfreemem(literal);
+            if (!run(pg, sql, "the installed module generation")) { PQclear(m); PQfinish(pg); return 1; }
+        } else printf("  the installed control's module could not be read (%s): the functions keep the generation they name\n",
+                      PQresultStatus(m) == PGRES_TUPLES_OK ? "no control on extension_control_path" : PQresultErrorMessage(m));
+        PQclear(m);
+    }
     if (!run(pg, "SELECT @extschema@.laplace_restore_function_bindings()", "matching Native implementation bindings")) return 1;
     /* Only a host installer may select server-local cache paths. A remote
      * extension install/upgrade preserves the server's existing configuration. */
