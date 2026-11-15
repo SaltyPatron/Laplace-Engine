@@ -120,13 +120,16 @@ jobs:
           python3 Laplace-Engine/tests/prompt-occurrences.py "$L"
           python3 Laplace-Engine/tests/firmware-relations.py "$L"
           # the tablebase source's own tables, 3, 4 and 5 pieces, probed with a bounded cache (the host declares where its data is)
-          bash Laplace-Engine/tests/syzygy-pieces.sh "$L" "${LAPLACE_DATA:-$(. /etc/laplace/machine.env && echo "$LAPLACE_DATA")}/Games/Chess/syzygy/3-4-5"
+          tables="${LAPLACE_DATA:-$(. /etc/laplace/machine.env && echo "$LAPLACE_DATA")}/Games/Chess/syzygy/3-4-5"
+          bash Laplace-Engine/tests/syzygy-pieces.sh "$L" "$tables"
+          # the same tables' verdicts, moves and lines, pinned on KQvK
+          bash Laplace-Engine/tests/syzygy-tablebase.sh "$L" "$tables"
           python3 Laplace-Engine/tests/recipe-order.py "$L"
           python3 Laplace-Engine/tests/record-values-width.py "$L"
           python3 Laplace-Engine/tests/semantic-interpretation.py "$L"
           cmake -DWORK="$RUNNER_TEMP/reader-contract" -P Laplace-Engine/tests/reader-contract.cmake
           failed=0
-          for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing input-frame rich-text chess-identity chess-cache chess-variants script-interpreters opening-lines syzygy-tablebase statement-claims cili-versions record-thing framenet-differences; do
+          for suite in highway-admission layout-counted left-open wordnet-recipes claims-tsv thing-resolved data-root source-after workspace-code record-framing input-frame rich-text chess-identity chess-cache chess-variants script-interpreters opening-lines statement-claims cili-versions record-thing framenet-differences; do
             if ! bash "Laplace-Engine/tests/$suite.sh" "$L"; then
               echo "::error::Engine check failed: $suite"
               failed=1

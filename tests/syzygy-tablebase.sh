@@ -4,16 +4,17 @@
 # ranked, and its best-play line. What the syzygy source records is that line, written as the PGN a game of it is and
 # read as a game is (chess.c), so its [P, M, P'] transitions are the ones games claim: a game that reaches the table and
 # plays the tables' move claims the same transition, by identity alone.
-# KQvK (tests/chess/syzygy, the tables of the lichess mirror) pins it.
-#   tests/syzygy-tablebase.sh path/to/laplace
+# KQvK of the syzygy source's own tables pins it.
+#   tests/syzygy-tablebase.sh path/to/laplace TABLES   (TABLES: the source's 3-4-5 directory, as syzygy-pieces.sh reads it)
 set -euo pipefail
 set -E; trap 'echo "FAILED: ${BASH_SOURCE[0]}:$LINENO: $BASH_COMMAND" >&2' ERR
-L=${1:?usage: tests/syzygy-tablebase.sh path/to/laplace}; here=$(cd "$(dirname "$0")" && pwd)
+L=${1:?usage: tests/syzygy-tablebase.sh path/to/laplace TABLES}; here=$(cd "$(dirname "$0")" && pwd)
+T=${2:?usage: tests/syzygy-tablebase.sh path/to/laplace TABLES}
 export LAPLACE_RECIPES=$here/../recipes
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/syzygy-tablebase.XXXXXX"); trap 'rm -rf "$scratch"' EXIT
 export LAPLACE_WORK=$scratch
 fail(){ echo "syzygy-tablebase: $*" >&2; exit 1; }
-tb(){ "$L" tablebase -T "$here/chess" "$@" 2>"$scratch/tb.err" | tr -d '\r'; }
+tb(){ "$L" tablebase -T "$T" "$@" 2>"$scratch/tb.err" | tr -d '\r'; }
 
 # pinned verdicts: the position's ID, its WDL and DTZ for the side to move
 pin(){ # FEN ID WDL DTZ
@@ -54,6 +55,6 @@ shared=$(comm -12 <(awk -F'\t' '$1 == "claim" { print $3 "\t" $4 "\t" $5 "\t" $6
 [ "$shared" = "$(printf '0\tKa1Qb7kh8b00-\tkh8g8\tKa1Qb7kg8w00-')" ] || fail "the game and the tablebase line do not share 1... Kg8: $shared"
 
 # the source's recipe reads the tables as games (grammar pgn) through the decoder
-plan=$("$L" ingest --plan -s syzygy "$here/chess/syzygy/KQvK.rtbw" 2>&1 | tr -d '\r') || fail "the syzygy source does not plan: $plan"
+plan=$("$L" ingest --plan -s syzygy "$T/KQvK.rtbw" 2>&1 | tr -d '\r') || fail "the syzygy source does not plan: $plan"
 grep -qE '^ +syzygy-lines +1 files$' <<<"$plan" || fail "syzygy-lines does not take KQvK.rtbw: $plan"
 echo "syzygy-tablebase: verdicts read from the tables; the line recorded is a game's line, sharing its transitions with the games that play it"

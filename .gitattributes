@@ -1,3 +1,0 @@
-# Syzygy tables (tests/chess/syzygy) are bytes, never text
-*.rtbw binary
-*.rtbz binary
