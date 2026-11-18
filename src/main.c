@@ -27,44 +27,12 @@
 #include <omp.h>
 
 static const char *env_or(const char *name, const char *dflt){ const char *v = getenv(name); return v && *v ? v : dflt; }
-const char *laplace_db(void){ return env_or("LAPLACE_CONNINFO", LAPLACE_CONNINFO_DEFAULT); }
 const char *laplace_recipes(void){ return env_or("LAPLACE_RECIPES", LAPLACE_RECIPES_DEFAULT); }
 const char *laplace_grammars(void){ return env_or("LAPLACE_GRAMMARS", LAPLACE_GRAMMARS_DEFAULT); }
 const char *laplace_ucd(void){ return env_or("LAPLACE_UCD", LAPLACE_UCD_DEFAULT); }
 
-static char noted_conn[8192];
-const char *db_noted(void){ return noted_conn; }
-static PGconn *connect_one(const char *conninfo);
-PGconn *db_connect(const char *conninfo){
-    if (!conninfo) conninfo = "";
-    /* pool_open passes db_noted(), which is this buffer: copying it onto itself is undefined */
-    if (conninfo != noted_conn) snprintf(noted_conn, sizeof noted_conn, "%s", conninfo);
-    return connect_one(conninfo);
-}
-/* Many connections at once. A backend takes its time to start (measured on Windows, where each is a new process that
- * loads the preloaded libraries again: about 1.5 s under load, 0.5 s idle), so 32 opened one after another were 16 s
- * under every batch and under the source's trunk, and 49 were half the merge's floor. The first is opened alone (it
- * notes the conninfo and the id type's oid); the rest open together. */
-void db_connect_many(const char *conninfo, int n, PGconn **out){
-    if (n <= 0) return;
-    out[0] = db_connect(conninfo);
-    #pragma omp parallel for schedule(static, 1)
-    for (int i = 1; i < n; i++) out[i] = connect_one(db_noted());
-}
-static PGconn *connect_one(const char *conninfo){
-    PGconn *pg = PQconnectdb(conninfo);
-    if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "Database connection failed: %s", PQerrorMessage(pg)); exit(1); }
-    db_notices(pg);
-    return pg;
-}
-/* Every statement in a read command uses its connection-owned, read-only
- * repeatable-read transaction. No containment pool or global snapshot owner. */
-PGconn *db_read(const char *conninfo){
-    PGconn *pg = db_connect(conninfo);
-    if(!db_read_begin(pg,NULL)){fprintf(stderr,"read snapshot: %s",PQerrorMessage(pg));exit(1);}
-    return pg;
-}
 int main(int argc, char **argv){
+    db_conninfo_default(LAPLACE_CONNINFO_DEFAULT);       /* laplace_db(): LAPLACE_CONNINFO, else this */
     #ifndef _WIN32
     setvbuf(stdout, NULL, _IOLBF, 0);
     setvbuf(stderr, NULL, _IOLBF, 0);
