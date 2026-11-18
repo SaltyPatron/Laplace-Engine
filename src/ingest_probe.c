@@ -29,7 +29,7 @@ static void show_tuple(const lp_id *id);
 void show_entities(const char *conninfo, int ask){
     uint64_t n = 0; TABLE_EACH(x) n++; if (!n) return;
     lp_id *ids = malloc(sizeof(lp_id) * n); Node **of = malloc(sizeof(Node *) * n); uint64_t k = 0; TABLE_EACH(x) { ids[k] = x->id; of[k++] = x; }
-    if (ask) { PGconn *t = PQconnectdb(conninfo); ask = PQstatus(t) == CONNECTION_OK; PQfinish(t); }     /* no database: the entities alone */
+    if (ask) { PGconn *t = db_try(conninfo); ask = t != NULL; PQfinish(t); }     /* no database: the entities alone */
     uint8_t *hit = ask ? db_recorded(conninfo, ids, n) : NULL;
     uint64_t by[17][2] = { { 0 } };
     for (int t = 0; t <= 16; t++) for (uint64_t i = 0; i < n; i++) { Node *x = of[i]; if ((x->tier < 16 ? x->tier : 16) != t) continue;
@@ -302,8 +302,8 @@ int ingest_highway(const char *conninfo, const char *t0p, int threads, int do_lo
  * a run that was cut off is taken up by running it again. */
 /* The room left where the database keeps its data, or -1 when that cannot be seen from here (another machine). */
 static double room_left(const char *conninfo){
-    PGconn *pg = PQconnectdb(conninfo); double gb = -1;
-    if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = db_exec(pg, "SHOW data_directory");
+    PGconn *pg = db_try(conninfo); double gb = -1;
+    if (pg) { PGresult *r = db_exec(pg, "SHOW data_directory");
         if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) { struct statvfs v; if (!statvfs(PQgetvalue(r, 0, 0), &v)) gb = (double)v.f_bavail * (double)v.f_frsize / 1e9; }
         PQclear(r); }
     PQfinish(pg); return gb;
@@ -312,8 +312,8 @@ static double room_left(const char *conninfo){
  * directory (room.tsv: source, times), one line a source, the last measure kept. It is a measure, not a forecast:
  * what is recorded once is not recorded again, so no later source is held to it. */
 static double db_bytes(const char *conninfo){
-    PGconn *pg = PQconnectdb(conninfo); double b = -1;
-    if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = db_exec(pg, "SELECT pg_database_size(current_database())"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) b = atof(PQgetvalue(r, 0, 0)); PQclear(r); }
+    PGconn *pg = db_try(conninfo); double b = -1;
+    if (pg) { PGresult *r = db_exec(pg, "SELECT pg_database_size(current_database())"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) b = atof(PQgetvalue(r, 0, 0)); PQclear(r); }
     PQfinish(pg); return b;
 }
 static void room_keep(const char *path, const char *source, double times){
@@ -334,8 +334,8 @@ static void after_recorded(const char *conninfo, const char *t0p, const Source *
     tier0_open(t0p); Ctx *ctx = lp_text_new(T0); lp_id *names = calloc((size_t)n, sizeof *names); int *of = calloc((size_t)n, sizeof *of); n = 0;
     for (int i = 0; i < nsrc; i++) if (want[i] == 2 && source_called(&src[i])) { const char *c = source_called(&src[i]); of[n] = i; names[n++] = lp_text_decompose(ctx, (const uint8_t *)c, strlen(c), NULL, NULL).id; }
     lp_text_free(ctx);
-    PGconn *pg = PQconnectdb(conninfo);
-    if (PQstatus(pg) == CONNECTION_OK) {
+    PGconn *pg = db_try(conninfo);
+    if (pg) {
         Args q = { 0 }; arg_ids(&q, names, (size_t)n);
         PGresult *r = ask_try(pg, "SELECT DISTINCT n.id FROM @extschema@.laplace_paths(ARRAY(SELECT w.witness FROM @extschema@.laplace_witness_trust() w)) p"
                                   " JOIN unnest($1::@extschema@.blake3[]) n(id) ON @extschema@.laplace_path_starts(p.path, n.id)", &q);
@@ -385,7 +385,7 @@ int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int 
         double bytes_in = (double)source_bytes(&src[i], rec, nrec), before = loads ? db_bytes(conninfo) : -1;
         if (bytes_in <= 0) { printf("%-4d %-38s %-10s %10s   its root holds no files%s%s\n", i + 1, src[i].name, src[i].held[0] ? "held" : "absent", "", src[i].held[0] ? ": " : "", src[i].held); if (src[i].held[0]) held++; else absent++; continue; }
         if (loads) { double have = room_left(conninfo); struct statvfs v; double whole = 0;
-            { PGconn *pg = PQconnectdb(conninfo); if (PQstatus(pg) == CONNECTION_OK) { PGresult *r = db_exec(pg, "SHOW data_directory"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !statvfs(PQgetvalue(r, 0, 0), &v)) whole = (double)v.f_blocks * (double)v.f_frsize / 1e9; PQclear(r); } PQfinish(pg); }
+            { PGconn *pg = db_try(conninfo); if (pg) { PGresult *r = db_exec(pg, "SHOW data_directory"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !statvfs(PQgetvalue(r, 0, 0), &v)) whole = (double)v.f_blocks * (double)v.f_frsize / 1e9; PQclear(r); } PQfinish(pg); }
             if (have >= 0 && have < whole / 10) { char why[128]; snprintf(why, sizeof why, "no room: %.0f GB is left of %.0f GB", have, whole);
                 printf("%-4d %-38s %-10s %10s   %s\n", i + 1, src[i].name, "not begun", "", why); short_of_room++; continue; } }
         char log[4300]; snprintf(log, sizeof log, "%s/%s.log", dir, src[i].name);

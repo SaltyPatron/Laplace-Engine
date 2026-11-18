@@ -163,3 +163,46 @@ static int digit_group(const lp_id *ids, uint64_t i, void *ctx){ (void)ctx; retu
 static void digit_table(int g, int t, char *out, size_t cap, void *ctx){ (void)t; snprintf(out, cap, "%s_%x", (const char *)ctx, g); }
 Groups by_digit(const char *table){ Groups g = { 16, digit_group, NULL, digit_table, (void *)table }; return g; }
 Groups whole(void){ Groups g = { 1, NULL, NULL, NULL, NULL }; return g; }
+
+/* ---- connections (reader.h): one way every program that links the reader opens the database. The conninfo is
+ * LAPLACE_CONNINFO, else the default the program was built with (db_conninfo_default, set once at its start). */
+static const char *conninfo_default = "";
+static char noted_conn[8192];
+void db_conninfo_default(const char *conninfo){ conninfo_default = conninfo ? conninfo : ""; }
+const char *laplace_db(void){ const char *v = getenv("LAPLACE_CONNINFO"); return v && *v ? v : conninfo_default; }
+const char *db_noted(void){ return noted_conn; }
+void db_note(const char *conninfo){
+    if (!conninfo) conninfo = "";
+    /* pool_open passes db_noted(), which is this buffer: copying it onto itself is undefined */
+    if (conninfo != noted_conn) snprintf(noted_conn, sizeof noted_conn, "%s", conninfo);
+}
+static PGconn *connect_one(const char *conninfo){
+    PGconn *pg = PQconnectdb(conninfo);
+    if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "Database connection failed: %s", PQerrorMessage(pg)); exit(1); }
+    db_notices(pg);
+    return pg;
+}
+PGconn *db_connect(const char *conninfo){ db_note(conninfo); return connect_one(db_noted()); }
+/* Many connections at once. A backend takes its time to start (measured on Windows, where each is a new process that
+ * loads the preloaded libraries again: about 1.5 s under load, 0.5 s idle), so 32 opened one after another were 16 s
+ * under every batch and under the source's trunk, and 49 were half the merge's floor. The first is opened alone (it
+ * notes the conninfo and the id type's oid); the rest open together. */
+void db_connect_many(const char *conninfo, int n, PGconn **out){
+    if (n <= 0) return;
+    out[0] = db_connect(conninfo);
+    #pragma omp parallel for schedule(static, 1)
+    for (int i = 1; i < n; i++) out[i] = connect_one(db_noted());
+}
+/* Every statement in a read command uses its connection-owned, read-only
+ * repeatable-read transaction. No containment pool or global snapshot owner. */
+PGconn *db_read(const char *conninfo){
+    PGconn *pg = db_connect(conninfo);
+    if(!db_read_begin(pg,NULL)){fprintf(stderr,"read snapshot: %s",PQerrorMessage(pg));exit(1);}
+    return pg;
+}
+PGconn *db_try(const char *conninfo){
+    PGconn *pg = PQconnectdb(conninfo ? conninfo : "");
+    if (PQstatus(pg) != CONNECTION_OK) { PQfinish(pg); return NULL; }
+    db_notices(pg);
+    return pg;
+}

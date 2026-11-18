@@ -15,14 +15,9 @@
 #include "os.h"                                     /* pthread mutexes and the other POSIX calls, on Windows too */
 
 /* ---- where things are: the environment (laplace.env), else what the engine was built with */
-const char *laplace_db(void);                        /* LAPLACE_CONNINFO: a libpq connection string */
 const char *laplace_recipes(void);                   /* LAPLACE_RECIPES */
 const char *laplace_grammars(void);                  /* LAPLACE_GRAMMARS */
 const char *laplace_ucd(void);                       /* LAPLACE_UCD */
-PGconn *db_connect(const char *conninfo);            /* exits with the server's message if it cannot */
-void db_connect_many(const char *conninfo, int n, PGconn **out);   /* n of them, opened together */
-const char *db_noted(void);                          /* the conninfo of the last db_connect */
-PGconn *db_read(const char *conninfo);               /* db_connect for a read: one world, a repeatable-read snapshot every connection of the command shares */
 #include "pg_plan.h"
 
 #include "walk.h"                                   /* the reader: reader.h, walk.h (Laplace::engine_reader) */
