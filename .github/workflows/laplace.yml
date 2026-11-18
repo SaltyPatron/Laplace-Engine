@@ -57,9 +57,13 @@ jobs:
           echo "deploys=$deploys" >> "$GITHUB_OUTPUT"
           echo "deploys: $deploys ($EVENT)" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@v4
-        with: { repository: "${{ github.repository_owner }}/Laplace-Native", ref: main, path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
-      - uses: actions/checkout@v4
         with: { repository: "${{ github.repository_owner }}/Laplace-Operations", path: Laplace-Operations, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
+      # Siblings at the revisions staging last verified (Laplace-Operations components.lock.tsv), never at their main.
+      - name: Sibling revisions from the version lock
+        id: lock
+        run: awk -F'\t' '!/^#/ && NF == 3 { print $1 "=" $3 }' Laplace-Operations/components.lock.tsv | tee -a "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with: { repository: "${{ github.repository_owner }}/Laplace-Native", ref: "${{ steps.lock.outputs.native }}", path: Laplace-Native, token: "${{ secrets.LAPLACE_CHECKOUT }}" }
       - name: Select qualified Native inputs for the exact source revision
         env:
           GH_TOKEN: ${{ secrets.LAPLACE_CHECKOUT }}
