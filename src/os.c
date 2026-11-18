@@ -66,6 +66,56 @@ int os_run_logged(const char *exe, char *const argv[], const char *log, const ch
     (void)exe; (void)argv; (void)log; (void)var; (void)value; errno = ENOSYS; return -1;      /* POSIX callers fork */
 }
 
+#include <poll.h>
+#include <stdint.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <time.h>
+static uint64_t monotonic_ns(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec; }
+/* The child in its own process group, so a timeout stops everything it started too. */
+int os_run_captured(char *const argv[], int timeout_s, size_t cap, char **out, int *code){
+    int fds[2];
+    if (pipe(fds) != 0) return 0;
+    pid_t pid = fork();
+    if (pid < 0) { close(fds[0]); close(fds[1]); return 0; }
+    if (pid == 0) {
+        setpgid(0, 0);
+        dup2(fds[1], 1); dup2(fds[1], 2);
+        close(fds[0]); close(fds[1]);
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    setpgid(pid, pid);
+    close(fds[1]);
+    char *buf = malloc(cap); size_t n = 0;
+    if (!buf) { close(fds[0]); kill(-pid, SIGTERM); waitpid(pid, NULL, 0); return 0; }
+    uint64_t deadline = timeout_s > 0 ? monotonic_ns() + (uint64_t)timeout_s * 1000000000ull : 0;
+    int timed = 0;
+    while (n + 1 < cap) {
+        int left = -1;
+        if (timeout_s > 0) {
+            int64_t ms = ((int64_t)deadline - (int64_t)monotonic_ns()) / 1000000ll;
+            if (ms <= 0) { timed = 1; break; }
+            left = (int)ms;
+        }
+        struct pollfd p = { .fd = fds[0], .events = POLLIN };
+        int w = poll(&p, 1, left);
+        if (w == 0) { timed = 1; break; }
+        if (w < 0) break;
+        ssize_t r = read(fds[0], buf + n, cap - 1 - n);
+        if (r <= 0) break;
+        n += (size_t)r;
+    }
+    close(fds[0]);
+    buf[n] = 0;
+    if (timed) { kill(-pid, SIGTERM); snprintf(buf + n, cap - n, "\n[stopped after %d s]\n", timeout_s); }
+    int st = 0;
+    waitpid(pid, &st, 0);
+    *code = timed ? 124 : WIFEXITED(st) ? WEXITSTATUS(st) : 128;
+    *out = buf;
+    return 1;
+}
+
 #else
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -361,8 +411,12 @@ static void quote(wchar_t *out, size_t *n, size_t cap, const char *arg){
     if (*n + 1 < cap) out[(*n)++] = L'"';
     free(w);
 }
-int os_run_logged(const char *exe, char *const argv[], const char *log, const char *var, const char *value){
+/* os_run_logged's whole run, waiting at most wait_ms (INFINITE: to its end); a process still running then is
+ * terminated, *timed set, and 124 returned. */
+static int run_logged(const char *exe, char *const argv[], const char *log, const char *var, const char *value,
+                      DWORD wait_ms, int *timed){
     static wchar_t cmd[32768]; size_t n = 0;
+    if (timed) *timed = 0;
     for (int i = 0; argv[i]; i++) { if (i && n + 1 < 32768) cmd[n++] = L' '; quote(cmd, &n, 32768, argv[i]); }
     cmd[n] = 0;
     SECURITY_ATTRIBUTES sa = { sizeof sa, NULL, TRUE };
@@ -383,13 +437,39 @@ int os_run_logged(const char *exe, char *const argv[], const char *log, const ch
     free(was); free(we); CloseHandle(h); if (in != INVALID_HANDLE_VALUE) CloseHandle(in);
     if (!ok) { fprintf(stderr, "%s: the process was not started (Windows error %lu)\n", exe, (unsigned long)err);
                errno = err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND ? ENOENT : ENOEXEC; return -1; }
-    WaitForSingleObject(pi.hProcess, INFINITE);
+    if (WaitForSingleObject(pi.hProcess, wait_ms) == WAIT_TIMEOUT) {
+        TerminateProcess(pi.hProcess, 124); WaitForSingleObject(pi.hProcess, INFINITE);
+        CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+        if (timed) *timed = 1;
+        return 124;
+    }
     DWORD code = 1; GetExitCodeProcess(pi.hProcess, &code); CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
     /* A process that died (an exception, a library that failed to load, the system out of memory) ends with an NT
      * status, 0xC0000000 and up: negative as an int, which read as a start that failed and was reported through
      * errno, as "No such file or directory". It is said as what it is, and counts as a signal does on POSIX. */
     if ((code & 0xC0000000u) == 0xC0000000u) { fprintf(stderr, "%s: ended with status 0x%08lX\n", exe, (unsigned long)code); return 128; }
     return (int)code;
+}
+int os_run_logged(const char *exe, char *const argv[], const char *log, const char *var, const char *value){
+    return run_logged(exe, argv, log, var, value, INFINITE, NULL);
+}
+/* On Windows the output goes through a log file in the temporary directory, read back and removed. */
+int os_run_captured(char *const argv[], int timeout_s, size_t cap, char **out, int *code){
+    static volatile long serial;
+    const char *tmp = getenv("TEMP"); if (!tmp || !*tmp) tmp = getenv("TMP"); if (!tmp || !*tmp) tmp = ".";
+    char log[1024];
+    snprintf(log, sizeof log, "%s/laplace-run-%lu-%ld.log", tmp, (unsigned long)GetCurrentProcessId(), InterlockedIncrement(&serial));
+    int timed = 0;
+    int rc = run_logged(argv[0], argv, log, NULL, NULL, timeout_s > 0 ? (DWORD)timeout_s * 1000u : INFINITE, &timed);
+    if (rc < 0) { remove(log); return 0; }
+    char *buf = malloc(cap); if (!buf) { remove(log); return 0; }
+    size_t n = 0; FILE *f = fopen(log, "rb");
+    if (f) { n = fread(buf, 1, cap - 1, f); fclose(f); }
+    remove(log);
+    buf[n] = 0;
+    if (timed) snprintf(buf + n, cap - n, "\n[stopped after %d s]\n", timeout_s);
+    *code = rc; *out = buf;
+    return 1;
 }
 pid_t waitpid(pid_t pid, int *status, int options){ (void)pid; (void)status; (void)options; errno = ECHILD; return -1; }
 int pipe(int fd[2]){ return _pipe(fd, 1 << 16, _O_BINARY); }

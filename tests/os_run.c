@@ -17,6 +17,7 @@ int main(int argc, char **argv){
     if (argc > 1 && !strcmp(argv[1], "child-die")) { ExitProcess(0xC0000142); }                     /* STATUS_DLL_INIT_FAILED, as a process that could not start ends */
     if (argc > 1 && !strcmp(argv[1], "child-env")) { printf("%s\n", getenv("LAPLACE_TEST") ? getenv("LAPLACE_TEST") : "(unset)"); return 0; }
     if (argc > 1 && !strcmp(argv[1], "child-stdin")) { char c; printf("%s\n", fread(&c, 1, 1, stdin) ? "read a byte" : "nothing to read"); return 0; }
+    if (argc > 1 && !strcmp(argv[1], "child-sleep")) { Sleep(10000); return 0; }
     DWORD k = GetModuleFileNameA(NULL, exe, sizeof exe); if (!k || k >= sizeof exe) { fprintf(stderr, "no path of my own\n"); return 2; }
     for (char *p = exe; *p; p++) if (*p == '\\') *p = '/';
     { char tmp[4096]; if (!GetTempPathA(sizeof tmp, tmp)) return 2; snprintf(log, sizeof log, "%slaplace-os_run-%lu.log", tmp, (unsigned long)GetCurrentProcessId()); }
@@ -50,5 +51,17 @@ int main(int argc, char **argv){
       int r = os_run_logged(av[0], av, log, NULL, NULL);
       printf("failed start without an override: returned %d, errno %d\n", r, errno);
       if (r != -1 || errno != ENOENT) fails++; }
+    /* os_run_captured: the output read back, the exit status, a run stopped at its limit, a start that fails. */
+    { char *av[] = { (char *)exe, "child-exit", "5", NULL }; char *out = NULL; int code = -1;
+      int ok = os_run_captured(av, 0, 4096, &out, &code);
+      printf("captured: ran %d, code %d, output %s", ok, code, out ? out : "(none)\n");
+      if (!ok || code != 5 || !out || strncmp(out, "hello", 5)) fails++; free(out); }
+    { char *av[] = { (char *)exe, "child-sleep", NULL }; char *out = NULL; int code = -1;
+      int ok = os_run_captured(av, 1, 4096, &out, &code);
+      printf("stopped at its limit: ran %d, code %d\n", ok, code);
+      if (!ok || code != 124 || !out || !strstr(out, "stopped after 1 s")) fails++; free(out); }
+    { char *av[] = { "C:/no/such/program.exe", NULL }; char *out = NULL; int code = -1;
+      int ok = os_run_captured(av, 0, 4096, &out, &code);
+      printf("captured, no such program: ran %d\n", ok); if (ok) fails++; free(out); }
     remove(log); printf(fails ? "FAILED %d\n" : "ok\n", fails); return fails;
 }

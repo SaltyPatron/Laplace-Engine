@@ -54,6 +54,10 @@ void os_discard(void *p, size_t bytes);
 /* A program run to its end with its standard output and error in a log file (truncated) and, when var is non-NULL,
  * one variable set in its environment: its exit status, or -1 if it could not be started (errno set). */
 int os_run_logged(const char *exe, char *const argv[], const char *log, const char *var, const char *value);
+/* argv[0] run to its end, or stopped after timeout_s seconds (0: no limit, its process group with it on POSIX), its
+ * standard output and error read back into *out (malloc'd, NUL-terminated, at most cap - 1 bytes): 1, and *code its
+ * exit status (124 when stopped, 128 when it died), or 0 when it could not be started. */
+int os_run_captured(char *const argv[], int timeout_s, size_t cap, char **out, int *code);
 
 #ifdef _WIN32
 /* The POSIX calls the Engine uses, on Windows: same names and semantics, so callers do not change. */
