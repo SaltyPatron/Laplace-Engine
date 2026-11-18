@@ -196,8 +196,34 @@ target_compile_definitions(chess_positions PRIVATE "LAPLACE_GRAMMARS_DEFAULT=\"$
 target_link_libraries(chess_positions PRIVATE laplace_engine_reader Laplace::text)
 # One relocatable recipe runtime is consumed by the modular CLI and managed hosts.
 # Its executable is the canonical Engine, with the same compiled grammars and estate.
-install(TARGETS laplace_engine
+install(TARGETS laplace_engine EXPORT LaplaceEngineTargets
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LaplaceRecipeRuntime)
+set_target_properties(laplace_engine PROPERTIES EXPORT_NAME engine)
+# The package LaplaceEngine: the program (Laplace::engine) and the reader a service links (Laplace::engine_reader,
+# ::engine_os, ::ts_runtime) with its headers, found by find_package(LaplaceEngine CONFIG REQUIRED), which finds the
+# LaplaceNative package the Engine was built against.
+if(PROJECT_IS_TOP_LEVEL)
+  include(CMakePackageConfigHelpers)
+  set(LAPLACE_ENGINE_PACKAGE_DIR ${CMAKE_INSTALL_LIBDIR}/cmake/LaplaceEngine)
+  install(TARGETS laplace_engine_os laplace_engine_reader ts_runtime EXPORT LaplaceEngineTargets
+          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT LaplaceEngineReader)
+  list(TRANSFORM LAPLACE_ENGINE_READER_HEADERS PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/src/" OUTPUT_VARIABLE _reader_headers)
+  install(FILES ${_reader_headers} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/laplace-engine COMPONENT LaplaceEngineReader)
+  if(WIN32)
+    install(DIRECTORY src/win/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/laplace-engine/win COMPONENT LaplaceEngineReader
+            FILES_MATCHING PATTERN "*.h")
+  endif()
+  install(FILES "${LAPLACE_TREESITTER}/lib/include/tree_sitter/api.h"
+          DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tree_sitter COMPONENT LaplaceEngineReader)
+  install(EXPORT LaplaceEngineTargets NAMESPACE Laplace:: DESTINATION ${LAPLACE_ENGINE_PACKAGE_DIR}
+          COMPONENT LaplaceEngineReader)
+  file(TO_CMAKE_PATH "${LaplaceNative_DIR}" LAPLACE_NATIVE_PACKAGE_DIR)   # the Native package this Engine was built against
+  configure_package_config_file(cmake/LaplaceEngineConfig.cmake.in ${CMAKE_CURRENT_BINARY_DIR}/LaplaceEngineConfig.cmake
+                                INSTALL_DESTINATION ${LAPLACE_ENGINE_PACKAGE_DIR})
+  write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/LaplaceEngineConfigVersion.cmake COMPATIBILITY ExactVersion)
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/LaplaceEngineConfig.cmake ${CMAKE_CURRENT_BINARY_DIR}/LaplaceEngineConfigVersion.cmake
+          DESTINATION ${LAPLACE_ENGINE_PACKAGE_DIR} COMPONENT LaplaceEngineReader)
+endif()
 option(LAPLACE_INSTALL_RECIPE_RESOURCES "Install resource inputs through CMake (standalone runtime)" ON)
 if(LAPLACE_INSTALL_RECIPE_RESOURCES)
 if(WIN32)

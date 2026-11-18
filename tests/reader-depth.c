@@ -15,7 +15,6 @@
 #include <string.h>
 
 const lp_tier0_record *T0;
-void *xrealloc(void *memory,size_t bytes){void *p=realloc(memory,bytes?bytes:1);assert(p);return p;}
 
 /* One fixture node: its ID, tier, coordinate and path as hex EWKB. */
 typedef struct {lp_id id;lp_coord c;uint8_t tier;char *path;} Fixed;

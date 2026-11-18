@@ -496,3 +496,9 @@ int clock_gettime(int clock, struct timespec *ts){
     return 0;
 }
 #endif
+
+/* The two runtime helpers every part of the Engine and its readers share (reader.h): a monotonic clock in seconds, and
+ * realloc that ends the process when memory is gone. */
+#include <time.h>
+double now(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
+void *xrealloc(void *p, size_t n){ p = realloc(p, n ? n : 1); if (!p) { perror("realloc"); exit(1); } return p; }

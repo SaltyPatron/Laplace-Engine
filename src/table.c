@@ -35,8 +35,6 @@ static void input_error_prefix(void){
     if (reading_file) fprintf(stderr, "%s: ", reading_file->path);
 }
 
-double now(void){ struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
-void *xrealloc(void *p, size_t n){ p = realloc(p, n ? n : 1); if (!p) { perror("realloc"); exit(1); } return p; }
 
 #define IDX_BITS 40
 #define IDX_MASK ((1ull << IDX_BITS) - 1)

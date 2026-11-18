@@ -1,0 +1,13 @@
+# LaplaceEngine: the installed Laplace-Engine package.
+#   find_package(LaplaceEngine CONFIG REQUIRED)
+# Targets: Laplace::engine (the laplace program), Laplace::engine_reader (the database reader: reader.h),
+#   Laplace::engine_os (the platform layer: os.h), Laplace::ts_runtime (tree-sitter). LaplaceEngine_PROGRAM is the
+#   program's path. The LaplaceNative package the Engine was built against is found first (its LP_C_FLAGS and paths).
+@PACKAGE_INIT@
+include(CMakeFindDependencyMacro)
+
+find_dependency(LaplaceNative CONFIG HINTS "@LAPLACE_NATIVE_PACKAGE_DIR@")
+find_dependency(OpenMP)
+include("${CMAKE_CURRENT_LIST_DIR}/LaplaceEngineTargets.cmake")
+get_target_property(LaplaceEngine_PROGRAM Laplace::engine LOCATION)
+check_required_components(LaplaceEngine)
