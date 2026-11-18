@@ -27,7 +27,7 @@ function(laplace_define_engine_reader engine_src)
       target_include_directories(laplace_engine_os BEFORE PUBLIC "${engine_src}/win")
       target_compile_definitions(laplace_engine_os PUBLIC _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
     endif()
-    target_include_directories(laplace_engine_os PUBLIC "${engine_src}" PRIVATE "${LAPLACE_NATIVE}/src")
+    target_include_directories(laplace_engine_os PUBLIC "${engine_src}")
     target_compile_options(laplace_engine_os PRIVATE ${LP_C_FLAGS})
     if(NOT WIN32)
       target_link_libraries(laplace_engine_os PUBLIC dl pthread)
@@ -47,14 +47,13 @@ function(laplace_define_engine_reader engine_src)
     set_target_properties(laplace_engine_reader PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_include_directories(laplace_engine_reader PUBLIC
       "${engine_src}"
-      "${LAPLACE_NATIVE}/include"
       "${LAPLACE_PG_DIR}/include")
     target_compile_options(laplace_engine_reader PRIVATE ${LP_C_FLAGS})
     target_link_libraries(laplace_engine_reader PUBLIC
       laplace_engine_os
-      laplace_text
-      laplace_static
-      lp_crmath
+      Laplace::text
+      Laplace::laplace_static
+      Laplace::math
       BLAKE3::blake3
       OpenMP::OpenMP_C
       ts_runtime)
