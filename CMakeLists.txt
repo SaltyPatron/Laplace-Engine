@@ -4,16 +4,11 @@ if(POLICY CMP0207)
 endif()
 project(LaplaceEngine VERSION 0.2.0 LANGUAGES C CXX ASM)
 
-# Laplace-Engine: Laplace itself, one program. Laplace-Native is built as part of it; recipes load tree-sitter grammars
-# at run time.
+# Laplace-Engine: Laplace itself, one program, linked with the installed Laplace-Native package (CMAKE_PREFIX_PATH or
+# LaplaceNative_DIR; a build that includes Native provides the same package, which also gives the floating-point
+# contract, LP_C_FLAGS, laplace_path() and laplace_utf8_executable()). Recipes load tree-sitter grammars at run time.
 set(CMAKE_C_STANDARD 17)
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LaplaceNative.cmake")
-if(NOT TARGET laplace_static)
-  add_subdirectory(${LAPLACE_NATIVE} native EXCLUDE_FROM_ALL)
-endif()
-include(${LAPLACE_NATIVE}/cmake/LaplacePaths.cmake)
-include(${LAPLACE_NATIVE}/cmake/LaplaceFlags.cmake)
-include(${LAPLACE_NATIVE}/cmake/LaplaceWindowsUtf8.cmake)
+find_package(LaplaceNative CONFIG REQUIRED)
 find_package(OpenMP REQUIRED)
 
 if(DEFINED ENV{LAPLACE_CONNINFO} AND NOT "$ENV{LAPLACE_CONNINFO}" STREQUAL "")
@@ -82,7 +77,7 @@ set(ENGINE_SOURCES
     src/reference_html.c
     src/record_output.c
 )
-if(TARGET laplace_model)
+if(TARGET Laplace::model)
   list(APPEND ENGINE_SOURCES src/model.c)
 else()
   list(APPEND ENGINE_SOURCES src/model_none.c)
@@ -111,7 +106,7 @@ if(WIN32)
   target_include_directories(laplace_engine PRIVATE ${LAPLACE_ZLIB_DIR}/../include)
 endif()
 set_target_properties(laplace_engine PROPERTIES OUTPUT_NAME laplace)
-target_include_directories(laplace_engine PRIVATE src ${LAPLACE_NATIVE}/src ${LAPLACE_BLAKE3_DIR} ${LAPLACE_ICU_DIR}/include ${LAPLACE_PG_DIR}/include)
+target_include_directories(laplace_engine PRIVATE src ${LAPLACE_ICU_DIR}/include ${LAPLACE_PG_DIR}/include)
 target_link_directories(laplace_engine PRIVATE ${LAPLACE_PG_DIR}/lib)
 target_compile_options(laplace_engine PRIVATE ${LP_C_FLAGS} -Wno-missing-field-initializers)
 # A reading contract identifies source, not a compiler's executable bytes (PE/ELF
@@ -119,7 +114,7 @@ target_compile_options(laplace_engine PRIVATE ${LP_C_FLAGS} -Wno-missing-field-i
 # Watch all reader/native inputs, normalize checkout line endings, and frame each
 # relative pathname and digest so a source change still invalidates the OS precheck.
 include(cmake/ReaderContract.cmake)
-laplace_reader_source_id(LAPLACE_READER_SOURCE_ID "${CMAKE_CURRENT_SOURCE_DIR}" "${LAPLACE_NATIVE}" "${LAPLACE_TREESITTER}/lib" "${ENGINE_QUERY_SOURCES};src/read_text.c")
+laplace_reader_source_id(LAPLACE_READER_SOURCE_ID "${CMAKE_CURRENT_SOURCE_DIR}" "${LaplaceNative_SOURCE_ID}" "${LAPLACE_TREESITTER}/lib" "${ENGINE_QUERY_SOURCES};src/read_text.c")
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/laplace_reader_source.h"
      CONTENT "#define LAPLACE_READER_SOURCE_ID \"${LAPLACE_READER_SOURCE_ID}\"\n")
 configure_file(src/config.h.in ${CMAKE_CURRENT_BINARY_DIR}/laplace_config.h @ONLY)
@@ -130,7 +125,6 @@ if(NOT WIN32)
   target_compile_options(input_frame_test PRIVATE ${LP_C_FLAGS} -UNDEBUG)
   add_executable(presence_frontier EXCLUDE_FROM_ALL tests/presence-frontier.c src/db_metadata.c src/db.c)
   target_include_directories(presence_frontier PRIVATE src ${CMAKE_CURRENT_BINARY_DIR}
-    ${LAPLACE_NATIVE}/include ${LAPLACE_NATIVE}/src ${LAPLACE_BLAKE3_DIR}
     ${LAPLACE_ICU_DIR}/include ${LAPLACE_PG_DIR}/include)
   target_compile_options(presence_frontier PRIVATE ${LP_C_FLAGS} -UNDEBUG
     -ffunction-sections -fdata-sections -Wno-unused-function -Wno-missing-field-initializers)
@@ -140,12 +134,12 @@ endif()
 if(WIN32)
   # libpq's import library and zlib's from their installs (Laplace-Operations dependencies.tsv); the C runtime and
   # Win32 give what dl, m and pthread give on Linux.
-  target_link_libraries(laplace_engine PRIVATE laplace_engine_reader laplace_text ts_runtime ${LAPLACE_ZLIB})
+  target_link_libraries(laplace_engine PRIVATE laplace_engine_reader Laplace::text ts_runtime ${LAPLACE_ZLIB})
 else()
-  target_link_libraries(laplace_engine PRIVATE laplace_engine_reader laplace_text ts_runtime z m)
+  target_link_libraries(laplace_engine PRIVATE laplace_engine_reader Laplace::text ts_runtime z m)
 endif()
-if(TARGET laplace_model)
-  target_link_libraries(laplace_engine PRIVATE laplace_model)
+if(TARGET Laplace::model)
+  target_link_libraries(laplace_engine PRIVATE Laplace::model)
   if(WIN32)
     set_source_files_properties(src/model.c PROPERTIES COMPILE_OPTIONS "/clang:-mf16c")
   else()
@@ -193,13 +187,13 @@ include(GNUInstallDirs)
 add_executable(reader_depth EXCLUDE_FROM_ALL tests/reader-depth.c)
 laplace_utf8_executable(reader_depth)
 target_compile_options(reader_depth PRIVATE ${LP_C_FLAGS} -UNDEBUG)
-target_link_libraries(reader_depth PRIVATE laplace_engine_reader laplace_text)
+target_link_libraries(reader_depth PRIVATE laplace_engine_reader Laplace::text)
 # The reader's chess (chess_rules.c): the IDs a reader such as Laplace-MCP gives a FEN and a line (tests/opening-lines.sh).
 add_executable(chess_positions EXCLUDE_FROM_ALL tests/chess-positions.c)
 laplace_utf8_executable(chess_positions)
 target_compile_options(chess_positions PRIVATE ${LP_C_FLAGS} -UNDEBUG)
 target_compile_definitions(chess_positions PRIVATE "LAPLACE_GRAMMARS_DEFAULT=\"${LAPLACE_GRAMMARS}\"")
-target_link_libraries(chess_positions PRIVATE laplace_engine_reader laplace_text)
+target_link_libraries(chess_positions PRIVATE laplace_engine_reader Laplace::text)
 # One relocatable recipe runtime is consumed by the modular CLI and managed hosts.
 # Its executable is the canonical Engine, with the same compiled grammars and estate.
 install(TARGETS laplace_engine
@@ -296,9 +290,9 @@ install(DIRECTORY "${LAPLACE_GRAMMARS}/" DESTINATION "${CMAKE_INSTALL_BINDIR}/gr
 endif()
 
 add_executable(claim_decode EXCLUDE_FROM_ALL tests/claim-decode.c src/claim_read.c)
-target_include_directories(claim_decode PRIVATE ${LAPLACE_NATIVE}/include ${LAPLACE_PG_DIR}/include)
+target_include_directories(claim_decode PRIVATE ${LAPLACE_PG_DIR}/include)
 target_compile_options(claim_decode PRIVATE ${LP_C_FLAGS} -UNDEBUG)
-target_link_libraries(claim_decode PRIVATE laplace_engine_os laplace_static lp_crmath BLAKE3::blake3 OpenMP::OpenMP_C)
+target_link_libraries(claim_decode PRIVATE laplace_engine_os Laplace::laplace_static BLAKE3::blake3 OpenMP::OpenMP_C)
 if(NOT WIN32)
   target_link_libraries(claim_decode PRIVATE m)
 endif()

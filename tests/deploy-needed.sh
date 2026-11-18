@@ -10,7 +10,7 @@ expect true  recipes/iso-639/source
 expect true  firmware/translate
 expect true  tools/build_grammars.sh
 expect true  CMakeLists.txt
-expect true  cmake/LaplaceNative.cmake
+expect true  cmake/EngineReader.cmake
 expect true  .github/workflows/laplace.yml
 expect true  tests/deployed/supersede.py
 expect true  '*'

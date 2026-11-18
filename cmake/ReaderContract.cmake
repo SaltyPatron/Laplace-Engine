@@ -1,12 +1,17 @@
 # The OS-only ingestion pre-check depends on readers, not query policy. The
 # exclusion list is the same source ownership list used to build the executable.
+# native is the Native package's LaplaceNative_SOURCE_ID: the same framing of
+# Native's sources, headers and manifests, computed where Native was built.
 function(laplace_reader_source_id out source native treesitter query_sources)
+  if(NOT native MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR "laplace_reader_source_id: no Native source ID ('${native}'): find_package(LaplaceNative) first")
+  endif()
   set(contract "")
   set(watch)
   if(NOT CMAKE_SCRIPT_MODE_FILE)
     set(watch CONFIGURE_DEPENDS)
   endif()
-  foreach(root IN ITEMS "${source}" "${native}" "${treesitter}")
+  foreach(root IN ITEMS "${source}" "${treesitter}")
     file(GLOB_RECURSE inputs ${watch} RELATIVE "${root}"
          "${root}/src/*.c" "${root}/src/*.h" "${root}/src/*.inc"
          "${root}/include/*.h" "${root}/manifest/*.tsv" "${root}/manifest/*.toml")
@@ -27,6 +32,7 @@ function(laplace_reader_source_id out source native treesitter query_sources)
     endforeach()
     string(APPEND contract "\n")
   endforeach()
+  string(APPEND contract "native:${native}\n")
   string(SHA256 digest "${contract}")
   set(${out} "${digest}" PARENT_SCOPE)
 endfunction()
