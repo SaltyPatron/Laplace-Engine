@@ -13,7 +13,7 @@
  * Usage: laplace model model_dir [-d conninfo] [--ingest] [--witness name] [--layers N] [--z zmin] [--cap K] [--sample word ...]
  */
 #include "engine.h"
-#include "json_min.h"
+#include "laplace/json.h"
 #include <locale.h>
 #include <math.h>
 #include <stdio.h>
@@ -30,8 +30,13 @@ static char *slurp(const char *path, size_t *len){
 }
 
 /* ---- safetensors: single file or sharded via model.safetensors.index.json */
-typedef struct { char path[4096]; const uint8_t *base; jdoc h; uint32_t root; } STShard;
-typedef struct { char dir[4096]; STShard shard[64]; int nshard; char *idx_buf; jdoc idx; int64_t wmap; } ST;
+typedef struct { char path[4096]; const uint8_t *base; lp_json *h; } STShard;
+typedef struct { char dir[4096]; STShard shard[64]; int nshard; char *idx_buf; lp_json *idx; uint32_t wmap; } ST;
+/* A member's number, or dflt when it is absent or no number. */
+static double jnum(const lp_json *j, uint32_t node, const char *key, double dflt){
+    double v; return lp_json_number(j, lp_json_get(j, node, key), &v) ? v : dflt;
+}
+static double jat(const lp_json *j, uint32_t array, uint32_t i){ double v = 0; lp_json_number(j, lp_json_item(j, array, i), &v); return v; }
 typedef struct { const char *dtype; size_t shape[4]; int nd; const uint8_t *data; size_t bytes; } Tensor;
 
 static STShard *st_open_shard(ST *s, const char *rel){
@@ -44,35 +49,41 @@ static STShard *st_open_shard(ST *s, const char *rel){
     snprintf(sh->path, sizeof sh->path, "%s", full);
     size_t size = 0;
     if (!(sh->base = os_map_read(full, &size)) || size < 8) { perror(full); exit(1); }
-    uint64_t hl; memcpy(&hl, sh->base, 8); sh->h = j_parse((const char *)sh->base + 8, hl); sh->root = 0;
+    uint64_t hl; memcpy(&hl, sh->base, 8);
+    if (hl > size - 8 || !(sh->h = lp_json_parse((const char *)sh->base + 8, hl))) { fprintf(stderr, "%s: no safetensors header\n", full); exit(1); }
     sh->base += 8 + hl; return sh;
 }
 static ST st_open_dir(const char *dir){
     ST s = { 0 }; snprintf(s.dir, sizeof s.dir, "%s", dir);
     char idxp[4352]; snprintf(idxp, sizeof idxp, "%s/model.safetensors.index.json", dir);
     size_t len = 0; s.idx_buf = slurp(idxp, &len);
-    if (s.idx_buf) { s.idx = j_parse(s.idx_buf, len); s.wmap = j_get(&s.idx, 0, "weight_map"); }
-    else { s.wmap = -1; st_open_shard(&s, "model.safetensors"); }
+    s.wmap = LP_JSON_NONE;
+    if (s.idx_buf) {
+        if (!(s.idx = lp_json_parse(s.idx_buf, len))) { fprintf(stderr, "%s: malformed\n", idxp); exit(1); }
+        s.wmap = lp_json_get(s.idx, LP_JSON_ROOT, "weight_map");
+    }
+    else st_open_shard(&s, "model.safetensors");
     return s;
 }
-static STShard *st_shard_for(ST *s, const char *name, int64_t *kout){
-    if (s->wmap >= 0) {
-        int64_t fn = j_get(&s->idx, (uint32_t)s->wmap, name);
-        if (fn < 0 || !s->idx.v[fn].str) { *kout = -1; return NULL; }
-        STShard *sh = st_open_shard(s, s->idx.v[fn].str);
-        *kout = j_get(&sh->h, sh->root, name); return sh;
+static STShard *st_shard_for(ST *s, const char *name, uint32_t *kout){
+    if (s->wmap != LP_JSON_NONE) {
+        const char *file = lp_json_string(s->idx, lp_json_get(s->idx, s->wmap, name), NULL);
+        if (!file) { *kout = LP_JSON_NONE; return NULL; }
+        STShard *sh = st_open_shard(s, file);
+        *kout = lp_json_get(sh->h, LP_JSON_ROOT, name); return sh;
     }
-    STShard *sh = &s->shard[0]; *kout = j_get(&sh->h, sh->root, name); return sh;
+    STShard *sh = &s->shard[0]; *kout = lp_json_get(sh->h, LP_JSON_ROOT, name); return sh;
 }
-static int st_has(ST *s, const char *name){ int64_t k = -1; st_shard_for(s, name, &k); return k >= 0; }
+static int st_has(ST *s, const char *name){ uint32_t k = LP_JSON_NONE; st_shard_for(s, name, &k); return k != LP_JSON_NONE; }
 static Tensor st_get(ST *s, const char *name){
-    Tensor t = { 0 }; int64_t k = -1; STShard *sh = st_shard_for(s, name, &k);
-    if (!sh || k < 0) { fprintf(stderr, "tensor %s missing\n", name); exit(1); }
-    t.dtype = sh->h.v[j_get(&sh->h, (uint32_t)k, "dtype")].str;
-    const jnode *sv = &sh->h.v[j_get(&sh->h, (uint32_t)k, "shape")]; t.nd = (int)sv->n;
-    for (uint32_t i = 0; i < sv->n; i++) t.shape[i] = (size_t)sh->h.v[sh->h.kids[sv->first + i]].num;
-    const jnode *off = &sh->h.v[j_get(&sh->h, (uint32_t)k, "data_offsets")];
-    size_t o0 = (size_t)sh->h.v[sh->h.kids[off->first]].num, o1 = (size_t)sh->h.v[sh->h.kids[off->first + 1]].num;
+    Tensor t = { 0 }; uint32_t k = LP_JSON_NONE; STShard *sh = st_shard_for(s, name, &k);
+    if (!sh || k == LP_JSON_NONE) { fprintf(stderr, "tensor %s missing\n", name); exit(1); }
+    t.dtype = lp_json_string(sh->h, lp_json_get(sh->h, k, "dtype"), NULL);
+    uint32_t shape = lp_json_get(sh->h, k, "shape"), off = lp_json_get(sh->h, k, "data_offsets");
+    t.nd = (int)lp_json_count(sh->h, shape);
+    if (!t.dtype || t.nd > 4 || lp_json_count(sh->h, off) != 2) { fprintf(stderr, "tensor %s: malformed header entry\n", name); exit(1); }
+    for (int i = 0; i < t.nd; i++) t.shape[i] = (size_t)jat(sh->h, shape, (uint32_t)i);
+    size_t o0 = (size_t)jat(sh->h, off, 0), o1 = (size_t)jat(sh->h, off, 1);
     t.data = sh->base + o0; t.bytes = o1 - o0; return t;
 }
 static float *to_f32(const Tensor *t){
@@ -117,12 +128,14 @@ static void token_id(const char *s, int do_ingest, lp_id *out, Ref *rout){
 static Tok *load_vocab(const char *dir, int do_ingest, size_t *nv, Ref *vocab_trunk){
     char p[4096]; snprintf(p, sizeof p, "%s/tokenizer.json", dir); size_t len; char *b = slurp(p, &len);
     if (!b) { perror(p); exit(1); }
-    jdoc d = j_parse(b, len); int64_t model = j_get(&d, 0, "model"), vocab = j_get(&d, model, "vocab");
-    const jnode *vo = &d.v[vocab]; size_t maxid = 0;
-    for (uint32_t i = 0; i < vo->n; i += 2) { size_t id = (size_t)d.v[d.kids[vo->first + i + 1]].num; if (id > maxid) maxid = id; }
+    lp_json *d = lp_json_parse(b, len);
+    if (!d) { fprintf(stderr, "%s: malformed\n", p); exit(1); }
+    uint32_t vocab = lp_json_get(d, lp_json_get(d, LP_JSON_ROOT, "model"), "vocab"), nvocab = lp_json_count(d, vocab);
+    size_t maxid = 0;
+    for (uint32_t i = 0; i < nvocab; i++) { size_t id = (size_t)jat(d, vocab, i); if (id > maxid) maxid = id; }
     Tok *t = calloc(maxid + 1, sizeof(Tok)); *nv = maxid + 1;
-    for (uint32_t i = 0; i < vo->n; i += 2) {
-        const char *s = d.v[d.kids[vo->first + i]].str; size_t id = (size_t)d.v[d.kids[vo->first + i + 1]].num;
+    for (uint32_t i = 0; i < nvocab; i++) {
+        const char *s = lp_json_key(d, vocab, i); size_t id = (size_t)jat(d, vocab, i);
         size_t L = strlen(s); char *o = malloc(L + 1), *q = o;
         for (size_t k = 0; k < L; ) {
             /* SentencePiece U+2581 (0xE2 0x96 0x81) or GPT-2/BPE U+0120 'Ġ' (0xC4 0xA0) -> ' '; U+010A 'Ċ' (0xC4 0x8A) -> '\n' */
@@ -143,7 +156,7 @@ static Tok *load_vocab(const char *dir, int do_ingest, size_t *nv, Ref *vocab_tr
         *vocab_trunk = nvr ? blocks_of(vr, nvr) : (Ref){ 0 };
         free(vr);
     }
-    free(b); return t;
+    lp_json_free(d); free(b); return t;
 }
 
 /* ---- linear algebra helpers */
@@ -264,10 +277,13 @@ int cmd_model(int argc, char **argv){
 
     char p[4096]; size_t len; snprintf(p, sizeof p, "%s/config.json", dir); char *cb = slurp(p, &len);
     if (!cb) { perror(p); return 1; }
-    jdoc cfg = j_parse(cb, len);
-    size_t D = (size_t)j_num(&cfg, 0, "hidden_size", 0), NH = (size_t)j_num(&cfg, 0, "num_attention_heads", 0),
-           NKV = (size_t)j_num(&cfg, 0, "num_key_value_heads", NH), NL = (size_t)j_num(&cfg, 0, "num_hidden_layers", 0),
-           FF = (size_t)j_num(&cfg, 0, "intermediate_size", 0); double eps = j_num(&cfg, 0, "rms_norm_eps", 1e-5);
+    lp_json *cfg = lp_json_parse(cb, len);
+    if (!cfg) { fprintf(stderr, "%s: malformed\n", p); return 1; }
+    size_t D = (size_t)jnum(cfg, LP_JSON_ROOT, "hidden_size", 0), NH = (size_t)jnum(cfg, LP_JSON_ROOT, "num_attention_heads", 0),
+           NKV = (size_t)jnum(cfg, LP_JSON_ROOT, "num_key_value_heads", (double)NH), NL = (size_t)jnum(cfg, LP_JSON_ROOT, "num_hidden_layers", 0),
+           FF = (size_t)jnum(cfg, LP_JSON_ROOT, "intermediate_size", 0); double eps = jnum(cfg, LP_JSON_ROOT, "rms_norm_eps", 1e-5);
+    lp_json_free(cfg);
+    if (!NH) { fprintf(stderr, "%s: no num_attention_heads\n", p); return 1; }
     size_t HD = D / NH; if (layers < 0 || (size_t)layers > NL) layers = (int)NL;
     Ref vocab_trunk = { 0 };
     V = load_vocab(dir, do_ingest, &NV, &vocab_trunk);

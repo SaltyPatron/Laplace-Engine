@@ -2,6 +2,7 @@
  * what it gives (op.h). A default left NULL is the operation's own and is not repeated here. */
 #include "op.h"
 #include "query.h"
+#include "laplace/json.h"
 #include <string.h>
 
 int cmd_highway_joins(int argc,char **argv);
@@ -194,16 +195,13 @@ void op_usage(FILE *out, const Op *op){
     fprintf(out, "\n");
 }
 
+/* A string as JSON on a stream (laplace/json.h's lp_json_str), or null. */
 void json_str(FILE *out, const char *s){
     if (!s) { fputs("null", out); return; }
-    fputc('"', out);
-    for (; *s; s++) {
-        unsigned char c = (unsigned char)*s;
-        if (c == '"' || c == '\\') fprintf(out, "\\%c", c);
-        else if (c < 0x20) fprintf(out, "\\u%04x", c);
-        else fputc(c, out);
-    }
-    fputc('"', out);
+    lp_buf b = { 0 };
+    lp_json_str(&b, s, strlen(s));
+    fwrite(b.b, 1, b.n, out);
+    lp_buf_free(&b);
 }
 
 void op_describe(FILE *out){
