@@ -196,7 +196,7 @@ static void pairs_free(Pairs *p){ if (p) { free(p->symLen); free(p->base); free(
 static void table_unmap(LpTablebase *tb, Table *t){
     for (int i = 0; i < 8; i++) { pairs_free(t->wdl[i].precomp); t->wdl[i].precomp = NULL; }
     for (int i = 0; i < 4; i++) { pairs_free(t->dtz[i].precomp); t->dtz[i].precomp = NULL; }
-    for (int k = 0; k < 2; k++) if (t->map[k]) { os_unmap(t->map[k], t->size[k]); t->map[k] = NULL; }
+    for (int k = 0; k < 2; k++) if (t->map[k]) { lp_unmap_file(t->map[k], t->size[k]); t->map[k] = NULL; }
     if (t->state == 1) { tb->open--; tb->unmaps++; }
     t->state = 0; t->dtzMap = NULL;
 }
@@ -204,7 +204,7 @@ static void table_unmap(LpTablebase *tb, Table *t){
 static int table_map(LpTablebase *tb, Table *t){
     for (int k = 0; k < 2; k++) {
         if (k == TB_DTZ && !t->has_dtz) continue;
-        t->map[k] = os_map_read(t->path[k], &t->size[k]);
+        t->map[k] = lp_map_file(t->path[k], 0, &t->size[k]);
         if (!t->map[k] || ((uintptr_t)t->map[k] & 63) || !file_type(t->map[k], t->size[k], t, k)) { if (!t->map[k]) fprintf(stderr, "%s: cannot be mapped\n", t->path[k]); table_unmap(tb, t); return 0; } }
     t->state = 1; tb->open++; tb->maps++; if (tb->open > tb->peak) tb->peak = tb->open; return 1;
 }

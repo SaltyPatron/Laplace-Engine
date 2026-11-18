@@ -4,7 +4,7 @@
  * move, position and ID is chess_rules.c's, so a position probed here is the position a game stands in.
  *
  * The tables are found under a root: root/NAME.rtbw and root/DIR/NAME.rtbw, each with its .rtbz beside it. A table is
- * mapped (os_map_read) the first time a probe needs it, never read whole; at most max_open tables are mapped at once,
+ * mapped (lp_map_file) the first time a probe needs it, never read whole; at most max_open tables are mapped at once,
  * the least recently used one unmapped when another is needed. A handle is shared by threads. */
 #ifndef LAPLACE_CHESS_TABLEBASE_H
 #define LAPLACE_CHESS_TABLEBASE_H
