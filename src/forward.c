@@ -49,23 +49,22 @@ int cmd_pull(int argc, char **argv){
     /* every segment of the prompt at once (laplace_forward): "The", "The dog", "The dog barked" and every other run of it,
      * the observations that hold each, how many as a run, and what follows the run in them, counted. The whole pass is one
      * set; a segment that is only tier-0 atoms (a space, a letter) is a hub and is not shown. */
-    { double t = now(); uint8_t *ab = malloc(20 + 20 * (size_t)np); size_t al = ids_param(pg,ab, ph, (uint32_t)np); char fan[24]; snprintf(fan, sizeof fan, "%d", fw.fan);
-      const char *v[2] = { (const char *)ab, fan }; int l[2] = { (int)al, (int)strlen(fan) }, f[2] = { 1, 0 };
+    { double t = now(); Args a = { 0 }; arg_ids(&a, ph, (size_t)np); arg_i64(&a, (int64_t)fw.fan);
       /* the prefixes first, as the pass walks them ("The", "The dog", ...), then every other segment by how many hold it */
-      PGresult *q = db_ask(pg, "SELECT i, j, paths, runs, next, times FROM @extschema@.laplace_forward($1::@extschema@.blake3[], $2::bigint) ORDER BY (i > 1), CASE WHEN i = 1 THEN j END, paths DESC, (j - i) DESC, i, times DESC NULLS LAST", 2, v, l, f);
-      if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "forward: %s", PQerrorMessage(pg)); return 1; }
+      PGresult *q = db_call(pg, LP_SQL_FORWARD, &a);
+      args_free(&a);
       int nr = PQntuples(q), shown = 0, segments = 0;
-      for (int r = 0; r < nr; r++) if (!PQgetisnull(q, r, 4)) { lp_id x; memcpy(x.b, PQgetvalue(q, r, 4), 16); reader_want(rd, &x); }
+      for (int r = 0; r < nr; r++) if (!PQgetisnull(q, r, 4)) reader_want(rd, col_id(q, r, 4));
       for (int i = 0; i < np; i++) reader_want(rd, &ph[i]);
-      for (int r = 0; r < nr; ) { int i = (int)lp_be(PQgetvalue(q, r, 0), 4), j = (int)lp_be(PQgetvalue(q, r, 1), 4); long paths = (long)lp_be(PQgetvalue(q, r, 2), 8), runs = (long)lp_be(PQgetvalue(q, r, 3), 8); int r0 = r;
-          while (r < nr && (int)lp_be(PQgetvalue(q, r, 0), 4) == i && (int)lp_be(PQgetvalue(q, r, 1), 4) == j) r++;
+      for (int r = 0; r < nr; ) { int i = (int)col_i32(q, r, 0), j = (int)col_i32(q, r, 1); long paths = (long)col_i64(q, r, 2), runs = (long)col_i64(q, r, 3); int r0 = r;
+          while (r < nr && (int)col_i32(q, r, 0) == i && (int)col_i32(q, r, 1) == j) r++;
           int words = 0; for (int k = i - 1; k < j; k++) words += table_find(&ph[k]) != NULL; if (!words || !paths) continue;
           segments++; if (shown >= 32) continue; shown++;
           printf("%-10s \"", shown == 1 ? "segments" : i == 1 ? "" : "   also"); for (int k = i - 1; k < j; k++) { char *tx = reader_text(rd, &ph[k], 0); printf("%s", tx); free(tx); }
           if (paths > fw.fan) printf("\"   more than the fan (%d) hold it: reached, not counted", fw.fan);           /* laplace_forward: a hub segment */
           else printf("\"   %ld held, %ld as a run", paths, runs);
-          int shownext = 0; for (int z = r0; z < r && shownext < 6; z++) { if (PQgetisnull(q, z, 4)) continue; long times = (long)lp_be(PQgetvalue(q, z, 5), 8); if (times < 2 && shownext) break;
-              lp_id x; memcpy(x.b, PQgetvalue(q, z, 4), 16); char *tx = reader_text(rd, &x, 0); printf("%s %s×%ld", shownext ? "" : "  then", strcmp(tx, " ") ? tx : "␠", times); free(tx); shownext++; }
+          int shownext = 0; for (int z = r0; z < r && shownext < 6; z++) { if (PQgetisnull(q, z, 4)) continue; long times = (long)col_i64(q, z, 5); if (times < 2 && shownext) break;
+              char *tx = reader_text(rd, col_id(q, z, 4), 0); printf("%s %s×%ld", shownext ? "" : "  then", strcmp(tx, " ") ? tx : "␠", times); free(tx); shownext++; }
           printf("\n"); }
       printf("%-10s %d segments observed of %d   (%.1f ms)\n", "", segments, np * (np + 1) / 2, (now() - t) * 1000);
       /* the fold: every observation that holds a run of two or more of the prompt's words is tugged at once. The claims
@@ -73,8 +72,8 @@ int cmd_pull(int argc, char **argv){
        * observation is the object, the object when it is the subject, never the predicate) pulls back as hard as the
        * strand's standing, summed over every strand that reaches it. What pulls back hardest is what the prompt is about. */
       t = now(); typedef struct { lp_id id; int16_t tier; } Ob; Ob *obs = NULL; int nobs = 0, cobs = 0;
-      for (int r = 0; r < nr; ) { int i = (int)lp_be(PQgetvalue(q, r, 0), 4), j = (int)lp_be(PQgetvalue(q, r, 1), 4); long runs = (long)lp_be(PQgetvalue(q, r, 3), 8);
-          while (r < nr && (int)lp_be(PQgetvalue(q, r, 0), 4) == i && (int)lp_be(PQgetvalue(q, r, 1), 4) == j) r++;
+      for (int r = 0; r < nr; ) { int i = (int)col_i32(q, r, 0), j = (int)col_i32(q, r, 1); long runs = (long)col_i64(q, r, 3);
+          while (r < nr && (int)col_i32(q, r, 0) == i && (int)col_i32(q, r, 1) == j) r++;
           int words = 0; for (int k = i - 1; k < j; k++) words += table_find(&ph[k]) != NULL; if (words < 2 || !runs || nobs >= 2048) continue;
           int floor = 0; for (int k = i - 1; k < j; k++) { Node *nd = table_find(&ph[k]); if (nd && nd->tier > floor) floor = nd->tier; }
           int nh = 0; Hold *hh = holds_above(pg,ph + i - 1, j - i + 1, floor, 0, 0, &nh);
@@ -110,7 +109,7 @@ int cmd_pull(int argc, char **argv){
       for (int u = 0; u < ntug && u < 12 && tug[u].pull > 0; u++) { char *tx = reader_text(rd, &tug[u].id, 110); printf("%10.2f %8d   %s\n", tug[u].pull, tug[u].strands, tx); free(tx); }
       free(tug); free(obs);
       #undef BE
-      PQclear(q); free(ab); }
+      PQclear(q); }
     Claim *mine = NULL; int nmine = -1, capped = 0;                           /* what is attested of the prompt itself, fetched once */
     #define MINE() do { if (nmine < 0) { mine = claims_of(pg, &pr.id, fw.fan, fw.k, &nmine, &capped); nmine = refused(pg, c, &fw, mine, nmine); weighed(c, &fw, mine, nmine); } } while (0)
     int held_back = 0, took = 0;

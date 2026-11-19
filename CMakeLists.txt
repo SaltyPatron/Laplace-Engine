@@ -322,3 +322,12 @@ target_link_libraries(claim_decode PRIVATE laplace_engine_os Laplace::laplace_st
 if(NOT WIN32)
   target_link_libraries(claim_decode PRIVATE m)
 endif()
+
+if(PROJECT_IS_TOP_LEVEL)
+  set(Python3_FIND_REGISTRY LAST)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    enable_testing()
+    add_test(NAME sql_contract_gate COMMAND Python3::Interpreter "${CMAKE_CURRENT_SOURCE_DIR}/tests/sql-contract-gate.py")
+  endif()
+endif()

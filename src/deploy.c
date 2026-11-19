@@ -17,23 +17,26 @@ static const char *conn_arg(int argc, char **argv){
     for (int a = 1; a + 1 < argc; a++) if (!strcmp(argv[a], "-d")) c = argv[a + 1];
     return c;
 }
-static int run(PGconn *pg, const char *sql, const char *what){
-    double t = now(); PGresult *r = db_exec(pg, sql); int ok = PQresultStatus(r) == PGRES_COMMAND_OK || PQresultStatus(r) == PGRES_TUPLES_OK;
-    if (!ok) fprintf(stderr, "%s: %s", what, PQerrorMessage(pg)); else printf("  %-52s %9.1f ms\n", what, (now() - t) * 1000);
-    PQclear(r); fflush(stdout); return ok;
+static void timed_ok(double t, const char *what){
+    printf("  %-52s %9.1f ms\n", what, (now() - t) * 1000);
+    fflush(stdout);
 }
-static PGresult *status_query(PGconn *pg, const char *sql){
-    PGresult *r=db_exec(pg,sql);
-    if(PQresultStatus(r)!=PGRES_TUPLES_OK){
-        fprintf(stderr,"laplace status: %s",PQresultErrorMessage(r));
-        PQclear(r);PQfinish(pg);exit(1);
+static int run_sql(PGconn *pg, LpSqlId id, Args *a, const char *what){
+    double t = now(); char err[512];
+    int ok = db_exec_contract_try(pg, id, a, err, sizeof err) == 0;
+    if (!ok) fprintf(stderr, "%s: %s\n", what, err); else timed_ok(t, what);
+    return ok;
+}
+static PGresult *status_query(PGconn *pg, LpSqlId id){
+    char err[512]; PGresult *r = db_call_try(pg, id, NULL, err, sizeof err);
+    if (!r) {
+        fprintf(stderr, "laplace status: %s\n", err);
+        PQfinish(pg); exit(1);
     }
     return r;
 }
-static char *one(PGconn *pg, const char *sql){
-    PGresult *r = status_query(pg, sql); char *v = NULL;
-    if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !PQgetisnull(r, 0, 0)) v = strdup(PQgetvalue(r, 0, 0));
-    PQclear(r); return v;
+static char *dup_text_col(const PGresult *r, int col){
+    return (PQntuples(r) && !PQgetisnull(r, 0, col)) ? strdup(col_str(r, 0, col)) : NULL;
 }
 
 /* The database the connection string names, made if the server does not have it: asked of the server's own
@@ -50,15 +53,15 @@ static void database_made(const char *conninfo){
     if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "cannot connect to %s: %scannot connect to postgres either: %s", db, first, PQerrorMessage(pg)); exit(1); }
     {   /* Only a database the server does not have is made: any other refusal (authentication, pg_hba, CONNECT
          * privilege, server down) is reported as it is. */
-        const char *pv[1] = { db };
-        PGresult *r = PQexecParams(pg, "SELECT 1 FROM pg_catalog.pg_database WHERE datname = $1", 1, NULL, pv, NULL, NULL, 0);
-        int exists = PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) == 1; PQclear(r);
+        Args a = {0}; arg_text(&a, db); char cerr[512];
+        PGresult *r = db_call_try(pg, LP_SQL_DB_EXISTS, &a, cerr, sizeof cerr); args_free(&a);
+        if (!r) { fprintf(stderr, "cannot check database %s: %s\n", db, cerr); PQfinish(pg); PQconninfoFree(o); exit(1); }
+        int exists = PQntuples(r) == 1; PQclear(r);
         if (exists) { fprintf(stderr, "cannot connect to %s, which exists: %s", db, first); PQfinish(pg); PQconninfoFree(o); exit(1); }
     }
-    char *id = PQescapeIdentifier(pg, db, strlen(db)), q[512]; snprintf(q, sizeof q, "CREATE DATABASE %s", id);
     printf("laplace deploy   the server has no database %s: making it\n", db);
-    if (!run(pg, q, "the database")) exit(1);
-    PQfreemem(id); PQfinish(pg); PQconninfoFree(o);
+    { double t = now(); if (db_ddl_create_db(pg, db) != 0) exit(1); timed_ok(t, "the database"); }
+    PQfinish(pg); PQconninfoFree(o);
 }
 /* Nothing is released, so nothing is upgraded: a database made by another build of the extension is dropped (its
  * sessions ended) and made again from this one, asked of "postgres" by the same role over the same connection. */
@@ -70,18 +73,75 @@ static void database_dropped(const char *conninfo){
     kw[n] = "dbname"; vl[n++] = "postgres"; kw[n] = NULL; vl[n] = NULL;
     PGconn *pg = PQconnectdbParams(kw, vl, 0);
     if (PQstatus(pg) != CONNECTION_OK) { fprintf(stderr, "cannot connect to postgres to make %s again: %s", db, PQerrorMessage(pg)); exit(1); }
-    char *id = PQescapeIdentifier(pg, db, strlen(db)), q[512]; snprintf(q, sizeof q, "DROP DATABASE %s WITH (FORCE)", id);
-    if (!run(pg, q, "the database, dropped")) exit(1);
-    PQfreemem(id); PQfinish(pg); PQconninfoFree(o);
+    { double t = now(); if (db_ddl_drop_db(pg, db) != 0) exit(1); timed_ok(t, "the database, dropped"); }
+    PQfinish(pg); PQconninfoFree(o);
+}
+static int valid_version_token(const char *s){
+    if(!s || !*s || strlen(s)>64) return 0;
+    for(const char *p=s; *p; p++){
+        if(*p=='/' || *p=='\\' || *p==':' || (*p=='.' && p[1]=='.')) return 0;
+    }
+    return 1;
+}
+static int prepare_laplace_transition(PGconn *pg, const char *installed, const char *avail, char *transition_path, size_t cap){
+    transition_path[0]='\0';
+    if(!valid_version_token(installed) || !valid_version_token(avail)) return 0;
+    char cerr[512];
+    PGresult *d=db_call_try(pg,LP_SQL_EXT_CONTROL_DIR,NULL,cerr,sizeof cerr);
+    if(!d || PQntuples(d)!=1 || PQgetisnull(d,0,0)){ if(d) PQclear(d); return 0; }
+    char dir[1024]; snprintf(dir,sizeof dir,"%s",col_str(d,0,0));
+    PQclear(d);
+    if(!*dir) return 0;
+    char rec_path[1200];
+    snprintf(rec_path,sizeof rec_path,"%s/laplace.reconcile.sql",dir);
+    FILE *rf=fopen(rec_path,"rb");
+    if(!rf) return 0;
+    if(fseek(rf,0,SEEK_END)!=0){ fclose(rf); return 0; }
+    long rlen=ftell(rf);
+    if(rlen<=0 || rlen>16*1024*1024 || fseek(rf,0,SEEK_SET)!=0){ fclose(rf); return 0; }
+    char *buf=malloc((size_t)rlen+1);
+    if(!buf){ fclose(rf); return 0; }
+    size_t got=fread(buf,1,(size_t)rlen,rf); fclose(rf);
+    if(got!=(size_t)rlen){ free(buf); return 0; }
+    buf[got]='\0';
+    const char *tag=strstr(buf,"laplace-storage:");
+    char stamp[64]="";
+    if(tag){
+        size_t i=0;
+        const char *p=tag+strlen("laplace-storage:");
+        while(i<sizeof(stamp)-1 && ((p[i]>='0'&&p[i]<='9')||(p[i]>='a'&&p[i]<='f')||(p[i]>='A'&&p[i]<='F'))){
+            stamp[i]=p[i]; i++;
+        }
+        stamp[i]='\0';
+        if(i>0){
+            char full[80]; snprintf(full,sizeof full,"laplace-storage:%s",stamp);
+            Args a={0}; arg_text(&a,full);
+            PGresult *sc=db_call_try(pg,LP_SQL_EXT_STORAGE_COMPAT,&a,cerr,sizeof cerr);
+            args_free(&a);
+            int compat=sc && PQntuples(sc)==1 && !PQgetisnull(sc,0,0) && col_bool(sc,0,0);
+            if(sc) PQclear(sc);
+            if(!compat){ free(buf); return 0; }
+        }
+    }
+    if(!*stamp){ free(buf); return 0; }
+    if(snprintf(transition_path,cap,"%s/laplace--%s--%s.sql",dir,installed,avail)>=(int)cap){
+        transition_path[0]='\0'; free(buf); return 0;
+    }
+    FILE *tf=fopen(transition_path,"wb");
+    if(!tf){ transition_path[0]='\0'; free(buf); return 0; }
+    size_t wrote=fwrite(buf,1,got,tf); fclose(tf); free(buf);
+    if(wrote!=got){ remove(transition_path); transition_path[0]='\0'; return 0; }
+    return 1;
 }
 int cmd_deploy(int argc, char **argv){
-    int configure_cache=0,prepare_only=0;const char *schema=NULL;
+    int configure_cache=0,prepare_only=0,recreate=0;const char *schema=NULL;
     for(int i=1;i<argc;i++){
         if(!strcmp(argv[i],"-d") && i+1<argc){i++;continue;}
         if(!strcmp(argv[i],"--schema") && i+1<argc){schema=argv[++i];continue;}
         if(!strcmp(argv[i],"--configure-server-cache")){configure_cache=1;continue;}
         if(!strcmp(argv[i],"--prepare")){prepare_only=1;continue;}
-        fputs("usage: laplace deploy [-d conninfo] [--schema name] [--configure-server-cache | --prepare]\n",stderr);return 2;
+        if(!strcmp(argv[i],"--recreate")){recreate=1;continue;}
+        fputs("usage: laplace deploy [-d conninfo] [--schema name] [--configure-server-cache | --prepare] [--recreate]\n",stderr);return 2;
     }
     if(prepare_only && configure_cache){
         fputs("--prepare preserves server cache bindings; it cannot configure them\n",stderr);return 2;
@@ -90,81 +150,90 @@ int cmd_deploy(int argc, char **argv){
     PGconn *pg = db_connect(conn_arg(argc, argv)); tier0_open(NULL);
     printf("laplace deploy   %s\n", PQdb(pg));
     if(schema){
-        PGresult *r=db_exec(pg,"SELECT (SELECT n.nspname FROM pg_catalog.pg_extension e JOIN pg_catalog.pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='laplace'),current_setting('max_identifier_length')::integer");
-        if(PQresultStatus(r)!=PGRES_TUPLES_OK){fprintf(stderr,"extension namespace: %s",PQerrorMessage(pg));PQclear(r);PQfinish(pg);return 1;}
-        if(!PQgetisnull(r,0,0) && strcmp(PQgetvalue(r,0,0),schema)){
-            fprintf(stderr,"laplace is installed in schema %s; --schema does not move an existing installation\n",PQgetvalue(r,0,0));
+        char cerr[512];
+        PGresult *r=db_call_try(pg,LP_SQL_EXT_INSTALLED_INFO,NULL,cerr,sizeof cerr);
+        if(!r){fprintf(stderr,"extension namespace: %s\n",cerr);PQfinish(pg);return 1;}
+        if(!PQgetisnull(r,0,0) && strcmp(col_str(r,0,0),schema)){
+            fprintf(stderr,"laplace is installed in schema %s; --schema does not move an existing installation\n",col_str(r,0,0));
             PQclear(r);PQfinish(pg);return 1;
         }
-        if(!*schema || strlen(schema)>(size_t)atoi(PQgetvalue(r,0,1))){
+        if(!*schema || strlen(schema)>(size_t)col_i32(r,0,1)){
             fputs("extension namespace exceeds PostgreSQL's identifier length or is empty\n",stderr);PQclear(r);PQfinish(pg);return 2;
         }
         PQclear(r);
-        char *quoted=PQescapeIdentifier(pg,schema,strlen(schema)),sql[192];
-        if(!quoted){PQfinish(pg);return 1;}
-        snprintf(sql,sizeof sql,"CREATE SCHEMA IF NOT EXISTS %s",quoted);
-        if(!run(pg,sql,"Native namespace")){PQfreemem(quoted);PQfinish(pg);return 1;}
-        PQfreemem(quoted);
+        double t=now();
+        if(db_ddl_create_schema(pg,schema)!=0){PQfinish(pg);return 1;}
+        timed_ok(t,"Native namespace");
     }
-    if(!run(pg,"CREATE EXTENSION IF NOT EXISTS postgis SCHEMA public","extension postgis")){PQfinish(pg);return 1;}
-    char *quoted=PQescapeIdentifier(pg,schema?schema:"public",strlen(schema?schema:"public")),sql[256];
-    if(!quoted){PQfinish(pg);return 1;}
-    snprintf(sql,sizeof sql,"CREATE EXTENSION IF NOT EXISTS laplace SCHEMA %s",quoted);PQfreemem(quoted);
-    if(!run(pg,sql,"extension laplace")){PQfinish(pg);return 1;}
-    {   /* Nothing is released: a database holding another version of the extension is made again from this one. */
-        PGresult *v = PQexec(pg, "SELECT e.extversion, a.default_version FROM pg_extension e"
-                                 " JOIN pg_available_extensions a ON a.name = e.extname WHERE e.extname = 'laplace'");
-        if (PQresultStatus(v) != PGRES_TUPLES_OK || PQntuples(v) != 1) { fprintf(stderr, "laplace extension version: %s", PQerrorMessage(pg)); PQclear(v); PQfinish(pg); return 1; }
-        if (strcmp(PQgetvalue(v, 0, 0), PQgetvalue(v, 0, 1))) {
-            printf("laplace deploy   %s holds laplace %s and the installed extension is %s: making it again\n",
-                   PQdb(pg), PQgetvalue(v, 0, 0), PQgetvalue(v, 0, 1));
-            PQclear(v); PQfinish(pg); fflush(stdout);
-            database_dropped(conn_arg(argc, argv));
-            return cmd_deploy(argc, argv);
+    { double t=now(); if(db_ddl_create_postgis(pg)!=0){PQfinish(pg);return 1;} timed_ok(t,"extension postgis"); }
+    { double t=now(); if(db_ddl_create_laplace(pg,schema?schema:"public")!=0){PQfinish(pg);return 1;} timed_ok(t,"extension laplace"); }
+    {   /* Reconcile replaceable API/operation objects in place when storage DDL matches; recreate only with --recreate. */
+        char cerr[512];
+        PGresult *v = db_call_try(pg, LP_SQL_EXT_VERSIONS, NULL, cerr, sizeof cerr);
+        if (!v || PQntuples(v) != 1) { fprintf(stderr, "laplace extension version: %s\n", v ? "not found" : cerr); PQclear(v); PQfinish(pg); return 1; }
+        if (strcmp(col_str(v, 0, 0), col_str(v, 0, 1))) {
+            char installed[128], avail[128];
+            snprintf(installed,sizeof installed,"%s",col_str(v,0,0));
+            snprintf(avail,sizeof avail,"%s",col_str(v,0,1));
+            PQclear(v);
+            int can_update=0;
+            PGresult *up=db_call_try(pg,LP_SQL_EXT_UPDATE_PATH,NULL,cerr,sizeof cerr);
+            if(up && PQntuples(up)==1 && !PQgetisnull(up,0,0) && col_i32(up,0,0)>0) can_update=1;
+            if(up) PQclear(up);
+            char transition_path[1400]="";
+            if(!can_update) can_update=prepare_laplace_transition(pg,installed,avail,transition_path,sizeof transition_path);
+            if(can_update){
+                double t=now();
+                int rc=db_ddl_update_laplace(pg,avail);
+                if(transition_path[0]) remove(transition_path);
+                if(rc!=0){ PQfinish(pg); return 1; }
+                timed_ok(t,"extension laplace updated in place");
+            }else if(recreate){
+                printf("laplace deploy   %s holds laplace %s and the installed extension is %s: making it again (--recreate)\n",
+                       PQdb(pg), installed, avail);
+                PQfinish(pg); fflush(stdout);
+                database_dropped(conn_arg(argc, argv));
+                return cmd_deploy(argc, argv);
+            }else{
+                fprintf(stderr, "laplace deploy: %s carries incompatible storage schema %s (installed extension is %s); run deploy drop or --recreate to recreate deliberately\n",
+                        PQdb(pg), installed, avail);
+                PQfinish(pg);
+                return 1;
+            }
+        } else {
+            PQclear(v);
         }
-        PQclear(v);
     }
     {   /* The module generation the installed control names (its module_pathname), read where the server finds the
          * control: a module rebuilt under the same version is another generation, and the bindings are restored by
          * that generation's own restore, so every C function comes to it. A server whose control cannot be read here
          * keeps the generation its functions name, and says so. */
-        PGresult *m = db_exec(pg,
-            "WITH paths AS (SELECT p, o FROM pg_catalog.unnest(pg_catalog.string_to_array(pg_catalog.current_setting('extension_control_path'),"
-            "  CASE WHEN pg_catalog.current_setting('data_directory') ~ '^[A-Za-z]:' THEN ';' ELSE ':' END)) WITH ORDINALITY AS u(p, o)),"
-            " controls AS (SELECT CASE WHEN p = '$system' THEN (SELECT setting FROM pg_catalog.pg_config WHERE name = 'SHAREDIR') ELSE p END"
-            "  || '/extension/laplace.control' AS f, o FROM paths)"
-            " SELECT pg_catalog.substring(pg_catalog.pg_read_file(f), 'module_pathname\\s*=\\s*''([^'']*)''') FROM controls"
-            " WHERE (pg_catalog.pg_stat_file(f, true)).size IS NOT NULL ORDER BY o LIMIT 1");
-        if (PQresultStatus(m) == PGRES_TUPLES_OK && PQntuples(m) == 1 && !PQgetisnull(m, 0, 0)) {
-            const char *module = PQgetvalue(m, 0, 0); char *literal = PQescapeLiteral(pg, module, strlen(module)), sql[1024];
-            snprintf(sql, sizeof sql, "CREATE OR REPLACE FUNCTION @extschema@.laplace_restore_function_bindings() RETURNS void"
-                                      " AS %s, 'laplace_restore_function_bindings' LANGUAGE C VOLATILE PARALLEL UNSAFE", literal);
-            PQfreemem(literal);
-            if (!run(pg, sql, "the installed module generation")) { PQclear(m); PQfinish(pg); return 1; }
+        char cerr[512];
+        PGresult *m = db_call_try(pg, LP_SQL_EXT_MODULE_PATH, NULL, cerr, sizeof cerr);
+        if (m && PQntuples(m) == 1 && !PQgetisnull(m, 0, 0)) {
+            double t = now();
+            if (db_ddl_install_restore_bindings(pg, col_str(m, 0, 0)) != 0) { PQclear(m); PQfinish(pg); return 1; }
+            timed_ok(t, "the installed module generation");
         } else printf("  the installed control's module could not be read (%s): the functions keep the generation they name\n",
-                      PQresultStatus(m) == PGRES_TUPLES_OK ? "no control on extension_control_path" : PQresultErrorMessage(m));
+                      m ? "no control on extension_control_path" : cerr);
         PQclear(m);
     }
-    if (!run(pg, "SELECT @extschema@.laplace_restore_function_bindings()", "matching Native implementation bindings")) return 1;
+    if (!run_sql(pg, LP_SQL_RESTORE_FUNCTION_BINDINGS, NULL, "matching Native implementation bindings")) { PQfinish(pg); return 1; }
     /* Only a host installer may select server-local cache paths. A remote
      * extension install/upgrade preserves the server's existing configuration. */
     if(configure_cache){
         const char *names[]={"laplace.tier0","laplace.flags","laplace.highway","laplace.chess"};
         const char *paths[]={lp_tier0_path(),lp_flags_path(),lp_highway_path(),chess_cache_path()};
-        char *db=PQescapeIdentifier(pg,PQdb(pg),strlen(PQdb(pg)));
-        if(!run(pg,"BEGIN","server cache configuration")){PQfreemem(db);PQfinish(pg);return 1;}
+        if(!run_sql(pg,LP_SQL_TX_BEGIN,NULL,"server cache configuration")){PQfinish(pg);return 1;}
         for(size_t i=0;i<sizeof names/sizeof *names;i++){
-            char *value=PQescapeLiteral(pg,paths[i],strlen(paths[i]));
-            size_t bytes=strlen(db)+strlen(names[i])+strlen(value)+32;char *sql=malloc(bytes);
-            if(!sql){perror("server cache configuration");PQfreemem(value);PQfreemem(db);PQfinish(pg);return 1;}
-            snprintf(sql,bytes,"ALTER DATABASE %s SET %s = %s",db,names[i],value);
-            int ok=run(pg,sql,names[i]);free(sql);PQfreemem(value);
-            if(!ok){PQfreemem(db);PQfinish(pg);return 1;}
+            double t=now();
+            if(db_ddl_alter_db_setting(pg,PQdb(pg),names[i],paths[i],1)!=0){PQfinish(pg);return 1;}
+            timed_ok(t,names[i]);
         }
-        if(!run(pg,"COMMIT","server cache configuration")){PQfreemem(db);PQfinish(pg);return 1;}
-        PQfreemem(db);PQfinish(pg);pg=db_connect(conn_arg(argc,argv));
+        if(!run_sql(pg,LP_SQL_TX_COMMIT,NULL,"server cache configuration")){PQfinish(pg);return 1;}
+        PQfinish(pg);pg=db_connect(conn_arg(argc,argv));
     }
-    if (!run(pg, "SELECT @extschema@.laplace_schema_indexes()", "every index, made where one is missing")) return 1;
+    if (!run_sql(pg, LP_SQL_SCHEMA_INDEXES, NULL, "every index, made where one is missing")) { PQfinish(pg); return 1; }
     PQfinish(pg);
     if(prepare_only){
         puts("Database schema prepared; runtime activation and compatibility readback remain required.");
@@ -176,17 +245,21 @@ int cmd_deploy(int argc, char **argv){
 int cmd_index(int argc, char **argv){
     PGconn *pg = db_connect(conn_arg(argc, argv));
     printf("laplace index   %s\n", PQdb(pg));
-    int ok = run(pg,"SELECT @extschema@.laplace_schema_indexes()","every index, made where one is missing") &&
-        run(pg,"ANALYZE @extschema@.entity; ANALYZE @extschema@.physicality; ANALYZE @extschema@.attestation; ANALYZE @extschema@.consensus","Native statistics");
+    int ok = run_sql(pg,LP_SQL_SCHEMA_INDEXES,NULL,"every index, made where one is missing") &&
+        run_sql(pg,LP_SQL_ANALYZE_SUBSTRATE,NULL,"Native statistics");
     PQfinish(pg); return !ok;
 }
 
 int cmd_status(int argc, char **argv){
     int compatible=1;
     PGconn *pg = db_connect(conn_arg(argc, argv)); setlocale(LC_NUMERIC, "en_US.UTF-8");
-    char *ver = one(pg, "SELECT extversion FROM pg_extension WHERE extname = 'laplace'"), *isa = one(pg, "SELECT @extschema@.laplace_isa()"),
-         *t0 = one(pg, "SELECT current_setting('laplace.tier0', true)"), *fp = one(pg, "SELECT @extschema@.laplace_fingerprint()"),
-         *size = one(pg, "SELECT pg_size_pretty(pg_database_size(current_database()))"), *srv = one(pg, "SELECT split_part(version(), ',', 1)");
+    PGresult *meta = status_query(pg, LP_SQL_STATUS_META);
+    char *ver = dup_text_col(meta, 0), *isa = dup_text_col(meta, 1),
+         *t0 = dup_text_col(meta, 2), *fp = dup_text_col(meta, 3),
+         *size = dup_text_col(meta, 4), *srv = dup_text_col(meta, 5),
+         *hw = dup_text_col(meta, 6), *hfp = dup_text_col(meta, 7),
+         *ch = dup_text_col(meta, 8), *cfp = dup_text_col(meta, 9);
+    PQclear(meta);
     printf("\ndatabase   %s, %s\nserver     %s\nextension  laplace %s; %s\n", PQdb(pg), size ? size : "?", srv ? srv : "?", ver ? ver : "(not installed)", isa ? isa : "");
     printf("tier 0     %s\n           %s\n", t0 && *t0 ? t0 : "(the extension's default)", fp ? fp : "(fingerprint unavailable)");
     const lp_tier0_record *mine = lp_tier0_map(NULL);
@@ -195,14 +268,13 @@ int cmd_status(int argc, char **argv){
                       int differs=strcmp(hex,fp);compatible&=!differs;
                       printf("           %s\n", differs ? "DIFFERS from this engine's tier 0: the two would give the same content different coordinates" : "the same as this engine's"); }
     else {fputs("laplace status: client or database Tier-0 cache is unavailable\n",stderr);compatible=0;}
-    { char *hw = one(pg, "SELECT current_setting('laplace.highway', true)"), *hfp = one(pg, "SELECT @extschema@.laplace_highway_fingerprint()"); const lp_highway *h = lp_highway_map(NULL);
+    { const lp_highway *h = lp_highway_map(NULL);
       printf("highway    %s\n           %s\n", hw && *hw ? hw : "(the extension's default)", hfp ? hfp : "(not generated: laplace highway)");
       if (h && hfp) { uint8_t b[32]; char hex[65]; lp_highway_fingerprint(h, b); lp_hex(b, 32, hex);
                       int differs=strcmp(hex,hfp);compatible&=!differs;
                       printf("           %s\n", differs ? "DIFFERS from this engine's highway: the two would give a type different slots" : "the same as this engine's"); }
       free(hw); free(hfp); }
-    { char *ch = one(pg, "SELECT current_setting('laplace.chess', true)"), *cfp = one(pg, "SELECT @extschema@.laplace_chess_fingerprint()");
-      const lp_perfcache *c = T0 ? chess_cache() : NULL;   /* without a tier 0 there is nothing to bind it to */
+    { const lp_perfcache *c = T0 ? chess_cache() : NULL;   /* without a tier 0 there is nothing to bind it to */
       printf("chess      %s\n           %s\n", ch && *ch ? ch : "(the extension's default)", cfp ? cfp : "(not generated: laplace chess)");
       if (c && cfp) { uint8_t b[32]; char hex[65]; lp_perfcache_fingerprint(c, b); lp_hex(b, 32, hex);
                       int differs=strcmp(hex,cfp);compatible&=!differs;
@@ -210,30 +282,29 @@ int cmd_status(int argc, char **argv){
       free(ch); free(cfp); }
 
     /* the tier is a column, not a partition: counted from a 1% sample of the rows, the size from the partitions */
-    PGresult *r = status_query(pg, "SELECT tier, (count(*) * 100)::bigint FROM @extschema@.entity TABLESAMPLE SYSTEM (1) GROUP BY 1 ORDER BY 1");
+    PGresult *r = status_query(pg, LP_SQL_STATUS_TIER_SAMPLE);
     printf("\nentities, by tier (from a 1%% sample)\n");
-    for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) printf("  tier %-3s %'16lld\n", PQgetvalue(r, i, 0), atoll(PQgetvalue(r, i, 1)));
+    for (int i = 0; i < PQntuples(r); i++) printf("  tier %-3d %'16lld\n", (int)col_i16(r, i, 0), (long long)col_i64(r, i, 1));
     PQclear(r);
-    r = status_query(pg, "SELECT CASE WHEN min(c.reltuples)<0 THEN -1 ELSE sum(c.reltuples) END::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
-                   "WHERE n.oid=(SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname='laplace') AND c.relkind = 'r' AND c.relname ~ '^(entity|physicality)_[0-9a-f]{2}$'");
+    r = status_query(pg, LP_SQL_STATUS_ENTITY_PHYSICALITY);
     if (PQntuples(r)) {
-        if(PQgetisnull(r,0,0) || atoll(PQgetvalue(r,0,0))<0) printf("  entities and paths %14s   %s\n","not counted yet",PQgetvalue(r,0,1));
-        else printf("  entities and paths %'14lld rows   %s\n",atoll(PQgetvalue(r,0,0)),PQgetvalue(r,0,1));
+        if(PQgetisnull(r,0,0) || col_i64(r,0,0)<0) printf("  entities and paths %14s   %s\n","not counted yet",col_str(r,0,1));
+        else printf("  entities and paths %'14lld rows   %s\n",(long long)col_i64(r,0,0),col_str(r,0,1));
     }
     PQclear(r);
     /* the witnesses (each a source's trunk) and the standings, the partitions of a table summed: a partition the planner
      * has not counted yet (reltuples -1) makes the sum not counted */
-    r = status_query(pg, "SELECT regexp_replace(c.relname, '_[0-9a-f]$', ''), CASE WHEN min(c.reltuples) < 0 THEN -1 ELSE sum(c.reltuples) END::bigint, pg_size_pretty(sum(pg_total_relation_size(c.oid))::bigint) "
-                   "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.oid=(SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname='laplace') AND c.relkind = 'r' AND c.relname ~ '^(attestation|consensus)_[0-9a-f]$' GROUP BY 1 ORDER BY 1");
+    r = status_query(pg, LP_SQL_STATUS_PARTITIONS);
     printf("\nsemantics\n");
-    for (int i = 0; PQresultStatus(r) == PGRES_TUPLES_OK && i < PQntuples(r); i++) {
-        if (atoll(PQgetvalue(r, i, 1)) < 0) printf("  %-24s %16s   %s\n", PQgetvalue(r, i, 0), "not counted yet", PQgetvalue(r, i, 2));
-        else printf("  %-24s %'16lld   %s\n", PQgetvalue(r, i, 0), atoll(PQgetvalue(r, i, 1)), PQgetvalue(r, i, 2));
+    for (int i = 0; i < PQntuples(r); i++) {
+        int64_t rows = col_i64(r, i, 1);
+        if (rows < 0) printf("  %-24s %16s   %s\n", col_str(r, i, 0), "not counted yet", col_str(r, i, 2));
+        else printf("  %-24s %'16lld   %s\n", col_str(r, i, 0), (long long)rows, col_str(r, i, 2));
     }
     PQclear(r);
-    r = status_query(pg, "SELECT count(*) FILTER (WHERE indexdef LIKE '%USING gin%'), count(*) FILTER (WHERE indexdef LIKE '%USING gist%'), count(*) "
-                   "FROM pg_indexes WHERE schemaname=(SELECT n.nspname FROM pg_catalog.pg_namespace n JOIN pg_catalog.pg_extension e ON e.extnamespace=n.oid WHERE e.extname='laplace') AND tablename IN ('entity', 'physicality')");
-    if (PQresultStatus(r) == PGRES_TUPLES_OK) printf("\nindexes    container (GIN) %s, 4D (GiST) %s, of %s on entity and physicality\n", PQgetvalue(r, 0, 0), PQgetvalue(r, 0, 1), PQgetvalue(r, 0, 2));
+    r = status_query(pg, LP_SQL_STATUS_INDEXES);
+    if (PQntuples(r)) printf("\nindexes    container (GIN) %lld, 4D (GiST) %lld, of %lld on entity and physicality\n",
+        (long long)col_i64(r, 0, 0), (long long)col_i64(r, 0, 1), (long long)col_i64(r, 0, 2));
     PQclear(r);
     free(ver); free(isa); free(t0); free(fp); free(size); free(srv); PQfinish(pg);
     return !compatible;
@@ -247,7 +318,7 @@ int cmd_sources(int argc, char **argv){
     printf("%-4s %-28s %-8s %-9s %s\n", "", "source", "recipes", "in", "kept at");
     /* a source is in when a witness is its trunk: [its record, its files' trunks], its record the source's name */
     lp_idmap *records = lp_idmap_new();
-    { PGresult *r = ask_try(pg, "SELECT DISTINCT witness FROM @extschema@.attestation", NULL); Reader *rd = reader_new(pg);
+    { char cerr[512]; PGresult *r = db_call_try(pg, LP_SQL_WITNESS_TRUST_ALL, NULL, cerr, sizeof cerr); Reader *rd = reader_new(pg);
       for (int j = 0; r && j < PQntuples(r); j++) { lp_id first[2]; if (reader_parts(rd, col_id(r, j, 0), first, 2)) lp_idmap_put(records, &first[0], NULL); }
       PQclear(r); reader_free(rd); }
     for (int i = 0; i < n; i++) {

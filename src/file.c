@@ -15,6 +15,7 @@
  * recorded is what deduplication already answers: its trunk is looked for, trunk to leaf (Storage: Ingestion). The
  * trunk is written last of everything a file is and attests, so a trunk that is recorded has all of it recorded. */
 #include "engine.h"
+#include "structure.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,6 +41,56 @@ int file_matches_bytes(const lp_id *id, const uint8_t *bytes, size_t length){
     const lp_id absent={{0}};
     if (!length && lp_id_eq(id,&absent)) return 1;
     size_t at = 0; return matches_node(id, bytes, length, &at) && at == length;
+}
+
+typedef struct {
+    const SInput *in;
+    uint8_t buf[65536];
+    size_t pos, len;
+    int eof, failed;
+} StreamVerify;
+
+static int stream_fill_next(StreamVerify *s){
+    if (s->failed || s->eof) return 0;
+    size_t n = s->in->read(s->in->context, s->buf, sizeof s->buf);
+    if (s->in->error && s->in->error(s->in->context)) { s->failed = 1; return 0; }
+    if (!n) { s->eof = 1; return 0; }
+    s->pos = 0; s->len = n;
+    return 1;
+}
+static int stream_take(StreamVerify *s, const uint8_t *want, size_t n){
+    while (n > 0) {
+        if (s->pos == s->len && !stream_fill_next(s)) return 0;
+        size_t avail = s->len - s->pos;
+        size_t take = n < avail ? n : avail;
+        if (memcmp(s->buf + s->pos, want, take)) return 0;
+        s->pos += take;
+        want += take;
+        n -= take;
+    }
+    return 1;
+}
+static int matches_node_stream(const lp_id *id, StreamVerify *s){
+    int64_t cp = lp_tier0_codepoint(T0, id);
+    if (cp >= 0) {
+        uint8_t encoded[4]; size_t n = lp_utf8_put((uint32_t)cp, encoded);
+        return stream_take(s, encoded, n);
+    }
+    const Node *node = table_find(id); if (!node) return 0;
+    for (uint32_t v = 0; v < node->nv; v++) {
+        const Vtx *vertex = &VTX[node->voff + v];
+        for (uint32_t run = 0; run < VRUN(vertex->m); run++)
+            if (!matches_node_stream(&vertex->id, s)) return 0;
+    }
+    return 1;
+}
+int file_matches_input(const lp_id *id, const SInput *input){
+    const lp_id absent={{0}};
+    StreamVerify s = { .in = input };
+    if (lp_id_eq(id, &absent)) return !stream_fill_next(&s) && !s.failed && s.eof;
+    if (!matches_node_stream(id, &s)) return 0;
+    if (s.pos < s.len) return 0;
+    return !stream_fill_next(&s) && !s.failed && s.eof;
 }
 
 /* Online form of the recipe's content-defined blocks. The first 4096 parts

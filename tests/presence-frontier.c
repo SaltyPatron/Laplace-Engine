@@ -44,11 +44,10 @@ int main(int argc,char **argv){
     /* The independent answer for the floor: an indexed probe of public.entity by the floor's IDs. */
     PGconn *pg=db_connect(argv[1]);
     Args args={0};arg_ids(&args,ids,LP_TIER0_COUNT);
-    PGresult *rows=ask_once(pg,"SELECT u.ordinal FROM unnest($1::@extschema@.blake3[]) WITH ORDINALITY u(id,ordinal)"
-        " WHERE EXISTS (SELECT 1 FROM @extschema@.entity e WHERE e.id OPERATOR(@extschema@.=) u.id)",&args);
+    PGresult *rows=db_call(pg,LP_SQL_TEST_DIRECT_ENTITY_EXISTS,&args);
     uint8_t *floor_stored=calloc(LP_TIER0_COUNT,1);assert(floor_stored);
     for(int r=0;r<PQntuples(rows);r++){
-        int64_t ordinal=(int64_t)lp_be(PQgetvalue(rows,r,0),8);assert(ordinal>0 && (uint64_t)ordinal<=LP_TIER0_COUNT);
+        int64_t ordinal=col_i64(rows,r,0);assert(ordinal>0 && (uint64_t)ordinal<=LP_TIER0_COUNT);
         floor_stored[ordinal-1]=1;
     }
     size_t floor_present=(size_t)PQntuples(rows);

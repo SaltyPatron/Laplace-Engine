@@ -73,7 +73,7 @@ static const TSLanguage *dl_load_grammar(const char *name, uint8_t fingerprint[3
     snprintf(sym, sizeof sym, "tree_sitter_%s", name);
     for (char *c = sym; *c; c++) if (*c == '-') *c = '_';
     void *h = os_dl_open(p);
-    if (!h) { fprintf(stderr, "grammar %s: %s\n", name, os_dl_error()); return NULL; }
+    if (!h) { fprintf(stderr, "grammar %s: cannot load %s: %s\n", name, p, os_dl_error()); return NULL; }
     if (!program_file_hash(p, fingerprint)) { fprintf(stderr, "grammar %s: cannot fingerprint %s\n", name, p); return NULL; }
     const TSLanguage *(*f)(void) = (const TSLanguage *(*)(void))os_dl_sym(h, sym);
     if (!f) { fprintf(stderr, "grammar %s: missing entry point %s: %s\n", name, sym, os_dl_error()); return NULL; }

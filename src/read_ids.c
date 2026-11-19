@@ -20,8 +20,8 @@ void tiers_of(PGconn *pg,const lp_id *ids,int n,int *tiers){
     for(size_t at=0;at<count;){
         size_t amount=count-at;if(amount>DB_ID_WINDOW)amount=DB_ID_WINDOW;
         args_reset(&args);arg_ids(&args,lp_idmap_keys(wanted)+at,amount);
-        PGresult *rows=ask(pg,"SELECT ordinal,tier FROM @extschema@.laplace_entities($1::@extschema@.blake3[])",&args);
-        for(int row=0;row<PQntuples(rows);row++)found[at+(size_t)col_int(rows,row,0)-1]=(int)col_int(rows,row,1);
+        PGresult *rows=db_call(pg,LP_SQL_ENTITIES_TIER,&args);
+        for(int row=0;row<PQntuples(rows);row++)found[at+(size_t)col_i64(rows,row,0)-1]=(int)col_i16(rows,row,1);
         PQclear(rows);at+=amount;
     }
     for(int i=0;i<n;i++)if(tiers[i]<0)tiers[i]=found[lp_idmap_find(wanted,ids+i)];
@@ -42,12 +42,12 @@ Hold *paths_of(PGconn *pg,const lp_id *ids,int n,int *nout){
     for(int at=0;at<n;){
         int amount=n-at;if(amount>DB_ID_WINDOW)amount=DB_ID_WINDOW;
         args_reset(&args);arg_ids(&args,ids+at,(size_t)amount);
-        PGresult *rows=ask(pg,"SELECT ordinal,entity,tier,path,mask FROM @extschema@.laplace_physicalities($1::@extschema@.blake3[])",&args);
+        PGresult *rows=db_call(pg,LP_SQL_PHYSICALITIES,&args);
         for(int row=0;row<PQntuples(rows);row++){
-            Hold x={0};x.src=at+(int)col_int(rows,row,0)-1;x.entity=*col_id(rows,row,1);
-            x.tier=(int)col_int(rows,row,2);x.path_len=PQgetlength(rows,row,3);
+            Hold x={0};x.src=at+(int)col_i64(rows,row,0)-1;x.entity=*col_id(rows,row,1);
+            x.tier=(int)col_i16(rows,row,2);x.path_len=PQgetlength(rows,row,3);
             x.path=malloc((size_t)(x.path_len?x.path_len:1));memcpy(x.path,PQgetvalue(rows,row,3),(size_t)x.path_len);
-            x.claim=(uint8_t)(PQgetlength(rows,row,4)>=5 && ((const uint8_t *)PQgetvalue(rows,row,4))[4]&0x80);lp_push(&bag,x);
+            x.claim=(uint8_t)col_is_claim(rows,row,4);lp_push(&bag,x);
         }
         PQclear(rows);at+=amount;
     }
@@ -61,11 +61,10 @@ Ends *ends_of(PGconn *pg,const lp_id *ids,size_t n,size_t *nout){
     for(size_t at=0;at<n;){
         size_t amount=n-at;if(amount>DB_ID_WINDOW)amount=DB_ID_WINDOW;
         args_reset(&args);arg_ids(&args,ids+at,amount);
-        PGresult *rows=ask(pg,"SELECT p.ordinal,p.entity,COALESCE(@postgis@.ST_StartPoint(p.path),p.path),COALESCE(@postgis@.ST_EndPoint(p.path),p.path),"
-                              "@extschema@.laplace_path_length(p.path) FROM @extschema@.laplace_physicalities($1::@extschema@.blake3[]) p",&args);
+        PGresult *rows=db_call(pg,LP_SQL_PATH_ENDPOINTS,&args);
         for(int row=0;row<PQntuples(rows);row++){
-            lp_path first=col_path(rows,row,2),last=col_path(rows,row,3);if(!first.n || !last.n)continue;
-            Ends e;e.src=at+(size_t)col_int(rows,row,0)-1;e.entity=*col_id(rows,row,1);e.first=lp_path_id(first,0);e.last=lp_path_id(last,last.n-1);e.length=col_int(rows,row,4);
+            Ends e;e.src=at+(size_t)col_i64(rows,row,0)-1;e.entity=*col_id(rows,row,1);
+            e.first=*col_id(rows,row,2);e.last=*col_id(rows,row,3);e.length=col_i64(rows,row,4);
             lp_push(&bag,e);
         }
         PQclear(rows);at+=amount;
@@ -92,10 +91,11 @@ void coords_of(PGconn *pg,const lp_id *ids,int n,double *out,uint8_t *has){
     for(size_t at=0;at<count;){
         size_t amount=count-at;if(amount>DB_ID_WINDOW)amount=DB_ID_WINDOW;
         args_reset(&args);arg_ids(&args,lp_idmap_keys(wanted)+at,amount);
-        PGresult *rows=ask(pg,"SELECT ordinal,@postgis@.ST_X(coord),@postgis@.ST_Y(coord),@postgis@.ST_Z(coord),@postgis@.ST_M(coord) FROM @extschema@.laplace_entities($1::@extschema@.blake3[])",&args);
+        PGresult *rows=db_call(pg,LP_SQL_ENTITY_COORDS,&args);
         for(int row=0;row<PQntuples(rows);row++){
-            size_t index=at+(size_t)col_int(rows,row,0)-1;
-            for(int d=0;d<4;d++)coords[index*4+(size_t)d]=lp_be_f64(PQgetvalue(rows,row,d+1));found[index]=1;
+            size_t index=at+(size_t)col_i64(rows,row,0)-1;
+            for(int d=0;d<4;d++)coords[index*4+(size_t)d]=col_f64(rows,row,d+3);
+            found[index]=1;
         }
         PQclear(rows);at+=amount;
     }

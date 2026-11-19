@@ -147,38 +147,83 @@ void ev_push(Events *e, const Event *x){                         /* by address: 
 }
 
 /* ---- one file */
-/* A file's bytes; gzip is read through zlib, so a recipe sees what the container holds. */
-static uint8_t *read_all(const char *path, size_t *n){
-    size_t l = strlen(path);
-    if (l > 3 && !strcmp(path + l - 3, ".gz")) {
-        gzFile g = gzopen(path, "rb"); if (!g) return NULL; gzbuffer(g, 1 << 20);
-        size_t cap = 1 << 24, k = 0; uint8_t *b = malloc(cap); int r;
-        while ((r = gzread(g, b + k, (unsigned)(cap - k))) > 0) { k += (size_t)r; if (k == cap) { cap *= 2; b = xrealloc(b, cap); } }
-        gzclose(g); if (r < 0) { free(b); return NULL; } *n = k; return b;
-    }
-    FILE *fp = fopen(path, "rb"); if (!fp) return NULL;
-    fseek(fp, 0, SEEK_END); size_t m = (size_t)ftell(fp); rewind(fp);
-    uint8_t *b = malloc(m + 1); if (fread(b, 1, m, fp) != m) { fclose(fp); free(b); return NULL; }
-    fclose(fp); *n = m; return b;
+typedef struct { FILE *plain; gzFile compressed; const InputDecoder *decoder; void *decoded; File *file; const char *path; int failed; } RecipeInput;
+static size_t recipe_input_read(void *context, uint8_t *out, size_t capacity){
+    RecipeInput *input = context; size_t n;
+    if (input->decoded) n = input->decoder->read(input->decoded, out, capacity);
+    else if (input->compressed) {
+        unsigned take = capacity > INT_MAX ? INT_MAX : (unsigned)capacity;
+        int got = gzread(input->compressed, out, take);
+        if (got < 0) { input->failed = 1; return 0; }
+        n = (size_t)got;
+    } else n = fread(out, 1, capacity, input->plain);
+    if (input->file) input->file->bytes += n;
+    return n;
 }
-/* A decoded file's text whole (input decode NAME), for the readings that take a file at once. */
-static uint8_t *read_decoded(const InputDecoder *decoder, const char *path, size_t *n){
-    void *input = decoder->open(path); if (!input) return NULL;
-    size_t cap = 1 << 24, k = 0; uint8_t *b = malloc(cap); size_t got;
-    while ((got = decoder->read(input, b + k, cap - k)) > 0) { k += got; if (k == cap) { cap *= 2; b = xrealloc(b, cap); } }
-    int failed = decoder->error(input); decoder->close(input);
-    if (failed) { free(b); return NULL; } *n = k; return b;
+static int recipe_input_error(void *context){
+    RecipeInput *input = context;
+    if (input->decoded) { if (input->decoder->error(input->decoded)) input->failed = 1; }
+    else if (input->compressed) {
+        int status; const char *message = gzerror(input->compressed, &status);
+        if (status != Z_OK && status != Z_STREAM_END) {
+            fprintf(stderr, "%s: %s\n", input->path, message); input->failed = 1;
+        }
+    } else if (ferror(input->plain)) { perror(input->path); input->failed = 1; }
+    return input->failed;
+}
+static int open_recipe_reader(const Recipe *r, const char *path, File *f, RecipeInput *reader){
+    memset(reader, 0, sizeof *reader); reader->file = f; reader->path = path;
+    size_t length = strlen(path);
+    if (r && r->decoder) {
+        reader->decoder = r->decoder;
+        reader->decoded = r->decoder->open(path);
+        return reader->decoded != NULL;
+    }
+    if (length > 3 && !strcmp(path + length - 3, ".gz")) {
+        reader->compressed = gzopen(path, "rb");
+        if (reader->compressed) gzbuffer(reader->compressed, 1 << 20);
+        return reader->compressed != NULL;
+    }
+    reader->plain = fopen(path, "rb");
+    return reader->plain != NULL;
+}
+static int close_recipe_reader(RecipeInput *reader){
+    if (reader->decoded) { if (reader->decoder->error(reader->decoded)) reader->failed = 1; reader->decoder->close(reader->decoded); }
+    else if (reader->compressed) { if (gzclose(reader->compressed) != Z_OK) reader->failed = 1; }
+    else if (reader->plain && fclose(reader->plain)) reader->failed = 1;
+    return !reader->failed;
+}
+/* Bounded chunked stream reader over plain, gzipped, or decoded input (never uses fseek/SEEK_END). */
+static uint8_t *read_stream_all(RecipeInput *reader, size_t *out_n){
+    size_t cap = 65536, k = 0; uint8_t *b = malloc(cap); if (!b) { perror("stream input"); exit(1); }
+    for (;;) {
+        if (k == cap) {
+            if (cap > SIZE_MAX / 2) { free(b); return NULL; }
+            cap *= 2; b = xrealloc(b, cap);
+        }
+        size_t got = recipe_input_read(reader, b + k, cap - k);
+        if (recipe_input_error(reader)) { free(b); return NULL; }
+        if (!got) break;
+        k += got;
+    }
+    if (k == cap) b = xrealloc(b, k + 1);
+    *out_n = k;
+    return b;
 }
 static uint8_t *read_recipe_input(const Recipe *recipe, const char *path, size_t *length){
-    if (recipe && recipe->decoder) return read_decoded(recipe->decoder, path, length);
-    return recipe && recipe->input_frame.width ? input_frame_read(&recipe->input_frame, path, length) : read_all(path, length);
+    if (recipe && recipe->input_frame.width) return input_frame_read(&recipe->input_frame, path, length);
+    RecipeInput reader;
+    if (!open_recipe_reader(recipe, path, NULL, &reader)) return NULL;
+    uint8_t *b = read_stream_all(&reader, length);
+    if (!close_recipe_reader(&reader) || !b) { free(b); return NULL; }
+    return b;
 }
 /* A witness's name, with {dir} as the directory the file is in. */
 static void named_for(const char *name, const char *path, const uint8_t *src, size_t n, char *out, size_t cap){
     const char *fa = strstr(name, "{first ");
     if (fa) {                                                              /* what the file first writes as NAME="..." */
         const char *fe = strchr(fa, '}'); char key[72]; int kl = snprintf(key, sizeof key, " %.*s=\"", fe ? (int)(fe - fa - 7) : 0, fa + 7);
-        const uint8_t *v = fe ? memmem(src, n, key, (size_t)kl) : NULL, *q = v ? memchr(v + kl, '"', n - (size_t)(v + kl - src)) : NULL;
+        const uint8_t *v = (fe && src) ? memmem(src, n, key, (size_t)kl) : NULL, *q = v ? memchr(v + kl, '"', n - (size_t)(v + kl - src)) : NULL;
         uint8_t val[400]; size_t vl = 0; if (q && (size_t)(q - v - kl) < 200) vl = xml_unescape(v + kl, (size_t)(q - v - kl), val);
         snprintf(out, cap, "%.*s%.*s%s", (int)(fa - name), name, (int)vl, (const char *)val, fe ? fe + 1 : ""); return;
     }
@@ -204,66 +249,51 @@ int reads_in_stretches(const Recipe *r, char *boundary){
     if (!r || !r->curated) return 0;
     int b = say_stretches(r); if (!b) return 0; *boundary = (char)b; return 1;      /* by its outermost tier */
 }
-typedef struct { FILE *plain; gzFile compressed; const InputDecoder *decoder; void *decoded; File *file; int failed; } RecipeInput;
 int recipe_record_streamable(const Recipe *recipe){
     return recipe && !recipe->input_frame.width && recipe->curated && (recipe->native ? recipe->native->input != NULL : say_record_streamable(recipe));
 }
-static size_t recipe_input_read(void *context, uint8_t *out, size_t capacity){
-    RecipeInput *input = context; size_t n;
-    if (input->decoded) n = input->decoder->read(input->decoded, out, capacity);
-    else if (input->compressed) {
-        unsigned take = capacity > INT_MAX ? INT_MAX : (unsigned)capacity;
-        int got = gzread(input->compressed, out, take);
-        if (got < 0) { input->failed = 1; return 0; }
-        n = (size_t)got;
-    } else n = fread(out, 1, capacity, input->plain);
-    input->file->bytes += n; return n;
-}
-static int recipe_input_error(void *context){
-    RecipeInput *input = context;
-    if (input->decoded) { if (input->decoder->error(input->decoded)) input->failed = 1; }
-    else if (input->compressed) {
-        int status; const char *message = gzerror(input->compressed, &status);
-        if (status != Z_OK && status != Z_STREAM_END) {
-            fprintf(stderr, "%s: %s\n", input->file->path, message); input->failed = 1;
-        }
-    } else if (ferror(input->plain)) { perror(input->file->path); input->failed = 1; }
-    return input->failed;
+static int recipe_accepts_stream(const Recipe *recipe){
+    return recipe && !recipe->input_frame.width && recipe->curated && (recipe->native ? recipe->native->input != NULL : say_input_compiled(recipe));
 }
 static void decompose_input(Ctx *c, File *f){
     const Recipe *r = f->recipe;
-    if (recipe_record_streamable(r)) {
-        RecipeInput reader = {.file=f}; size_t length = strlen(f->path);
-        if (r->decoder) { reader.decoder = r->decoder; reader.decoded = r->decoder->open(f->path); if (!reader.decoded) exit(2); }
-        else if (length > 3 && !strcmp(f->path + length - 3, ".gz")) {
-            reader.compressed = gzopen(f->path, "rb");
-            if (reader.compressed) gzbuffer(reader.compressed, 1 << 20);
-        } else reader.plain = fopen(f->path, "rb");
-        if (!reader.decoded && !reader.compressed && !reader.plain) { perror(f->path); exit(2); }
-        const char *witness = f->source ? source_called(f->source) : r->witness[0] ? r->witness : r->name;
-        const char *lineage = f->source ? f->source->lineage : r->lineage;
-        if (!witness || strchr(witness, '{') || strchr(lineage, '{')) {
+    const char *witness_tpl = r ? (f->source ? source_called(f->source) : r->witness[0] ? r->witness : r->name) : NULL;
+    const char *lineage_tpl = r ? (f->source ? f->source->lineage : r->lineage) : NULL;
+    if (recipe_accepts_stream(r) && witness_tpl && !strstr(witness_tpl, "{first ") && (!lineage_tpl || !strstr(lineage_tpl, "{first "))) {
+        if (recipe_record_streamable(r) && (strchr(witness_tpl, '{') || (lineage_tpl && strchr(lineage_tpl, '{')))) {
             fprintf(stderr, "%s: streaming records require a declared source record and lineage, without witness templates\n", f->path); exit(2);
         }
-        f->witness = text_ref(c, (const uint8_t *)witness, strlen(witness)); f->trunk = f->witness;
-        if (lineage[0]) { f->lineage = text_ref(c, (const uint8_t *)lineage, strlen(lineage)); f->has_lineage = 1; }
+        RecipeInput reader;
+        if (!open_recipe_reader(r, f->path, f, &reader)) { perror(f->path); exit(2); }
+        char w[512], l[512];
+        named_for(witness_tpl, f->path, NULL, 0, w, sizeof w);
+        f->witness = text_ref(c, (const uint8_t *)w, strlen(w)); f->trunk = f->witness;
+        if (lineage_tpl && lineage_tpl[0]) {
+            named_for(lineage_tpl, f->path, NULL, 0, l, sizeof l);
+            if (l[0]) { f->lineage = text_ref(c, (const uint8_t *)l, strlen(l)); f->has_lineage = 1; }
+        }
         SInput input = {.context=&reader, .read=recipe_input_read, .error=recipe_input_error};
         f->bytes = 0;
         if (r->native) r->native->input(r, f, &input); else attest_input(r, f, &input);
-        if (reader.decoded) { if (r->decoder->error(reader.decoded)) reader.failed = 1; r->decoder->close(reader.decoded); }
-        else if (reader.compressed) { if (gzclose(reader.compressed) != Z_OK) reader.failed = 1; }
-        else if (fclose(reader.plain)) reader.failed = 1;
-        if (reader.failed) { fprintf(stderr, "%s: input did not close cleanly\n", f->path); exit(2); }
+        if (!close_recipe_reader(&reader)) { fprintf(stderr, "%s: input did not close cleanly\n", f->path); exit(2); }
         f->exact = 1; return;
     }
     size_t n; uint8_t *src0 = read_recipe_input(r, f->path, &n); if (!src0) { perror(f->path); f->exact = -1; exit(2); }
     if (r && r->input_frame.width) f->at = r->input_frame.width;
     f->bytes = (uint64_t)n + (r ? r->input_frame.width : 0); decompose_bytes(c, f, src0, n, 1);
-    if (f->recipe && f->recipe->curated) f->exact = 1;
-    else {
+    if (f->recipe && f->recipe->curated) {
+        f->exact = 1; free(src0);
+    } else if (r && r->input_frame.width) {
         f->exact = file_matches_bytes(f->has_packaging ? &f->packaging.id : &f->trunk.id, src0, n);
+        free(src0);
+    } else {
+        free(src0);
+        RecipeInput vreader;
+        if (!open_recipe_reader(r, f->path, NULL, &vreader)) { perror(f->path); f->exact = -1; exit(2); }
+        SInput vinput = {.context=&vreader, .read=recipe_input_read, .error=recipe_input_error};
+        f->exact = file_matches_input(f->has_packaging ? &f->packaging.id : &f->trunk.id, &vinput);
+        if (!close_recipe_reader(&vreader)) f->exact = 0;
     }
-    free(src0);
 }
 void decompose_file(Ctx *c, File *f){
     const File *previous = table_reading_file(f);

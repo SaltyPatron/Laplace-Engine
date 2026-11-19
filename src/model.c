@@ -48,7 +48,7 @@ static STShard *st_open_shard(ST *s, const char *rel){
     STShard *sh = &s->shard[s->nshard++];
     snprintf(sh->path, sizeof sh->path, "%s", full);
     size_t size = 0;
-    if (!(sh->base = os_map_read(full, &size)) || size < 8) { perror(full); exit(1); }
+    if (!(sh->base = lp_map_file(full, 0, &size)) || size < 8) { perror(full); exit(1); }
     uint64_t hl; memcpy(&hl, sh->base, 8);
     if (hl > size - 8 || !(sh->h = lp_json_parse((const char *)sh->base + 8, hl))) { fprintf(stderr, "%s: no safetensors header\n", full); exit(1); }
     sh->base += 8 + hl; return sh;

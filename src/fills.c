@@ -53,7 +53,7 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
     Ids keys = { 0 }; for (int i = 0; i < np; i++) if (table_find(&ph[i])) lp_push(&keys, ph[i]);
     if (!keys.n) for (int i = 0; i < np; i++) lp_push(&keys, ph[i]);
     Args a = { 0 }; arg_ids(&a, keys.v, keys.n);
-    PGresult *r = ask(pg, "SELECT entity, path, tier FROM @extschema@.laplace_containers($1::@extschema@.blake3[], '{}'::smallint[])", &a);
+    PGresult *r = db_call(pg, LP_SQL_CONTAINERS_DEFAULT, &a);
     Ids front = { 0 };
     for (int i = 0; i < PQntuples(r); i++) {
         lp_path p = col_path(r, i, 1); size_t fc = p.n * 4 + 16; lp_id *out = malloc(sizeof(lp_id) * fc);
@@ -70,13 +70,13 @@ static int fills(const char *conninfo, Ctx *ctx, const char *phrase_text, int li
         for (size_t i0 = 0; i0 < front.n; i0 += 20000) {
             size_t k = front.n - i0 < 20000 ? front.n - i0 : 20000;
             args_reset(&a); arg_ids(&a, front.v + i0, k);
-            PGresult *q = ask(pg, "SELECT entity, id, times, tier FROM @extschema@.laplace_fills($1::@extschema@.blake3[])", &a);
+            PGresult *q = db_call(pg, LP_SQL_FILLS, &a);
             fetched += (uint64_t)PQntuples(q);
             for (int j = 0; j < PQntuples(q); j++) {
                 bool fresh; int pidx = (int)lp_idmap_put(d, col_id(q, j, 0), &fresh);
                 if (fresh) lp_push(&next, *col_id(q, j, 0));
                 int ci = (int)lp_idmap_find(d, col_id(q, j, 1)); if (ci < 0 || ci == pidx) continue;     /* the child it holds, and how often */
-                uint32_t times = (uint32_t)col_int(q, j, 2); DNode *c = lp_idmap_at(d, (size_t)ci); size_t u = 0;
+                uint32_t times = (uint32_t)col_i64(q, j, 2); DNode *c = lp_idmap_at(d, (size_t)ci); size_t u = 0;
                 while (u < c->up.n && c->up.v[u].parent != pidx) u++;
                 if (u < c->up.n) c->up.v[u].times += times; else lp_push(&c->up, (Up){ pidx, times });
             }

@@ -148,13 +148,19 @@ static void coordinate_failure_chain(PGconn *pg,const Node *node,unsigned depth)
                 if(ids){
                     for(uint32_t i=0;i<node->nv;i++)ids[i]=VTX[node->voff+i].id;
                     Args input={0};arg_ids(&input,ids,node->nv);free(ids);
-                    PGresult *children=ask_once(pg,"SELECT ordinal,id,@postgis@.ST_AsEWKB(coord) FROM @extschema@.laplace_entities($1)",&input);
+                    PGresult *children=db_call(pg,LP_SQL_ENTITY_COORDS,&input);
                     const Node *next=NULL;unsigned changed=0;lp_coord_sum local_sum={{0},0},recorded_sum={{0},0};
                     for(int i=0;i<PQntuples(children);i++){
-                        uint64_t ordinal=(uint64_t)col_int(children,i,0);if(!ordinal || ordinal>node->nv)continue;
-                        int known=0;Ref local=ref_of_id(col_id(children,i,1),&known);lp_coord recorded;lp_ewkb_info info;
-                        if(!known || PQgetisnull(children,i,2) || !lp_ewkb_visit((const uint8_t *)PQgetvalue(children,i,2),
-                            (size_t)PQgetlength(children,i,2),binding_point,&recorded,&info))continue;
+                        uint64_t ordinal=(uint64_t)col_i64(children,i,0);if(!ordinal || ordinal>node->nv)continue;
+                        int known=0;Ref local=ref_of_id(col_id(children,i,1),&known);lp_coord recorded;
+                        if(!known || PQgetisnull(children,i,3) || PQgetisnull(children,i,4) || PQgetisnull(children,i,5) || PQgetisnull(children,i,6))continue;
+                        int valid_pt=1;
+                        for(int d=0;d<4;d++){
+                            double v=col_f64(children,i,3+d);
+                            if(!isfinite(v) || fabs(v)>1.0){valid_pt=0;break;}
+                            recorded.m[d]=(int64_t)llround(v*LP_FIXED_ONE);
+                        }
+                        if(!valid_pt)continue;
                         uint64_t run=VRUN(VTX[node->voff+ordinal-1].m);
                         for(int d=0;d<4;d++){local_sum.s[d]+=(__int128)local.c.m[d]*run;recorded_sum.s[d]+=(__int128)recorded.m[d]*run;}
                         local_sum.n+=run;recorded_sum.n+=run;
@@ -176,58 +182,34 @@ static void coordinate_failure_chain(PGconn *pg,const Node *node,unsigned depth)
 }
 static void merge_failure(PGconn *pg, const char *entities, const char *paths, const char *error){
     fprintf(stderr,"stage merge: %s",error);
-    char sql[8192];
-    int length=snprintf(sql,sizeof sql,
-        "WITH rejected(reason,id,detail) AS ("
-        " SELECT 'duplicate entity',id,'rows='||count(*) FROM %s GROUP BY id HAVING count(*)<>1"
-        " UNION ALL SELECT 'duplicate path',entity,'rows='||count(*) FROM %s GROUP BY entity HAVING count(*)<>1"
-        " UNION ALL SELECT 'invalid entity carrier/tier',id,'tier='||tier||' mask='||mask FROM %s"
-        " WHERE tier NOT BETWEEN 1 AND 255 OR NOT @extschema@.laplace_mask_valid(mask)"
-        " UNION ALL SELECT 'invalid path carrier/tier',entity,'tier='||tier||' mask='||mask FROM %s"
-        " WHERE tier NOT BETWEEN 1 AND 255 OR NOT @extschema@.laplace_mask_valid(mask)"
-        " UNION ALL SELECT 'entity identity conflict',s.id,"
-        " 'coord_equal='||(@postgis@.ST_AsEWKB(s.coord)=@postgis@.ST_AsEWKB(d.coord))||' hilbert_equal='||(s.hilbert=d.hilbert)"
-        " ||' staged='||@postgis@.ST_AsEWKT(s.coord)||' recorded='||@postgis@.ST_AsEWKT(d.coord)"
-        " FROM (SELECT * FROM %s WHERE coord IS NOT NULL OR hilbert IS NOT NULL) s"
-        " CROSS JOIN LATERAL @extschema@.laplace_entities(ARRAY[s.id]) d"
-        " WHERE @postgis@.ST_AsEWKB(s.coord)<>@postgis@.ST_AsEWKB(d.coord) OR s.hilbert<>d.hilbert"
-        " UNION ALL SELECT 'path identity conflict',s.entity,"
-        " 'ids_equal='||(@extschema@.laplace_vertex_ids(s.path)=@extschema@.laplace_vertex_ids(d.path))"
-        " ||' hilbert_equal='||(s.hilbert=d.hilbert)"
-        " ||' staged_vertices='||@extschema@.laplace_path_length(s.path)||' recorded_vertices='||@extschema@.laplace_path_length(d.path)"
-        " ||' staged_prefix='||encode(substring(@postgis@.ST_AsEWKB(s.path) from 1 for 160),'hex')"
-        " ||' recorded_prefix='||encode(substring(@postgis@.ST_AsEWKB(d.path) from 1 for 160),'hex')"
-        " FROM (SELECT * FROM %s WHERE path IS NOT NULL OR hilbert IS NOT NULL) s"
-        " CROSS JOIN LATERAL @extschema@.laplace_physicalities(ARRAY[s.entity]) d"
-        " WHERE (@postgis@.ST_AsEWKB(s.path)<>@postgis@.ST_AsEWKB(d.path) AND @extschema@.laplace_path_enrich(d.path,s.path) IS NULL) OR s.hilbert<>d.hilbert"
-        " UNION ALL SELECT 'entity without path',s.id,'' FROM (SELECT * FROM %s WHERE NOT present) s"
-        " LEFT JOIN %s batch ON batch.entity OPERATOR(@extschema@.=) s.id LEFT JOIN @extschema@.physicality d ON d.entity OPERATOR(@extschema@.=) s.id"
-        " WHERE NOT s.present AND batch.entity IS NULL AND d.entity IS NULL"
-        " UNION ALL SELECT 'path without entity',s.entity,'' FROM (SELECT * FROM %s WHERE NOT present) s"
-        " LEFT JOIN %s batch ON batch.id OPERATOR(@extschema@.=) s.entity LEFT JOIN @extschema@.entity d ON d.id OPERATOR(@extschema@.=) s.entity"
-        " WHERE NOT s.present AND batch.id IS NULL AND d.id IS NULL)"
-        ",sample AS MATERIALIZED (SELECT reason,id,detail FROM rejected ORDER BY reason,id LIMIT 8)"
-        " SELECT s.reason,s.id::text,s.detail,@postgis@.ST_AsEWKB(p.path) FROM sample s"
-        " LEFT JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) s.id ORDER BY s.reason,s.id",
-        entities,paths,entities,paths,entities,paths,entities,paths,paths,entities);
-    if(length<0 || (size_t)length>=sizeof sql){fputs("stage rejection diagnostic exceeded its bound\n",stderr);return;}
-    PGresult *detail=db_exec(pg,sql);
-    if(PQresultStatus(detail)==PGRES_TUPLES_OK){
+    Args args={0};arg_text(&args,entities);arg_text(&args,paths);
+    char err[512];PGresult *detail=db_call_try(pg,LP_SQL_MERGE_DIAGNOSTICS,&args,err,sizeof err);
+    args_free(&args);
+    if(detail){
         for(int row=0;row<PQntuples(detail);row++){
-            fprintf(stderr,"  stage rejection: %s id=%s %s\n",PQgetvalue(detail,row,0),PQgetvalue(detail,row,1),PQgetvalue(detail,row,2));
-            lp_id id; if(!id_parse(PQgetvalue(detail,row,1),&id)) continue;
-            const Node *node=table_find(&id); if(!node) continue;
+            const char *reason=PQgetisnull(detail,row,0)?"":col_str(detail,row,0);
+            const char *msg=PQgetisnull(detail,row,2)?"":col_str(detail,row,2);
+            lp_id id={0};char idhex[33]="";
+            int has_id=!PQgetisnull(detail,row,1) && PQgetlength(detail,row,1)==16;
+            if(has_id){id=*col_id(detail,row,1);id_text(&id,idhex);}
+            fprintf(stderr,"  stage rejection: %s id=%s %s\n",reason,idhex,msg);
+            if(!has_id)continue;
+            const Node *node=table_find(&id);if(!node)continue;
             fprintf(stderr,"    staged decomposition: tier=%u parts=%u vertices=%u\n",node->tier,node->len,node->nv);
             for(uint32_t i=0;i<node->nv && i<8;i++){
-                const Vtx *v=&VTX[node->voff+i]; char child[33]; id_text(&v->id,child);
+                const Vtx *v=&VTX[node->voff+i];char child[33];id_text(&v->id,child);
                 fprintf(stderr,"    child=%s run=%u\n",child,VRUN(v->m));
             }
-            if(!strcmp(PQgetvalue(detail,row,0),"entity identity conflict") && node->nv)coordinate_failure_chain(pg,node,0);
-            if(!PQgetisnull(detail,row,3))
-                fprintf(stderr,"    recorded path prefix=%.322s\n",PQgetvalue(detail,row,3));
+            if(!strcmp(reason,"entity identity conflict") && node->nv)coordinate_failure_chain(pg,node,0);
+            if(!PQgetisnull(detail,row,3)){
+                size_t len=(size_t)PQgetlength(detail,row,3);
+                if(len>161)len=161;
+                char hex[323];lp_hex((const uint8_t *)PQgetvalue(detail,row,3),len,hex);
+                fprintf(stderr,"    recorded path prefix=%s\n",hex);
+            }
         }
-    }else fprintf(stderr,"stage rejection diagnostic: %s",PQerrorMessage(pg));
-    PQclear(detail);
+        PQclear(detail);
+    }else fprintf(stderr,"stage rejection diagnostic: %s\n",err);
 }
 typedef struct { lp_id *ids;uint64_t *runs;uint32_t *spare;uint8_t *bytes;size_t capacity,byte_capacity; } PathEncoding;
 static size_t encode_node_path(const Node *x,PathEncoding *path){
@@ -246,10 +228,8 @@ static size_t encode_node_path(const Node *x,PathEncoding *path){
     return size;
 }
 static void copy_rows(PGconn *pg,int lane,const Row *rows,size_t lo,size_t hi){
-    lp_copy copy={0}; char sql[512]; uint8_t geometry[128],mask[12];
-    snprintf(sql,sizeof sql,"BEGIN;COPY %s (id,tier,coord,hilbert,mask,present) FROM STDIN (FORMAT binary);"
-        "COPY %s (entity,tier,hilbert,path,mask,present) FROM STDIN (FORMAT binary);COMMIT",writer.entity[lane],writer.path[lane]);
-    copy_open(&copy,pg,sql);
+    lp_copy copy={0}; uint8_t geometry[128],mask[12];
+    db_copy_open_stage_pair(&copy,pg,writer.entity[lane],writer.path[lane]);
     for(size_t i=lo;i<hi;i++){
         const Node *x=rows[i].node;uint8_t present=x->keep==2;
         lp_copy_row(&copy,6);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
@@ -305,11 +285,9 @@ static void maintain_window(PGconn *pg,IndexPartitions *partitions){
     size_t n=0;
     for(size_t i=0;i<partitions->n;i++)
         if(!i || partitions->v[i]!=partitions->v[i-1])partitions->v[n++]=partitions->v[i];
-    lp_buf ids={0};lp_pg_array(&ids,26,n);
-    for(size_t i=0;i<n;i++){lp_buf_be(&ids,4,4);lp_buf_be(&ids,partitions->v[i],4);}
-    Args input={0};arg_raw(&input,ids.b,ids.n);
-    PQclear(ask_once(pg,"SELECT @extschema@.laplace_clean_partitions($1::oid[])",&input));
-    args_free(&input);lp_buf_free(&ids);
+    Args input={0};arg_oid_array(&input,partitions->v,n);
+    db_exec_contract(pg,LP_SQL_CLEAN_PARTITIONS,&input);
+    args_free(&input);
 }
 int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     start_loader(conninfo,npg);table_kinds();
@@ -393,20 +371,22 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
         uint64_t entities=0,paths=0;
         #pragma omp parallel for num_threads(lanes) schedule(static,1) reduction(+:entities,paths)
         for(unsigned lane=0;lane<lanes;lane++)if(bounds[lane]<bounds[lane+1]){
-            char sql[512];snprintf(sql,sizeof sql,
-                "SELECT * FROM @extschema@.laplace_merge_stage('%s'::regclass,'%s'::regclass%s)",
-                writer.entity[lane],writer.path[lane],writer.window_index?",true":"");
-            PGresult *q=db_command_binary(writer.copy[lane],sql);
-            if(PQresultStatus(q)!=PGRES_TUPLES_OK){
-                merge_failure(writer.copy[lane],writer.entity[lane],writer.path[lane],PQresultErrorMessage(q));
-                PQclear(q);exit(1);
+            Args ma={0};arg_text(&ma,writer.entity[lane]);arg_text(&ma,writer.path[lane]);
+            if(writer.window_index)arg_bool(&ma,true);
+            char err[512];
+            PGresult *q=db_call_try(writer.copy[lane],
+                writer.window_index?LP_SQL_MERGE_STAGE:LP_SQL_MERGE_STAGE_DEFAULT,&ma,err,sizeof err);
+            args_free(&ma);
+            if(!q){
+                merge_failure(writer.copy[lane],writer.entity[lane],writer.path[lane],err);
+                exit(1);
             }
             if(PQntuples(q)!=1 || PQnfields(q)!=(writer.window_index?4:3)
                 || PQgetisnull(q,0,0) || PQgetisnull(q,0,1)){
                 fputs("publication: invalid Native merge result\n",stderr);PQclear(q);exit(1);
             }
-            entities+=(uint64_t)col_int(q,0,0);
-            paths+=(uint64_t)col_int(q,0,1);
+            entities+=(uint64_t)col_i64(q,0,0);
+            paths+=(uint64_t)col_i64(q,0,1);
             if(writer.window_index)maintenance_partitions(maintenance+lane,q);
             PQclear(q);
         }
@@ -450,14 +430,14 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
 
 int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t count,const File *files,int nfiles){
     if(!count)return 0;start_loader(conninfo,npg);
-    statement(writer.series,"BEGIN ISOLATION LEVEL READ COMMITTED");
+    db_tx(writer.series,LP_SQL_TX_BEGIN_RC);
     if(!writer.registered)writer.registered=lp_idmap_new();
     if(!writer.new_witnesses)writer.new_witnesses=lp_idmap_new();
     lp_id *ids=malloc(count*sizeof *ids);
     if(!ids){perror("witness measurement roots");return 1;}
     for(size_t i=0;i<count;i++){ids[i]=roots[i].id;lp_idmap_put(writer.registered,ids+i,NULL);}
     Args existing_args={0};arg_ids(&existing_args,ids,count);free(ids);
-    PGresult *existing=ask(writer.series,"SELECT DISTINCT witness FROM @extschema@.attestation WHERE witness OPERATOR(@extschema@.=) ANY($1)",&existing_args);
+    PGresult *existing=db_call(writer.series,LP_SQL_WITNESSES_EXISTING,&existing_args);
     lp_idmap *known_witnesses=lp_idmap_new();
     for(int i=0;i<PQntuples(existing);i++)lp_idmap_put(known_witnesses,col_id(existing,i,0),NULL);
     for(size_t i=0;i<count;i++)if(lp_idmap_find(known_witnesses,&roots[i].id)<0){
@@ -465,8 +445,8 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
         writer.witness_changed=1;
     }
     lp_idmap_free(known_witnesses);PQclear(existing);args_free(&existing_args);
-    lp_copy copy={0};char sql[2400];snprintf(sql,sizeof sql,"COPY %s (id,lineage,trust) FROM STDIN (FORMAT binary)",writer.witnesses);
-    copy_open(&copy,writer.series,sql);
+    lp_copy copy={0};
+    db_copy_open_stage_witnesses(&copy,writer.series,writer.witnesses);
     for(size_t i=0;i<count;i++){
         if(!isfinite(roots[i].trust) || roots[i].trust < -1 || roots[i].trust > 1){fprintf(stderr,"invalid witness trust\n");exit(1);}
         lp_copy_row(&copy,3);lp_copy_id(&copy,&roots[i].id);
@@ -476,10 +456,9 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
     copy_close(&copy);lp_buf_free(&copy.buf);
     if(count==1){
         /* Rewrite provisional source/model witness ID in writer.pending to the final trunk ID. */
-        snprintf(sql,sizeof sql,
-            "UPDATE %s SET witness=$1::@extschema@.blake3 WHERE witness OPERATOR(@extschema@.<>) $1::@extschema@.blake3",
-            writer.pending);
-        Args rw={0};arg_raw(&rw,roots[0].id.b,16);PQclear(ask_once(writer.series,sql,&rw));args_free(&rw);
+        Args rw={0};arg_text(&rw,writer.pending);arg_id(&rw,&roots[0].id);
+        db_exec_contract(writer.series,LP_SQL_STAGE_REWRITE_WITNESS,&rw);
+        args_free(&rw);
     }
     if(writer.series_changed || writer.witness_changed || writer.counts_unknown){
         /* New assertions already supplied their exact claim IDs in each
@@ -490,42 +469,14 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
             lp_idmap_put(reused,&files[i].file.id,NULL);
         if(lp_idmap_count(reused)){
             /* a recorded file's testimony, restored into the delta and folded by the one accumulation (series_delta_apply) */
-            int own=PQtransactionStatus(writer.series)==PQTRANS_IDLE; if(own)statement(writer.series,"BEGIN");
-            if(count==1){
-                snprintf(sql,sizeof sql,
-                    "WITH restored AS ("
-                    "  SELECT c.claim, $2::@extschema@.blake3 AS witness,"
-                    "         coalesce(c.dependence_root, w.lineage) AS lineage,"
-                    "         sum(c.games)::bigint AS games, greatest(sum(c.tokens)::bigint, sum(c.games)::bigint) AS tokens,"
-                    "         sum(c.score) AS wins, min(nullif(c.\"position\",0)) AS \"position\","
-                    "         coalesce(max(c.dependence_trust), w.trust) AS trust"
-                    "  FROM @extschema@.laplace_contained_series($1::@extschema@.blake3[]) c"
-                    "  CROSS JOIN %s w"
-                    "  WHERE c.games > 0"
-                    "  GROUP BY c.claim, coalesce(c.dependence_root, w.lineage), w.trust"
-                    ") INSERT INTO %s (claim,witness,lineage,games,tokens,score,\"position\",trust,wins)"
-                    " SELECT claim,witness,lineage,games,tokens,least(1.0,greatest(0.0,wins/games)),\"position\",trust,wins FROM restored",
-                    writer.witnesses,writer.delta);
-                Args args={0};arg_ids(&args,lp_idmap_keys(reused),lp_idmap_count(reused));arg_raw(&args,roots[0].id.b,16);
-                PQclear(ask_once(writer.series,sql,&args));args_free(&args);
-            }else{
-                snprintf(sql,sizeof sql,
-                    "WITH restored AS ("
-                    "  SELECT c.claim, c.trunk AS witness,"
-                    "         coalesce(c.dependence_root, w.lineage) AS lineage,"
-                    "         c.games::bigint AS games, greatest(c.tokens::bigint, c.games::bigint) AS tokens,"
-                    "         c.score AS wins, nullif(c.\"position\",0) AS \"position\","
-                    "         coalesce(c.dependence_trust, w.trust) AS trust"
-                    "  FROM @extschema@.laplace_contained_series($1::@extschema@.blake3[]) c"
-                    "  JOIN %s w ON w.id OPERATOR(@extschema@.=) c.trunk"
-                    "  WHERE c.games > 0"
-                    ") INSERT INTO %s (claim,witness,lineage,games,tokens,score,\"position\",trust,wins)"
-                    " SELECT claim,witness,lineage,games,tokens,least(1.0,greatest(0.0,wins/games)),\"position\",trust,wins FROM restored",
-                    writer.witnesses,writer.delta);
-                Args args={0};arg_ids(&args,lp_idmap_keys(reused),lp_idmap_count(reused));
-                PQclear(ask_once(writer.series,sql,&args));args_free(&args);
-            }
-            series_delta_apply(); if(own)statement(writer.series,"COMMIT");
+            int own=PQtransactionStatus(writer.series)==PQTRANS_IDLE;if(own)db_tx(writer.series,LP_SQL_TX_BEGIN);
+            Args args={0};
+            arg_ids(&args,lp_idmap_keys(reused),lp_idmap_count(reused));
+            arg_text(&args,writer.witnesses);arg_text(&args,writer.delta);
+            if(count==1)arg_id(&args,&roots[0].id);else arg_null(&args);
+            db_exec_contract(writer.series,LP_SQL_STAGE_RESTORE_PRUNED,&args);
+            args_free(&args);
+            series_delta_apply();if(own)db_tx(writer.series,LP_SQL_TX_COMMIT);
             writer.series_changed=1;
         }
         lp_idmap_free(reused);
@@ -534,45 +485,31 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
 }
 int merge(const char *conninfo,int npg,LoadStats *stats){
     (void)conninfo;(void)npg;if(!writer.series)return 0;
-    if(PQtransactionStatus(writer.series)==PQTRANS_IDLE)statement(writer.series,"BEGIN ISOLATION LEVEL READ COMMITTED");
-    char sql[2400];uint64_t admitted=0;
+    if(PQtransactionStatus(writer.series)==PQTRANS_IDLE)db_tx(writer.series,LP_SQL_TX_BEGIN_RC);
+    uint64_t admitted=0;
     if(lp_idmap_count(writer.registered) && (writer.series_changed || writer.witness_changed || writer.counts_unknown)){
-        snprintf(sql,sizeof sql,
-            "INSERT INTO @extschema@.attestation (claim,witness,lineage,games,tokens,score,\"position\",trust)"
-            " SELECT claim,witness,lineage,games,greatest(tokens,games),score,\"position\",trust FROM %s"
-            " ON CONFLICT (claim,witness,lineage) DO UPDATE"
-            "   SET games=excluded.games,tokens=excluded.tokens,score=excluded.score,"
-            "       \"position\"=excluded.\"position\",trust=excluded.trust",
-            writer.pending);
-        statement(writer.series,sql);
-        Args roots={0};arg_ids(&roots,lp_idmap_keys(writer.registered),lp_idmap_count(writer.registered));
-        snprintf(sql,sizeof sql,
-            "SELECT witness,count(DISTINCT claim)::bigint FROM @extschema@.attestation"
-            " WHERE witness OPERATOR(@extschema@.=) ANY($1) GROUP BY witness");
-        PGresult *measured=ask(writer.series,sql,&roots);
-        for(int i=0;i<PQntuples(measured);i++)if(lp_idmap_find(writer.new_witnesses,col_id(measured,i,0))>=0){
-            uint64_t n=(uint64_t)col_int(measured,i,1);
-            if(n>UINT64_MAX-admitted){fprintf(stderr,"attestation counter overflow\n");return 1;}
-            admitted+=n;
+        Args pa={0};arg_text(&pa,writer.pending);
+        if(writer.series_changed || writer.witness_changed)arg_text(&pa,writer.affected);else arg_null(&pa);
+        if(lp_idmap_count(writer.new_witnesses))
+            arg_ids(&pa,lp_idmap_keys(writer.new_witnesses),lp_idmap_count(writer.new_witnesses));
+        else arg_null(&pa);
+        PGresult *pub=db_call(writer.series,LP_SQL_STAGE_PUBLISH_ATTESTATIONS,&pa);
+        args_free(&pa);
+        if(PQntuples(pub)!=1 || PQgetisnull(pub,0,0)){
+            fputs("attestation publication: invalid Native result\n",stderr);PQclear(pub);return 1;
         }
-        PQclear(measured);args_free(&roots);
+        admitted=(uint64_t)col_i64(pub,0,0);
+        PQclear(pub);
     }
-    /* Resolve only the affected claims through the indexed Native series
-     * snapshot after the real trunk is registered in @extschema@.attestation. */
-    snprintf(sql,sizeof sql,
-        "SELECT @extschema@.laplace_attest_stage('%s'::regclass,'%s'::regclass)",
-        writer.pending,writer.affected);
-    /* An unchanged registered source contributes no new evidence on replay.
-     * Recompute only for new series or changed witness trust/containment. */
-    /* A window of a source not yet registered inserts no attestation, so folding it publishes nothing; it would only
-     * hold every consensus bucket lock of its claims for the window (observation-windows). */
-    if(lp_idmap_count(writer.registered) && (writer.series_changed || writer.witness_changed)) statement(writer.series,sql);
-    for(int lane=0;lane<writer.ncopy;lane++){
-        snprintf(sql,sizeof sql,"DROP TABLE %s,%s",writer.entity[lane],writer.path[lane]);
-        statement(writer.series,sql);
-    }
-    snprintf(sql,sizeof sql,"DROP TABLE %s,%s,%s,%s",writer.delta,writer.pending,writer.witnesses,writer.affected);
-    statement(writer.series,sql);statement(writer.series,"COMMIT");
+    size_t ndrop=(size_t)writer.ncopy*2u+4u;
+    const char **drops=malloc(ndrop*sizeof *drops);
+    if(!drops){perror("stage drop");return 1;}
+    size_t dk=0;
+    for(int lane=0;lane<writer.ncopy;lane++){drops[dk++]=writer.entity[lane];drops[dk++]=writer.path[lane];}
+    drops[dk++]=writer.delta;drops[dk++]=writer.pending;drops[dk++]=writer.witnesses;drops[dk++]=writer.affected;
+    if(db_stage_drop(writer.series,drops,ndrop)!=0){free(drops);return 1;}
+    free(drops);
+    db_tx(writer.series,LP_SQL_TX_COMMIT);
     if(stats){stats->attestations+=admitted;stats->attestations_measured=1;}
     PQfinish(writer.series);for(int i=0;i<writer.ncopy;i++)PQfinish(writer.copy[i]);
     free(writer.copy);free(writer.entity);free(writer.path);lp_idmap_free(writer.known);
@@ -582,10 +519,12 @@ int cmd_merge(int argc,char **argv){
     const char *conninfo=laplace_db();
     int at=opts(argc,argv,(const Opt[]){ {.flag="-d",.kind='s',.at=&conninfo}, {0} });
     if(at<argc){fputs("usage: laplace merge [-d conninfo]\n",stderr);return 2;}
-    PGconn *pg=db_connect(conninfo);statement(pg,"SELECT @extschema@.laplace_ensure_stage()");
-    PGresult *q=db_exec(pg,"SELECT * FROM @extschema@.laplace_merge_stage('stage.entity','stage.physicality')");
-    if(PQresultStatus(q)!=PGRES_TUPLES_OK){merge_failure(pg,"stage.entity","stage.physicality",PQresultErrorMessage(q));PQclear(q);PQfinish(pg);return 1;}
-    printf("merged %s entities, %s paths, %s existing rows updated\n",PQgetvalue(q,0,0),PQgetvalue(q,0,1),PQgetvalue(q,0,2));
+    PGconn *pg=db_connect(conninfo);db_exec_contract(pg,LP_SQL_ENSURE_STAGE,NULL);
+    Args ma={0};arg_text(&ma,"stage.entity");arg_text(&ma,"stage.physicality");
+    char err[512];PGresult *q=db_call_try(pg,LP_SQL_MERGE_STAGE_DEFAULT,&ma,err,sizeof err);args_free(&ma);
+    if(!q){merge_failure(pg,"stage.entity","stage.physicality",err);PQfinish(pg);return 1;}
+    printf("merged %lld entities, %lld paths, %lld existing rows updated\n",
+        (long long)col_i64(q,0,0),(long long)col_i64(q,0,1),(long long)col_i64(q,0,2));
     PQclear(q);PQfinish(pg);return 0;
 }
 int cmd_projection(int argc,char **argv){
@@ -594,13 +533,13 @@ int cmd_projection(int argc,char **argv){
         {.flag="-d",.kind='s',.at=&conninfo}, {.flag="--apply",.kind='b',.at=&apply}, {0}});
     if(at<argc){fputs("usage: laplace projection [-d conninfo] [--apply]\n",stderr);return 2;}
     PGconn *pg=db_connect(conninfo);
-    const char *arguments[]={apply?"true":"false"};
-    PGresult *result=db_exec_params(pg,"SELECT * FROM @extschema@.laplace_recoordinate($1::boolean)",1,NULL,arguments,NULL,NULL,0);
-    if(PQresultStatus(result)!=PGRES_TUPLES_OK || PQntuples(result)!=1 || PQnfields(result)!=2){
-        fprintf(stderr,"projection %s: %s",apply?"repair":"audit",PQerrorMessage(pg));
+    Args ra={0};arg_bool(&ra,apply!=0);
+    char err[512];PGresult *result=db_call_try(pg,LP_SQL_RECOORDINATE,&ra,err,sizeof err);args_free(&ra);
+    if(!result || PQntuples(result)!=1 || PQnfields(result)!=2){
+        fprintf(stderr,"projection %s: %s\n",apply?"repair":"audit",result?"invalid result":err);
         PQclear(result);PQfinish(pg);return 1;
     }
-    printf("projection %s: %s entity coordinates, %s path Hilbert keys %s\n",
-        apply?"applied":"audit",PQgetvalue(result,0,0),PQgetvalue(result,0,1),apply?"corrected":"need correction");
+    printf("projection %s: %lld entity coordinates, %lld path Hilbert keys %s\n",
+        apply?"applied":"audit",(long long)col_i64(result,0,0),(long long)col_i64(result,0,1),apply?"corrected":"need correction");
     PQclear(result);PQfinish(pg);return 0;
 }

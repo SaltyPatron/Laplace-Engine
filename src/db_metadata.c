@@ -7,20 +7,16 @@ void start_loader(const char *conninfo, int requested){
     if (writer.series) return;
     writer.from_ingest = active_fold != NULL;
     PGconn *control = db_connect(conninfo);
-    PGresult *q = db_exec(control, "SELECT greatest(1, current_setting('max_connections')::int"
-        " - current_setting('superuser_reserved_connections')::int"
-        " - current_setting('reserved_connections')::int - (SELECT count(*) FROM pg_stat_activity) - 4),"
-        " to_regprocedure('@extschema@.laplace_stage_own(bigint,regclass[])') IS NOT NULL"
-        " AND to_regprocedure('@extschema@.laplace_accumulate_series(regclass,regclass)') IS NOT NULL"
-        " AND to_regprocedure('@extschema@.laplace_attest_stage(regclass,regclass)') IS NOT NULL"
-        " AND to_regprocedure('@extschema@.laplace_present_stage(regclass,regclass,name,name)') IS NOT NULL,"
-        " to_regprocedure('@extschema@.laplace_merge_stage(regclass,regclass,boolean)') IS NOT NULL"
-        " AND to_regprocedure('@extschema@.laplace_stage_partitions(regclass)') IS NOT NULL"
-        " AND to_regprocedure('@extschema@.laplace_clean_partitions(oid[])') IS NOT NULL");
-    if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "ingest connections: %s", PQerrorMessage(control)); exit(1); }
-    if(strcmp(PQgetvalue(q,0,1),"t")){fputs("ingest requires the installed Native observation-window API (laplace 1.44)\n",stderr);PQclear(q);PQfinish(control);exit(1);}
-    writer.window_index=!strcmp(PQgetvalue(q,0,2),"t");
-    int available = atoi(PQgetvalue(q, 0, 0)); PQclear(q);
+    PGresult *q = db_call(control, LP_SQL_POOL_SLOTS, NULL);
+    if (PQntuples(q) != 1 || PQgetisnull(q, 0, 0) || PQgetisnull(q, 0, 1) || PQgetisnull(q, 0, 2)) {
+        fputs("ingest connections: invalid pool check result\n", stderr); PQclear(q); PQfinish(control); exit(1);
+    }
+    if (!col_bool(q, 0, 1)) {
+        fputs("ingest requires the installed Native observation-window API (laplace 1.44)\n", stderr);
+        PQclear(q); PQfinish(control); exit(1);
+    }
+    writer.window_index = col_bool(q, 0, 2);
+    int available = col_i32(q, 0, 0); PQclear(q);
     int cores = omp_get_max_threads();
     if (requested <= 0 || requested > cores) requested = cores;
     const char *pool = getenv("LAPLACE_DB_POOL_SIZE");
@@ -35,11 +31,12 @@ void start_loader(const char *conninfo, int requested){
     }
     writer.copy[0] = control;
     for (int i = 1; i < writer.ncopy; i++) writer.copy[i] = db_connect(conninfo);
-    statement(control, "SELECT @extschema@.laplace_ensure_stage()");
-    statement(control, "SELECT * FROM @extschema@.laplace_stage_retire()");
-    q = db_exec(control, "SELECT pg_current_xact_id()::text");
-    if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "ingest identity: %s", PQerrorMessage(control)); exit(1); }
-    char suffix[40]; snprintf(suffix, sizeof suffix, "%s", PQgetvalue(q, 0, 0)); PQclear(q);
+    db_exec_contract(control, LP_SQL_ENSURE_STAGE, NULL);
+    db_exec_contract(control, LP_SQL_STAGE_RETIRE, NULL);
+    q = db_call(control, LP_SQL_CURRENT_XACT, NULL);
+    if (PQntuples(q) != 1 || PQgetisnull(q, 0, 0)) { fputs("ingest identity: invalid transaction id\n", stderr); PQclear(q); exit(1); }
+    int64_t xid = col_i64(q, 0, 0);
+    char suffix[40]; snprintf(suffix, sizeof suffix, "%lld", (long long)xid); PQclear(q);
     for (int lane=0; lane<writer.ncopy; lane++) {
         snprintf(writer.entity[lane], sizeof writer.entity[lane], "stage.lp_entity_%s_%d", suffix, lane);
         snprintf(writer.path[lane], sizeof writer.path[lane], "stage.lp_path_%s_%d", suffix, lane);
@@ -48,41 +45,31 @@ void start_loader(const char *conninfo, int requested){
     snprintf(writer.pending, sizeof writer.pending, "stage.lp_pending_%s", suffix);
     snprintf(writer.witnesses, sizeof writer.witnesses, "stage.lp_witness_%s", suffix);
     snprintf(writer.affected, sizeof writer.affected, "stage.lp_affected_%s", suffix);
-    char sql[1800];
-    statement(control, "BEGIN");
+    db_tx(control, LP_SQL_TX_BEGIN);
     for (int lane=0; lane<writer.ncopy; lane++) {
-        snprintf(sql, sizeof sql,
-            "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS,present boolean NOT NULL);"
-            "ALTER TABLE %s ALTER coord DROP NOT NULL,ALTER hilbert DROP NOT NULL;"
-            "CREATE UNLOGGED TABLE %s (LIKE stage.physicality INCLUDING DEFAULTS,present boolean NOT NULL);"
-            "ALTER TABLE %s ALTER path DROP NOT NULL,ALTER hilbert DROP NOT NULL",
-            writer.entity[lane],writer.entity[lane],writer.path[lane],writer.path[lane]);
-        statement(control, sql);
+        if (db_stage_create_pair(control, writer.entity[lane], writer.path[lane]) != 0) exit(1);
     }
-    snprintf(sql, sizeof sql,
-        "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, wins double precision NOT NULL);"
-        "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, wins double precision NOT NULL,"
-        " CHECK(games>0 AND games<=9007199254740992 AND wins>=0 AND wins<=games));"
-        "CREATE UNIQUE INDEX ON %s (claim,witness,lineage) NULLS NOT DISTINCT;"
-        "CREATE UNLOGGED TABLE %s (id @extschema@.blake3 PRIMARY KEY, lineage @extschema@.blake3, trust double precision NOT NULL);"
-        "CREATE UNLOGGED TABLE %s (claim @extschema@.blake3 PRIMARY KEY)",
-        writer.delta,writer.pending,writer.pending,writer.witnesses,writer.affected);
-    statement(control, sql);
+    if (db_stage_create_series(control, writer.delta, writer.pending, writer.witnesses, writer.affected) != 0) exit(1);
     /* Creation and the durable ownership marker become visible together.
      * The control connection holds the session lease across all COPY/source
      * transactions. A later load may reclaim these objects only after it exits. */
-    lp_buf owned={0};lp_buf_put(&owned,"{",1);
-    for(int lane=0;lane<writer.ncopy;lane++){
-        if(lane)lp_buf_put(&owned,",",1);
-        lp_buf_put(&owned,writer.entity[lane],strlen(writer.entity[lane]));lp_buf_put(&owned,",",1);
-        lp_buf_put(&owned,writer.path[lane],strlen(writer.path[lane]));
+    size_t nowned = (size_t)writer.ncopy * 2u + 4u;
+    const char **owned = malloc(nowned * sizeof *owned);
+    if (!owned) { perror("stage ownership"); exit(1); }
+    size_t k = 0;
+    for (int lane = 0; lane < writer.ncopy; lane++) {
+        owned[k++] = writer.entity[lane];
+        owned[k++] = writer.path[lane];
     }
-    const char *extra[]={writer.delta,writer.pending,writer.witnesses,writer.affected};
-    for(size_t i=0;i<sizeof extra/sizeof *extra;i++){lp_buf_put(&owned,",",1);lp_buf_put(&owned,extra[i],strlen(extra[i]));}
-    lp_buf_put(&owned,"}",2);
-    Args ownership={0};arg_text(&ownership,suffix);arg_text(&ownership,(const char *)owned.b);
-    PQclear(ask_once(control,"SELECT @extschema@.laplace_stage_own($1::bigint,$2::regclass[])",&ownership));
-    args_free(&ownership);lp_buf_free(&owned);statement(control,"COMMIT");
+    const char *extra[] = {writer.delta, writer.pending, writer.witnesses, writer.affected};
+    for (size_t i = 0; i < sizeof extra / sizeof *extra; i++) owned[k++] = extra[i];
+    Args ownership = {0};
+    arg_i64(&ownership, xid);
+    arg_text_array(&ownership, owned, nowned);
+    db_exec_contract(control, LP_SQL_STAGE_OWN, &ownership);
+    args_free(&ownership);
+    free(owned);
+    db_tx(control, LP_SQL_TX_COMMIT);
     writer.known = lp_idmap_sized(sizeof(Published));
     writer.series = db_connect(conninfo);
 }
@@ -92,9 +79,9 @@ void load_begin(const char *conninfo,int npg){start_loader(conninfo,npg);writer.
 uint8_t *recorded(PGconn **pg,int npg,const lp_id *ids,uint64_t n){
     (void)npg;uint8_t *hit=calloc(n?(size_t)n:1,1);if(!n)return hit;
     Args input={0};arg_ids(&input,ids,(size_t)n);
-    PGresult *result=ask_once(pg[0],"SELECT ordinal FROM @extschema@.laplace_present_ids($1::@extschema@.blake3[])",&input);
+    PGresult *result=db_call(pg[0],LP_SQL_PRESENT_IDS,&input);
     for(int row=0;row<PQntuples(result);row++){
-        int64_t ordinal=(int64_t)lp_be(PQgetvalue(result,row,0),8);
+        int64_t ordinal=col_i64(result,row,0);
         if(ordinal>0 && (uint64_t)ordinal<=n)hit[(size_t)ordinal-1]=1;
     }
     PQclear(result);args_free(&input);return hit;
@@ -120,12 +107,9 @@ int files_known(PGconn **pg, int npg, File *files, int nfiles, LoadStats *st){
     }
     if (count) {
         Args a = {0}; arg_ids(&a, ids, (size_t)count);
-        PGresult *q = ask_once(pg[0],
-            "SELECT wanted.id FROM unnest($1::@extschema@.blake3[]) wanted(id)"
-            " WHERE (SELECT true FROM @extschema@.entity e WHERE e.id OPERATOR(@extschema@.=) wanted.id)"
-            " AND (SELECT true FROM @extschema@.physicality p WHERE p.entity OPERATOR(@extschema@.=) wanted.id)", &a);
+        PGresult *q = db_call(pg[0], LP_SQL_FILES_KNOWN, &a);
         lp_idmap *recorded = lp_idmap_new();
-        for (int row = 0; row < PQntuples(q); row++) { lp_id id; bool fresh; memcpy(id.b, PQgetvalue(q,row,0),16); lp_idmap_put(recorded,&id,&fresh); }
+        for (int row = 0; row < PQntuples(q); row++) { lp_id id = *col_id(q, row, 0); bool fresh; lp_idmap_put(recorded, &id, &fresh); }
         for (int i = 0; i < count; i++) if (lp_idmap_find(recorded, &ids[i]) >= 0) { files[of[i]].known = 1; found++; }
         PQclear(q); args_free(&a); lp_idmap_free(recorded);
     }
@@ -184,17 +168,14 @@ void fold_events(Fold *f, const File *files, int nfiles){
  * events, or a recorded file's restored testimony) is folded by laplace_accumulate_series, its claims marked affected,
  * and the delta emptied. Runs inside the caller's transaction. */
 void series_delta_apply(void){
-    char sql[512]; Args a={0}; arg_text(&a,writer.pending); arg_text(&a,writer.delta);
-    PGresult *q=ask(writer.series,"SELECT @extschema@.laplace_accumulate_series($1::regclass,$2::regclass)",&a);
-    writer.series_changed |= lp_be(PQgetvalue(q,0,0),8)!=0; PQclear(q); args_free(&a);
-    snprintf(sql,sizeof sql,"INSERT INTO %s SELECT DISTINCT claim FROM %s ON CONFLICT DO NOTHING;TRUNCATE %s",
-        writer.affected,writer.delta,writer.delta);
-    statement(writer.series,sql);
+    Args a={0}; arg_text(&a,writer.pending); arg_text(&a,writer.delta); arg_text(&a,writer.affected);
+    PGresult *q=db_call(writer.series,LP_SQL_STAGE_FLUSH_CLAIMS,&a);
+    writer.series_changed |= col_i64(q,0,0)!=0;
+    PQclear(q); args_free(&a);
 }
 void flush_series(Fold *f){    if (!f || !f->dirty.n) return;
-    lp_copy copy={0}; char sql[512];
-    snprintf(sql,sizeof sql,"BEGIN;COPY %s (claim,witness,lineage,games,tokens,score,\"position\",trust,wins) FROM STDIN (FORMAT binary)",writer.delta);
-    copy_open(&copy,writer.series,sql);
+    lp_copy copy={0};
+    db_copy_open_stage_delta(&copy,writer.series,writer.delta);
     for (size_t i=0;i<f->dirty.n;i++) {
         Series *s=lp_strmap_at(f->series,f->dirty.v[i]);
         lp_copy_row(&copy,9); lp_copy_id(&copy,&s->claim); lp_copy_id(&copy,&s->witness);
@@ -206,7 +187,7 @@ void flush_series(Fold *f){    if (!f || !f->dirty.n) return;
         lp_copy_f64(&copy,s->t.wins);
     }
     copy_close(&copy); lp_buf_free(&copy.buf);
-    series_delta_apply(); statement(writer.series,"COMMIT");
+    series_delta_apply(); db_tx(writer.series, LP_SQL_TX_COMMIT);
     lp_strmap_free(f->series);f->series=lp_strmap_sized(sizeof(Series));
     f->dirty.n=0;
 }

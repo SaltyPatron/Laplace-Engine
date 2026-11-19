@@ -25,7 +25,6 @@ PGconn *db_read(const char *conninfo);               /* db_connect for a read: o
 PGconn *db_try(const char *conninfo);                /* a connection, or NULL when there is none to be had: for what can do without */
 
 /* ---- the database, as the engine speaks to it (pg.c): a statement's parameters, its columns read back, COPY */
-size_t ids_param(PGconn *,uint8_t *out, const lp_id *ids, uint32_t n); /* Native binary array bound to this connection's installed ID type */
 void   id_text(const lp_id *id, char out[33]);                        /* 32 hexadecimal digits */
 typedef struct { lp_id *id; int n; } Run;                               /* a trajectory's constituents in order, runs written out */
 Run run_of(const uint8_t *ewkb, size_t len);                            /* ... from a path as the database sends it (lp_path_ids) */
@@ -82,27 +81,20 @@ typedef struct { lp_id file, unit; uint64_t keys; int64_t length; int tier; uint
 HeldFile *held_in(PGconn *pg,const lp_id *trunk,const lp_id *keys,int nkeys,long cap,long max_nodes,
                   uint64_t *hubs,int *levels,int *cut,size_t *nout);
 int tier_max(PGconn *pg,const lp_id *ids,int n);
-#define ARGS_MAX 8
-enum { SQL_ID_ARRAY=2 }; /* binary payload whose element OID binds at execution */
+#define ARGS_MAX 12
+enum { SQL_TEXT=0, SQL_BIN=1, SQL_ID_ARRAY=2, SQL_NULL=3 }; /* binary payload whose element OID binds at execution */
 typedef struct { lp_buf b; int binary; } SqlArg;
-typedef struct { SqlArg a[ARGS_MAX]; int n; } Args;                    /* zeroed to begin; args_free when done */
+typedef struct Args { SqlArg a[ARGS_MAX]; int n; } Args;                    /* zeroed to begin; args_free when done */
 void arg_ids(Args *, const lp_id *ids, size_t n);                     /* a blake3[], in binary */
 void arg_text(Args *, const char *s);                                 /* a value as text: the server casts it */
-void arg_int(Args *, long long v);
-void arg_f64(Args *, double v);
 void arg_raw(Args *, const void *bytes, size_t n);                    /* bytes already in the binary form */
 void args_reset(Args *);                                              /* empty, its buffers kept for the next statement */
 void args_free(Args *);
-PGresult *ask(PGconn *, const char *sql, Args *);                     /* planned once for the connection (db_ask); exits on an error */
 /* One transport grain, independent of admitted set size. Binary ID arrays
  * have a 20-byte header and one length word per fixed-width identity. */
 enum { DB_TRANSPORT_BYTES=1u<<22, DB_ID_WINDOW=(DB_TRANSPORT_BYTES-20)/(sizeof(lp_id)+sizeof(uint32_t)) };
-PGresult *ask_once(PGconn *, const char *sql, Args *);                /* a statement made for this call alone (a partition named in it) */
-PGresult *ask_try(PGconn *, const char *sql, Args *);                 /* the same, NULL when the database refuses it (a table not made yet) */
-void exec(PGconn *, const char *sql);                                 /* a statement with nothing to read back */
 /* A column of a row, as the database sends it in binary. */
 static inline const lp_id *col_id(const PGresult *q, int r, int c){ return (const lp_id *)PQgetvalue(q, r, c); }
-static inline int64_t col_int(const PGresult *q, int r, int c){ int n = PQgetlength(q, r, c); uint64_t u = lp_be(PQgetvalue(q, r, c), n); return n == 2 ? (int16_t)u : n == 4 ? (int32_t)u : (int64_t)u; }
 static inline double col_f64(const PGresult *q, int r, int c){ return lp_be_f64(PQgetvalue(q, r, c)); }
 static inline lp_path col_path(const PGresult *q, int r, int c){ return lp_path_of((const uint8_t *)PQgetvalue(q, r, c), (size_t)PQgetlength(q, r, c)); }
 static inline lp_rating col_rating(const PGresult *q, int r, int c){ lp_rating x = { col_f64(q, r, c), col_f64(q, r, c + 1), col_f64(q, r, c + 2) }; return x; }
@@ -110,21 +102,7 @@ static inline lp_rating col_rating(const PGresult *q, int r, int c){ lp_rating x
 void copy_open(lp_copy *, PGconn *, const char *sql);
 void copy_next(lp_copy *);                                          /* finish this stream and enter the next COPY in the same command */
 void copy_close(lp_copy *);                                           /* the trailer, the last flush, the server's answer: exits on a failure */
-
-/* One statement over a set of IDs, on every connection at once (pg.c): the IDs grouped by where each can be, each group
- * in ID order and in chunks, a chunk sent to each table its group names (%s in the statement); every row through each,
- * one at a time, with place[k] where the chunk's k-th ID stands in ids. */
-typedef void (*Each)(const PGresult *q, int row, const uint64_t *place, void *ctx);
-typedef struct {
-    int ngroups;
-    int (*group)(const lp_id *ids, uint64_t i, void *ctx);                  /* NULL: one group */
-    int (*targets)(int group, void *ctx);                                    /* NULL: one table a group */
-    void (*target)(int group, int t, char *out, size_t cap, void *ctx);      /* NULL: no table named */
-    void *ctx;
-} Groups;
-uint64_t over_ids(PGconn **pg, int npg, const lp_id *ids, uint64_t n, const Groups *, size_t chunk, const char *sql, Each, void *ctx);
-Groups by_digit(const char *table);                                     /* table_0 .. table_f, by the ID's first hex digit */
-Groups whole(void);                                                     /* one group, the statement as written */
+#include "pg_contract.h"
 
 /* ---- a command's options: each its flag, what it holds ('s' a string, 'i' an int, 'u' unsigned, 'l' long long, 'd' a
  * double, 'b' a flag that is there or not, 'v' an int set to val) and where; the list ends with { NULL }. Returns where

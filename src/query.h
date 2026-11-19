@@ -30,6 +30,7 @@ typedef struct {
     int elect[FW_E_KEYS], nelect;                     /* the election order: the evidence keys a proposal is compared by, first to last */
     int tie, seed_session;                            /* what a real tie gets (first, draw, ask); whether the seed holds the session and turn */
     char refuse_predicate[FW_NAMES][96], refuse_witness[FW_NAMES][96]; int nrefuse_predicate, nrefuse_witness;
+    char negate[FW_NAMES][96], negate_relation[FW_NAMES][96], scope_stop[FW_NAMES][96]; int nnegate, nnegate_relation, nscope_stop;
     char only_predicate[FW_NAMES][96]; int nonly_predicate;
     char prevalence[96]; int prevalence_pair;      /* prevalence_pair: the count is of the pair [word, concept] itself */                              /* the relation by which a source counts a word's concepts (a tagged corpus): the prior of a fork */   /* when any is named, only strands whose relation is one of these are read: one head, or a few, alone */
     struct { int what, n; } take[FW_TAKES]; int ntake; /* a pull's steps, in order */
@@ -38,7 +39,7 @@ typedef struct {
     char chain[FW_ALTS][FW_CHAIN][96]; int nchain[FW_ALTS], nalt;                                             /* the relations a pull follows from the word that pulls hardest, in order */
     char lexical[4][96], gloss[2][96], equiv[5][96], usages[2][96]; int nequiv;                                                                         /* translation: the recipe, the thing it names a lexicalization, and its parts that are the language and the concept; the recipe and the part whose relation says what is shown of a concept; the recipe and the part whose relation states how often a sense is observed (usages, pull.c) */
     char up[FW_CHAIN][96]; int nup; char language[2][96];
-    struct { int ready; lp_id prevalence; lp_id only[FW_NAMES], refuse[FW_NAMES], refuse_witness[FW_NAMES], weigh[FW_WEIGHS], role_by, role[FW_WEIGHS], chain[FW_ALTS][FW_CHAIN], up[FW_CHAIN], language[2]; } id;
+    struct { int ready; lp_id image_id; lp_id prevalence; lp_id only[FW_NAMES], refuse[FW_NAMES], refuse_witness[FW_NAMES], negate[FW_NAMES], negate_relation[FW_NAMES], scope_stop[FW_NAMES], weigh[FW_WEIGHS], role_by, role[FW_WEIGHS], chain[FW_ALTS][FW_CHAIN], up[FW_CHAIN], language[2]; } id;
 } Firmware;                                           /* id: every name above as the entity it is, computed once a pass (firmware_ids) */
 /* ---- the lookups the forward pass is made of (pull.c) */
 typedef struct { lp_id id; const lp_id *part; int np; lp_rating r; int64_t matches; double conf; int position; } Claim;   /* a claim is a tuple: a pair, three parts, or a longer path */
@@ -51,7 +52,6 @@ int lexicalization_of(lp_text *, const Firmware *, Lexicalization *);
 void firmware_say(const Firmware *, int op);
 lp_ref entity_named(lp_text *, const char *text, lp_ref *parts, size_t cap, size_t *np);      /* a text's trunk, computed here */
 void   show_ref(const char *label, const lp_ref *r);
-const char *refuse_param(PGconn *pg, int *len);
 int    middle_refused(const lp_id *part, int np);
 /* Returned claims and all operands share one allocation; release with free(). */
 Claim *claim_block(size_t count,size_t operands);

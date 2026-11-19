@@ -5,11 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-size_t ids_param(PGconn *pg,uint8_t *out, const lp_id *ids, uint32_t n){
-    lp_buf encoded={.b=out,.cap=20+20*(size_t)n};
-    lp_pg_ids(&encoded,db_binding(pg)->id_type,ids,(size_t)n);
-    return encoded.n;
-}
 void id_text(const lp_id *id, char out[33]){ lp_id_hex(id, out); }
 
 /* A trajectory's constituents in order, runs written out, from a path as the database sends it. What a record says, its
@@ -36,11 +31,11 @@ static void standings_of(PGconn *pg,Hold *holds,int count){
     for(size_t begin=0;begin<n;){
         size_t amount=n-begin;if(amount>DB_ID_WINDOW)amount=DB_ID_WINDOW;
         args_reset(&args);arg_ids(&args,lp_idmap_keys(wanted)+begin,amount);
-        PGresult *rows=ask(pg,"SELECT ordinal,rating,deviation,volatility,matches FROM @extschema@.laplace_standings($1::@extschema@.blake3[])",&args);
+        PGresult *rows=db_call(pg,LP_SQL_STANDINGS,&args);
         for(int row=0;row<PQntuples(rows);row++){
-            size_t at=begin+(size_t)col_int(rows,row,0)-1;
+            size_t at=begin+(size_t)col_i64(rows,row,0)-1;
             for(int i=*(int *)lp_idmap_at(wanted,at);i>=0;i=links[i]){
-                holds[i].r=col_rating(rows,row,1);holds[i].matches=col_int(rows,row,4);holds[i].stood=1;
+                holds[i].r=col_rating(rows,row,1);holds[i].matches=col_i64(rows,row,4);holds[i].stood=1;
             }
         }
         PQclear(rows);begin+=amount;
@@ -54,30 +49,34 @@ static Hold *holders(PGconn *pg,const lp_id *keys,int nkeys,int floor,int each,i
     arg_ids(&args,required,required?1:0);
     PGresult *rows;
     if(!each){
-        arg_int(&args,floor);arg_int(&args,kinds);
-        rows=ask(pg,"SELECT 0::bigint,entity,path,tier,mask,CASE WHEN mask OPERATOR(@extschema@.?) 0::smallint THEN 1 ELSE 0 END::smallint,false"
-            " FROM @extschema@.laplace_containers($1::@extschema@.blake3[]||$2::@extschema@.blake3[],'{}'::smallint[])"
-            " WHERE tier>$3::smallint AND (($4::smallint & CASE WHEN mask OPERATOR(@extschema@.?) 0::smallint THEN 1 ELSE 2 END)<>0)",&args);
+        arg_i16(&args,(int16_t)floor);arg_i16(&args,(int16_t)kinds);
+        rows=db_call(pg,LP_SQL_CONTAINERS_ABOVE,&args);
     }else{
-        arg_int(&args,each==1);arg_int(&args,floor);arg_int(&args,cap);arg_int(&args,kinds);
-        rows=ask(pg,"SELECT ordinal,entity,path,tier,mask,kind,hub FROM @extschema@.laplace_holders("
-            "$1::@extschema@.blake3[],$2::@extschema@.blake3[],$3::integer<>0,$4::smallint,$5::bigint,$6::smallint)",&args);
+        arg_bool(&args,each==1);arg_i16(&args,(int16_t)floor);arg_i64(&args,(int64_t)cap);
+        arg_i16(&args,(int16_t)kinds);arg_null(&args);arg_i16(&args,0);
+        rows=db_call(pg,standing?LP_SQL_HOLDERS_WITH_STANDINGS:LP_SQL_HOLDERS,&args);
     }
     lp_vec(Hold) out={0};
     for(int row=0;row<PQntuples(rows);row++){
-        int ordinal=(int)col_int(rows,row,0),claim=(int)col_int(rows,row,5);
-        if(PQgetvalue(rows,row,6)[0]){
+        int ordinal=each?(int)col_i64(rows,row,0):0;
+        int col_base=each?1:0;
+        int claim=(int)col_i16(rows,row,col_base+4);
+        if(each && col_bool(rows,row,6)){
             if(hub && ordinal>0 && ordinal<=nkeys)hub[2*(ordinal-1)+(claim?0:1)]=1;
             continue;
         }
-        Hold hold={.src=each==1?ordinal-1:each==2?-1:0,.entity=*col_id(rows,row,1),
-            .tier=(int16_t)col_int(rows,row,3),.claim=(uint8_t)claim,.path_len=PQgetlength(rows,row,2)};
+        Hold hold={.src=each==1?ordinal-1:each==2?-1:0,.entity=*col_id(rows,row,col_base),
+            .tier=col_i16(rows,row,col_base+2),.claim=(uint8_t)claim,.path_len=PQgetlength(rows,row,col_base+1)};
         hold.path=malloc((size_t)(hold.path_len?hold.path_len:1));
-        memcpy(hold.path,PQgetvalue(rows,row,2),(size_t)hold.path_len);lp_push(&out,hold);
+        memcpy(hold.path,PQgetvalue(rows,row,col_base+1),(size_t)hold.path_len);
+        if(each && standing && !PQgetisnull(rows,row,7)){
+            hold.r=col_rating(rows,row,7);hold.matches=col_i64(rows,row,10);hold.stood=1;
+        }
+        lp_push(&out,hold);
     }
     PQclear(rows);args_free(&args);
     if(out.n>1)qsort(out.v,out.n,sizeof(Hold),hold_order);
-    if(standing && out.n)standings_of(pg,out.v,(int)out.n);
+    if(!each && standing && out.n)standings_of(pg,out.v,(int)out.n);
     *nout=(int)out.n;return out.v;
 }
 Hold *holds_above(PGconn *pg,const lp_id *keys,int n,int floor,int each,int standing,int *nout){
@@ -97,84 +96,81 @@ Hold *holds_capped(PGconn *pg,const lp_id *keys,int n,int cap,int standing,int k
     return holders(pg,keys,n,-1,1,standing,NULL,cap,kinds,hub,nout);
 }
 long holds_count(PGconn *pg,const lp_id *keys,int n,int kind){
-    if(!n)return 0;Args args={0};arg_ids(&args,keys,(size_t)n);arg_int(&args,kind);
-    PGresult *rows=ask(pg,"SELECT count(*) FROM @extschema@.laplace_containers($1::@extschema@.blake3[],'{}'::smallint[])"
-        " WHERE $2::smallint<0 OR (mask OPERATOR(@extschema@.?) 0::smallint)=($2::smallint=1)",&args);
-    long count=(long)col_int(rows,0,0);PQclear(rows);args_free(&args);return count;
+    if(!n)return 0;Args args={0};arg_ids(&args,keys,(size_t)n);arg_i16(&args,(int16_t)kind);
+    PGresult *rows=db_call(pg,LP_SQL_CONTAINERS_COUNT,&args);
+    long count=(long)col_i64(rows,0,0);PQclear(rows);args_free(&args);return count;
 }
 
-/* Up the container index to the files (engine.h, held_up). The front is the nodes whose keys changed at the level
- * before; each holder of a front node takes the keys of every front node it holds (by content, or by its record), and
- * is in the next front when it is new or its keys grew, unless it is a file. Keys only grow, so a node re-enters the
- * front at most once a key. */
-static size_t held_node(HeldUp *out,lp_idmap *at,size_t *cap,const lp_id *id,bool *fresh){
-    size_t i=lp_idmap_put(at,id,fresh);
-    if(*fresh){lp_reserve((void **)&out->node,cap,out->n+1,sizeof *out->node);out->node[out->n++]=(Held){.id=*id};}
-    return i;
-}
+/* Up the container index to the files inside PostgreSQL (laplace_held_closure).
+ * Deduplicates (parent, child) edges in vertex order and projects seed hub flags
+ * and node/edge arrays onto HeldUp. */
 void held_up(PGconn *pg,const lp_id *keys,int nkeys,int by,int cap,size_t max_nodes,HeldUp *out){
     memset(out,0,sizeof *out);
     if(nkeys<=0)return;
-    lp_idmap *at=lp_idmap_new(),*front=lp_idmap_new();
-    lp_strmap *pairs=lp_strmap_sized(1);
-    size_t ncap=0,ecap=0;lp_vec(lp_vertex) vx={0};
-    for(int k=0;k<nkeys;k++){
-        bool fresh;size_t i=held_node(out,at,&ncap,keys+k,&fresh);
-        if(k<64)out->node[i].keys|=1ull<<k;
-        lp_idmap_put(front,keys+k,NULL);
-    }
-    while(lp_idmap_count(front) && out->levels<128 && !out->cut){
-        int nh=0;Hold *h;
-        if(out->levels==0 && cap>=0){
-            int *hub=calloc((size_t)nkeys*2,sizeof *hub);
-            h=holds_capped(pg,lp_idmap_keys(front),(int)lp_idmap_count(front),cap,0,3,hub,&nh);
-            for(int k=0;k<nkeys && k<64;k++)if(hub[2*k] || hub[2*k+1])out->hub|=1ull<<k;
-            free(hub);
-        }else h=holds_any(pg,lp_idmap_keys(front),(int)lp_idmap_count(front),&nh);
-        lp_idmap *next=lp_idmap_new();
-        for(int j=0;j<nh && !out->cut;j++){
-            size_t nv=lp_path_vertices(h[j].path,(size_t)h[j].path_len,NULL,0);if(!nv)continue;
-            lp_vec_reserve(&vx,nv);lp_path_vertices(h[j].path,(size_t)h[j].path_len,vx.v,nv);
-            int file=vx.v[0].said==LP_SAID_METADATA;size_t parent=SIZE_MAX;uint64_t before=0;bool grew=false;
-            /* by name, a file is reached through its record (its first vertex) and nothing else that is a file counts */
-            if(by==HELD_NAME && file && lp_idmap_find(front,&vx.v[0].id)<0)continue;
-            for(size_t v=0;v<nv;v++){
-                if(lp_idmap_find(front,&vx.v[v].id)<0)continue;
-                if(by==HELD_CONTENT ? vx.v[v].said==LP_SAID_METADATA : file && v>0)continue;
-                int64_t child=lp_idmap_find(at,&vx.v[v].id);if(child<0)continue;
-                if(parent==SIZE_MAX){
-                    bool fresh;
-                    if(lp_idmap_find(at,&h[j].entity)<0 && out->n>=max_nodes){out->cut=1;break;}
-                    parent=held_node(out,at,&ncap,&h[j].entity,&fresh);
-                    out->node[parent].file|=(uint8_t)file;grew=fresh;before=out->node[parent].keys;
-                }
-                out->node[parent].keys|=out->node[child].keys;
-                uint64_t key=((uint64_t)parent<<32)|(uint64_t)child;bool added;
-                lp_strmap_put(pairs,&key,sizeof key,&added);
-                if(added){lp_reserve((void **)&out->edge,&ecap,out->ne+1,sizeof *out->edge);
-                    out->edge[out->ne++]=(HeldEdge){(uint32_t)parent,(uint32_t)child,(uint8_t)vx.v[v].said};}
+    Args args={0};
+    arg_ids(&args,keys,(size_t)nkeys);
+    arg_i16(&args,(int16_t)by);
+    arg_i64(&args,(int64_t)cap);
+    arg_i32(&args,128);
+    arg_i32(&args,(int32_t)(max_nodes>(size_t)INT32_MAX?(size_t)INT32_MAX:max_nodes));
+    PGresult *rows=db_call(pg,LP_SQL_HELD_CLOSURE,&args);
+    args_free(&args);
+    int nr=PQntuples(rows);
+    if(nr>0){
+        out->n=(size_t)nr;
+        out->node=calloc(out->n,sizeof *out->node);
+        out->cut=col_bool(rows,0,13)?1:0;
+        out->levels=col_i32(rows,0,14);
+        lp_strmap *pairs=lp_strmap_sized(1);
+        size_t ecap=0,ac=64;
+        int32_t *cidx=malloc(ac*sizeof *cidx);
+        int16_t *csaid=malloc(ac*sizeof *csaid);
+        for(int row=0;row<nr;row++){
+            int32_t pidx=col_i32(rows,row,0);
+            if(pidx<0 || (size_t)pidx>=out->n)continue;
+            out->node[pidx].id=*col_id(rows,row,1);
+            out->node[pidx].keys=(uint64_t)col_i64(rows,row,3);
+            out->node[pidx].file=col_bool(rows,row,4)?1:0;
+            if(col_bool(rows,row,6) && col_i32(rows,row,8)==0 && pidx<64)
+                out->hub|=1ull<<(uint32_t)pidx;
+            size_t nc=col_i32_array(rows,row,9,cidx,ac);
+            if(nc>ac){
+                ac=nc;
+                cidx=realloc(cidx,ac*sizeof *cidx);
+                csaid=realloc(csaid,ac*sizeof *csaid);
+                nc=col_i32_array(rows,row,9,cidx,ac);
             }
-            if(parent!=SIZE_MAX && !file && (grew || out->node[parent].keys!=before))
-                lp_idmap_put(next,&out->node[parent].id,NULL);
+            col_i16_array(rows,row,10,csaid,ac);
+            for(size_t k=0;k<nc;k++){
+                if(cidx[k]<0 || (size_t)cidx[k]>=out->n)continue;
+                uint64_t key=((uint64_t)(uint32_t)pidx<<32)|(uint64_t)(uint32_t)cidx[k];
+                bool added;
+                lp_strmap_put(pairs,&key,sizeof key,&added);
+                if(added){
+                    lp_reserve((void **)&out->edge,&ecap,out->ne+1,sizeof *out->edge);
+                    out->edge[out->ne++]=(HeldEdge){(uint32_t)pidx,(uint32_t)cidx[k],(uint8_t)csaid[k]};
+                }
+            }
         }
-        holds_free(h,nh);lp_idmap_free(front);front=next;out->levels++;
+        free(cidx);free(csaid);lp_strmap_free(pairs);
     }
-    lp_vec_free(&vx);lp_idmap_free(front);lp_idmap_free(at);lp_strmap_free(pairs);
+    PQclear(rows);
 }
 void held_up_free(HeldUp *u){free(u->node);free(u->edge);memset(u,0,sizeof *u);}
 HeldFile *held_in(PGconn *pg,const lp_id *trunk,const lp_id *keys,int nkeys,long cap,long max_nodes,
                   uint64_t *hubs,int *levels,int *cut,size_t *nout){
     *nout=0;*hubs=0;*levels=0;*cut=0;
     if(nkeys<=0)return NULL;
-    Args args={0};arg_ids(&args,keys,(size_t)nkeys);arg_ids(&args,trunk,trunk?1:0);arg_int(&args,cap);arg_int(&args,max_nodes);
-    PGresult *rows=ask(pg,"SELECT file,keys,hubs,levels,cut,unit,unit_length,counts,unit_tier FROM @extschema@.laplace_held_files("
-        "$1::@extschema@.blake3[],($2::@extschema@.blake3[])[1],$3::bigint,$4::bigint)",&args);
+    Args args={0};arg_ids(&args,keys,(size_t)nkeys);
+    if(trunk)arg_id(&args,trunk); else arg_null(&args);
+    arg_i64(&args,(int64_t)cap);arg_i64(&args,(int64_t)max_nodes);
+    PGresult *rows=db_call(pg,LP_SQL_HELD_FILES,&args);
     lp_vec(HeldFile) out={0};
     for(int row=0;row<PQntuples(rows);row++){
-        *hubs=(uint64_t)col_int(rows,row,2);*levels=(int)col_int(rows,row,3);*cut=PQgetvalue(rows,row,4)[0]!=0;
+        *hubs=(uint64_t)col_i64(rows,row,2);*levels=(int)col_i64(rows,row,3);*cut=col_bool(rows,row,4)?1:0;
         if(PQgetisnull(rows,row,0))continue;
-        HeldFile held={.file=*col_id(rows,row,0),.unit=*col_id(rows,row,5),.keys=(uint64_t)col_int(rows,row,1),
-                       .length=col_int(rows,row,6),.tier=(int)col_int(rows,row,8)};
+        HeldFile held={.file=*col_id(rows,row,0),.unit=*col_id(rows,row,5),.keys=(uint64_t)col_i64(rows,row,1),
+                       .length=col_i64(rows,row,6),.tier=(int)col_i64(rows,row,8)};
         /* counts: a binary int8[] of one dimension, each element its length then its value */
         const uint8_t *a=(const uint8_t *)PQgetvalue(rows,row,7);int bytes=PQgetlength(rows,row,7);
         if(bytes>=20 && lp_be(a,4)==1){

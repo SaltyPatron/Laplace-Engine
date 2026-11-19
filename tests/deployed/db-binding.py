@@ -24,7 +24,7 @@ CHECK = 'db-binding'
 
 
 def adapter():
-    binary = Path(os.environ.get('LAPLACE_CHECK_BIN', '')) / 'pg_plan_lifecycle'
+    binary = Path(os.environ.get('LAPLACE_CHECK_BIN', '')) / ('pg_plan_lifecycle.exe' if os.name == 'nt' else 'pg_plan_lifecycle')
     if not binary.is_file():
         raise SystemExit(f'db-binding: no check program {binary} (LAPLACE_CHECK_BIN; CMake target pg_plan_lifecycle)')
     result = subprocess.run([str(binary), connection()], text=True, capture_output=True, timeout=300)

@@ -303,8 +303,8 @@ int ingest_highway(const char *conninfo, const char *t0p, int threads, int do_lo
 /* The room left where the database keeps its data, or -1 when that cannot be seen from here (another machine). */
 static double room_left(const char *conninfo){
     PGconn *pg = db_try(conninfo); double gb = -1;
-    if (pg) { PGresult *r = db_exec(pg, "SHOW data_directory");
-        if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) { struct statvfs v; if (!statvfs(PQgetvalue(r, 0, 0), &v)) gb = (double)v.f_bavail * (double)v.f_frsize / 1e9; }
+    if (pg) { char err[512]; PGresult *r = db_call_try(pg, LP_SQL_SHOW_DATA_DIR, NULL, err, sizeof err);
+        if (r && PQntuples(r) && !PQgetisnull(r, 0, 0)) { struct statvfs v; if (!statvfs(col_str(r, 0, 0), &v)) gb = (double)v.f_bavail * (double)v.f_frsize / 1e9; }
         PQclear(r); }
     PQfinish(pg); return gb;
 }
@@ -313,7 +313,9 @@ static double room_left(const char *conninfo){
  * what is recorded once is not recorded again, so no later source is held to it. */
 static double db_bytes(const char *conninfo){
     PGconn *pg = db_try(conninfo); double b = -1;
-    if (pg) { PGresult *r = db_exec(pg, "SELECT pg_database_size(current_database())"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r)) b = atof(PQgetvalue(r, 0, 0)); PQclear(r); }
+    if (pg) { char err[512]; PGresult *r = db_call_try(pg, LP_SQL_DB_SIZE_BYTES, NULL, err, sizeof err);
+        if (r && PQntuples(r) && !PQgetisnull(r, 0, 0)) b = (double)col_i64(r, 0, 0);
+        PQclear(r); }
     PQfinish(pg); return b;
 }
 static void room_keep(const char *path, const char *source, double times){
@@ -336,11 +338,10 @@ static void after_recorded(const char *conninfo, const char *t0p, const Source *
     lp_text_free(ctx);
     PGconn *pg = db_try(conninfo);
     if (pg) {
-        Args q = { 0 }; arg_ids(&q, names, (size_t)n);
-        PGresult *r = ask_try(pg, "SELECT DISTINCT n.id FROM @extschema@.laplace_paths(ARRAY(SELECT w.witness FROM @extschema@.laplace_witness_trust() w)) p"
-                                  " JOIN unnest($1::@extschema@.blake3[]) n(id) ON @extschema@.laplace_path_starts(p.path, n.id)", &q);
+        Args q = { 0 }; arg_ids(&q, names, (size_t)n); char err[512];
+        PGresult *r = db_call_try(pg, LP_SQL_AFTER_RECORDED, &q, err, sizeof err);
         if (r) { for (int k = 0; k < PQntuples(r); k++) for (int j = 0; j < n; j++) if (lp_id_eq(col_id(r, k, 0), &names[j])) recorded[of[j]] = 1; PQclear(r); }
-        else fprintf(stderr, "whether what the sources named come after is recorded could not be read: %s; it is ingested\n", PQerrorMessage(pg));
+        else fprintf(stderr, "whether what the sources named come after is recorded could not be read: %s; it is ingested\n", err);
         args_free(&q);
     }
     PQfinish(pg); free(names); free(of);
@@ -385,7 +386,7 @@ int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int 
         double bytes_in = (double)source_bytes(&src[i], rec, nrec), before = loads ? db_bytes(conninfo) : -1;
         if (bytes_in <= 0) { printf("%-4d %-38s %-10s %10s   its root holds no files%s%s\n", i + 1, src[i].name, src[i].held[0] ? "held" : "absent", "", src[i].held[0] ? ": " : "", src[i].held); if (src[i].held[0]) held++; else absent++; continue; }
         if (loads) { double have = room_left(conninfo); struct statvfs v; double whole = 0;
-            { PGconn *pg = db_try(conninfo); if (pg) { PGresult *r = db_exec(pg, "SHOW data_directory"); if (PQresultStatus(r) == PGRES_TUPLES_OK && PQntuples(r) && !statvfs(PQgetvalue(r, 0, 0), &v)) whole = (double)v.f_blocks * (double)v.f_frsize / 1e9; PQclear(r); } PQfinish(pg); }
+            { PGconn *pg = db_try(conninfo); if (pg) { char err[512]; PGresult *r = db_call_try(pg, LP_SQL_SHOW_DATA_DIR, NULL, err, sizeof err); if (r && PQntuples(r) && !PQgetisnull(r, 0, 0) && !statvfs(col_str(r, 0, 0), &v)) whole = (double)v.f_blocks * (double)v.f_frsize / 1e9; PQclear(r); } PQfinish(pg); }
             if (have >= 0 && have < whole / 10) { char why[128]; snprintf(why, sizeof why, "no room: %.0f GB is left of %.0f GB", have, whole);
                 printf("%-4d %-38s %-10s %10s   %s\n", i + 1, src[i].name, "not begun", "", why); short_of_room++; continue; } }
         char log[4300]; snprintf(log, sizeof log, "%s/%s.log", dir, src[i].name);

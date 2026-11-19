@@ -13,12 +13,15 @@ here=$(cd "$(dirname "$0")" && pwd)
 : "${LAPLACE_ENGINE_BUILD:?the deployed Engine build tree}"
 [[ -x $LAPLACE_PROGRAM ]] || { echo "run.sh: $LAPLACE_PROGRAM is not a program" >&2; exit 2; }
 # The check programs, built against the deployed configuration of this revision.
-cmake --build "$LAPLACE_ENGINE_BUILD" --target reader_depth presence_frontier pg_plan_lifecycle || exit 1
+targets=(reader_depth pg_plan_lifecycle)
+is_win=0
+case "${OSTYPE:-}" in msys*|cygwin*|win*) is_win=1 ;; *) targets+=(presence_frontier) ;; esac
+cmake --build "$LAPLACE_ENGINE_BUILD" --target "${targets[@]}" || exit 1
 export LAPLACE_CHECK_BIN=$LAPLACE_ENGINE_BUILD
 export LAPLACE_RECIPES_FROM=$here/../../recipes
 export TMPDIR=${TMPDIR:-/tmp}
 if (( $# )); then checks=("$@"); else
-  checks=(); for f in "$here"/*.py; do n=$(basename "$f" .py); [[ $n == check ]] || checks+=("$n"); done
+  checks=(); for f in "$here"/*.py; do n=$(basename "$f" .py); [[ $n == check || ( $is_win == 1 && $n == presence-frontier ) ]] || checks+=("$n"); done
 fi
 failed=()
 for c in "${checks[@]}"; do

@@ -53,14 +53,6 @@ void *os_reserve(size_t bytes){
     madvise(p, bytes, MADV_HUGEPAGE);                   /* random probes over gigabytes: fewer TLB misses */
     return p;
 }
-const void *os_map_read(const char *path, size_t *size){
-    int fd = open(path, O_RDONLY); if (fd < 0) return NULL;
-    struct stat st; if (fstat(fd, &st) || st.st_size == 0) { close(fd); return NULL; }
-    void *p = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_SHARED, fd, 0); close(fd);
-    if (p == MAP_FAILED) return NULL;
-    *size = (size_t)st.st_size; return p;
-}
-void os_unmap(const void *p, size_t size){ if (p) munmap((void *)p, size); }
 void os_discard(void *p, size_t bytes){ if (bytes) madvise(p, bytes, MADV_DONTNEED); }
 int os_run_logged(const char *exe, char *const argv[], const char *log, const char *var, const char *value){
     (void)exe; (void)argv; (void)log; (void)var; (void)value; errno = ENOSYS; return -1;      /* POSIX callers fork */
@@ -266,17 +258,6 @@ void *os_reserve(size_t bytes){
     region[i].bytes = bytes; region[i].base = p;
     return p;
 }
-const void *os_map_read(const char *path, size_t *size){
-    wchar_t *w = wide(path); if (!w) return NULL;
-    HANDLE f = CreateFileW(w, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL); free(w);
-    if (f == INVALID_HANDLE_VALUE) return NULL;
-    LARGE_INTEGER n; if (!GetFileSizeEx(f, &n) || n.QuadPart == 0) { CloseHandle(f); return NULL; }
-    HANDLE m = CreateFileMappingW(f, NULL, PAGE_READONLY, 0, 0, NULL); CloseHandle(f); if (!m) return NULL;
-    const void *p = MapViewOfFile(m, FILE_MAP_READ, 0, 0, 0); CloseHandle(m);
-    if (p) *size = (size_t)n.QuadPart;
-    return p;
-}
-void os_unmap(const void *p, size_t size){ (void)size; if (p) UnmapViewOfFile(p); }
 
 /* Decommitted and committed again, the whole pages come back zero; a partial last page is zeroed by hand. */
 void os_discard(void *p, size_t bytes){

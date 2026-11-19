@@ -71,7 +71,7 @@ int claim_by_conf(const void *a, const void *b){ double x = ((const Claim *)a)->
  * loaded; their IDs are computed here, once, on the first read. */
 static char refuse_names[FW_NAMES][96]; static int nrefuse_names;
 static uint64_t refuse_generation=1;
-typedef struct { uint64_t generation; lp_id ids[FW_NAMES]; uint8_t wire[20+20*FW_NAMES]; } RefusalCache;
+typedef struct { uint64_t generation; lp_id ids[FW_NAMES]; } RefusalCache;
 static _Thread_local RefusalCache refusal;
 void refuse_named(const Firmware *fw){
     nrefuse_names=fw->nrefuse_predicate;memcpy(refuse_names,fw->refuse_predicate,sizeof refuse_names);refuse_generation++;
@@ -86,11 +86,6 @@ static RefusalCache *refused_ids(void){
         refusal.generation=refuse_generation;
     }
     return &refusal;
-}
-const char *refuse_param(PGconn *pg,int *len){
-    RefusalCache *cache=refused_ids();
-    *len=(int)ids_param(pg,cache->wire,cache->ids,(uint32_t)nrefuse_names);
-    return (const char *)cache->wire;
 }
 void arg_refused(Args *a){arg_ids(a,refused_ids()->ids,(size_t)nrefuse_names);}
 /* Whether a claim holds a refused predicate between its first part and its last: the check the reads make in SQL. */
@@ -178,7 +173,7 @@ void positions_of(PGconn *pg, Claim *c, int n){
     int na = 0; Attested *a = attested(pg, ids, n, &na, NULL);
     for (int j = 0; j < na; j++) { if (!a[j].position) continue; const int *x = lp_idmap_lookup(at, &a[j].claim); if (!x) continue;
         int i = *x, pos = (int)a[j].position; if (!c[i].position || pos < c[i].position) c[i].position = pos; }
-    free(a); lp_idmap_free(at); uint8_t *ab = NULL;
+    free(a); lp_idmap_free(at);
     /* A claim said within a record has its place in the record's own trajectory (Physicality: the trajectory records
      * the order of the constituents, so no ordinal is needed): the entry lists its senses in the order its witness
      * gave them. For the claims no record gave a place, the paths that hold each are fetched as one set, and the
@@ -199,7 +194,7 @@ void positions_of(PGconn *pg, Claim *c, int n){
         }
         holds_free(h, nh); free(want); free(of);
     }
-    free(ab); free(ids);
+    free(ids);
 }
 /* As given first, then by how hard the strand tugs back. */
 int claim_by_position(const void *a, const void *b){
@@ -290,12 +285,12 @@ int cmd_hop(int argc, char **argv){
                   free(cl); reader_free(rd); PQfinish(pg); return 0; }
 
     /* observed: the content that holds it, which is not claims */
-    t = now(); uint8_t ab[40]; size_t al = ids_param(pg,ab, &e.id, 1);
-    const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = db_ask(pg, "SELECT tier FROM @extschema@.laplace_containers($1::@extschema@.blake3[], '{}'::smallint[]) WHERE NOT (mask OPERATOR(@extschema@.?) 0::smallint)", 1, v, l, f);
-    if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "containers: %s", PQerrorMessage(pg)); return 1; }
+    t = now(); Args ca = { 0 }; arg_ids(&ca, &e.id, 1);
+    char err[512]; PGresult *q = db_call_try(pg, LP_SQL_CONTAINERS_NONCLAIM, &ca, err, sizeof err);
+    args_free(&ca);
+    if (!q) { fprintf(stderr, "containers: %s\n", err); return 1; }
     uint64_t by_tier[256] = { 0 }; int any = 0;
-    for (int j = 0; j < PQntuples(q); j++) { uint16_t tb; memcpy(&tb, PQgetvalue(q, j, 0), 2); by_tier[ntohs(tb) & 255]++; any = 1; }
+    for (int j = 0; j < PQntuples(q); j++) { by_tier[(uint16_t)col_i16(q, j, 0) & 255]++; any = 1; }
     PQclear(q);
     printf("\nobserved: held by"); if (!any) printf(" nothing recorded");
     for (int tr = 0, first = 1; tr < 256; tr++) if (by_tier[tr]) { printf("%s %llu path%s of tier %d", first ? "" : ",", (unsigned long long)by_tier[tr], by_tier[tr] == 1 ? "" : "s", tr); first = 0; }
@@ -340,11 +335,13 @@ static Step *open_each(PGconn *pg,const lp_id *keys,int nk,const lp_id *rel,int 
 /* The constituents of each entity, one set: out[i] for keys[i]. */
 static Run *parts_each(PGconn *pg, const lp_id *keys, int nk){
     Run *out = calloc((size_t)(nk ? nk : 1), sizeof(Run)); if (!nk) return out;
-    uint8_t *ab = malloc(20 + 20 * (size_t)nk); size_t al = ids_param(pg,ab, keys, (uint32_t)nk); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = db_ask(pg, "SELECT u.i, p.path FROM unnest($1::@extschema@.blake3[]) WITH ORDINALITY AS u(id, i) JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) u.id", 1, v, l, f);
-    if (PQresultStatus(q) == PGRES_TUPLES_OK) for (int j = 0; j < PQntuples(q); j++) { uint64_t o; memcpy(&o, PQgetvalue(q, j, 0), 8); int i = (int)__builtin_bswap64(o) - 1;
+    Args ca = { 0 }; arg_ids(&ca, keys, (size_t)nk);
+    char err[512]; PGresult *q = db_call_try(pg, LP_SQL_PHYSICALITY_PARTS, &ca, err, sizeof err);
+    args_free(&ca);
+    if (q) for (int j = 0; j < PQntuples(q); j++) { int i = (int)col_i64(q, j, 0) - 1;
         if (i >= 0 && i < nk && !out[i].id) out[i] = run_of((const uint8_t *)PQgetvalue(q, j, 1), (size_t)PQgetlength(q, j, 1)); }
-    PQclear(q); free(ab); return out;
+    if (q) PQclear(q);
+    return out;
 }
 static Claim *one_open_claims(PGconn *pg, const lp_id *first, const lp_id *rel, int fan, int *n){
     lp_id p[3] = { *first, *rel, *first }; int h[3] = { 2, 2, 0 }, capped; return claims_like(pg, p, h, fan, read_k, n, &capped);
@@ -400,11 +397,13 @@ int lexicalization_counts(PGconn *pg, Reader *rd, const Lexicalization *lx, cons
     if (!lx->has_usage || !n) return 0;
     /* the games of each lexicalization: the times a source observed it (a count the source states is the games of the sense
      * it attests, never a claim's value), one set */
-    uint8_t *ab = malloc(20 + 20 * (size_t)n); size_t al = ids_param(pg, ab, ids, (uint32_t)n); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, f[1] = { 1 };
-    PGresult *q = db_ask(pg, "SELECT u.i, sum(a.games)::bigint FROM unnest($1::@extschema@.blake3[]) WITH ORDINALITY AS u(id, i) JOIN @extschema@.attestation a ON a.claim OPERATOR(@extschema@.=) u.id GROUP BY u.i", 1, v, l, f);
-    if (PQresultStatus(q) == PGRES_TUPLES_OK) for (int j = 0; j < PQntuples(q); j++) { uint64_t o, g; memcpy(&o, PQgetvalue(q, j, 0), 8); memcpy(&g, PQgetvalue(q, j, 1), 8);
-        int entry = (int)__builtin_bswap64(o) - 1; long long value = (long long)__builtin_bswap64(g); if (entry >= 0 && entry < n && value > uses[entry]) uses[entry] = value; }
-    PQclear(q); free(ab); return 1;
+    Args ca = { 0 }; arg_ids(&ca, ids, (size_t)n);
+    char err[512]; PGresult *q = db_call_try(pg, LP_SQL_ATTESTATION_GAMES, &ca, err, sizeof err);
+    args_free(&ca);
+    if (q) for (int j = 0; j < PQntuples(q); j++) {
+        int entry = (int)col_i64(q, j, 0) - 1; long long value = (long long)col_i64(q, j, 1); if (entry >= 0 && entry < n && value > uses[entry]) uses[entry] = value; }
+    if (q) PQclear(q);
+    return 1;
 }
 static void found_put(Found *f, const lp_id *id, int of){
     if (f->n == f->cap) { f->cap = f->cap ? f->cap * 2 : 64; f->id = xrealloc(f->id, sizeof(lp_id) * (size_t)f->cap); f->of = xrealloc(f->of, sizeof(int) * (size_t)f->cap); }

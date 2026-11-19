@@ -25,7 +25,6 @@ typedef struct {
     int counts_unknown;
 } Loader;
 
-static inline void statement(PGconn *pg, const char *sql){ exec(pg, sql); }
 static inline bool binding_point(void *context, const lp_ewkb_span *span){
     double point[4]; if (span->count != 1 || !lp_ewkb_vertex(span, 0, point)) return false;
     lp_coord *coord = context;

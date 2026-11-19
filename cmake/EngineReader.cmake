@@ -1,9 +1,9 @@
 # The Engine's platform layer and database reader as libraries: Laplace::engine_os, Laplace::engine_reader and the
 # tree-sitter runtime Laplace::ts_runtime, built by Laplace-Engine and installed with its package (LaplaceEngine), so a
 # reader such as Laplace-MCP links them by find_package and compiles none of the Engine's sources. Their public header
-# is reader.h (with os.h, pg_plan.h, walk.h, chess_rules.h, chess_tablebase.h), installed under include/laplace-engine.
+# is reader.h (with os.h, pg_plan.h, pg_contract.h, sql_catalog.def, walk.h, chess_rules.h, chess_tablebase.h), installed under include/laplace-engine.
 
-set(LAPLACE_ENGINE_READER_HEADERS reader.h os.h pg_plan.h walk.h chess_rules.h chess_tablebase.h)
+set(LAPLACE_ENGINE_READER_HEADERS reader.h os.h pg_plan.h pg_contract.h sql_catalog.def walk.h chess_rules.h chess_tablebase.h)
 
 function(laplace_define_engine_reader engine_src)
   if(NOT TARGET ts_runtime)
@@ -19,7 +19,7 @@ function(laplace_define_engine_reader engine_src)
     add_library(Laplace::ts_runtime ALIAS ts_runtime)
   endif()
 
-  foreach(f os.c read.c read_ids.c read_text.c pg.c pg_plan.c walk.c chess_rules.c chess_tablebase.c ${LAPLACE_ENGINE_READER_HEADERS})
+  foreach(f os.c read.c read_ids.c read_text.c pg.c pg_plan.c pg_contract.c walk.c chess_rules.c chess_tablebase.c ${LAPLACE_ENGINE_READER_HEADERS})
     if(NOT EXISTS "${engine_src}/${f}")
       message(FATAL_ERROR "laplace_define_engine_reader: missing ${f} at '${engine_src}'")
     endif()
@@ -48,6 +48,7 @@ function(laplace_define_engine_reader engine_src)
       "${engine_src}/read_text.c"
       "${engine_src}/pg.c"
       "${engine_src}/pg_plan.c"
+      "${engine_src}/pg_contract.c"
       "${engine_src}/walk.c"
       "${engine_src}/chess_rules.c"
       "${engine_src}/chess_tablebase.c")

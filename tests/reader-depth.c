@@ -16,8 +16,8 @@
 
 const lp_tier0_record *T0;
 
-/* One fixture node: its ID, tier, coordinate and path as hex EWKB. */
-typedef struct {lp_id id;lp_coord c;uint8_t tier;char *path;} Fixed;
+/* One fixture node: its ID, tier, coordinate and path as raw EWKB. */
+typedef struct {lp_id id;lp_coord c;uint8_t tier;uint8_t *ewkb;size_t ewkb_len;} Fixed;
 typedef struct {Fixed *v;size_t n,cap;} Fixeds;
 static lp_coord cp_coord(uint32_t cp){const lp_tier0_record *r=lp_tier0_at(T0,cp);assert(r);lp_coord c;memcpy(c.m,r->m,sizeof c.m);return c;}
 /* A node of nv vertices (ids[i] repeated runs[i] times, said said[i]) whose children have coordinates cs and tiers. */
@@ -33,52 +33,40 @@ static Fixed *node_add(Fixeds *all,const lp_id *ids,const uint32_t *runs,const u
     size_t bytes=lp_ewkb_runs(ids,m,nv,NULL,0);uint8_t *ewkb=malloc(bytes);assert(ewkb && lp_ewkb_runs(ids,m,nv,ewkb,bytes)==bytes);
     lp_reserve((void **)&all->v,&all->cap,all->n+1,sizeof *all->v);Fixed *x=all->v+all->n++;
     lp_id_compose(children,expanded,&x->id);lp_coord_mean(&sum,&x->c);x->tier=(uint8_t)(top+1);
-    x->path=malloc(2*bytes+1);assert(x->path);lp_hex(ewkb,bytes,x->path);
-    free(children);free(m);free(ewkb);return x;
+    x->ewkb=ewkb;x->ewkb_len=bytes;
+    free(children);free(m);return x;
 }
 static Fixed pair_node(Fixeds *all,const Fixed *left,uint32_t right){
     lp_id ids[2]={left->id};lp_id_codepoint(right,ids+1);uint32_t runs[2]={1,1},said[2]={0,0};
     lp_coord cs[2]={left->c,cp_coord(right)};uint8_t tiers[2]={left->tier,0};
     return *node_add(all,ids,runs,said,2,cs,tiers);
 }
-static void put_text(lp_buf *b,const char *s){lp_buf_put(b,s,strlen(s));}
 /* Every node in one statement: the entity rows not stored yet, and the physicality of each one this statement
  * added. Returns the IDs it added, which the caller checks against the nodes it must own. */
 static PGresult *store(PGconn *pg,const Fixeds *all){
-    lp_buf tiers={0},x={0},y={0},z={0},w={0},hilbert={0},paths={0};lp_vec(lp_id) ids={0};
-    lp_buf *axes[4]={&x,&y,&z,&w};char value[48];
-    for(size_t i=0;i<all->n;i++){
-        const Fixed *node=all->v+i;const char *sep=i?",":"{";lp_push(&ids,node->id);
-        snprintf(value,sizeof value,"%s%u",sep,node->tier);put_text(&tiers,value);
+    size_t n=all->n;
+    lp_id *ids=malloc(n*sizeof *ids);
+    int16_t *tiers=malloc(n*sizeof *tiers);
+    double *xs=malloc(n*sizeof *xs),*ys=malloc(n*sizeof *ys),*zs=malloc(n*sizeof *zs),*ms=malloc(n*sizeof *ms);
+    int64_t *hilberts=malloc(n*sizeof *hilberts);
+    const uint8_t **ewkbs=malloc(n*sizeof *ewkbs);
+    size_t *ewkb_lens=malloc(n*sizeof *ewkb_lens);
+    assert(ids && tiers && xs && ys && zs && ms && hilberts && ewkbs && ewkb_lens);
+    for(size_t i=0;i<n;i++){
+        const Fixed *node=all->v+i;ids[i]=node->id;tiers[i]=(int16_t)node->tier;
         double xyzm[4];lp_coord_xyzm(&node->c,xyzm);
-        for(int d=0;d<4;d++){snprintf(value,sizeof value,"%s%.17g",sep,xyzm[d]);put_text(axes[d],value);}
-        snprintf(value,sizeof value,"%s%lld",sep,(long long)lp_hilbert_key(lp_hilbert4(&node->c)));put_text(&hilbert,value);
-        put_text(&paths,i?":":"{");put_text(&paths,node->path); /* PostGIS geometry's array delimiter is ':' (WKT has commas) */
+        xs[i]=xyzm[0];ys[i]=xyzm[1];zs[i]=xyzm[2];ms[i]=xyzm[3];
+        hilberts[i]=(int64_t)lp_hilbert_key(lp_hilbert4(&node->c));
+        ewkbs[i]=node->ewkb;ewkb_lens[i]=node->ewkb_len;
     }
-    lp_buf *arrays[6]={&tiers,&x,&y,&z,&w,&hilbert};
-    for(int i=0;i<6;i++)lp_buf_put(arrays[i],"}",2);
-    lp_buf_put(&paths,"}",2);
-    Args args={0};arg_ids(&args,ids.v,ids.n);
-    for(int i=0;i<6;i++)arg_text(&args,(const char *)arrays[i]->b);
-    arg_text(&args,(const char *)paths.b);
-    PGresult *added=ask_once(pg,
-        "WITH node AS ("
-        " SELECT u.id,u.tier,@postgis@.ST_MakePoint(u.x,u.y,u.z,u.m) coord,u.hilbert,u.path"
-        " FROM unnest($1::@extschema@.blake3[],$2::int2[],$3::float8[],$4::float8[],$5::float8[],$6::float8[],"
-        "  $7::int8[],$8::@postgis@.geometry[]) u(id,tier,x,y,z,m,hilbert,path)"
-        "), added AS ("
-        " INSERT INTO @extschema@.entity(id,tier,coord,hilbert)"
-        " SELECT n.id,n.tier,n.coord,n.hilbert FROM node n"
-        " WHERE NOT EXISTS (SELECT 1 FROM @extschema@.entity e WHERE e.id OPERATOR(@extschema@.=) n.id)"
-        " RETURNING id"
-        "), paths AS ("
-        " INSERT INTO @extschema@.physicality(entity,tier,hilbert,path)"
-        " SELECT n.id,n.tier,n.hilbert,n.path FROM node n WHERE n.id OPERATOR(@extschema@.=) ANY(SELECT id FROM added)"
-        " RETURNING entity"
-        ") SELECT entity FROM paths",&args);
-    args_free(&args);lp_vec_free(&ids);
-    for(int i=0;i<6;i++)lp_buf_free(arrays[i]);
-    lp_buf_free(&paths);return added;
+    Args args={0};
+    arg_ids(&args,ids,n);arg_i16_array(&args,tiers,n);
+    arg_f64_array(&args,xs,n);arg_f64_array(&args,ys,n);arg_f64_array(&args,zs,n);arg_f64_array(&args,ms,n);
+    arg_i64_array(&args,hilberts,n);arg_bytea_array(&args,ewkbs,ewkb_lens,n);
+    PGresult *added=db_call(pg,LP_SQL_TEST_INSERT_READER_NODES,&args);
+    args_free(&args);
+    free(ids);free(tiers);free(xs);free(ys);free(zs);free(ms);free(hilberts);free(ewkbs);free(ewkb_lens);
+    return added;
 }
 static bool added_has(PGresult *added,const lp_id *id){
     for(int i=0;i<PQntuples(added);i++)if(lp_id_eq(col_id(added,i,0),id))return true;
@@ -132,7 +120,9 @@ int main(int argc,char **argv){
     }
     T0=lp_tier0_map(argv[2]);assert(T0);
     PGconn *pg=PQconnectdb(argv[1]);assert(PQstatus(pg)==CONNECTION_OK);
-    assert(db_binding(pg)->id_type);
+    char err[256];
+    const DbBinding *binding=db_contract_binding(pg,err,sizeof err);
+    assert(binding && binding->id_type);
     bool cycle=argc==4;
     /* A 4,096-deep chain [[[A,B],B],...,B]; a run of 100,000 A's; A beside two private-use vertices said to be a
      * claim and its voice (no part of text); 32 branches [U+0400+i,A] each under [branch,B]. */
@@ -156,7 +146,7 @@ int main(int argc,char **argv){
         Fixed branch=pair_node(&all,&leaf,65);selected[i]=pair_node(&all,&branch,66).id;
     }
     /* Never committed: rolled back below, or aborted with the connection when the reader exits on the cycle. */
-    exec(pg,"BEGIN");
+    db_tx(pg,LP_SQL_TX_BEGIN);
     PGresult *added=store(pg,&all);
     if(!added_has(added,&deep.id) || !added_has(added,&annotated.id)){
         fputs("reader: a fixture node this check must own is already stored\n",stderr);return 1;
@@ -166,11 +156,9 @@ int main(int argc,char **argv){
         /* The deep end made its own first child: a cycle the reader must reject, not follow. */
         lp_id ids[2]={deep.id};lp_id_codepoint(66,ids+1);uint64_t m[2]={lp_m_full(1,0,0,0),lp_m_full(1,0,0,0)};
         size_t bytes=lp_ewkb_runs(ids,m,2,NULL,0);uint8_t *ewkb=malloc(bytes);assert(ewkb && lp_ewkb_runs(ids,m,2,ewkb,bytes)==bytes);
-        char *hex=malloc(2*bytes+1);lp_hex(ewkb,bytes,hex);
-        Args args={0};arg_ids(&args,&deep.id,1);arg_text(&args,hex);
-        PQclear(ask_once(pg,"UPDATE @extschema@.physicality SET path=$2::@postgis@.geometry"
-                            " WHERE entity OPERATOR(@extschema@.=) ($1::@extschema@.blake3[])[1]",&args));
-        args_free(&args);free(hex);free(ewkb);
+        Args args={0};arg_id(&args,&deep.id);arg_raw(&args,ewkb,bytes);
+        db_exec_contract(pg,LP_SQL_TEST_UPDATE_PATH_EWKB,&args);
+        args_free(&args);free(ewkb);
         Reader *reader=reader_new(pg);reader_want(reader,&deep.id);
         char *text=reader_text(reader,&deep.id,0);free(text);
         fputs("reader: a corrupt cycle was followed to an end\n",stderr);return 1;   /* lp_realize must have exited */
@@ -202,8 +190,8 @@ int main(int argc,char **argv){
     lp_id emoji;lp_id_codepoint(128512,&emoji);text=reader_text(reader,&emoji,0);assert(!strcmp(text,"\xF0\x9F\x98\x80"));free(text);
     lp_id absent;assert(lp_id_unhex("00000000000000000000000000000000",&absent));
     text=reader_text(reader,&absent,0);assert(!strcmp(text,"{00000000000000000000000000000000}"));free(text);
-    reader_free(reader);exec(pg,"ROLLBACK");PQfinish(pg);
-    for(size_t i=0;i<all.n;i++)free(all.v[i].path);free(all.v);
+    reader_free(reader);db_tx(pg,LP_SQL_TX_ROLLBACK);PQfinish(pg);
+    for(size_t i=0;i<all.n;i++)free(all.v[i].ewkb);free(all.v);
     puts("reader: 4096 tiers, shared frontiers, bounded run projection, display limits and annotation roles passed");
     return 0;
 }

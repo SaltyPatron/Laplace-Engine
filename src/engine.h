@@ -49,8 +49,6 @@ int cmd_tablebase(int argc, char **argv);            /* chess_syzygy.c: a positi
 int cmd_chess(int argc, char **argv);                /* chess_cache.c: the chess perf-cache generated, verified or fingerprinted */
 const char *ingest_database(void);                   /* the database the ingest running loads into (its -d, else LAPLACE_CONNINFO) */
 
-/* ---- the bits a row must have (physicality.mask): what it is, by LP_KIND_*; as the text of a smallint[] parameter */
-#define CLAIM_BITS "{0}"
 /* ---- references: an entity's ID, its real coordinate, and its tier */
 typedef lp_ref Ref;
 
@@ -225,6 +223,7 @@ void keys_reader_file(uint64_t file);
 void attest_layout(const Recipe *, File *, const uint8_t *src, size_t n);             /* records read so far: a stretch's positions go on from the last */
 struct SInput;
 int  say_record_streamable(const Recipe *);
+int  say_input_compiled(const Recipe *);
 int  recipe_record_streamable(const Recipe *);
 void attest_input(const Recipe *, File *, const struct SInput *);
 typedef int (*source_file_ready_fn)(void *, File *);
@@ -292,8 +291,6 @@ void ev_push(Events *, const Event *);
 typedef struct { uint64_t checked, found, rounds, new_nodes, ent_rows, phy_rows, std_new, std_upd, known, publish_waves, publish_lanes, attestations; int attestations_measured; double t_prepare, t_transfer, t_publish, t_index, t_dedup, t_copy, t_sem, t_read, t_play, t_led; } LoadStats;
 typedef struct { uint64_t commands, copy_streams; } DbTraffic;
 DbTraffic db_traffic(void);
-PGresult *db_command(PGconn *, const char *sql);
-PGresult *db_command_binary(PGconn *, const char *sql);
 int load(const char *conninfo, int npg, File *files, int nfiles, LoadStats *st);
 typedef struct { lp_id id, lineage; double trust; int has_lineage; } LoadWitness;
 void load_begin(const char *conninfo, int npg);
@@ -319,12 +316,12 @@ uint8_t *db_recorded(const char *conninfo, const lp_id *ids, uint64_t n);   /* w
 int cmd_merge(int argc, char **argv);
 int cmd_projection(int argc, char **argv);
 
-const char *refuse_param(PGconn *,int *len);                              /* ... as this database's binary blake3[] */
-void   arg_refused(Args *);                                              /* ... the same, as a statement's parameter */
+void   arg_refused(Args *);                                              /* this database's binary blake3[] refused predicates */
 
 /* ---- a file in the DAG (file.c) */
 void file_close(File *);                                              /* the file is whole: its metadata, its content, its trunk */
 int file_matches_bytes(const lp_id *, const uint8_t *, size_t);
+int file_matches_input(const lp_id *, const struct SInput *);
 int  source_trunk(const Source *, const File *, int nfiles, Ref *out);  /* the source's trunk: [its record, its files' trunks] */
 const char *source_called(const Source *);                            /* its record: its witness, or its called line */
 size_t file_record(const Recipe *, const File *, Ref *out, size_t cap);   /* the OS's record of a file, its parts as its recipes dispose of them */

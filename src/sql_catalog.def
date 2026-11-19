@@ -1,0 +1,408 @@
+#ifndef LP_SQL
+#error "define LP_SQL(name, arity, sql) before including sql_catalog.def"
+#endif
+
+/* Transaction and extension binding lifecycle */
+LP_SQL(TX_BEGIN, 0, "BEGIN")
+LP_SQL(TX_BEGIN_RC, 0, "BEGIN ISOLATION LEVEL READ COMMITTED")
+LP_SQL(TX_BEGIN_RR, 0, "BEGIN ISOLATION LEVEL REPEATABLE READ")
+LP_SQL(TX_COMMIT, 0, "COMMIT")
+LP_SQL(TX_ROLLBACK, 0, "ROLLBACK")
+LP_SQL(EXT_BINDING, 0,
+    "SELECT n.nspname, gn.nspname, t.oid, t.typarray"
+    " FROM pg_catalog.pg_extension e"
+    " JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace"
+    " JOIN pg_catalog.pg_extension g ON g.extname = 'postgis'"
+    " JOIN pg_catalog.pg_namespace gn ON gn.oid = g.extnamespace"
+    " JOIN pg_catalog.pg_type t ON t.typnamespace = n.oid AND t.typname = 'blake3'"
+    " WHERE e.extname = 'laplace'")
+
+/* Reader library (laplace_engine_reader): exact-ID, frontier, containment, provenance */
+LP_SQL(PRESENT_IDS, 1,
+    "SELECT ordinal FROM @extschema@.laplace_present_ids($1::@extschema@.blake3[])")
+LP_SQL(PRESENT_TRUNKS, 1,
+    "SELECT ordinal, id FROM @extschema@.laplace_present_trunks($1::@extschema@.blake3[])")
+LP_SQL(ENTITIES_TIER, 1,
+    "SELECT ordinal, tier FROM @extschema@.laplace_entities($1::@extschema@.blake3[])")
+LP_SQL(ENTITY_COORDS, 1,
+    "SELECT ordinal, id, tier, x, y, z, m, hilbert FROM @extschema@.laplace_entity_coords($1::@extschema@.blake3[])")
+LP_SQL(PHYSICALITIES, 1,
+    "SELECT ordinal, entity, tier, path, mask FROM @extschema@.laplace_physicalities($1::@extschema@.blake3[])")
+LP_SQL(PHYSICALITY_BATCH, 1,
+    "SELECT entity, path, mask FROM @extschema@.laplace_physicalities($1::@extschema@.blake3[])")
+LP_SQL(PATH_ENDPOINTS, 1,
+    "SELECT i, entity, start_id, end_id, length FROM @extschema@.laplace_path_endpoints($1::@extschema@.blake3[])")
+LP_SQL(PATHS, 1,
+    "SELECT entity, path FROM @extschema@.laplace_paths($1::@extschema@.blake3[])")
+LP_SQL(STANDINGS, 1,
+    "SELECT ordinal, rating, deviation, volatility, matches FROM @extschema@.laplace_standings($1::@extschema@.blake3[])")
+LP_SQL(HOLDERS, 8,
+    "SELECT ordinal, entity, path, tier, mask, kind, hub"
+    " FROM @extschema@.laplace_holders($1::@extschema@.blake3[], $2::@extschema@.blake3[], $3::boolean, $4::smallint, $5::bigint, $6::smallint, $7::smallint[], $8::smallint)")
+LP_SQL(HOLDERS_WITH_STANDINGS, 8,
+    "SELECT ordinal, entity, path, tier, mask, kind, hub, rating, deviation, volatility, matches"
+    " FROM @extschema@.laplace_holders_with_standings($1::@extschema@.blake3[], $2::@extschema@.blake3[], $3::boolean, $4::smallint, $5::bigint, $6::smallint, $7::smallint[], $8::smallint)")
+LP_SQL(HOLDER_COUNTS, 5,
+    "SELECT ordinal, id, claims, observations"
+    " FROM @extschema@.laplace_holder_counts($1::@extschema@.blake3[], $2::smallint, $3::smallint, $4::smallint[], $5::smallint)")
+LP_SQL(HELD_CLOSURE, 5,
+    "SELECT node_idx, entity, tier, keys_mask, is_file, is_metadata, is_hub, expanded, level,"
+    " child_idxs, child_saids, child_runs, child_ordinals, cut, levels"
+    " FROM @extschema@.laplace_held_closure($1::@extschema@.blake3[], $2::smallint, $3::bigint, $4::integer, $5::integer)")
+LP_SQL(HELD_FILES, 4,
+    "SELECT file, keys, hubs, levels, cut, unit, unit_length, counts, unit_tier"
+    " FROM @extschema@.laplace_held_files($1::@extschema@.blake3[], $2::@extschema@.blake3, $3::bigint, $4::bigint)")
+LP_SQL(WITNESS_TRUST, 1,
+    "SELECT witness, trust FROM @extschema@.laplace_witness_trust($1::@extschema@.blake3[])")
+LP_SQL(WITNESS_TRUST_ALL, 0,
+    "SELECT witness FROM @extschema@.laplace_witness_trust()")
+LP_SQL(ATTESTED, 1,
+    "SELECT claim, trunk, games, tokens, score, \"position\", trust, witness FROM @extschema@.laplace_attested($1::@extschema@.blake3[])")
+LP_SQL(ATTESTED_FILTERED, 2,
+    "SELECT claim, trunk, games, tokens, score, \"position\", trust, witness"
+    " FROM @extschema@.laplace_attested($1::@extschema@.blake3[], $2::boolean)"
+    " WHERE witness OR $2::boolean ORDER BY claim, trunk")
+
+/* Query, coupling, traversal, forward program */
+LP_SQL(FILLS_CLOSURE, 3,
+    "SELECT entity, times, tier, level FROM @extschema@.laplace_fills_closure($1::@extschema@.blake3[], $2::bigint[], $3::integer)")
+LP_SQL(FORWARD, 2,
+    "SELECT i, j, paths, runs, next, times FROM @extschema@.laplace_forward($1::@extschema@.blake3[], $2::bigint)"
+    " ORDER BY (i > 1), CASE WHEN i = 1 THEN j END, paths DESC, (j - i) DESC, i, times DESC NULLS LAST")
+LP_SQL(FORWARD_TURN, 2,
+    "SELECT i, j, paths, next, times FROM @extschema@.laplace_forward($1::@extschema@.blake3[], $2::bigint)"
+    " ORDER BY j, i, times DESC, next")
+LP_SQL(FORWARD_SUFFIX, 2,
+    "SELECT i, j, next, times FROM @extschema@.laplace_forward_suffix($1::@extschema@.blake3[], $2::bigint)")
+LP_SQL(CLAIMS_EACH, 4,
+    "SELECT i, entity, path, rating, deviation, volatility"
+    " FROM @extschema@.laplace_claims_each($1::@extschema@.blake3[], $2::bigint, $3::smallint[], $4::@extschema@.blake3[])")
+LP_SQL(CLAIMS_EACH_FULL, 8,
+    "SELECT i, entity, path, rating, deviation, volatility"
+    " FROM @extschema@.laplace_claims_each($1::@extschema@.blake3[], $2::bigint, $3::smallint[], $4::@extschema@.blake3[], $5::smallint, $6::@extschema@.blake3[], $7::bigint, $8::@extschema@.blake3[])")
+LP_SQL(CONTAINERS_NONCLAIM, 1,
+    "SELECT tier FROM @extschema@.laplace_containers($1::@extschema@.blake3[], '{}'::smallint[])"
+    " WHERE NOT (mask OPERATOR(@extschema@.?) 0::smallint)")
+LP_SQL(ATTESTATION_GAMES, 1,
+    "SELECT ordinal, games FROM @extschema@.laplace_attestation_games($1::@extschema@.blake3[])")
+LP_SQL(ROLES_OF, 3,
+    "SELECT ordinal, entity, path FROM @extschema@.laplace_roles_of($1::@extschema@.blake3[], $2::@extschema@.blake3[], $3::bigint)")
+LP_SQL(KNN4D, 4,
+    "SELECT ordinal, id, tier, coord, distance"
+    " FROM @extschema@.laplace_knn4d(@postgis@.ST_GeomFromEWKB($1::bytea), $2::integer, $3::boolean, $4::smallint)")
+LP_SQL(COUPLE, 6,
+    "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices"
+    " FROM @extschema@.laplace_couple($1::@extschema@.blake3[], $2::bigint, $3::@extschema@.blake3[], $4::smallint, $5::float8, $6::integer)")
+LP_SQL(COUPLE_SCAN, 6,
+    "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices"
+    " FROM @extschema@.laplace_couple($1::@extschema@.blake3[], $2::bigint, $3::@extschema@.blake3[], $4::smallint, $5::float8, $6::integer)"
+    " WHERE route = 2")
+
+/* Ingest, staging, diagnostics, maintenance, deployment, benchmarking */
+LP_SQL(POOL_SLOTS, 0,
+    "SELECT greatest(1, least("
+    " pg_catalog.current_setting('max_connections')::int"
+    " - pg_catalog.current_setting('superuser_reserved_connections')::int"
+    " - pg_catalog.current_setting('reserved_connections')::int"
+    " - (SELECT count(*) FROM pg_catalog.pg_stat_activity) - 4,"
+    " COALESCE((SELECT CASE WHEN r.rolconnlimit < 0 THEN NULL"
+    "  ELSE 1 + greatest(0, r.rolconnlimit - (SELECT count(*) FROM pg_catalog.pg_stat_activity a WHERE a.usesysid = r.oid) - 1) END"
+    "  FROM pg_catalog.pg_roles r WHERE r.rolname = current_user), 2147483647)"
+    "))::integer,"
+    " pg_catalog.to_regprocedure('@extschema@.laplace_stage_own(bigint,regclass[])') IS NOT NULL"
+    " AND pg_catalog.to_regprocedure('@extschema@.laplace_accumulate_series(regclass,regclass)') IS NOT NULL"
+    " AND pg_catalog.to_regprocedure('@extschema@.laplace_attest_stage(regclass,regclass)') IS NOT NULL"
+    " AND pg_catalog.to_regprocedure('@extschema@.laplace_present_stage(regclass,regclass,name,name)') IS NOT NULL,"
+    " pg_catalog.to_regprocedure('@extschema@.laplace_merge_stage(regclass,regclass,boolean)') IS NOT NULL"
+    " AND pg_catalog.to_regprocedure('@extschema@.laplace_stage_partitions(regclass)') IS NOT NULL"
+    " AND pg_catalog.to_regprocedure('@extschema@.laplace_clean_partitions(oid[])') IS NOT NULL")
+LP_SQL(ENSURE_STAGE, 0,
+    "SELECT @extschema@.laplace_ensure_stage()")
+LP_SQL(STAGE_RETIRE, 0,
+    "SELECT * FROM @extschema@.laplace_stage_retire()")
+LP_SQL(CURRENT_XACT, 0,
+    "SELECT pg_catalog.pg_current_xact_id()::text::bigint")
+LP_SQL(STAGE_OWN, 2,
+    "SELECT @extschema@.laplace_stage_own($1::bigint, $2::text[]::regclass[])")
+LP_SQL(STAGE_FLUSH_CLAIMS, 3,
+    "SELECT @extschema@.laplace_stage_flush_claims($1::text::regclass, $2::text::regclass, $3::text::regclass)")
+LP_SQL(STAGE_REWRITE_WITNESS, 2,
+    "SELECT @extschema@.laplace_stage_rewrite_witness($1::text::regclass, $2::@extschema@.blake3)")
+LP_SQL(STAGE_RESTORE_PRUNED, 4,
+    "SELECT @extschema@.laplace_stage_restore_pruned($1::@extschema@.blake3[], $2::text::regclass, $3::text::regclass, $4::@extschema@.blake3)")
+LP_SQL(STAGE_PUBLISH_ATTESTATIONS, 3,
+    "SELECT admitted, consensus_rows"
+    " FROM @extschema@.laplace_stage_publish_attestations($1::text::regclass, $2::text::regclass, $3::@extschema@.blake3[])")
+LP_SQL(MERGE_STAGE, 3,
+    "SELECT * FROM @extschema@.laplace_merge_stage($1::text::regclass, $2::text::regclass, $3::boolean)")
+LP_SQL(MERGE_STAGE_DEFAULT, 2,
+    "SELECT entity_rows, physicality_rows, updated_rows"
+    " FROM @extschema@.laplace_merge_stage($1::text::regclass, $2::text::regclass)")
+LP_SQL(MERGE_DIAGNOSTICS, 2,
+    "SELECT reason, id, detail, recorded_ewkb FROM @extschema@.laplace_merge_diagnostics($1::text::regclass, $2::text::regclass)")
+LP_SQL(CLEAN_PARTITIONS, 1,
+    "SELECT @extschema@.laplace_clean_partitions($1::oid[])")
+LP_SQL(RECOORDINATE, 1,
+    "SELECT * FROM @extschema@.laplace_recoordinate($1::boolean)")
+LP_SQL(ATTEST_SERIES, 2,
+    "SELECT @extschema@.laplace_attest_series($1::text::regclass, $2::@extschema@.blake3[])")
+LP_SQL(WITNESS_COUNT_MATCHES, 1,
+    "SELECT matched, orphaned FROM @extschema@.laplace_standing_counts($1::@extschema@.blake3[])")
+LP_SQL(FORGET_WITNESSES, 4,
+    "SELECT witnesses_removed, entities_removed, standings_recomputed, orphaned_claims"
+    " FROM @extschema@.laplace_forget_witnesses($1::@extschema@.blake3[], $2::@extschema@.blake3[], $3::boolean, $4::@extschema@.blake3)")
+LP_SQL(SWEEP_ORPHANS, 1,
+    "SELECT @extschema@.laplace_sweep_orphans($1::@extschema@.blake3[])")
+LP_SQL(REPLAY_VERIFY, 1,
+    "SELECT identical, different, applied FROM @extschema@.laplace_replay_verify($1::boolean)")
+LP_SQL(HIGHWAY_FINGERPRINT, 0,
+    "SELECT @extschema@.laplace_highway_fingerprint()")
+LP_SQL(HIGHWAY_AUDIT, 0,
+    "SELECT list, cached, attested, direct_2w, direct_3w, direct_4w, xwalk_2w, xwalk_3w, xwalk_4w, invalid_lineage"
+    " FROM @extschema@.laplace_highway_audit()")
+LP_SQL(ESTATE_SUMMARY, 1,
+    "SELECT @extschema@.laplace_estate_summary($1::boolean)::text")
+LP_SQL(WITNESSES_NAMED, 0,
+    "SELECT witness, trust, lineage, record_id, name, parts, readings FROM @extschema@.laplace_witnesses_named()")
+LP_SQL(AFTER_RECORDED, 1,
+    "SELECT DISTINCT id FROM @extschema@.laplace_present_trunks($1::@extschema@.blake3[])")
+LP_SQL(SHOW_DATA_DIR, 0, "SHOW data_directory")
+LP_SQL(DB_SIZE_BYTES, 0, "SELECT pg_catalog.pg_database_size(pg_catalog.current_database())::bigint")
+LP_SQL(DB_EXISTS, 1, "SELECT 1 FROM pg_catalog.pg_database WHERE datname = $1::name")
+LP_SQL(EXT_INSTALLED_INFO, 0,
+    "SELECT (SELECT n.nspname FROM pg_catalog.pg_extension e JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'laplace'),"
+    " current_setting('max_identifier_length')::integer")
+LP_SQL(EXT_VERSIONS, 0,
+    "SELECT e.extversion, a.default_version"
+    " FROM pg_catalog.pg_extension e"
+    " JOIN pg_catalog.pg_available_extensions a ON a.name = e.extname"
+    " WHERE e.extname = 'laplace'")
+LP_SQL(EXT_UPDATE_PATH, 0,
+    "SELECT count(*)::integer FROM pg_catalog.pg_extension e"
+    " JOIN pg_catalog.pg_available_extensions a ON a.name = e.extname"
+    " JOIN pg_catalog.pg_extension_update_paths('laplace') u ON u.source = e.extversion AND u.target = a.default_version"
+    " WHERE e.extname = 'laplace' AND u.path IS NOT NULL")
+LP_SQL(EXT_CONTROL_DIR, 0,
+    "WITH paths AS (SELECT p, o FROM pg_catalog.unnest(pg_catalog.string_to_array(pg_catalog.current_setting('extension_control_path'),"
+    "  CASE WHEN pg_catalog.current_setting('data_directory') ~ '^[A-Za-z]:' THEN ';' ELSE ':' END)) WITH ORDINALITY AS u(p, o)),"
+    " controls AS (SELECT CASE WHEN p = '$system' THEN (SELECT setting FROM pg_catalog.pg_config WHERE name = 'SHAREDIR') ELSE p END"
+    "  || '/extension' AS d, o FROM paths)"
+    " SELECT d FROM controls WHERE (pg_catalog.pg_stat_file(d || '/laplace.control', true)).size IS NOT NULL ORDER BY o LIMIT 1")
+LP_SQL(EXT_STORAGE_COMPAT, 1,
+    "SELECT COALESCE(("
+    " SELECT"
+    "  pg_catalog.obj_description(pg_catalog.to_regclass(ext.ns || '.entity'), 'pg_class') = $1::text"
+    "  OR ("
+    "    pg_catalog.to_regclass(ext.ns || '.entity') IS NOT NULL"
+    "    AND (pg_catalog.obj_description(pg_catalog.to_regclass(ext.ns || '.entity'), 'pg_class') IS NULL"
+    "         OR pg_catalog.obj_description(pg_catalog.to_regclass(ext.ns || '.entity'), 'pg_class') LIKE 'laplace-storage:%')"
+    "    AND EXISTS (SELECT 1 FROM pg_catalog.pg_type t WHERE t.typnamespace = ext.nsoid AND t.typname = 'blake3' AND t.typlen = 16)"
+    "    AND (SELECT p.partstrat::text || ':' || (SELECT count(*) FROM pg_catalog.pg_inherits i WHERE i.inhparent = c.oid)"
+    "         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_partitioned_table p ON p.partrelid = c.oid"
+    "         WHERE c.relnamespace = ext.nsoid AND c.relname = 'entity') IN ('r:9', 'r:256')"
+    "    AND (SELECT pg_catalog.string_agg(a.attname, ',' ORDER BY a.attnum)"
+    "         FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid"
+    "         WHERE c.relnamespace = ext.nsoid AND c.relname = 'entity' AND a.attnum > 0 AND NOT a.attisdropped) = 'id,tier,coord,hilbert,mask'"
+    "    AND (SELECT p.partstrat::text || ':' || (SELECT count(*) FROM pg_catalog.pg_inherits i WHERE i.inhparent = c.oid)"
+    "         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_partitioned_table p ON p.partrelid = c.oid"
+    "         WHERE c.relnamespace = ext.nsoid AND c.relname = 'physicality') IN ('r:9', 'r:256')"
+    "    AND (SELECT pg_catalog.string_agg(a.attname, ',' ORDER BY a.attnum)"
+    "         FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid"
+    "         WHERE c.relnamespace = ext.nsoid AND c.relname = 'physicality' AND a.attnum > 0 AND NOT a.attisdropped) = 'entity,tier,hilbert,path,mask'"
+    "    AND (SELECT p.partstrat::text || ':' || (SELECT count(*) FROM pg_catalog.pg_inherits i WHERE i.inhparent = c.oid)"
+    "         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_partitioned_table p ON p.partrelid = c.oid"
+    "         WHERE c.relnamespace = ext.nsoid AND c.relname = 'attestation') = 'r:16'"
+    "    AND (SELECT pg_catalog.string_agg(a.attname, ',' ORDER BY a.attnum)"
+    "         FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid"
+    "         WHERE c.relnamespace = ext.nsoid AND c.relname = 'attestation' AND a.attnum > 0 AND NOT a.attisdropped) = 'claim,witness,lineage,games,tokens,score,position,trust'"
+    "    AND (SELECT p.partstrat::text || ':' || (SELECT count(*) FROM pg_catalog.pg_inherits i WHERE i.inhparent = c.oid)"
+    "         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_partitioned_table p ON p.partrelid = c.oid"
+    "         WHERE c.relnamespace = ext.nsoid AND c.relname = 'consensus') = 'r:16'"
+    "    AND (SELECT pg_catalog.string_agg(a.attname, ',' ORDER BY a.attnum)"
+    "         FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid"
+    "         WHERE c.relnamespace = ext.nsoid AND c.relname = 'consensus' AND a.attnum > 0 AND NOT a.attisdropped) = 'claim,rating,deviation,volatility,matches'"
+    "  )"
+    " FROM pg_catalog.pg_extension e JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace,"
+    "      LATERAL (SELECT n.oid AS nsoid, n.nspname AS ns) ext"
+    " WHERE e.extname = 'laplace'"
+    "), false)")
+LP_SQL(EXT_MODULE_PATH, 0,
+    "WITH paths AS (SELECT p, o FROM pg_catalog.unnest(pg_catalog.string_to_array(pg_catalog.current_setting('extension_control_path'),"
+    "  CASE WHEN pg_catalog.current_setting('data_directory') ~ '^[A-Za-z]:' THEN ';' ELSE ':' END)) WITH ORDINALITY AS u(p, o)),"
+    " controls AS (SELECT CASE WHEN p = '$system' THEN (SELECT setting FROM pg_catalog.pg_config WHERE name = 'SHAREDIR') ELSE p END"
+    "  || '/extension/laplace.control' AS f, o FROM paths)"
+    " SELECT pg_catalog.substring(pg_catalog.pg_read_file(f), 'module_pathname\\s*=\\s*''([^'']*)''')"
+    " FROM controls WHERE (pg_catalog.pg_stat_file(f, true)).size IS NOT NULL ORDER BY o LIMIT 1")
+LP_SQL(RESTORE_FUNCTION_BINDINGS, 0,
+    "SELECT @extschema@.laplace_restore_function_bindings()")
+LP_SQL(SCHEMA_INDEXES, 0,
+    "SELECT @extschema@.laplace_schema_indexes()")
+LP_SQL(ANALYZE_SUBSTRATE, 0,
+    "ANALYZE @extschema@.entity, @extschema@.physicality, @extschema@.attestation, @extschema@.consensus")
+LP_SQL(STATUS_META, 0,
+    "SELECT (SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'laplace'),"
+    " @extschema@.laplace_isa(),"
+    " pg_catalog.current_setting('laplace.tier0', true),"
+    " @extschema@.laplace_fingerprint(),"
+    " pg_catalog.pg_size_pretty(pg_catalog.pg_database_size(pg_catalog.current_database())),"
+    " pg_catalog.split_part(pg_catalog.version(), ',', 1),"
+    " pg_catalog.current_setting('laplace.highway', true),"
+    " @extschema@.laplace_highway_fingerprint(),"
+    " pg_catalog.current_setting('laplace.chess', true),"
+    " @extschema@.laplace_chess_fingerprint()")
+LP_SQL(STATUS_TIER_SAMPLE, 0,
+    "SELECT tier, estimated FROM @extschema@.laplace_entity_tier_sample() ORDER BY 1")
+LP_SQL(STATUS_ENTITY_PHYSICALITY, 0,
+    "SELECT CASE WHEN min(c.reltuples) < 0 THEN -1 ELSE sum(c.reltuples) END::bigint,"
+    " pg_catalog.pg_size_pretty(sum(pg_catalog.pg_total_relation_size(c.oid))::bigint)"
+    " FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace"
+    " WHERE n.oid = (SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname = 'laplace')"
+    " AND c.relkind = 'r' AND c.relname ~ '^(entity|physicality)_[0-9a-f]{2}$'")
+LP_SQL(STATUS_PARTITIONS, 0,
+    "SELECT pg_catalog.regexp_replace(c.relname, '_[0-9a-f]$', ''),"
+    " CASE WHEN min(c.reltuples) < 0 THEN -1 ELSE sum(c.reltuples) END::bigint,"
+    " pg_catalog.pg_size_pretty(sum(pg_catalog.pg_total_relation_size(c.oid))::bigint)"
+    " FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace"
+    " WHERE n.oid = (SELECT extnamespace FROM pg_catalog.pg_extension WHERE extname = 'laplace')"
+    " AND c.relkind = 'r' AND c.relname ~ '^(attestation|consensus)_[0-9a-f]$' GROUP BY 1 ORDER BY 1")
+LP_SQL(STATUS_INDEXES, 0,
+    "SELECT count(*) FILTER (WHERE indexdef LIKE '%USING gin%'),"
+    " count(*) FILTER (WHERE indexdef LIKE '%USING gist%'),"
+    " count(*)::bigint"
+    " FROM pg_catalog.pg_indexes"
+    " WHERE schemaname = (SELECT n.nspname FROM pg_catalog.pg_namespace n JOIN pg_catalog.pg_extension e ON e.extnamespace = n.oid WHERE e.extname = 'laplace')"
+    " AND tablename IN ('entity', 'physicality')")
+
+/* Additional Engine & MCP catalog contracts */
+LP_SQL(CONTAINERS_ABOVE, 4,
+    "SELECT entity, path, tier, mask, CASE WHEN mask OPERATOR(@extschema@.?) 0::smallint THEN 1 ELSE 0 END::smallint"
+    " FROM @extschema@.laplace_containers($1::@extschema@.blake3[] || $2::@extschema@.blake3[], '{}'::smallint[])"
+    " WHERE tier > $3::smallint AND (($4::smallint & CASE WHEN mask OPERATOR(@extschema@.?) 0::smallint THEN 1 ELSE 2 END) <> 0)")
+LP_SQL(CONTAINERS_COUNT, 2,
+    "SELECT count(*)::bigint FROM @extschema@.laplace_containers($1::@extschema@.blake3[], '{}'::smallint[])"
+    " WHERE $2::smallint < 0 OR (mask OPERATOR(@extschema@.?) 0::smallint) = ($2::smallint = 1)")
+LP_SQL(CONTAINERS_DEFAULT, 1,
+    "SELECT entity, path, tier FROM @extschema@.laplace_containers($1::@extschema@.blake3[], '{}'::smallint[])")
+LP_SQL(FILLS, 1,
+    "SELECT entity, id, times, tier FROM @extschema@.laplace_fills($1::@extschema@.blake3[])")
+LP_SQL(FILES_KNOWN, 1,
+    "SELECT id FROM @extschema@.laplace_known_files($1::@extschema@.blake3[])")
+LP_SQL(WITNESSES_EXISTING, 1,
+    "SELECT witness FROM @extschema@.laplace_witness_trust($1::@extschema@.blake3[])")
+LP_SQL(PHYSICALITY_PARTS, 1,
+    "SELECT ordinal, path FROM @extschema@.laplace_physicalities($1::@extschema@.blake3[])")
+LP_SQL(ROLE_JUNCTIONS, 3,
+    "SELECT ordinal, entity, path"
+    " FROM @extschema@.laplace_roles_of($1::@extschema@.blake3[], $2::@extschema@.blake3[], $3::bigint, 2::smallint)"
+    " ORDER BY ordinal, entity")
+LP_SQL(ROLE_HOLDERS, 2,
+    "SELECT h.ordinal, h.path"
+    " FROM @extschema@.laplace_holders($1::@extschema@.blake3[], '{}'::@extschema@.blake3[], true, -1::smallint, $2::bigint, 3::smallint) h"
+    " WHERE NOT h.hub")
+LP_SQL(PATH_FIRST, 1,
+    "SELECT path FROM @extschema@.laplace_paths($1::@extschema@.blake3[]) LIMIT 1")
+LP_SQL(SHAPE_NEAREST_ENTITIES, 2,
+    "SELECT id FROM @extschema@.laplace_knn4d(@postgis@.ST_GeomFromEWKB($1::bytea), $2::integer, false, 3::smallint)")
+LP_SQL(REPLAY_EXPORT, 1,
+    "SELECT claim, trunk, games, tokens, score, \"position\""
+    " FROM @extschema@.laplace_replay_export($1::boolean)")
+LP_SQL(FORWARD_MCP, 1,
+    "SELECT i, j, paths, runs, next, times FROM @extschema@.laplace_forward($1::@extschema@.blake3[], 64) LIMIT 128")
+LP_SQL(WITNESS_TRUST_ORDERED, 0,
+    "SELECT witness, trust FROM @extschema@.laplace_witness_trust() ORDER BY witness")
+LP_SQL(WITNESS_TRUST_ID_ORDERED, 0,
+    "SELECT witness FROM @extschema@.laplace_witness_trust() ORDER BY witness")
+LP_SQL(MCP_ACTIVITY, 0,
+    "SELECT pid, coalesce(usename::text, ''), coalesce(state, ''),"
+    " coalesce(extract(epoch FROM now() - query_start)::bigint, 0),"
+    " left(regexp_replace(coalesce(query, ''), '\\s+', ' ', 'g'), 200)"
+    " FROM pg_catalog.pg_stat_activity"
+    " WHERE datname = pg_catalog.current_database() AND pid <> pg_catalog.pg_backend_pid()"
+    " AND state IS DISTINCT FROM 'idle' ORDER BY query_start NULLS LAST LIMIT 32")
+LP_SQL(MCP_READY, 0,
+    "SELECT pg_catalog.current_database(),"
+    " coalesce((SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'laplace'), '')")
+LP_SQL(MCP_CATALOG, 0,
+    "WITH x AS MATERIALIZED (SELECT @extschema@.laplace_estate_summary(false) AS s)"
+    " SELECT pg_catalog.json_build_object('database', x.s->>'database',"
+    " 'read_only', (x.s->>'read_only')::boolean,"
+    " 'database_bytes', x.s->>'database_bytes',"
+    " 'entities', x.s->>'entities',"
+    " 'physicalities', x.s->>'physicalities',"
+    " 'standing_rows', x.s->>'standing_rows',"
+    " 'attestation_rows', x.s->>'attestation_rows',"
+    " 'registered_witness_rows', x.s->>'registered_witness_rows',"
+    " 'as_of', pg_catalog.statement_timestamp(), 'count_kind', x.s->>'count_kind')::text"
+    " FROM x")
+LP_SQL(LIBRARY_PAGE, 1,
+    "SELECT entity, tier, path, mask::text FROM @extschema@.laplace_library_page($1::@extschema@.blake3, 65)")
+LP_SQL(ENTITIES_ORDINAL, 1,
+    "SELECT ordinal FROM @extschema@.laplace_entities($1::@extschema@.blake3[])")
+LP_SQL(ENTITIES_ORDINAL_HILBERT, 1,
+    "SELECT ordinal, hilbert FROM @extschema@.laplace_entities($1::@extschema@.blake3[])")
+LP_SQL(ENTITIES_TIER_MASK, 1,
+    "SELECT tier, mask FROM @extschema@.laplace_entities($1::@extschema@.blake3[])")
+LP_SQL(PHYSICALITIES_BY_ID, 1,
+    "SELECT path, tier, mask, mask::text FROM @extschema@.laplace_physicalities($1::@extschema@.blake3[])")
+
+/* Test helpers */
+LP_SQL(TEST_ADD, 1, "SELECT $1::integer + 1")
+LP_SQL(TEST_ADD2, 1, "SELECT $1::integer + 2")
+LP_SQL(TEST_ECHO_IDS, 1, "SELECT $1::@extschema@.blake3[]")
+LP_SQL(TEST_BINDING_TYPES, 0,
+    "SELECT pg_catalog.to_regtype('@extschema@.blake3')::oid,"
+    " pg_catalog.to_regprocedure('@postgis@.st_astext(@postgis@.geometry)') IS NOT NULL")
+LP_SQL(TEST_PROBE_COUNT, 1,
+    "SELECT count(*)::bigint FROM @extschema@.entity WHERE id OPERATOR(@extschema@.=) $1::@extschema@.blake3")
+LP_SQL(TEST_VISIBLE_XACT, 1,
+    "SELECT pg_catalog.pg_visible_in_snapshot($1::pg_catalog.xid8, pg_catalog.pg_current_snapshot())")
+LP_SQL(TEST_CURRENT_XACT_TEXT, 0,
+    "SELECT pg_catalog.pg_current_xact_id()::text")
+LP_SQL(TEST_READ_SETTINGS, 0,
+    "SELECT pg_catalog.current_setting('transaction_read_only'), pg_catalog.current_setting('transaction_isolation')")
+LP_SQL(TEST_FORBIDDEN_DELETE, 0,
+    "DELETE FROM @extschema@.entity WHERE false")
+LP_SQL(TEST_INSERT_PROBE_ENTITY, 7,
+    "INSERT INTO @extschema@.entity(id, tier, coord, hilbert)"
+    " VALUES ($1::@extschema@.blake3, $2::smallint, @postgis@.ST_MakePoint($3::float8, $4::float8, $5::float8, $6::float8), $7::bigint)")
+LP_SQL(TEST_INSERT_PROBE_PATH, 4,
+    "INSERT INTO @extschema@.physicality(entity, tier, hilbert, path)"
+    " VALUES ($1::@extschema@.blake3, $2::smallint, $3::bigint, @postgis@.ST_GeomFromEWKB($4::bytea))")
+LP_SQL(TEST_MARK_PROBE_CLAIM, 1,
+    "UPDATE @extschema@.physicality SET mask = @extschema@.laplace_mask_slot('kind', 'claim')"
+    " WHERE entity OPERATOR(@extschema@.=) $1::@extschema@.blake3")
+LP_SQL(TEST_INSERT_PROBE_CONSENSUS, 5,
+    "INSERT INTO @extschema@.consensus(claim, rating, deviation, volatility, matches)"
+    " VALUES ($1::@extschema@.blake3, $2::float8, $3::float8, $4::float8, $5::bigint)")
+LP_SQL(TEST_INSERT_READER_NODES, 8,
+    "WITH node AS ("
+    " SELECT u.id, u.tier, @postgis@.ST_MakePoint(u.x, u.y, u.z, u.m) coord, u.hilbert, @postgis@.ST_GeomFromEWKB(u.ewkb) path"
+    " FROM unnest($1::@extschema@.blake3[], $2::smallint[], $3::float8[], $4::float8[], $5::float8[], $6::float8[], $7::bigint[], $8::bytea[])"
+    "  AS u(id, tier, x, y, z, m, hilbert, ewkb)"
+    "), added AS ("
+    " INSERT INTO @extschema@.entity(id, tier, coord, hilbert)"
+    " SELECT n.id, n.tier, n.coord, n.hilbert FROM node n"
+    " WHERE NOT EXISTS (SELECT 1 FROM @extschema@.entity e WHERE e.id OPERATOR(@extschema@.=) n.id)"
+    " RETURNING id"
+    "), paths AS ("
+    " INSERT INTO @extschema@.physicality(entity, tier, hilbert, path)"
+    " SELECT n.id, n.tier, n.hilbert, n.path FROM node n"
+    " WHERE n.id OPERATOR(@extschema@.=) ANY(SELECT id FROM added)"
+    " RETURNING entity"
+    ") SELECT entity FROM paths")
+LP_SQL(TEST_UPDATE_PATH_EWKB, 2,
+    "UPDATE @extschema@.physicality SET path = @postgis@.ST_GeomFromEWKB($2::bytea)"
+    " WHERE entity OPERATOR(@extschema@.=) $1::@extschema@.blake3")
+LP_SQL(TEST_DIRECT_ENTITY_EXISTS, 1,
+    "SELECT u.ordinal FROM unnest($1::@extschema@.blake3[]) WITH ORDINALITY u(id, ordinal)"
+    " WHERE EXISTS (SELECT 1 FROM @extschema@.entity e WHERE e.id OPERATOR(@extschema@.=) u.id)")
+LP_SQL(TEST_PLAN_MODE_CUSTOM, 0, "SET plan_cache_mode = force_custom_plan")
+LP_SQL(TEST_PLAN_MODE_SHOW, 0, "SHOW plan_cache_mode")
+LP_SQL(TEST_PROBE_COMPOSED, 2,
+    "SELECT @extschema@.laplace_id($1::text), @extschema@.laplace_id($2::text),"
+    " @extschema@.laplace_compose(ARRAY[@extschema@.laplace_id($1::text), @extschema@.laplace_id($2::text)]),"
+    " GREATEST(@extschema@.laplace_tier($1::text), @extschema@.laplace_tier($2::text))::smallint + 1::smallint,"
+    " @postgis@.ST_X(@extschema@.laplace_coord($1::text)), @postgis@.ST_Y(@extschema@.laplace_coord($1::text)),"
+    " @postgis@.ST_Z(@extschema@.laplace_coord($1::text)), @postgis@.ST_M(@extschema@.laplace_coord($1::text)),"
+    " @extschema@.laplace_hilbert($1::text),"
+    " @postgis@.ST_AsEWKB(@extschema@.laplace_path(ARRAY[@extschema@.laplace_id($1::text), @extschema@.laplace_id($2::text)]))")

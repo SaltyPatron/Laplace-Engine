@@ -123,7 +123,7 @@ static void chess_trunks(PGconn *pg, IdList *trunks){
     for (int i = 0; i < nsrc; i++) { int chess = 0;
         for (int k = 0; k < nrec; k++) if (rec[k].source == i && !rec[k].decoder && !rec[k].broken && ((rec[k].native == pgn) || say_part_native(&rec[k], pgn))) chess = 1;
         const char *w = chess ? source_called(&src[i]) : NULL; if (w) lp_push(&names, w); }
-    Args a = { 0 }; PGresult *q = ask_try(pg, "SELECT witness FROM @extschema@.laplace_witness_trust()", &a); args_free(&a);
+    char err[512]; PGresult *q = db_call_try(pg, LP_SQL_WITNESS_TRUST_ALL, NULL, err, sizeof err);
     if (!q) return;
     Reader *rd = reader_new(pg);
     for (int r = 0; r < PQntuples(q); r++) { const lp_id *w = col_id(q, r, 0); lp_id first[2]; char *nm = reader_parts(rd, w, first, 2) ? reader_text(rd, &first[0], 256) : NULL;

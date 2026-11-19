@@ -48,9 +48,19 @@ def psql():
 def sql(statement, *, variables=None, timeout=300):
     """One psql script against the deployed database; its rows as text. Variables bind as psql :'name'."""
     command = [psql(), connection(), '-XwAt', '-v', 'ON_ERROR_STOP=1']
+    prefix = []
     for name, value in (variables or {}).items():
-        command += ['-v', f'{name}={value}']
-    result = subprocess.run(command + ['-f', '-'], input=statement, text=True, capture_output=True, timeout=timeout)
+        text = str(value)
+        if text.isascii() and '\n' not in text and '\r' not in text:
+            command += ['-v', f'{name}={text}']
+        else:
+            encoded = text.encode('utf-8').hex()
+            ident = '"' + name.replace('"', '""') + '"'
+            prefix.append(f"SELECT convert_from(decode('{encoded}', 'hex'), 'UTF8') AS {ident} \\gset\n")
+    script = ''.join(prefix) + statement
+    env = dict(os.environ, PGCLIENTENCODING='UTF8')
+    result = subprocess.run(command + ['-f', '-'], input=script, env=env, text=True, encoding='utf-8',
+                            capture_output=True, timeout=timeout)
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or f'psql exited {result.returncode}')
     return result.stdout.replace('\r', '').strip()

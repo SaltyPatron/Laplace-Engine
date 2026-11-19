@@ -74,6 +74,9 @@ Firmware firmware_for(const char *path, int op){
             if (v && !strcmp(v, "predicate")) names(&fw, fw.refuse_predicate, &fw.nrefuse_predicate, FW_NAMES, fw.path, line);
             else if (v && !strcmp(v, "witness")) names(&fw, fw.refuse_witness, &fw.nrefuse_witness, FW_NAMES, fw.path, line);
             else { fprintf(stderr, "%s:%d: refuse predicate NAME... | witness NAME...\n", fw.path, line); exit(2); } }
+        else if (!strcmp(tok, "negate")) names(&fw, fw.negate, &fw.nnegate, FW_NAMES, fw.path, line);
+        else if (!strcmp(tok, "negate_relation")) names(&fw, fw.negate_relation, &fw.nnegate_relation, FW_NAMES, fw.path, line);
+        else if (!strcmp(tok, "scope_stop")) names(&fw, fw.scope_stop, &fw.nscope_stop, FW_NAMES, fw.path, line);
         else if (!strcmp(tok, "weigh")) { double w = NUMBER(); char *nm; int any = 0;                 /* weigh N KIND...: strands of these kinds pull N as hard */
             if (w < 0 || w > 1) { fprintf(stderr, "%s:%d: a weight is between 0 and 1\n", fw.path, line); exit(2); }
             while ((nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') { if (fw.nweigh >= FW_WEIGHS) { fprintf(stderr, "%s:%d: more weights than a firmware holds (%d)\n", fw.path, line, FW_WEIGHS); exit(2); }
@@ -156,6 +159,7 @@ static lp_id firmware_name(lp_text *c, const Firmware *fw, const char *name){
     }
     return entity_named(c, text, NULL, 0, NULL).id;
 }
+
 /* Every name the firmware says, as the entity it names: the text's trunk, decomposed as any text is. A pass computes
  * them once, not again for every stage, step or strand that uses them. */
 const Firmware *firmware_ids(Firmware *fw){
@@ -165,6 +169,9 @@ const Firmware *firmware_ids(Firmware *fw){
     for (int i = 0; i < fw->nrefuse_predicate; i++) fw->id.refuse[i] = NAMED(fw->refuse_predicate[i]);
     for (int i = 0; i < fw->nonly_predicate; i++) fw->id.only[i] = NAMED(fw->only_predicate[i]);
     for (int i = 0; i < fw->nrefuse_witness; i++) fw->id.refuse_witness[i] = NAMED(fw->refuse_witness[i]);
+    for (int i = 0; i < fw->nnegate; i++) fw->id.negate[i] = NAMED(fw->negate[i]);
+    for (int i = 0; i < fw->nnegate_relation; i++) fw->id.negate_relation[i] = firmware_name(c, fw, fw->negate_relation[i]);
+    for (int i = 0; i < fw->nscope_stop; i++) fw->id.scope_stop[i] = NAMED(fw->scope_stop[i]);
     for (int i = 0; i < fw->nweigh; i++) fw->id.weigh[i] = NAMED(fw->weigh_name[i]);
     if (fw->role_by[0]) fw->id.role_by = NAMED(fw->role_by);
     for (int i = 0; i < fw->nrole; i++) fw->id.role[i] = NAMED(fw->role_name[i]);
@@ -173,6 +180,12 @@ const Firmware *firmware_ids(Firmware *fw){
     for (int i = 0; i < 2; i++) if (fw->language[i][0]) fw->id.language[i] = NAMED(fw->language[i]);
     if (fw->prevalence[0] && !fw->prevalence_pair) fw->id.prevalence = NAMED(fw->prevalence);
     #undef NAMED
+    {
+        size_t sz = 0; const void *bytes = lp_map_file(fw->path, 0, &sz);
+        if (!bytes) { perror(fw->path); exit(1); }
+        fw->id.image_id = lp_text_decompose(c, (const uint8_t *)bytes, sz, NULL, NULL).id;
+        lp_unmap_file(bytes, sz);
+    }
     lp_text_free(c); fw->id.ready = 1;
     return fw;
 }
@@ -187,7 +200,8 @@ int cmd_firmware(int argc, char **argv){
     int op = 0; while (op < FW_OPS && strcmp(OPS[op], operation)) op++;
     if (a != argc || op == FW_OPS) { fprintf(stderr, "usage: laplace firmware [--firmware FILE] [--operation hop|search|translate|follows|pull]\n"); return 2; }
     Firmware fw = firmware_for(path, op); tier0_open(NULL); firmware_ids(&fw);
-    fputs("{\"operation\":", stdout); json_str(stdout, operation); fputs(",\"up\":[", stdout);
+    char fid[33]; lp_id_hex(&fw.id.image_id, fid);
+    printf("{\"firmware_id\":\"%s\",\"operation\":", fid); json_str(stdout, operation); fputs(",\"up\":[", stdout);
     for (int i=0; i<fw.nup; i++) { if (i) putchar(','); binding_json(fw.up[i], &fw.id.up[i]); }
     fputs("],\"chains\":[", stdout);
     for (int a_=0; a_<fw.nalt; a_++) { if (a_) putchar(','); putchar('[');

@@ -574,7 +574,7 @@ int cmd_structure(int argc, char **argv){
     }
     fclose(f);
     if (!layout_compile_recipe(l, grammar, sizeof grammar)) { free(l); return 2; }
-    size_t n = 0; const uint8_t *src = os_map_read(file, &n);
+    size_t n = 0; const uint8_t *src = lp_map_file(file, 0, &n);
     if (!src) { perror(file); free(l); return 1; }
     Show s = {.left=nodes, .spans=(uint8_t)spans}; uint64_t units = 0;
     if (*grammar) {

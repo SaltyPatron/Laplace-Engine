@@ -19,7 +19,7 @@ static inline void bit_clear(Bits *a, const Bits *b){ for (int i = 0; i < MAXOCC
 
 enum { R_CLAIM, R_FOLLOWS, R_DISCOURSE, R_SCAN, R_CONTAIN, R_LAYER, R_KINDS };
 #define CELL_HEADS 8
-typedef struct { lp_id id; double force, cost; Bits support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, tier; lp_id heads[CELL_HEADS]; int nheads, layer; } Cell;
+typedef struct { lp_id id; double force, cost; Bits support, neg_support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, tier; lp_id heads[CELL_HEADS]; int nheads, layer; } Cell;
 typedef struct { Cell *c; int n; size_t cap; lp_idmap *m; } Field;
 static inline Cell *cell(Field *f, const lp_id *id){
     if (!f->m) f->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(f->m, id, &fresh);
@@ -33,7 +33,8 @@ static inline void field_free(Field *f){ free(f->c); lp_idmap_free(f->m); memset
 typedef struct {
     const Firmware *fw; PGconn *pg; Reader *rd; lp_text *c;
     Lexicalization lexical;
-    lp_id prompt; lp_id occ[MAXOCC]; int nocc; double role[MAXOCC]; int composed[MAXOCC];
+    lp_id prompt, handle, program_id; lp_id occ[MAXOCC]; int nocc; double role[MAXOCC]; int composed[MAXOCC];
+    int8_t polarity[MAXOCC];
     lp_id role_read[MAXOCC]; int role_votes[MAXOCC], role_seen[MAXOCC];    /* the reading each word is read as where it stands, by how many of how many observations of its run */
     lp_id disc[MAXOCC]; int ndisc;
     lp_id traj[4096]; int ntraj;
@@ -55,7 +56,7 @@ static inline double draw(const State *st, uint32_t a, uint32_t b, uint32_t c){
     blake3_hasher h; blake3_hasher_init(&h); blake3_hasher_update(&h, st->seed, 32); uint32_t v[3] = { a, b, c }; blake3_hasher_update(&h, v, sizeof v);
     uint8_t o[8]; blake3_hasher_finalize(&h, o, 8); uint64_t x; memcpy(&x, o, 8); return (double)(x >> 11) * 0x1.0p-53;
 }
-static inline PGresult *ask_st(State *st, const char *sql, Args *a){ st->trips++; return ask(st->pg, sql, a); }
+static inline PGresult *call_st(State *st, LpSqlId id, Args *a){ st->trips++; return db_call(st->pg, id, a); }
 static inline int head_read(const Firmware *fw, const lp_id *v, size_t n){
     if (lp_tuple_middle_any(v, n, fw->id.refuse, (size_t)fw->nrefuse_predicate)) return 0;
     if (fw->nonly_predicate && !lp_tuple_middle_any(v, n, fw->id.only, (size_t)fw->nonly_predicate)) return 0;
@@ -75,6 +76,8 @@ typedef struct { lp_id id; long times; int len; } Next;
 
 #define HEADS lp_program_HEADS
 #define resolve_roles lp_program_resolve_roles
+#define resolve_polarity lp_program_resolve_polarity
+#define contextual_salience_lift lp_program_contextual_salience_lift
 #define layer_round lp_program_layer_round
 #define heads_say lp_program_heads_say
 #define couple lp_program_couple
@@ -88,6 +91,8 @@ typedef struct { lp_id id; long times; int len; } Next;
 
 extern lp_idmap *HEADS;
 void resolve_roles(State *st);
+void resolve_polarity(State *st);
+void contextual_salience_lift(State *st, const Field *fd);
 int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out);
 void heads_say(State *st, lp_idmap *hm, const char *label);
 int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_of, int kind, Curve *near, int keep);

@@ -219,6 +219,10 @@ int say_record_streamable(const Recipe *recipe){
         ((say->lay.g.record_count || say->lay.g.record_children) && !say->lay.g.record_name_count &&
          (!say->lay.g.has_context || say->lay.g.context_stream)));
 }
+int say_input_compiled(const Recipe *recipe){
+    const Say *say = recipe ? recipe->say : NULL;
+    return say && say->lay.g.compiled;
+}
 static void read_records(RecordPipeline *pipeline){
     const uint8_t *original_source = pipeline->source; size_t original_length = pipeline->length;
     MemoryInput memory = {.bytes=original_source, .length=original_length};

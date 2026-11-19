@@ -90,14 +90,21 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
             const lp_reached *at = &batch[who[e]]; path_into(&rn, lp_path_of(hh[r].path, (size_t)hh[r].path_len));
             if (!head_read(fw, rn.v, rn.n)) { st->refused++; continue; }
             int other = lp_tuple_other(rn.v, rn.n, &at->id); if (other < 0) continue;
+            if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
             lp_rating rt = hh[r].r;
             double sw = strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n); if (sw <= 0) continue;
             double cost = at->cost + lp_cost(&rt, fw->k, fw->lambda) - log(sw);
             lp_frontier_reach(fr, &rn.v[other], &at->id, &hh[r].entity, cost, 0, at->hops + 1);
-            const Cell *ca = cell_find(fd, &at->id); Bits sup = ca ? ca->support : (Bits){ 0 };
+            const Cell *ca = cell_find(fd, &at->id);
+            Bits sup = ca ? ca->support : (Bits){ 0 }, nsup = ca ? ca->neg_support : (Bits){ 0 };
+            lp_id rel = rn.n >= 3 ? rn.v[1] : at->id;
+            int flip = 0; for (int ni = 0; ni < fw->nnegate_relation && !flip; ni++) flip = lp_id_eq(&fw->id.negate_relation[ni], &rel);
             Cell *cx = cell(fd, &rn.v[other]); cx->routes[R_SCAN]++;
-            for (int w = 0; w < MAXOCC / 64; w++) cx->support.w[w] |= sup.w[w];
-            if (cost < cx->cost) { cx->cost = cost; if (!cx->has_r) { cx->r = rt; cx->has_r = 1; cx->via = at->id; cx->rel = rn.n >= 3 ? rn.v[1] : at->id; } }
+            for (int w = 0; w < MAXOCC / 64; w++) {
+                cx->support.w[w] |= (flip ? nsup.w[w] : sup.w[w]);
+                cx->neg_support.w[w] |= (flip ? sup.w[w] : nsup.w[w]);
+            }
+            if (cost < cx->cost) { cx->cost = cost; if (!cx->has_r) { cx->r = rt; cx->has_r = 1; cx->via = at->id; cx->rel = rel; } }
         }
         holds_free(hh, nh);
     }
@@ -115,15 +122,29 @@ enum { CH_STRAND, CH_WALK, CH_BESIDE };
 static void weigh_prop(const State *st, const Field *fd, Prop *p){
     const Cell *x = cell_find(fd, &p->id); memset(p->by, 0, sizeof p->by); p->cooc = p->walk = 0; p->heads = x ? x->nheads : 0;      /* independent relation heads converging on it */
     int atom = lp_tier0_codepoint(T0, &p->id) >= 0;                          /* a letter, a space, a mark: it may continue a run, it grounds nothing */
+    int is_neg_word = 0; for (int ni = 0; ni < st->fw->nnegate && !is_neg_word; ni++) is_neg_word = lp_id_eq(&p->id, &st->fw->id.negate[ni]);
+    Bits contra; memset(&contra, 0, sizeof contra);
     for (int j = 0; j < st->npos; j++) { if (lp_id_eq(&st->occ[j], &p->id)) continue;
         int v = visits(st, &p->id, j), b = beside(st, j, &p->id); p->walk += v; p->cooc += b;      /* how the whole trajectory so far, prompt and emitted, attends to it */
         if (atom || j >= st->nocc || !((st->open.w[j >> 6] >> (j & 63)) & 1)) continue;            /* grounding: only what is still owed, and only by a composition */
-        if (x && ((x->support.w[j >> 6] >> (j & 63)) & 1)) bit_set(&p->by[CH_STRAND], j);
-        if (v >= 2) bit_set(&p->by[CH_WALK], j);
-        if (beside_grounds(st, j, &p->id)) bit_set(&p->by[CH_BESIDE], j); }
+        int is_neg_occ = st->polarity[j] < 0;
+        int has_pos_strand = x && ((x->support.w[j >> 6] >> (j & 63)) & 1);
+        int has_neg_strand = x && ((x->neg_support.w[j >> 6] >> (j & 63)) & 1);
+        if (has_pos_strand) bit_set(&p->by[CH_STRAND], j);
+        if (has_neg_strand) bit_set(&contra, j);
+        if (v >= 2) {
+            if (is_neg_occ && !has_pos_strand && !is_neg_word) bit_set(&contra, j);
+            else if (!has_neg_strand) bit_set(&p->by[CH_WALK], j);
+        }
+        if (beside_grounds(st, j, &p->id)) {
+            if (is_neg_occ && !has_pos_strand && !is_neg_word) bit_set(&contra, j);
+            else if (!has_neg_strand) bit_set(&p->by[CH_BESIDE], j);
+        }
+    }
     Bits u; memset(&u, 0, sizeof u); p->agree = 0;
     for (int c = 0; c < 3; c++) { int any = 0; for (int w = 0; w < MAXOCC / 64; w++) { u.w[w] |= p->by[c].w[w]; any |= p->by[c].w[w] != 0; } p->agree += any; }
-    p->grounds = owed(&u, &st->open);
+    int pos_g = owed(&u, &st->open), neg_g = owed(&contra, &st->open);
+    p->grounds = pos_g > neg_g ? pos_g - neg_g : 0;
 }
 static const Firmware *ELECT;
 static int key_cmp(const Prop *x, const Prop *y, int k){                      /* -1: x first */
@@ -165,6 +186,7 @@ static int cannot_tell(const Prop *x, const Prop *y, const Firmware *fw){
  * ambiguous; one whose readings nothing else holds together with binds nothing. All of it is the perf-cache: no read. */
 typedef struct { int cell, occ, list; uint32_t slot; } Cand;
 typedef struct { int ncand, choice, level, capped; double score; } Bind;      /* per occurrence */
+typedef struct { const lp_highway *h; Cand *cand; int nc, *first; } Readings;
 static int mapped(const lp_highway *h, const Cand *a, const Cand *b){        /* the highway maps a to b */
     const lp_edge *e; size_t n = lp_highway_edges(h, h->list[a->list].name, a->slot, h->list[b->list].name, &e);
     for (size_t k = 0; k < n; k++) if (e[k].to == b->slot) return 1;
@@ -172,6 +194,26 @@ static int mapped(const lp_highway *h, const Cand *a, const Cand *b){        /* 
 }
 static int holds_with(const lp_highway *h, const Cand *a, const Cand *b){
     return (a->list == b->list && a->slot == b->slot) || mapped(h, a, b) || mapped(h, b, a);
+}
+static double reading_compat(const State *st, const Field *fd, const Readings *R, const Cand *a, const Cand *b){
+    if (holds_with(R->h, a, b)) return 1.0;
+    const Cell *ca = &fd->c[a->cell], *cb = &fd->c[b->cell];
+    int cross = ((ca->support.w[b->occ >> 6] >> (b->occ & 63)) & 1) ||
+                ((cb->support.w[a->occ >> 6] >> (a->occ & 63)) & 1);
+    if (cross) return 0.85;
+    int v_ab = visits(st, &cb->id, a->occ) + visits(st, &ca->id, b->occ);
+    int c_ab = beside_grounds(st, a->occ, &cb->id) + beside_grounds(st, b->occ, &ca->id);
+    if (v_ab >= 2 && c_ab > 0) return 0.75;
+    if (v_ab >= 2) return 0.60;
+    int shared_other = 0;
+    for (int w = 0; w < MAXOCC / 64 && !shared_other; w++) {
+        uint64_t m = ca->support.w[w] & cb->support.w[w];
+        if (w == (a->occ >> 6)) m &= ~(1ull << (a->occ & 63));
+        if (w == (b->occ >> 6)) m &= ~(1ull << (b->occ & 63));
+        if (m) shared_other = 1;
+    }
+    if (c_ab > 0 || shared_other) return 0.45;
+    return 0.0;
 }
 static const Field *CAND_FD;
 static int cand_by_id(const void *a, const void *b){ return memcmp(&CAND_FD->c[((const Cand *)a)->cell].id, &CAND_FD->c[((const Cand *)b)->cell].id, 16); }
@@ -183,7 +225,6 @@ static void reach_of(const State *st, const Cell *x, int i, int upto, double *wa
         *walks += st->role[j] * visits(st, &x->id, j); *strands += (int)((x->support.w[j >> 6] >> (j & 63)) & 1); }
 }
 /* Every position's readings, once: the types its own strands reach, in content order. */
-typedef struct { const lp_highway *h; Cand *cand; int nc, *first; } Readings;
 static void readings_build(State *st, Field *fd, Bind *bind, Readings *R){
     R->h = lp_highway_map(NULL); R->cand = NULL; R->nc = 0; R->first = calloc((size_t)st->nocc + 1, sizeof(int)); int cc = 0;
     for (int i = 0; i < st->nocc; i++) { memset(&bind[i], 0, sizeof bind[i]); bind[i].choice = -1; }
@@ -205,13 +246,16 @@ static void readings_build(State *st, Field *fd, Bind *bind, Readings *R){
 static int reading_for(const State *st, const Field *fd, const Bind *bind, const Readings *R, int i, int upto, double *score, int *level){
     double best = 0, bw = 0; int pick = -1, lvl = 0, bs = 0;
     for (int a = R->first[i]; a < R->first[i] + bind[i].ncand; a++) { double s = 0;
-        for (int j = 0; j < upto; j++) { if (j == i || !bind[j].ncand) continue; int hold = 0;
-            if (bind[j].choice >= 0) hold = holds_with(R->h, &R->cand[a], &R->cand[bind[j].choice]);
-            else for (int c = R->first[j]; c < R->first[j] + bind[j].ncand && !hold; c++) hold = holds_with(R->h, &R->cand[a], &R->cand[c]);
+        for (int j = 0; j < upto; j++) { if (j == i || !bind[j].ncand) continue; double hold = 0;
+            if (bind[j].choice >= 0) hold = reading_compat(st, fd, R, &R->cand[a], &R->cand[bind[j].choice]);
+            else for (int c = R->first[j]; c < R->first[j] + bind[j].ncand; c++) {
+                double h = reading_compat(st, fd, R, &R->cand[a], &R->cand[c]);
+                if (h > hold) { hold = h; if (hold >= 1.0) break; }
+            }
             s += hold * st->role[j]; }
         double w; int sn; reach_of(st, &fd->c[R->cand[a].cell], i, upto, &w, &sn);
-        if (s > best) { best = s; pick = a; lvl = 0; bw = w; bs = sn; }
-        else if (s == best && s > 0) {
+        if (s > best + 1e-9) { best = s; pick = a; lvl = 0; bw = w; bs = sn; }
+        else if (fabs(s - best) <= 1e-9 && best > 0) {
             double tol = st->fw->sure * sqrt(w + bw);
             if (w > bw + tol || (!(bw > w + tol) && sn > bs)) { pick = a; lvl = 0; bw = w; bs = sn; }
             else if (!(bw > w + tol) && sn == bs) lvl = 1; } }
@@ -265,12 +309,12 @@ static int turn_witness(const char *conninfo, Ref who, Ref by, Ref handle, Ref p
     c2.outcome = (uint8_t)lp_outcome_of(1.0, &c2.spare);
     Ref u_tr[2] = { said_metadata(who), c1 }; Ref u_trunk = compose(u_tr, 2, ref_above(u_tr, 2));
     Ref r_tr[2] = { said_metadata(by), c2 }; Ref r_trunk = compose(r_tr, 2, ref_above(r_tr, 2));
-    f[0].path = "the prompt"; f[0].witness = who; f[0].trust = uc ? uc->prior : 0.3; f[0].trunk = u_trunk; f[0].file = u_trunk; f[0].has_file = 1;
+    f[0].path = "the prompt"; f[0].witness = who; f[0].lineage = who; f[0].has_lineage = 1; f[0].trust = uc ? uc->prior : 0.3; f[0].trunk = u_trunk; f[0].file = u_trunk; f[0].has_file = 1;
     Event e1 = { .claim = c1.id, .witnessed = c1.id, .score = 1.0f, .enter_rating = 1500.0f, .position = (uint32_t)ordinal, .kind = EV_CLAIM }; ev_push(&f[0].ev, &e1);
-    f[1].path = "the response"; f[1].witness = by; f[1].trust = rc ? rc->prior : 0.2; f[1].trunk = r_trunk; f[1].file = r_trunk; f[1].has_file = 1;
+    f[1].path = "the response"; f[1].witness = by; f[1].lineage = by; f[1].has_lineage = 1; f[1].trust = rc ? rc->prior : 0.2; f[1].trunk = r_trunk; f[1].file = r_trunk; f[1].has_file = 1;
     Event e2 = { .claim = c2.id, .witnessed = c2.id, .score = 1.0f, .enter_rating = 1500.0f, .kind = EV_CLAIM }; ev_push(&f[1].ev, &e2);
     Fold *fold = fold_new(); fold_events(fold, f, 2);
-    LoadWitness lw[2] = { { .id = u_trunk.id, .trust = f[0].trust }, { .id = r_trunk.id, .trust = f[1].trust } };
+    LoadWitness lw[2] = { { .id = u_trunk.id, .lineage = who.id, .trust = f[0].trust, .has_lineage = 1 }, { .id = r_trunk.id, .lineage = by.id, .trust = f[1].trust, .has_lineage = 1 } };
     int rc_ = load(conninfo, 2, f, 2, ls); fold_free(fold);
     free(f[0].ev.e); free(f[1].ev.e);
     if (rc_ || load_register(conninfo, 2, lw, 2, f, 2) || merge(conninfo, 2, ls)) return 1;
@@ -301,9 +345,12 @@ static int receipt_open(const char *path){
 static void receipt_close(void){ if (RECEIPT) { fclose(RECEIPT); RECEIPT = NULL; } }
 static void receipt_id(const char *key, const lp_id *id){ char h[33]; lp_id_hex(id, h); fprintf(RECEIPT, ",\"%s\":\"%s\"", key, h); }
 static void receipt_end(void){ fputs("}\n", RECEIPT); fflush(RECEIPT); }
-static void receipt_resolve(const lp_id *prompt, const lp_id *response, const char *user, const char *session, int ordinal, int nturn){
+static void receipt_resolve(const lp_id *firmware_id, const lp_id *program_id, const lp_id *prompt, const lp_id *response, const char *user, const char *session, int ordinal, int nturn){
     if (!RECEIPT) return;
-    fputs("{\"event\":\"resolve\"", RECEIPT); receipt_id("prompt", prompt); if (response) receipt_id("response", response);
+    fputs("{\"event\":\"resolve\"", RECEIPT);
+    if (firmware_id) receipt_id("firmware_id", firmware_id);
+    if (program_id) receipt_id("program_id", program_id);
+    receipt_id("prompt", prompt); if (response) receipt_id("response", response);
     fputs(",\"user\":", RECEIPT); json_str(RECEIPT, user); fputs(",\"session\":", RECEIPT); json_str(RECEIPT, session);
     fprintf(RECEIPT, ",\"ordinal\":%d,\"turns_before\":%d", ordinal, nturn); receipt_end();
 }
@@ -313,9 +360,13 @@ static void receipt_step(int step, const char *kind, const lp_id *id, const char
     fputs(",\"text\":", RECEIPT); json_str(RECEIPT, text);
     fprintf(RECEIPT, ",\"grounds\":%.6g,\"continuity\":%d,\"confidence\":%.6g", grounds, continuity, confidence); receipt_end();
 }
-static void receipt_realize(const char *text, const char *disposition){
+static void receipt_realize(const lp_id *firmware_id, const lp_id *program_id, const lp_id *decision_id, const char *text, const char *disposition){
     if (!RECEIPT) return;
-    fputs("{\"event\":\"realize\",\"text\":", RECEIPT); json_str(RECEIPT, text); fputs(",\"disposition\":", RECEIPT); json_str(RECEIPT, disposition); receipt_end();
+    fputs("{\"event\":\"realize\",\"text\":", RECEIPT); json_str(RECEIPT, text); fputs(",\"disposition\":", RECEIPT); json_str(RECEIPT, disposition);
+    if (firmware_id) receipt_id("firmware_id", firmware_id);
+    if (program_id) receipt_id("program_id", program_id);
+    if (decision_id) receipt_id("decision_id", decision_id);
+    receipt_end();
 }
 static void receipt_witnessed(const lp_id *turn, const lp_id *response, int ordinal, unsigned long long entities){
     if (!RECEIPT) return;
@@ -328,6 +379,12 @@ static void receipt_unwitnessed(const lp_id *turn, int held, const char *reason)
     if (held) fprintf(RECEIPT, ",\"held\":%d", held > 0 ? held : 0); else fputs(",\"held\":null", RECEIPT);
     if (turn) receipt_id("turn", turn); else fputs(",\"turn\":null", RECEIPT);
     fputs(",\"reason\":", RECEIPT); json_str(RECEIPT, reason); receipt_end();
+}
+static lp_id compute_program_id(lp_text *c, const lp_id *prompt, const lp_id *firmware_id, const lp_id *handle, int ordinal){
+    char ord[16]; int ol = snprintf(ord, sizeof ord, "%d", ordinal);
+    lp_id ord_id = lp_text_decompose(c, (const uint8_t *)ord, (size_t)ol, NULL, NULL).id;
+    const lp_id parts[4] = { *prompt, *firmware_id, *handle, ord_id };
+    lp_id out; lp_id_compose(parts, 4, &out); return out;
 }
 /* A prompt or a response: the argument itself, or with --files the file it names; whole UTF-8 text, never empty. */
 static uint8_t *said_text(const char *arg, int files, const char *what, size_t *n){
@@ -354,7 +411,7 @@ int cmd_said(int argc, char **argv){
     size_t np, nr; uint8_t *prompt = said_text(argv[a], files, "prompt", &np); if (!prompt) return 1;
     uint8_t *response = said_text(argv[a + 1], files, "response", &nr); if (!response) return 1;
     Firmware fw = firmware_for(fwp, FW_PULL);
-    tier0_open(NULL); table_init(); ctx_open(1);
+    tier0_open(NULL); firmware_ids(&fw); table_init(); ctx_open(1);
     Ref pr = text_ref(CTX[0], prompt, np), resp = text_ref(CTX[0], response, nr);
     Ref who, handle = session_handle(user, session, &who), speaker = text_ref(CTX[0], (const uint8_t *)by, strlen(by));
     Ref tp[2] = { pr, resp }; tp[0].said = tp[1].said = 0; Ref turn = compose(tp, 2, ref_above(tp, 2));
@@ -362,9 +419,10 @@ int cmd_said(int argc, char **argv){
     Claim *tc = session_turns(pg, &fw, &handle.id, &nturn, &ordinal);
     for (int i = 0; i < nturn && !held; i++) if (lp_id_eq(&tc[i].part[1], &turn.id)) held = tc[i].position ? tc[i].position : -1;
     free(tc); PQfinish(pg);
+    lp_id program_id = compute_program_id(CTX[0], &pr.id, &fw.id.image_id, &handle.id, held > 0 ? held : held ? 0 : ordinal);
     char ti[33], pi[33], ri[33]; lp_id_hex(&turn.id, ti); lp_id_hex(&pr.id, pi); lp_id_hex(&resp.id, ri);
     printf("RESOLVE    prompt %s, tier %d; response %s, tier %d; session \"%s\" of %s, %d turn%s before it\n", pi, pr.tier, ri, resp.tier, session, user, nturn, nturn == 1 ? "" : "s");
-    receipt_resolve(&pr.id, &resp.id, user, session, held > 0 ? held : held ? 0 : ordinal, nturn);
+    receipt_resolve(&fw.id.image_id, &program_id, &pr.id, &resp.id, user, session, held > 0 ? held : held ? 0 : ordinal, nturn);
     if (held) { if (held > 0) printf("WITNESS    turn %s is held by the session, at %d: nothing is witnessed again\n", ti, held); else printf("WITNESS    turn %s is held by the session: nothing is witnessed again\n", ti);
         receipt_unwitnessed(&turn.id, held, "the turn is held by the session: nothing is witnessed again"); }
     else { LoadStats ls = { 0 }; lp_id id;
@@ -397,6 +455,7 @@ int cmd_turn(int argc, char **argv){
     st->nocc = (int)occurrences;
     st->pg = db_read(conninfo); st->rd = reader_new(st->pg);
     Ref who, handle = session_handle(user, session, &who);                   /* the session: its name within its user's */
+    st->handle = handle.id;
     int nturn = 0, ordinal = 1;
     { Claim *tc = session_turns(st->pg, &fw, &handle.id, &nturn, &ordinal); st->trips++;
       for (int i = 0; i < nturn; i++) {
@@ -404,20 +463,21 @@ int cmd_turn(int argc, char **argv){
           if (parts > remaining) { fprintf(stderr, "turn: session discourse exceeds this execution window of %d constituents\n", MAXOCC); free(tc); return 2; }
           st->ndisc += (int)parts; }
       free(tc); }
-    if (!read_only) {                                                         /* the prompt, admitted as content (Forward 20.1, Sessions 21.3): what follows reads a substrate that holds it */
-        const lp_trust_class *pc = lp_trust_class_named("UserPromptContent"); File pf; memset(&pf, 0, sizeof pf);
-        pf.path = "the prompt"; pf.witness = who; pf.trust = pc ? pc->prior : 0.3; pf.trunk = pr;
+    if (!read_only) {                                                         /* the prompt, admitted as content (Forward 20.1, Sessions 21.3, Users 22.6): zero semantic attestations */
+        File pf; memset(&pf, 0, sizeof pf);
+        pf.path = "the prompt"; pf.witness = who; pf.trust = 0.0; pf.trunk = pr;
         LoadStats ls = { 0 }; if (load(conninfo, 2, &pf, 1, &ls) || merge(conninfo, 2, &ls)) return 1; st->admitted = ls.ent_rows;
         TABLE_EACH(x) x->keep = 0;                                            /* recorded now: the turn's witnessing finds it, and writes it again nowhere */
     }
-    /* the seed: BLAKE3 of the observation and the firmware's text (and, when the firmware says so, the session and the
+    st->program_id = compute_program_id(st->c, &pr.id, &fw.id.image_id, &handle.id, ordinal);
+    /* the seed: BLAKE3 of the observation and the firmware's content identity (and, when the firmware says so, the session and the
      * turn), or of --seed: the same prompt under the same firmware draws the same, and the receipt can say from what */
     { blake3_hasher h; blake3_hasher_init(&h);
       if (seedv >= 0) { int64_t sv = seedv; blake3_hasher_update(&h, &sv, sizeof sv); }
-      else { blake3_hasher_update(&h, &pr.id, 16); FILE *ff = fopen(fw.path, "rb"); if (ff) { char b[4096]; size_t k; while ((k = fread(b, 1, sizeof b, ff)) > 0) blake3_hasher_update(&h, b, k); fclose(ff); }
+      else { blake3_hasher_update(&h, &pr.id, 16); blake3_hasher_update(&h, fw.id.image_id.b, 16);
              if (fw.seed_session) { blake3_hasher_update(&h, &handle.id, 16); int32_t od = ordinal; blake3_hasher_update(&h, &od, sizeof od); } }
       blake3_hasher_finalize(&h, st->seed, 32); }
-    resolve_roles(st); ROLE = st->role;
+    resolve_roles(st); resolve_polarity(st); ROLE = st->role;
     { lp_id w[MAXOCC]; int nw = 0; for (int i = 0; i < st->nocc; i++) if (st->composed[i]) { int dup = 0; for (int z = 0; z < nw && !dup; z++) dup = lp_id_eq(&w[z], &st->occ[i]); if (!dup) w[nw++] = st->occ[i]; }   /* each word once: a word said twice is one vote */
       lp_id (*lg)[LANGS] = calloc((size_t)(nw ? nw : 1), sizeof *lg); int *nlg = calloc((size_t)(nw ? nw : 1), sizeof(int)); langs_of(st, w, nw, lg, nlg);
       /* each word gives each language it is lexicalized in a share of one vote: a word in one language says which; a
@@ -431,7 +491,7 @@ int cmd_turn(int argc, char **argv){
     for (int i = 0; i < st->nocc; i++) reader_want(st->rd, &st->occ[i]);
     char idt[33]; lp_id_hex(&pr.id, idt);
     printf("RESOLVE    prompt %s, tier %d, %d occurrences; session \"%s\" of %s, turn %d (%d before it, %d discourse entities)\n", idt, pr.tier, st->nocc, session, user, ordinal, nturn, st->ndisc);
-    receipt_resolve(&pr.id, NULL, user, session, ordinal, nturn);
+    receipt_resolve(&fw.id.image_id, &st->program_id, &pr.id, NULL, user, session, ordinal, nturn);
     if (!read_only) printf("           admitted as content, the user witnessing it: %llu entities new\n", (unsigned long long)st->admitted);
     printf("           language:"); for (int y = 0; y < st->nlang; y++) { reader_want(st->rd, &st->lang[y]); char *tl = reader_text(st->rd, &st->lang[y], 16); printf(" %s", tl); free(tl); } if (!st->nlang) printf(" not known"); printf("\n");
     printf("           obligations:"); for (int i = 0; i < st->nocc; i++) if (st->composed[i]) { char *tx = reader_text(st->rd, &st->occ[i], 32); printf(" %s%s(%.2f)", tx, (st->open.w[i >> 6] >> (i & 63)) & 1 ? "" : "~", st->role[i]); free(tx); } printf("\n");
@@ -459,7 +519,8 @@ int cmd_turn(int argc, char **argv){
       printf("           walks: %d from each word, %d steps, seed %s: %llu steps taken, %llu home, %zu entities stood on, %d read   (%.1f ms)\n", fw.walks, fw.steps, sd,
              (unsigned long long)st->walk_steps, (unsigned long long)st->walk_homes, st->walk_at ? lp_idmap_count(st->walk_at) : (size_t)0, st->walk_read, (now() - t) * 1000);
       t = now(); context(st, 0, st->nocc); int nctx = 0, nhub = 0; for (int i = 0; i < st->nocc; i++) { nctx += st->ctx_n[i]; nhub += st->ctx_hub[i]; }
-      printf("           context: %d observations hold the words (%d distinct), %d word%s held by more than the fan   (%.1f ms)\n", nctx, st->ctx_total, nhub, nhub == 1 ? "" : "s", (now() - t) * 1000); }
+      printf("           context: %d observations hold the words (%d distinct), %d word%s held by more than the fan   (%.1f ms)\n", nctx, st->ctx_total, nhub, nhub == 1 ? "" : "s", (now() - t) * 1000);
+      contextual_salience_lift(st, &fd); }
     /* READ, position by position, in the prompt's order: what the fetches above hold is read the way the prompt is,
      * each position's state depending on the positions before it. For each position: whether what came before
      * predicted it (what follows the longest observed run ending just before it), its reading against the readings
@@ -468,14 +529,14 @@ int cmd_turn(int argc, char **argv){
     for (int i = 0; i < R.nc; i++) reader_want(st->rd, &fd.c[R.cand[i].cell].id);
     for (int i = 0; i < nnear && i < 5; i++) reader_want(st->rd, &near[i].id);
     Next nx0[64]; int nn0 = 0;
-    { double t = now(); Args ra = { 0 }; arg_ids(&ra, st->occ, (size_t)st->nocc); arg_int(&ra, fw.fan);
-      PGresult *fq = ask_st(st, "SELECT i, j, paths, next, times FROM @extschema@.laplace_forward($1::@extschema@.blake3[], $2::bigint) ORDER BY j, i, times DESC, next", &ra);
+    { double t = now(); Args ra = { 0 }; arg_ids(&ra, st->occ, (size_t)st->nocc); arg_i64(&ra, (int64_t)fw.fan);
+      PGresult *fq = call_st(st, LP_SQL_FORWARD_TURN, &ra);
       { lp_idmap *seen0 = lp_idmap_new();
         for (int r = 0; r < PQntuples(fq) && nn0 < 64; r++) {
-            if ((int)col_int(fq, r, 1) != st->nocc || PQgetisnull(fq, r, 3)) continue;
+            if (col_i32(fq, r, 1) != st->nocc || PQgetisnull(fq, r, 3)) continue;
             bool fresh; lp_idmap_put(seen0, col_id(fq, r, 3), &fresh); if (!fresh) continue;
-            nx0[nn0].id = *col_id(fq, r, 3); nx0[nn0].times = (long)col_int(fq, r, 4);
-            nx0[nn0].len = (int)(col_int(fq, r, 1) - col_int(fq, r, 0) + 1); nn0++;
+            nx0[nn0].id = *col_id(fq, r, 3); nx0[nn0].times = (long)col_i64(fq, r, 4);
+            nx0[nn0].len = col_i32(fq, r, 1) - col_i32(fq, r, 0) + 1; nn0++;
         }
         lp_idmap_free(seen0); }
       int expected = 0, surprised = 0, revised = 0;
@@ -483,12 +544,12 @@ int cmd_turn(int argc, char **argv){
           char *w = reader_text(st->rd, &st->occ[p], 24); printf("READ %-3d   %-12s", p + 1, w); free(w);
           /* expectation: the longest run ending at p - 1 that something follows, and whether it is followed by this */
           if (p > 0) { int seg = -1; long times = -1, total = 0;
-              for (int r = 0; r < PQntuples(fq); r++) { int i_ = (int)col_int(fq, r, 0), j_ = (int)col_int(fq, r, 1); if (j_ != p || PQgetisnull(fq, r, 3) || col_int(fq, r, 2) > fw.fan) continue;
+              for (int r = 0; r < PQntuples(fq); r++) { int i_ = col_i32(fq, r, 0), j_ = col_i32(fq, r, 1); if (j_ != p || PQgetisnull(fq, r, 3) || col_i64(fq, r, 2) > fw.fan) continue;
                   if (seg < 0 || i_ < seg) { seg = i_; times = -1; total = 0; } if (i_ != seg) continue;
-                  long tm = (long)col_int(fq, r, 4); total += tm; if (lp_id_eq(col_id(fq, r, 3), &st->occ[p])) times = tm; }
+                  long tm = (long)col_i64(fq, r, 4); total += tm; if (lp_id_eq(col_id(fq, r, 3), &st->occ[p])) times = tm; }
               /* a longer run before it that more than the fan hold is a hub: its rows are not crossed, but the index
                * counts it: how many observations hold the run, and how many hold the run and this one too */
-              int hubseg = -1; for (int r = 0; r < PQntuples(fq); r++) { int i_ = (int)col_int(fq, r, 0), j_ = (int)col_int(fq, r, 1); if (j_ == p && col_int(fq, r, 2) > fw.fan && (hubseg < 0 || i_ < hubseg)) hubseg = i_; }
+              int hubseg = -1; for (int r = 0; r < PQntuples(fq); r++) { int i_ = col_i32(fq, r, 0), j_ = col_i32(fq, r, 1); if (j_ == p && col_i64(fq, r, 2) > fw.fan && (hubseg < 0 || i_ < hubseg)) hubseg = i_; }
               if (hubseg > 0 && (seg < 0 || hubseg < seg)) { int len = p - hubseg + 1; long c_run = holds_count(st->pg,st->occ + hubseg - 1, len, 0), c_with = holds_count(st->pg,st->occ + hubseg - 1, len + 1, 0); st->trips += 2;
                   if (c_with > 0) { expected++; printf(" held with the %d before it in %ld of the %ld observations that hold those", len, c_with, c_run); }
                   else { surprised++; printf(" held with the %d before it in none of the %ld observations that hold those", len, c_run); } }
@@ -627,7 +688,12 @@ int cmd_turn(int argc, char **argv){
     }
     if (nemit >= fw.emit) disposition = "the emission budget is spent";
     printf("REALIZE    \"%s\"\n           %s\n", out, disposition);
-    receipt_realize(out, disposition);
+    { lp_id parts[514]; size_t np = 0;
+      parts[np++] = st->program_id;
+      for (int i = 0; i < nemit; i++) parts[np++] = emitted[i];
+      parts[np++] = entity_named(st->c, disposition, NULL, 0, NULL).id;
+      lp_id decision_id; lp_id_compose(parts, np, &decision_id);
+      receipt_realize(&fw.id.image_id, &st->program_id, &decision_id, out, disposition); }
 
     /* ---- WITNESS: the turn, recorded */
     if (!read_only && outn) {

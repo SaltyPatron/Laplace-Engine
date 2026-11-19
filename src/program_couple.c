@@ -31,6 +31,53 @@ void resolve_roles(State *st){
     for (int i = 0; i < st->nocc; i++) if (st->composed[i] && st->role[i] > 0) bit_set(&st->open, i);   /* an obligation until what is attested of it says it pulls nothing */
 }
 
+void resolve_polarity(State *st){
+    const Firmware *fw = st->fw;
+    for (int i = 0; i < st->nocc; i++) st->polarity[i] = 1;
+    for (int i = 0; i < st->nocc; i++) {
+        int is_neg = 0;
+        for (int z = 0; z < fw->nnegate && !is_neg; z++) is_neg = lp_id_eq(&st->occ[i], &fw->id.negate[z]);
+        if (!is_neg) continue;
+        st->polarity[i] = -1;
+        if (st->composed[i] && st->role[i] > 0.0) {
+            if (st->role[i] < 0.35) st->role[i] = 0.35;
+            bit_set(&st->open, i);
+        }
+        int scoped = 0;
+        for (int k = i + 1; k < st->nocc && scoped < 3; k++) {
+            int stop = 0;
+            for (int s = 0; s < fw->nscope_stop && !stop; s++) stop = lp_id_eq(&st->occ[k], &fw->id.scope_stop[s]);
+            if (stop) break;
+            if (st->composed[k]) { st->polarity[k] = -1; scoped++; }
+        }
+    }
+}
+
+static int is_neg_rel(const State *st, const lp_id *rel){
+    const Firmware *fw = st->fw;
+    for (int i = 0; i < fw->nnegate_relation; i++) if (lp_id_eq(&fw->id.negate_relation[i], rel)) return 1;
+    return 0;
+}
+
+void contextual_salience_lift(State *st, const Field *fd){
+    for (int i = 0; i < st->nocc; i++) {
+        if (!st->composed[i] || st->role[i] <= 0.0 || st->role[i] >= 0.75) continue;
+        int multi = 0;
+        for (int z = 0; z < fd->n && !multi; z++) {
+            const Cell *x = &fd->c[z];
+            if (x->segment && x->tier >= 2 && ((x->support.w[i >> 6] >> (i & 63)) & 1) &&
+                bit_count_and(&x->support, &x->support) >= 2)
+                multi = 1;
+        }
+        int disc = st->ctx_n[i] > 0 && !st->ctx_hub[i] && st->ctx_total > 0 &&
+                   ((double)st->ctx_total / (double)st->ctx_n[i]) >= st->fw->lift;
+        if (multi || disc || st->polarity[i] < 0) {
+            double lifted = st->role[i] + 0.35 * (1.0 - st->role[i]);
+            if (lifted > st->role[i]) { st->role[i] = lifted; bit_set(&st->open, i); }
+        }
+    }
+}
+
 /* COUPLE through the extension's one native operator (Sequence 20.2): the strands, the containment and, when asked, the
  * shape of these entities, in one call. Each row keeps its route; here they are folded into the field by entity, the
  * routes and supporting occurrences kept apart. occ_of: the occurrence each entity is (-1: none); kind: the route a
@@ -53,8 +100,8 @@ static int shape_measured(State *st, const lp_id *ids, int n, const Hold *h0, in
     { double *pc = malloc(sizeof(double) * 4 * (size_t)n); uint8_t *hc = malloc((size_t)n); coords_of(st->pg, ids, n, pc, hc); double cen[4] = { 0 }; int m = 0;
       for (int k = 0; k < n; k++) if (hc[k]) { for (int d = 0; d < 4; d++) cen[d] += pc[4 * k + d]; m++; }
       if (m >= 2) { for (int d = 0; d < 4; d++) cen[d] /= m; uint8_t pt[64]; size_t pl = lp_ewkb_point4(cen, pt, sizeof pt);
-          Args a = { 0 }; arg_raw(&a, pt, pl); arg_int(&a, fw->nearest);
-          double tk = now(); PGresult *q = ask_st(st, "SELECT e.id FROM @extschema@.entity e WHERE e.tier >= 3 ORDER BY e.coord OPERATOR(@extschema@.<~>) @postgis@.ST_GeomFromEWKB($1::bytea), e.id LIMIT $2", &a);
+          Args a = { 0 }; arg_raw(&a, pt, pl); arg_i32(&a, (int32_t)fw->nearest);
+          double tk = now(); PGresult *q = call_st(st, LP_SQL_SHAPE_NEAREST_ENTITIES, &a);
           int nq = PQntuples(q); lp_id *gid = malloc(sizeof(lp_id) * (size_t)(nq ? nq : 1)); for (int r = 0; r < nq; r++) memcpy(gid[r].b, PQgetvalue(q, r, 0), 16); PQclear(q); args_free(&a);
           double tp = now(); int ng = 0; Hold *g = paths_of(st->pg, gid, nq, &ng); for (int i = 0; i < ng && nh < nh0 + fw->fan + 1; i++) { h[nh++] = g[i]; extra++; } free(g); free(gid);
           if (getenv("LAPLACE_TIMES")) fprintf(stderr, "times: the GiST's %d nearest in %.1f ms, their paths in %.1f ms\n", nq, (tp - tk) * 1000, (now() - tp) * 1000); }
@@ -98,8 +145,8 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
         int own = 0; for (int i = 0; i < st->nocc && !own; i++) own = lp_id_eq(&st->occ[i], &x->id); if (own || lp_tier0_codepoint(T0, &x->id) >= 0) continue; c[m++] = x; }
     if (!m) { free(c); return 0; }
     qsort(c, (size_t)m, sizeof(Cell *), by_force_layer); if (m > fw->breadth) m = fw->breadth;
-    lp_id *keys = malloc(sizeof(lp_id) * (size_t)m); Bits *sup = malloc(sizeof(Bits) * (size_t)m); double *fo = malloc(sizeof(double) * (size_t)m);
-    for (int i = 0; i < m; i++) { keys[i] = c[i]->id; sup[i] = c[i]->support; fo[i] = c[i]->force; }
+    lp_id *keys = malloc(sizeof(lp_id) * (size_t)m); Bits *sup = malloc(sizeof(Bits) * (size_t)m), *nsup = malloc(sizeof(Bits) * (size_t)m); double *fo = malloc(sizeof(double) * (size_t)m);
+    for (int i = 0; i < m; i++) { keys[i] = c[i]->id; sup[i] = c[i]->support; nsup[i] = c[i]->neg_support; fo[i] = c[i]->force; }
     free(c);
     int *hub = malloc(sizeof(int) * 2 * (size_t)m), nh = 0; Hold *h = holds_capped(st->pg,keys, m, fw->fan, 1, 1, hub, &nh); st->trips++;
     int *outdeg = calloc((size_t)m, sizeof(int)); Ids rn = { 0 };
@@ -107,15 +154,21 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
     int fresh_n = 0;
     for (int r = 0; r < nh; r++) { int s = h[r].src; if (s < 0 || s >= m || hub[2 * s] || !h[r].claim || !h[r].stood) continue;
         path_into(&rn, lp_path_of(h[r].path, (size_t)h[r].path_len)); if (rn.n < 2 || !head_read(fw, rn.v, rn.n)) continue;
+        if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
         int other = lp_tuple_other(rn.v, rn.n, &keys[s]); if (other < 0 || lp_id_eq(&rn.v[other], &keys[s]) || lp_id_eq(&rn.v[other], &st->prompt)) continue;
         lp_id rel = rn.n >= 3 ? rn.v[1] : keys[s];
+        int flip = is_neg_rel(st, &rel);
         double conf = lp_confidence(&h[r].r, fw->k) * strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n) * fo[s] / (outdeg[s] ? outdeg[s] : 1);
         int before = fd->n; Cell *x = cell(fd, &rn.v[other]); if (fd->n > before) { x->layer = round; fresh_n++; }
-        x->force += conf; x->routes[R_LAYER]++; for (int w = 0; w < MAXOCC / 64; w++) x->support.w[w] |= sup[s].w[w];
+        x->force += conf; x->routes[R_LAYER]++;
+        for (int w = 0; w < MAXOCC / 64; w++) {
+            x->support.w[w] |= (flip ? nsup[s].w[w] : sup[s].w[w]);
+            x->neg_support.w[w] |= (flip ? sup[s].w[w] : nsup[s].w[w]);
+        }
         { int have = 0; for (int k = 0; k < x->nheads && k < CELL_HEADS; k++) have |= lp_id_eq(&x->heads[k], &rel); if (!have) { if (x->nheads < CELL_HEADS) x->heads[x->nheads] = rel; x->nheads++; } }
         if (heads_out) { bool f; HeadStat *hs = lp_idmap_at(heads_out, lp_idmap_put(heads_out, &rel, &f)); if (f) memset(hs, 0, sizeof *hs); hs->strands++; hs->force += conf; for (int w = 0; w < MAXOCC / 64; w++) hs->support.w[w] |= sup[s].w[w]; }
         if (!x->has_r) { x->r = h[r].r; x->has_r = 1; x->via = keys[s]; x->rel = rel; } }
-    holds_free(h, nh); free(hub); free(outdeg); free(keys); free(sup); free(fo); lp_vec_free(&rn);
+    holds_free(h, nh); free(hub); free(outdeg); free(keys); free(sup); free(nsup); free(fo); lp_vec_free(&rn);
     return fresh_n;
 }
 void heads_say(State *st, lp_idmap *hm, const char *label){
@@ -146,10 +199,16 @@ int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_of, int
             if (lp_id_eq(&h[i].entity, &st->prompt)) continue;
             if (h[i].claim) { if (!h[i].stood) continue; path_into(&rn, lp_path_of(h[i].path, (size_t)h[i].path_len)); if (rn.n < 2) continue;
                 if (!head_read(fw, rn.v, rn.n)) { st->refused++; continue; }
+                if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
                 int other = lp_tuple_other(rn.v, rn.n, &ids[o]); if (other < 0 || lp_id_eq(&rn.v[other], &st->prompt)) continue;
                 lp_id p3[3] = { ids[o], rn.n >= 3 ? rn.v[1] : ids[o], rn.v[other] };
                 double conf = lp_confidence(&h[i].r, fw->k) * strand_weight(fw, fw->id.weigh, p3, 3);
-                Cell *x = cell(fd, &rn.v[other]); x->force += conf * pull; x->routes[kind]++; if (occ >= 0) bit_set(&x->support, occ); if (pull > 0) head_note(x, &p3[1], conf * pull, occ);      /* a head is what pulls through it: a space or a mark pulls nothing */
+                Cell *x = cell(fd, &rn.v[other]); x->force += conf * pull; x->routes[kind]++;
+                if (occ >= 0) {
+                    int neg = (occ < st->nocc && st->polarity[occ] < 0) ^ is_neg_rel(st, &p3[1]);
+                    if (neg) bit_set(&x->neg_support, occ); else bit_set(&x->support, occ);
+                }
+                if (pull > 0) head_note(x, &p3[1], conf * pull, occ);      /* a head is what pulls through it: a space or a mark pulls nothing */
                 if (!x->has_r || conf > lp_confidence(&x->r, fw->k)) { x->r = h[i].r; x->has_r = 1; x->via = p3[0]; x->rel = p3[1]; } }
             else { Cell *x = cell(fd, &h[i].entity); x->segment = 1; x->tier = h[i].tier; x->force += pull; x->routes[R_CONTAIN]++; if (occ >= 0) bit_set(&x->support, occ); } }
         /* a word whose strands are more than the fan is reached, not crossed: its on-ramp is read instead, the word and
@@ -158,10 +217,16 @@ int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_of, int
             for (int u = 0; u < fw->nup && nhk; u++) { int n2 = 0; Hold *h2 = holds_both(st->pg,hk, nhk, &fw->id.up[u], &n2); st->trips++; int read_ = 0;
                 for (int i = 0; i < n2; i++) { int s = h2[i].src; if (s < 0 || s >= nhk || !h2[i].claim) continue; int o = hof[s]; int occ = occ_of ? occ_of[o] : -1; double pull = occ >= 0 && occ < st->nocc ? st->role[occ] : 1.0;
                     path_into(&rn, lp_path_of(h2[i].path, (size_t)h2[i].path_len)); if (rn.n < 2 || !head_read(fw, rn.v, rn.n)) continue;
+                    if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
                     int other = lp_tuple_other(rn.v, rn.n, &hk[s]); if (other < 0) continue;
                     if (!h2[i].stood) continue; lp_rating rt = h2[i].r;
                     lp_id p3[3] = { hk[s], rn.n >= 3 ? rn.v[1] : hk[s], rn.v[other] }; double conf = lp_confidence(&rt, fw->k);
-                    Cell *x = cell(fd, &rn.v[other]); x->force += conf * pull; x->routes[kind]++; if (occ >= 0) bit_set(&x->support, occ); if (pull > 0) head_note(x, &p3[1], conf * pull, occ);
+                    Cell *x = cell(fd, &rn.v[other]); x->force += conf * pull; x->routes[kind]++;
+                    if (occ >= 0) {
+                        int neg = (occ < st->nocc && st->polarity[occ] < 0) ^ is_neg_rel(st, &p3[1]);
+                        if (neg) bit_set(&x->neg_support, occ); else bit_set(&x->support, occ);
+                    }
+                    if (pull > 0) head_note(x, &p3[1], conf * pull, occ);
                     if (!x->has_r) { x->r = rt; x->has_r = 1; x->via = p3[0]; x->rel = p3[1]; } read_++; }
                 holds_free(h2, n2); (void)read_; } }
         lp_vec_free(&rn);
@@ -176,13 +241,13 @@ int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_of, int
         int nn = keep > 0 ? shape_measured(st, ids, n, h, nh, near, keep) : 0;
         holds_free(h, nh); free(hub); free(keys); free(of); return nn;
     }
-    Args a = { 0 }; arg_ids(&a, ids, (size_t)n); arg_int(&a, fw->fan); arg_refused(&a); arg_int(&a, keep > 0 ? fw->shape : -1); arg_f64(&a, fw->shape_n); arg_int(&a, keep > 0 ? keep + 1 : keep);
-    PGresult *q = ask_st(st, "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices FROM @extschema@.laplace_couple($1::@extschema@.blake3[], $2::bigint, $3::@extschema@.blake3[], $4::smallint, $5::float8, $6::integer)", &a);
+    Args a = { 0 }; arg_ids(&a, ids, (size_t)n); arg_i64(&a, (int64_t)fw->fan); arg_refused(&a); arg_i16(&a, (int16_t)(keep > 0 ? fw->shape : -1)); arg_f64_bin(&a, fw->shape_n); arg_i32(&a, (int32_t)(keep > 0 ? keep + 1 : keep));
+    PGresult *q = call_st(st, LP_SQL_COUPLE, &a);
     int *held = calloc((size_t)n + 1, sizeof(int)), nn = 0;
-    for (int r = 0; r < PQntuples(q); r++) if (col_int(q, r, 2) == 0) { int o = (int)col_int(q, r, 1); if (o >= 1 && o <= n) held[o - 1]++; }
+    for (int r = 0; r < PQntuples(q); r++) if (col_i16(q, r, 2) == 0) { int o = col_i32(q, r, 1); if (o >= 1 && o <= n) held[o - 1]++; }
     static const int OC[] = { 2, 1, 9, 0, 6, 7 }; int *ord = rows_in_order(q, OC, 6);      /* route, occurrence, distance, entity, via, relation */
     for (int r_ = 0; r_ < PQntuples(q); r_++) { int r = ord[r_];
-        const lp_id *id = col_id(q, r, 0); int o = (int)col_int(q, r, 1) - 1, route = (int)col_int(q, r, 2);
+        const lp_id *id = col_id(q, r, 0); int o = col_i32(q, r, 1) - 1, route = col_i16(q, r, 2);
         if (lp_id_eq(id, &st->prompt)) continue;                            /* the prompt, admitted, is not its own response: not even its nearest curve */
         int occ = o >= 0 && o < n && occ_of ? occ_of[o] : -1; double pull = occ >= 0 && occ < st->nocc ? st->role[occ] : kind == R_CLAIM ? 1.0 : 0.5;
         if (route == 2) { if (nn < keep) { Curve *c = &near[nn++]; c->id = *id; c->d = col_f64(q, r, 9);
@@ -190,7 +255,7 @@ int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_of, int
                 c->v = malloc(sizeof(lp_id) * (na ? na : 1)); c->nv = (int)lp_pg_ids_read(v, vl, c->v, na); }
             continue; }
         Cell *x = cell(fd, id);
-        if (route == 1) { x->segment = 1; x->tier = (int)col_int(q, r, 8); x->force += pull; x->routes[R_CONTAIN]++; if (occ >= 0) bit_set(&x->support, occ); continue; }
+        if (route == 1) { x->segment = 1; x->tier = col_i16(q, r, 8); x->force += pull; x->routes[R_CONTAIN]++; if (occ >= 0) bit_set(&x->support, occ); continue; }
         lp_rating rt = col_rating(q, r, 3); lp_id part[3] = { *col_id(q, r, 6), *col_id(q, r, 7), *id };
         double conf = lp_confidence(&rt, fw->k) * strand_weight(fw, fw->id.weigh, part, 3);
         x->force += conf * pull; x->routes[kind]++; if (occ >= 0) bit_set(&x->support, occ);
@@ -201,13 +266,12 @@ int couple(State *st, Field *fd, const lp_id *ids, int n, const int *occ_of, int
 }
 int follows(State *st, Next *out, int cap){
     int from = st->ntraj > 24 ? st->ntraj - 24 : 0, n = st->ntraj - from; if (n <= 0) return 0;
-    Args a = { 0 }; arg_ids(&a, st->traj + from, (size_t)n); arg_int(&a, st->fw->fan);
-    /* every run that ends the trajectory, not only the longest: as attention reads every position, a word that follows
-     * only the last two is still a proposal, at the run it follows (its continuity) */
-    PGresult *q = ask_st(st, "SELECT i, j, next, times FROM @extschema@.laplace_forward($1::@extschema@.blake3[], $2::bigint) WHERE j = array_length($1::@extschema@.blake3[], 1) AND next IS NOT NULL ORDER BY (j - i) DESC, times DESC, next", &a);
+    Args a = { 0 }; arg_ids(&a, st->traj + from, (size_t)n); arg_i64(&a, (int64_t)st->fw->fan);
+    /* Sequence 18.8: one scan from j down to i+1 inside laplace_forward */
+    PGresult *q = call_st(st, LP_SQL_FORWARD_SUFFIX, &a);
     int m = 0; lp_idmap *seen = lp_idmap_new();
-    for (int r = 0; r < PQntuples(q) && m < cap; r++) { int len = (int)(col_int(q, r, 1) - col_int(q, r, 0) + 1); bool fresh; lp_idmap_put(seen, col_id(q, r, 2), &fresh); if (!fresh) continue;
-        out[m].id = *col_id(q, r, 2); out[m].times = (long)col_int(q, r, 3); out[m].len = len; m++; }
+    for (int r = 0; r < PQntuples(q) && m < cap; r++) { int len = col_i32(q, r, 1) - col_i32(q, r, 0) + 1; bool fresh; lp_idmap_put(seen, col_id(q, r, 2), &fresh); if (!fresh) continue;
+        out[m].id = *col_id(q, r, 2); out[m].times = (long)col_i64(q, r, 3); out[m].len = len; m++; }
     lp_idmap_free(seen); PQclear(q); args_free(&a); return m;
 }
 static int curve_order(const void *a, const void *b){ const Curve *x = a, *y = b; return x->d < y->d ? -1 : x->d > y->d ? 1 : memcmp(&x->id, &y->id, 16); }
@@ -222,8 +286,8 @@ int shape_near(State *st, const lp_id *ids, int n, Curve *near, int keep){
         int *hub = malloc(sizeof(int) * 2 * (size_t)(nk ? nk : 1)), nh = 0;
         Hold *h = nk ? holds_capped(st->pg,keys, nk, fw->fan, 0, 2, hub, &nh) : NULL; if (nk) st->trips++;
         int k = shape_measured(st, ids, n, h, nh, near, keep); holds_free(h, nh); free(hub); free(keys); return k; }
-    Args a = { 0 }; arg_ids(&a, ids, (size_t)n); arg_int(&a, fw->fan); arg_refused(&a); arg_int(&a, fw->shape); arg_f64(&a, fw->shape_n); arg_int(&a, keep + 4);
-    PGresult *q = ask_st(st, "SELECT entity, occ, route, rating, deviation, volatility, via, rel, tier, distance, vertices FROM @extschema@.laplace_couple($1::@extschema@.blake3[], $2::bigint, $3::@extschema@.blake3[], $4::smallint, $5::float8, $6::integer) WHERE route = 2", &a);
+    Args a = { 0 }; arg_ids(&a, ids, (size_t)n); arg_i64(&a, (int64_t)fw->fan); arg_refused(&a); arg_i16(&a, (int16_t)fw->shape); arg_f64_bin(&a, fw->shape_n); arg_i32(&a, (int32_t)(keep + 4));
+    PGresult *q = call_st(st, LP_SQL_COUPLE_SCAN, &a);
     int m = PQntuples(q), nn = 0; Curve *all = malloc(sizeof(Curve) * (size_t)(m ? m : 1));
     for (int r = 0; r < m; r++) { const lp_id *id = col_id(q, r, 0); if (lp_id_eq(id, &st->prompt)) continue; Curve *c = &all[nn++]; c->id = *id; c->d = col_f64(q, r, 9);
         const uint8_t *v = (const uint8_t *)PQgetvalue(q, r, 10); size_t vl = (size_t)PQgetlength(q, r, 10), na = lp_pg_ids_read(v, vl, NULL, 0);

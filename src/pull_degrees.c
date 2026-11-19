@@ -23,16 +23,19 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
     lp_id *ids = malloc(sizeof(lp_id) * (size_t)(n ? n : 1)); int *who = malloc(sizeof(int) * (size_t)(n ? n : 1)), m = 0;
     for (int i = 0; i < n; i++) if ((int)closed[i].hops < hops) { ids[m] = closed[i].id; who[m++] = i; }
     if (!m) { free(ids); free(who); return n; }
-    uint8_t *ab = malloc(20 + 20 * (size_t)m); size_t al = ids_param(pg,ab, ids, (uint32_t)m); char lim[16]; snprintf(lim, sizeof lim, "%d", fan + 1);
-    int rl; const char *v[4] = { (const char *)ab, lim, CLAIM_BITS, refuse_param(pg,&rl) }; int l[4] = { (int)al, 0, 0, rl }, f[4] = { 1, 0, 0, 1 };
-    PGresult *q = db_ask(pg,
-        "SELECT i, entity, path, rating, deviation, volatility FROM @extschema@.laplace_claims_each($1::@extschema@.blake3[], $2::bigint, $3::smallint[], $4::@extschema@.blake3[])", 4, v, l, f);
-    if (PQresultStatus(q) != PGRES_TUPLES_OK) { fprintf(stderr, "claims: %s", PQerrorMessage(pg)); exit(1); }
+    Args ca = { 0 }; int16_t claim_bit = 0;
+    arg_ids(&ca, ids, (size_t)m);
+    arg_i64(&ca, (int64_t)(fan + 1));
+    arg_i16_array(&ca, &claim_bit, 1);
+    arg_refused(&ca);
+    char err[512]; PGresult *q = db_call_try(pg, LP_SQL_CLAIMS_EACH, &ca, err, sizeof err);
+    args_free(&ca);
+    if (!q) { fprintf(stderr, "claims: %s\n", err); exit(1); }
     w->trips++; w->expanded += (uint64_t)m;
     int rows = PQntuples(q), *held = calloc((size_t)m, sizeof(int));
-    for (int j = 0; j < rows; j++) { uint64_t o; memcpy(&o, PQgetvalue(q, j, 0), 8); held[__builtin_bswap64(o) - 1]++; }
+    for (int j = 0; j < rows; j++) { held[col_i64(q, j, 0) - 1]++; }
     for (int j = 0; j < rows; j++) {
-        uint64_t o; memcpy(&o, PQgetvalue(q, j, 0), 8); int e = (int)(__builtin_bswap64(o) - 1); const lp_reached *at = &closed[who[e]];
+        int e = (int)(col_i64(q, j, 0) - 1); const lp_reached *at = &closed[who[e]];
         if (held[e] > fan) continue;                                                       /* a hub: reached, not crossed (the origin is read below) */
         lp_id part[3], claim; if (decode_claim(PQgetvalue(q, j, 2), PQgetlength(q, j, 2), part) != 3) continue;
         const lp_id *other;                                                                /* a claim ties its subject to its object */
@@ -40,8 +43,8 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
         else if (!memcmp(&part[2], &at->id, 16)) other = &part[0];
         else continue;                                                                     /* held as the predicate: it names the tie */
         if (!memcmp(other, &at->id, 16)) continue;
-        lp_rating r = { lp_be_f64(PQgetvalue(q, j, 3)), lp_be_f64(PQgetvalue(q, j, 4)), lp_be_f64(PQgetvalue(q, j, 5)) };
-        memcpy(claim.b, PQgetvalue(q, j, 1), 16); w->claims++;
+        lp_rating r = { col_f64(q, j, 3), col_f64(q, j, 4), col_f64(q, j, 5) };
+        claim = *col_id(q, j, 1); w->claims++;
         double sw = strand_weight(way, wids, part, 3); if (sw <= 0) continue;                 /* a kind weighed at nothing is not crossed */
         lp_frontier_reach(sd->f, other, &at->id, &claim, at->cost + lp_cost(&r, k, per_hop) - log(sw), 0, at->hops + 1);
     }
@@ -61,16 +64,17 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
         }
         free(cl);
     }
-    PQclear(q); free(ab); free(ids); free(who); free(held);
+    PQclear(q); free(ids); free(who); free(held);
     return n;
 }
 
 /* The tie between two neighbours of a chain, as text: the claim's predicate, read from its subject to its object. */
 static void show_tie(PGconn *pg, Reader *rd, const lp_id *claim, const lp_id *left){
-    uint8_t ab[40]; size_t al = ids_param(pg,ab, claim, 1); const char *v[1] = { (const char *)ab }; int l[1] = { (int)al }, fm[1] = { 1 };
-    PGresult *q = db_ask(pg, "SELECT path FROM @extschema@.laplace_paths($1::@extschema@.blake3[]) LIMIT 1", 1, v, l, fm);
-    lp_id part[3]; int np = PQresultStatus(q) == PGRES_TUPLES_OK && PQntuples(q) ? decode_claim(PQgetvalue(q, 0, 0), PQgetlength(q, 0, 0), part) : 0;
-    PQclear(q);
+    Args ca = { 0 }; arg_ids(&ca, claim, 1);
+    char err[512]; PGresult *q = db_call_try(pg, LP_SQL_PATH_FIRST, &ca, err, sizeof err);
+    args_free(&ca);
+    lp_id part[3]; int np = q && PQntuples(q) ? decode_claim(PQgetvalue(q, 0, 0), PQgetlength(q, 0, 0), part) : 0;
+    if (q) PQclear(q);
     char *pt = np == 3 ? reader_text(rd, &part[1], 32) : strdup("?");
     printf(np == 3 && !memcmp(&part[0], left, 16) ? " -[%s]-> " : " <-[%s]- ", pt); free(pt);
 }
@@ -212,14 +216,12 @@ void roles_of(PGconn *pg, Firmware *fw, const lp_id *seq, const uint8_t *word, i
     /* the junctions: each word with the word after it; a word alone is its own */
     int np = nw > 1 ? nw - 1 : 1; lp_id *left = malloc(sizeof(lp_id) * (size_t)np), *right = malloc(sizeof(lp_id) * (size_t)np);
     for (int k = 0; k < np; k++) { left[k] = seq[at[k]]; right[k] = seq[at[nw > 1 ? k + 1 : 0]]; }
-    Args q = { 0 }; arg_ids(&q, left, (size_t)np); arg_ids(&q, right, (size_t)np); arg_int(&q, fw->fan);
-    PGresult *r1 = ask(pg, "SELECT p.k, h.entity, h.path FROM unnest($1::@extschema@.blake3[], $2::@extschema@.blake3[]) WITH ORDINALITY AS p(a, b, k)"
-                           " CROSS JOIN LATERAL @extschema@.laplace_holders(ARRAY[p.a], ARRAY[p.b], true, -1::smallint, $3::bigint, 2::smallint) h"
-                           " WHERE NOT h.hub ORDER BY p.k, h.entity", &q);
+    Args q = { 0 }; arg_ids(&q, left, (size_t)np); arg_ids(&q, right, (size_t)np); arg_i64(&q, (int64_t)fw->fan);
+    PGresult *r1 = db_call(pg, LP_SQL_ROLE_JUNCTIONS, &q);
     if (trips) (*trips)++;
     lp_idmap *obs = lp_idmap_new(); lp_vec(Run) runs = { 0 }; lp_vec(RoleSpot) spots = { 0 };
     for (int row = 0; row < PQntuples(r1); row++) {
-        int k = (int)col_int(r1, row, 0) - 1; if (k < 0 || k >= np) continue;
+        int k = (int)col_i64(r1, row, 0) - 1; if (k < 0 || k >= np) continue;
         bool fresh; size_t oi = lp_idmap_put(obs, col_id(r1, row, 1), &fresh);
         if (fresh) lp_push(&runs, run_of((const uint8_t *)PQgetvalue(r1, row, 2), (size_t)PQgetlength(r1, row, 2)));
         const Run *rn = &runs.v[oi];
@@ -236,12 +238,11 @@ void roles_of(PGconn *pg, Firmware *fw, const lp_id *seq, const uint8_t *word, i
     if (spots.n) {
         for (size_t begin = 0; begin < nobs; ) {
             size_t amount = nobs - begin; if (amount > DB_ID_WINDOW) amount = DB_ID_WINDOW;
-            Args q2 = { 0 }; arg_ids(&q2, lp_idmap_keys(obs) + begin, amount); arg_int(&q2, fw->fan);
-            PGresult *r2 = ask(pg, "SELECT h.ordinal, h.path FROM @extschema@.laplace_holders($1::@extschema@.blake3[], '{}'::@extschema@.blake3[], true,"
-                                   " -1::smallint, $2::bigint, 3::smallint) h WHERE NOT h.hub", &q2);
+            Args q2 = { 0 }; arg_ids(&q2, lp_idmap_keys(obs) + begin, amount); arg_i64(&q2, (int64_t)fw->fan);
+            PGresult *r2 = db_call(pg, LP_SQL_ROLE_HOLDERS, &q2);
             if (trips) (*trips)++;
             for (int row = 0; row < PQntuples(r2); row++) {
-                size_t oi = begin + (size_t)col_int(r2, row, 0) - 1; if (oi >= nobs) continue;
+                size_t oi = begin + (size_t)col_i64(r2, row, 0) - 1; if (oi >= nobs) continue;
                 Run rec = run_of((const uint8_t *)PQgetvalue(r2, row, 1), (size_t)PQgetlength(r2, row, 1)); lp_idmap *once = lp_idmap_new();
                 for (int c = 0; c < rec.n; c++) {
                     if (lp_id_eq(&rec.id[c], lp_idmap_key(obs, oi))) continue;

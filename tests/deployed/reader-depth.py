@@ -18,7 +18,7 @@ import check  # noqa: E402
 
 
 def main():
-    binary = Path(os.environ.get('LAPLACE_CHECK_BIN', '')) / 'reader_depth'
+    binary = Path(os.environ.get('LAPLACE_CHECK_BIN', '')) / ('reader_depth.exe' if os.name == 'nt' else 'reader_depth')
     if not binary.is_file():
         raise SystemExit('LAPLACE_CHECK_BIN must hold the reader_depth check program')
     tier0 = os.environ.get('LAPLACE_TIER0') or sys.exit('LAPLACE_TIER0 must name the installed tier-0 table')

@@ -59,7 +59,7 @@ static size_t fetch(Reader *r){
         }
         if(!ids.n){at+=amount;continue;}
         args_reset(&args);arg_ids(&args,ids.v,ids.n);
-        PGresult *rows=ask(r->pg,"SELECT entity,path FROM @extschema@.laplace_paths($1::@extschema@.blake3[])",&args);r->trips++;
+        PGresult *rows=db_call(r->pg,LP_SQL_PATHS,&args);r->trips++;
         for(int row=0;row<PQntuples(rows);row++){
             Ent *node=ent(r,col_id(rows,row,0),0);if(!node || node->state==1)continue;
             lp_path path=col_path(rows,row,1);node->first=r->children.n;node->nv=path.n;node->state=1;
