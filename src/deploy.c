@@ -63,8 +63,8 @@ static void database_made(const char *conninfo){
     { double t = now(); if (db_ddl_create_db(pg, db) != 0) exit(1); timed_ok(t, "the database"); }
     PQfinish(pg); PQconninfoFree(o);
 }
-/* Nothing is released, so nothing is upgraded: a database made by another build of the extension is dropped (its
- * sessions ended) and made again from this one, asked of "postgres" by the same role over the same connection. */
+/* Used only when --recreate is explicitly passed and persistent storage table DDL is incompatible with in-place
+ * laplace.reconcile.sql update: ends active sessions, drops the database, and recreates it over the same role. */
 static void database_dropped(const char *conninfo){
     char *err = NULL; PQconninfoOption *o = PQconninfoParse(conninfo, &err); if (!o) { fprintf(stderr, "%s", err ? err : "the connection string does not parse\n"); exit(1); }
     const char *kw[32], *vl[32], *db = NULL; int n = 0;

@@ -8,13 +8,12 @@
 #include <string.h>
 #include <libpq-fe.h>
 
-typedef enum {
-    LP_SQL_INVALID = -1,
-#define LP_SQL(name, arity, sql) LP_SQL_##name,
+typedef int LpSqlId;
+enum { LP_SQL_INVALID = -1, LP_SQL_COUNTER_BASE_ = __COUNTER__ };
+#define LP_SQL(name, arity, sql) enum { LP_SQL_##name = __COUNTER__ - LP_SQL_COUNTER_BASE_ - 1 };
 #include "sql_catalog.def"
 #undef LP_SQL
-    LP_SQL_COUNT
-} LpSqlId;
+enum { LP_SQL_COUNT = __COUNTER__ - LP_SQL_COUNTER_BASE_ - 1 };
 
 typedef struct Args Args;
 
