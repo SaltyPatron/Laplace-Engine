@@ -7,3 +7,4 @@ lineage Perspective API
 class AIModelProbe
 root $LAPLACE_DATA/Safety/RealToxicityPrompts/real-toxicity-prompts-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
 after unicode iso-639
+reads text

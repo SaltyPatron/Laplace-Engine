@@ -1,0 +1,15 @@
+name wikipedia-pages
+# MediaWiki pages-articles XML dump: one <page> per article, holding title, redirect, and revision prose.
+match *.xml
+format xml
+split page siteinfo
+
+thing page title
+metadata sitename dbname base generator case ns timestamp model format
+omit xmlns xmlns:* xsi:* xml:space bytes id parentid sha1 minor restrictions comment origin contributor
+content *
+
+relation "article body" revision.text
+relation "redirect target" redirect.title
+attest revision text
+attest redirect title

@@ -3,4 +3,5 @@ name openings
 witness Lichess Chess Openings
 class AcademicCurated
 root $LAPLACE_DATA/Games/Chess/openings
+except */LichessOpenings/*
 after unicode

@@ -19,7 +19,8 @@ key text id
 # the data set a sentence is from (semeval2015, senseval2) is the framework's bookkeeping
 omit text.source
 content corpus.source
-content wf instance lemma pos lang
+content wf instance lemma pos
+type lang language
 # What each part means (Laplace-Engine#32). Data_Validation/README: "each sentences consists of "wf" (non-disambiguated)
 # and "instance" (disambiguated) tags. Both types should contain two mandatory attributes ("lemma" and "pos") ... The
 # "pos" tag (Part-of-Speech), should follow the Universal PoS tags (http://universaldependencies.org/u/pos/index.html)":
@@ -29,9 +30,9 @@ content wf instance lemma pos lang
 # layers aligned to its words is Laplace-Engine#27.
 value upos pos
 value - lemma
-# lang: schema.xsd's attribute of the corpus, which the README words nowhere; the language is a part of each
-# lexicalization and record the corpus holds, not a claim on the corpus's name: an unresolved obligation
-# (Laplace-Engine#20).
+# corpus.lang (e.g. "en" in schema.xsd) resolves onto ISO 639 via the highway's language list (en -> eng)
+# as a value of the language road class with zero open obligations.
+value language lang
 attest corpus lang
 attest wf lemma pos
 attest instance lemma pos

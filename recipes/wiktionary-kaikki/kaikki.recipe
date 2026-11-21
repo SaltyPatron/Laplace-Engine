@@ -2,8 +2,8 @@ name wiktextract-kaikki
 # The entries of one language, as kaikki.org gives them: the same JSON object on every line as Wiktextract's raw file
 # (see wiktionary/wiktextract.recipe for what Wiktextract's README says of it), read the same way, so that what two
 # editions say of the same entry they say of the same thing. Here a sense also holds an "id" of its own
-# (en-dictionary-en-noun-hIt8uVcE), a "senseid" and a "wikidata" number: keys, how the source and Wikidata point at
-# the sense.
+# (en-dictionary-en-noun-hIt8uVcE) and a "senseid" (keys, how the source points at the sense), plus
+# optional "wikidata" QIDs (content, how Wikidata identifies the concept).
 #   An entry is the thing its lang_code, word and pos name together: [en, free, noun]. A sense is the thing its
 #   glosses name; a form, the thing its form names; an example, the thing its text names; a translation, or a word
 #   linked from the entry (a synonym, a hypernym), the thing its lang_code and word, or its word, name.
@@ -26,8 +26,8 @@ thing sounds audio-ipa
 thing * lang_code word
 thing * word
 thing redirect title
-# keys: where an entry stood on its page, and how Wiktionary and Wikidata point at a sense
-omit etymology_number id senseid wikidata
+# keys: where an entry stood on its page, and how Wiktionary points at a sense
+omit etymology_number id senseid
 # the extract's machinery, read by nothing: the templates and categories the page was rendered from, disambiguation
 # weights, where bold text sat in an example
 omit head_templates etymology_templates inflection_templates categories _dis _dis1 topics source bold_text_offsets italic_text_offsets
@@ -41,6 +41,7 @@ omit bold_roman_offsets bold_translation_offsets bold_literal_offsets
 # "code - Wiktionary's 2 or 3-letter language code for the language the translation is for": the translation's
 # lang_code, which is part of the translation's thing, written again under another key: packaging
 omit code
+content wikidata
 content *
 
 # What each member a claim is made of means (Laplace-Engine#32): never the member's JSON key. The words are Wiktextract's
@@ -132,6 +133,9 @@ relation "additional text" extra
 #   "wikipedia - list of Wikipedia page titles (with optional language code prefix)"; "wiktionary - non-disambiguated
 #   page title in Wikipedia"
 relation "Wikipedia page title" wikipedia wiktionary
+#   "wikidata - list of Wikidata identifiers associated with this sense": QIDs (Q937, Q23622) collide across
+#   Wikidata, Natural Earth, and ConceptNet as content identity.
+relation "Wikidata item identifier" wikidata
 #   a redirect: "the dictionary will have a redirect key, which will contain the page title that the entry redirects to"
 relation "redirects to" redirect
 #   Pronunciation (said where a sound is said of a thing; as built a sound is no thing and says nothing):

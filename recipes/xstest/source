@@ -5,5 +5,6 @@ name xstest
 witness XSTest
 class AcademicCurated
 root $LAPLACE_DATA/Safety/XSTest/xstest-*
-except */evaluation/* *.gitignore
+except */evaluation/* *.gitignore LICENSE
 after unicode iso-639
+reads text

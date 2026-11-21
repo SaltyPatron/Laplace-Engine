@@ -1,0 +1,35 @@
+name natural-earth-places
+# Natural Earth Populated Places shapefiles: [NAME, LATITUDE, LONGITUDE] collides with GeoNames places and
+# cross-braces with WIKIDATAID (Q...), GEONAMESID, ISO_A2, TIMEZONE, and localized NAME_* names.
+match *populated_places*.shp *places*.shp
+input decode shapefile
+tier row by \n
+header
+escaped \
+tier field by \t
+
+thing row NAME LATITUDE LONGITUDE
+when ISO_A2 is -99
+omit ISO_A2
+always
+when GEONAMESID is 0
+omit GEONAMESID
+always
+omit NE_ID MAPCOLOR* SCALERANK scalerank LABEL* MIN_ZOOM* MAX_ZOOM* MIN_LABEL* MAX_LABEL* MIN_BBX* MAX_BBX* FCLASS_* WOE_ID* NOTE_* WOF_ID
+content *
+
+value - shape_type
+relation "Well-Known Text geometry" wkt
+relation "Wikidata identifier" WIKIDATAID
+relation "ISO 3166-1 alpha-2 code" ISO_A2
+relation "GeoNames identifier" GEONAMESID
+relation "country name" ADM0NAME
+relation "ISO 3166-1 alpha-3 sovereign code" ADM0_A3
+relation "first-order administrative division" ADM1NAME
+relation "IANA time zone" TIMEZONE
+relation "localized name" NAME_*
+relation "ASCII place name" NAMEASCII
+relation "alternate place name" NAMEALT
+relation "maximum population" POP_MAX
+relation "minimum population" POP_MIN
+attest row *

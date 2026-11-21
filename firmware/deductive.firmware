@@ -1,0 +1,54 @@
+# Deductive firmware: strict high-confidence inferential chains and explicit disambiguation on ambiguity.
+k 3
+lambda 0.02
+hops 12
+top always
+order standing
+fact 0.85
+
+role by UPOS
+role 1 NOUN ADJ NUM
+role 0.75 PROPN
+role 0.5 VERB ADV ADP PART
+role 0.25 PRON DET CCONJ PUNCT
+role 0.15 SCONJ
+role 0.10 AUX
+
+for hop
+  fan 4096
+
+for search
+  fan 512
+
+for pull
+  fan 4096
+  lexicalization wn-lmf Sense language ili
+  up @wn-lmf/Sense
+  usages wordnet-cntlist tag_cnt
+  rounds 3
+  breadth 64
+  nearest 256
+  walks 48
+  walkfan 512
+  steps 4
+  restart 0.25
+  sure 2.5
+  lift 2.5
+  elect confidence grounds continuity agree heads shared cooccur walks shape
+  tie ask
+  seed observation
+  ooda 2
+  salience 0.10
+  multitier on
+  combine on
+  refuse predicate BNC PENN GF PT NER WSL Target Other Sent Verb Noun Adj Prep Adv UPOS XPOS DEPREL FEATS MISC LEMMA type n f itype
+  negate not no never without neither nor
+  negate_relation antonym excludes contradicts
+  scope_stop . ; : ? ! ,
+  emit 48
+  enough 0.2
+  take fact
+  take segment
+  take attestations 4
+  take constituents 2
+  take chain 1 @wn-lmf/Sense @wn-lmf/synset @wn-lmf/Definition | @conllu/LEMMA @wn-lmf/Sense @wn-lmf/synset @wn-lmf/Definition

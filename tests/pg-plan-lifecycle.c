@@ -18,8 +18,9 @@ const lp_tier0_record *T0;
 static char XW[64], YW[64];
 
 static PGconn *connect(const char *connection){
-    PGconn *pg=PQconnectdb(connection);
-    if(PQstatus(pg)!=CONNECTION_OK){fprintf(stderr,"%s",PQerrorMessage(pg));PQfinish(pg);return NULL;}
+    char err[512] = "";
+    PGconn *pg=db_try_err(connection, err, sizeof err);
+    if(!pg){fprintf(stderr,"%s\n",err);return NULL;}
     return pg;
 }
 static void answer(PGconn *pg,LpSqlId id,int expected){

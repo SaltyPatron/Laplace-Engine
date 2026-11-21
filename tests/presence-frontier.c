@@ -11,7 +11,7 @@
  * independent indexed probe of public.entity by the same IDs, and the duplicate of the first floor ID at the end of
  * the frontier must agree with the first. */
 #define main engine_cli_main
-#include "../src/main.c"
+#include "../src/core/main.c"
 #undef main
 #include "laplace/tier0.h"
 #include <assert.h>

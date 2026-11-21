@@ -6,3 +6,4 @@ witness Social-Chem-101 Dataset
 class AcademicCurated
 root $LAPLACE_DATA/Safety/SocialChemistry101/social-chem-101
 after unicode iso-639
+reads text

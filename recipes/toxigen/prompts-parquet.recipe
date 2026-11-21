@@ -1,0 +1,14 @@
+name toxigen-prompts-parquet
+# Direct HF Parquet companion to prompts.recipe.
+match prompts/*.parquet
+input decode parquet
+
+tier row by \n
+header
+escaped \
+tier field by \t
+
+stem -
+thing row text
+content text
+pair row {file}

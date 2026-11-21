@@ -36,6 +36,9 @@ sloane-electrical
 tokenizers
 brown
 geonames
+wikidata
+wikipedia
+natural-earth
 hatecheck
 sghatecheck
 xstest
@@ -52,6 +55,10 @@ lumbras-gigabase
 laplace-chess
 openings
 syzygy
+fide
+chess-books
+coco
+laplace-assets
 laplace-operational
 agent-transcripts
 workspace-code

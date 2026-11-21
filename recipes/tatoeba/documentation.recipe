@@ -1,0 +1,4 @@
+name tatoeba-documentation
+# Documentation text and download provenance kept beside Tatoeba's CSV exports in documentation/.
+match documentation/*.txt documentation/RECEIPT.tsv
+grammar text

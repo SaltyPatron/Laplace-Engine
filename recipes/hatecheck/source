@@ -4,4 +4,9 @@ name hatecheck
 witness HateCheck
 class AcademicCurated
 root $LAPLACE_DATA/Safety/HateCheck/hatecheck-*
+# all_* contains all 3,901 cases/annotations (a strict superset of the 3,728 in test_suite_*); prefer it to avoid duplicate games.
+prefer all_cases.csv over test_suite_cases.csv
+prefer all_annotations.csv over test_suite_annotations.csv
+except *.pdf LICENSE
 after unicode iso-639
+reads text

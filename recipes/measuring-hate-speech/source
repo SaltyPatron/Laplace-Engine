@@ -2,11 +2,11 @@ name measuring-hate-speech
 aliases mhs
 # Comments and the annotators' readings of them: "39,565 comments annotated by 7,912 annotators, for 135,556 combined
 # rows" (the card). The dataset card's title: "Dataset card for Measuring Hate Speech".
-# Its data is in Parquet files, read as they are written out in extracted/; the card is read as text.
+# Its data is in Parquet files under data/, and the card is read as text.
 witness Measuring Hate Speech
 class AcademicCurated
 root $LAPLACE_DATA/Safety/MeasuringHateSpeech/measuring-hate-speech-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
-# The files are Parquet, read as they are written out in extracted/.
-except *.parquet */extracted/measuring-hate-speech.tsv
+# Read the canonical HF Parquet split directly; skip pre-extracted TSV mirrors and top-level duplicate parquet.
+except */extracted/* */measuring-hate-speech.parquet
 after unicode iso-639
 reads text

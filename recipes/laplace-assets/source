@@ -1,0 +1,8 @@
+name laplace-assets
+# First-party Laplace logo, title-bar, and tier artwork under $LAPLACE_DATA/LaplaceAssets.
+# WebP files (*.webp) are excluded because stb_image does not decode WebP.
+witness Laplace
+class AppDerived
+root $LAPLACE_DATA/LaplaceAssets
+except *.webp
+after unicode

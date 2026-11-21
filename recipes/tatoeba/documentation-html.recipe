@@ -1,0 +1,5 @@
+name tatoeba-documentation-html
+# Tatoeba's archived "Download sentences" HTML documentation page beside the CSV exports.
+match documentation/*.html
+grammar html
+product-format html_text

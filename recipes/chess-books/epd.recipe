@@ -1,0 +1,7 @@
+name chess-books-epd
+# Chess EPD/FEN position collections: one 6-field FEN position per line, decoded via grammar fen into
+# canonical Laplace chess positions without clocks or move counters.
+match *.epd
+tier row by \n
+part row grammar fen
+content row

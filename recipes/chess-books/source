@@ -1,0 +1,8 @@
+name chess-books
+# Chess opening and endgame books ($LAPLACE_DATA/Games/Chess/books): PGN opening lines (8moves_v3.pgn)
+# and pure 6-field FEN position collections (endgames.epd, noob_3moves.epd, UHO_Lichess_4852_v1.epd).
+witness Chess Books
+class StructuredCorpus
+root $LAPLACE_DATA/Games/Chess/books
+except *.sha256
+after unicode

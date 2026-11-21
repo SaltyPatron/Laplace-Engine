@@ -1,0 +1,8 @@
+name tatoeba-audio
+# Spoken recordings of Tatoeba sentences (MP3, Opus, or WAV), keyed by Audio id
+# beside sentences_with_audio.csv. `audio_grammar` in media_audio.c decomposes PCM
+# via `records audio`; `.opus` (Ogg OpusHead) decoding and filename-stem linkage
+# to `tatoeba-sentences-with-audio`'s "Audio id" require audio codec/grammar support.
+match *.mp3 *.opus *.wav
+grammar audio
+records audio

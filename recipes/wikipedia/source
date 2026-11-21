@@ -1,0 +1,8 @@
+name wikipedia
+# Wikipedia article dumps in Wikimedia CirrusSearch JSONL (*.jsonl / *.json, linking wikibase_item Q... onto prose)
+# or MediaWiki XML (*-pages-articles*.xml), optionally gzipped.
+witness Wikipedia
+class UserCuratedResource
+root $LAPLACE_DATA/Wikipedia
+held "Wikipedia dump not staged on this host"
+after unicode iso-639 wikidata

@@ -1,0 +1,21 @@
+name civil-comments-comments-parquet
+# Direct HF Parquet companion to comments.recipe (omits 'like' because like overwrites 'input decode parquet').
+match data/*.parquet
+input decode parquet
+
+tier row by \n
+header
+escaped \
+tier field by \t
+
+thing row text
+content text toxicity severe_toxicity obscene threat insult identity_attack sexual_explicit
+score row toxicity from 0 to 1
+relation "toxicity: rude, disrespectful, or unreasonable comment" toxicity
+relation "severe toxicity: very hateful or aggressive comment" severe_toxicity
+relation "obscene or vulgar language such as cursing" obscene
+relation "threat: intention to inflict pain, injury, or violence" threat
+relation "insult: insulting, inflammatory, or negative comment" insult
+relation "identity attack: negative or hateful comment on identity" identity_attack
+relation "sexually explicit: sexual acts, body parts, or lewd content" sexual_explicit
+attest row toxicity severe_toxicity obscene threat insult identity_attack sexual_explicit

@@ -24,6 +24,9 @@ key row situation-short-id
 content rot-worker-id breakdown-worker-id
 # m, the README: "How many workers did the RoT Breakdown for this RoT. Roughly corresponds to the split, but not
 # exactly." A count of workers: the set's bookkeeping, read by nothing.
+# rot-bad = 1 marks confusing, vague, very low quality, or unsplittable RoTs: suppress those rows (still keeping rows
+# where rot-bad is 0 or absent in minimal test slices).
+where rot-bad is-not 1
 omit split n-characters rot-bad
 omit m
 content rot situation area rot-agree rot-categorization rot-moral-foundations rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-hypothetical characters
@@ -46,17 +49,21 @@ relation "domain" area
 #   characters '"|" separated list of characters that appeared'
 relation "characters that appeared" characters
 #   rot-agree: Worker answer to question "What portion of people probably agree that ${rot}?" (buckets 0 to 4)
+relation "portion of people who probably agree with the RoT" rot-agree
 #   rot-judgment: "Worker-written string representing the judgment portion of the RoT."
 relation "the judgment portion of the RoT" rot-judgment
 #   action: "The action (conjugated / tweaked substring of RoT), written by the worker."
 relation "The action (conjugated / tweaked substring of RoT)" action
 #   action-moral-judgment: Worker answer to the question which best matches the RoT's original judgment (${judgment})
-#   of ${action}?" (buckets -2 to 2)
+#   of ${action}?" (buckets -2 to 2: -2 very bad -> 0.0 LOSS, 0 expected/OK -> 0.5 DRAW, +2 very good -> 1.0 WIN)
 relation "best matches the RoT's original judgment" action-moral-judgment
+score row action-moral-judgment from -2 to 2
 #   action-agree: Worker answer to the question, "What portion of people probably agree that ${action} is
 #   ${judgment}?" (buckets 0 to 4)
+relation "portion of people who probably agree with the judgment" action-agree
 #   action-pressure: Worker answer to question "How much cultural pressure do you (or those you know) feel about
 #   ${action}?" (buckets -2 to 2)
+relation "cultural pressure felt about the action" action-pressure
 # The worker's labels from the README's choice lists, values of the set's own vocabularies: rot-categorization
 # {morality-ethics, social-norms, advice, description}; rot-moral-foundations {care-harm, fairness-cheating,
 # loyalty-betrayal, authority-subversion, sanctity-degradation}; action-agency {agency, experience}; action-legal
@@ -66,7 +73,5 @@ value - rot-categorization rot-moral-foundations action-agency action-legal acti
 relation "Who is the RoT most likely targeting" rot-char-targeting
 relation "who is most likely to do the action or its opposite" action-char-involved
 attest row situation with rot-worker-id
-attest row rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-legal action-char-involved action-hypothetical with breakdown-worker-id
+attest row rot-agree rot-categorization rot-moral-foundations rot-char-targeting rot-judgment action action-agency action-moral-judgment action-agree action-legal action-pressure action-char-involved action-hypothetical with breakdown-worker-id
 attest row area characters
-# What portion of people agree and how much cultural pressure the action carries are quantities, no claim's value: they stay in
-# the row, the record, and are attested of nothing.

@@ -5,4 +5,6 @@ aliases sbf
 witness Social Bias Frames
 class AcademicCurated
 root $LAPLACE_DATA/Safety/SocialBiasFrames
+except *.tgz LICENSE
 after unicode iso-639
+reads text

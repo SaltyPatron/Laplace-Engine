@@ -1,0 +1,21 @@
+name toxigen-generations-parquet
+# Direct HF Parquet companion to generations.recipe.
+match train/*.parquet
+input decode parquet
+
+tier row by \n
+header
+escaped \
+tier field by \t
+
+thing row generation
+content *
+score row roberta_prediction from 0 to 1
+together row
+value - generation_method
+relation "the prompt used for generation" prompt
+relation "whether or not the prompt is toxic" prompt_label
+relation "the target group of the prompt" group
+relation "toxicity probability predicted by RoBERTa classifier" roberta_prediction
+attest row prompt generation_method roberta_prediction
+attest row prompt_label group of prompt

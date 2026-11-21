@@ -1,0 +1,9 @@
+name wikidata
+# Wikidata full entity JSON dump (latest-all.json / *.jsonl, optionally gzipped): one JSON entity object per line
+# (items Q..., properties P..., lexemes L...), carrying multilingual labels, descriptions, aliases, property claims
+# keyed by P..., and sitelinks.
+witness Wikidata
+class UserCuratedResource
+root $LAPLACE_DATA/Wikidata
+held "Wikidata JSONL dump not staged on this host"
+after unicode iso-639

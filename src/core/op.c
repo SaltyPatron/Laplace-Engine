@@ -1,0 +1,232 @@
+/* The catalog: every parameter defined once, every operation declared by the parameters it takes, its effects and
+ * what it gives (op.h). A default left NULL is the operation's own and is not repeated here. */
+#include "op.h"
+#include "query.h"
+#include "laplace/json.h"
+#include <string.h>
+
+int cmd_highway_joins(int argc,char **argv);
+static int status_with_joins(int argc,char **argv){
+    for(int i=1;i<argc;i++)if(!strcmp(argv[i],"--joins"))return cmd_highway_joins(argc,argv);
+    return cmd_status(argc,argv);
+}
+/* ---- the parameters. Each says only what the program itself says of it (its comments and usage). */
+static const Param
+    CONNINFO = { "conninfo", "-d", ARG_CONNINFO, "LAPLACE_CONNINFO", "the database, as a libpq connection string" },
+    JOBS     = { "jobs", "-j", ARG_INT, NULL, "connections" },
+    THREADS  = { "threads", "-j", ARG_INT, NULL, "threads" },
+    LIMIT    = { "limit", "-n", ARG_INT, NULL, "N" },
+    NODES    = { "nodes", "-n", ARG_INT, NULL, "nodes" },
+    TIER0    = { "tier0", "-t", ARG_PATH, "LAPLACE_TIER0", "the tier-0 perf-cache" },
+    RECIPES  = { "recipes", "-r", ARG_PATH, "LAPLACE_RECIPES", "the recipes directory, holding order and one directory per source" },
+    GRAMMAR  = { "grammar", "-g", ARG_TEXT, NULL, "grammar" },
+    UCD      = { "ucd", "-u", ARG_PATH, "LAPLACE_UCD", "UCD_ROOT: the Unicode data" },
+    OUT_T0   = { "output", "-o", ARG_PATH, "LAPLACE_TIER0", "tier0.bin" },
+    OUT_FL   = { "output", "-o", ARG_PATH, "LAPLACE_FLAGS, else tier 0's path with .flags", "tier0.flags" },
+    OUT_HW   = { "output", "-o", ARG_PATH, "LAPLACE_HIGHWAY, else tier 0's path with .highway", "highway.bin" },
+    FINGERPRINT = { "fingerprint", "--fingerprint", ARG_FLAG, NULL, "read the existing highway fingerprint without generation" },
+    OUT_CH   = { "output", "-o", ARG_PATH, "LAPLACE_CHESS, else tier 0's path with .chess", "chess.bin" },
+    CH_PRINT = { "fingerprint", "--fingerprint", ARG_FLAG, NULL, "read the existing chess perf-cache's fingerprint and counts without generation" },
+    CH_VERIFY = { "verify", "--verify", ARG_FLAG, NULL, "recompute every record of the existing chess perf-cache: the vocabulary from the law, every move it holds replayed from the standard start" },
+    CH_WHAT  = { "what", NULL, ARG_TEXT, "none: the vocabulary alone", "the sources (or files) whose played positions and moves are admitted, read as laplace ingest --no-load reads them" },
+    IDENTITIES = { "identities", "--identities", ARG_FLAG, NULL, "report stored and canonical highway identifier IDs as TSV, without changing the registry" },
+    FIRMWARE = { "firmware", "--firmware", ARG_PATH, "LAPLACE_FIRMWARE", "the firmware: how a standing is read, how far a search walks, how many claims are read and what is refused" },
+    FW_OPERATION = { "operation", "--operation", ARG_TEXT, "pull", "hop, search, translate, follows or pull" },
+    SEED     = { "seed", "--seed", ARG_INT, "the clock", "N: the seed that breaks ties between claims taken" },
+    FAN      = { "fan", "--fan", ARG_INT, "the firmware's", "to measure against the firmware: over the firmware's fan" },
+    K        = { "k", "--k", ARG_REAL, "the firmware's", "to measure against the firmware: over the firmware's k" },
+    HOPS     = { "hops", "--hops", ARG_INT, "the firmware's", "H: to measure against the firmware" },
+    PER_HOP  = { "per_hop", "--per-hop", ARG_REAL, "the firmware's", "C: to measure against the firmware" },
+    BATCH    = { "batch", "--batch", ARG_INT, NULL, "B" },
+    DRY      = { "dry", "--dry", ARG_FLAG, NULL, "dry" },
+    EXCEPT   = { "except", "--except", ARG_FLAG, NULL, "every witness but these" },
+    TRUNK    = { "trunk", "--trunk", ARG_FLAG, NULL, "each witness named by its ID, its source's trunk, not by the source's name" },
+    FILES    = { "files", "--files", ARG_FLAG, NULL, "the count under each file as well" },
+    TSV      = { "tsv", "--tsv", ARG_PATH, NULL, "FILE: claims and their corpus/file containment: games, tokens, score sum, least position" },
+    JOINS    = { "joins", "--joins", ARG_FLAG, NULL, "highway identifiers with evidence from at least 2, 3 and 4 independent source lineages" },
+    WRITE    = { "write", "--write", ARG_FLAG, NULL, "put the replayed standings in place" },
+    APPLY    = { "apply", "--apply", ARG_FLAG, NULL, "repair the canonical coordinate projection after complete validation; otherwise audit" },
+    PART     = { "part", NULL, ARG_TEXT, NULL, "a part of the strand: a text, LIST:KEY for a type of the highway, ? for a part left open" },
+    SOURCE   = { "source", "-s", ARG_TEXT, NULL, "the files named are this source's: a part of it at a time" },
+    HIGHWAY  = { "highway", "--highway", ARG_FLAG, NULL, "admit the existing highway contents only; --no-load validates without database access" },
+    WHOLE    = { "whole", "--whole", ARG_FLAG, NULL, "after a run that was cut off: every node is looked for" },
+    NO_LOAD  = { "no_load", "--no-load", ARG_FLAG, NULL, "no-load" },
+    PLAN     = { "plan", "--plan", ARG_FLAG, NULL, "plan" },
+    CATALOG  = { "catalog", "--catalog", ARG_FLAG, NULL, "all available sources, aliases, content locations, recipes and formats as JSON; no database or cache" },
+    LIST_SOURCES = { "list_sources", "--list-sources", ARG_FLAG, NULL, "every canonical recipe source name; no database or cache" },
+    CLAIMS   = { "claims", "--claims", ARG_FLAG, NULL, "what the recipes attest, as text; nothing is loaded" },
+    CLAIMS_TSV = { "claims_tsv", "--claims-tsv", ARG_FLAG, NULL, "--claims for a machine: a claim a line, kind, position, score and its parts between tabs (LIST:KEY for a type of the highway)" },
+    ENTITIES = { "entities", "--entities", ARG_FLAG, NULL, "every composition a sample makes, its tier, parts and text, new or recorded; nothing is loaded" },
+    AS       = { "as", "--as", ARG_TEXT, "USER", "USER" },
+    WITNESS_AS = { "as", "--as", ARG_TEXT, NULL, "WITNESS: who states it, a name recorded as content: the record its trunk begins with" },
+    CLASS    = { "class", "--class", ARG_TEXT, NULL, "CLASS: the witness's trust class, one Laplace-Native's manifest/trust_classes.toml declares; its prior is the trust its claims play at" },
+    LINEAGE  = { "lineage", "--lineage", ARG_TEXT, "the witness's own name", "NAME: the witness it derives from; one lineage plays one matchup a claim" },
+    STATED   = { "file", NULL, ARG_PATH, NULL, "what it states: a .statement (a claim a line: subject, relation, object and a score from 0 to 1, between tabs), or any file a recipe reads" },
+    WITNESS_ROOT = { "root", "--root", ARG_PATH, "the directory the files share", "DIR: the directory every file is under, its pathname recorded from there" },
+    SESSION  = { "session", "--session", ARG_TEXT, NULL, "NAME" },
+    BY       = { "by", "--by", ARG_TEXT, "Laplace", "NAME: who gave the response, a name recorded as content" },
+    AS_FILES = { "files", "--files", ARG_FLAG, NULL, "the prompt and the response are files that hold them" },
+    PROMPT_FILE = { "files", "--files", ARG_FLAG, NULL, "the prompt is a file that holds it" },
+    RECEIPT  = { "receipt", "--receipt", ARG_PATH, NULL, "FILE: what the turn did, for a program: one JSON object a line (resolve, each step, realize, witness), each written as it happens" },
+    RESPONSE = { "response", NULL, ARG_TEXT, NULL, "response" },
+    READ     = { "read", "--read", ARG_FLAG, NULL, "a read: nothing is witnessed" },
+    SEGMENTS = { "segments", "--segments", ARG_FLAG, NULL, "canonical word-segment occurrence IDs as JSON, including separators; no database" },
+    LAYERS   = { "layers", "--layers", ARG_INT, "every layer", "N" },
+    ZMIN     = { "z", "--z", ARG_REAL, "3", "zmin" },
+    CAP      = { "cap", "--cap", ARG_INT, "64", "K" },
+    SAMPLE   = { "sample", "--sample", ARG_TEXT, "\" king\" \" dog\" \" Paris\" \" happy\" \" run\"", "word ..." },
+    TEXT     = { "text", NULL, ARG_TEXT, NULL, "text" },
+    PROMPT   = { "prompt", NULL, ARG_TEXT, NULL, "prompt" },
+    PHRASE   = { "phrase", NULL, ARG_TEXT, NULL, "phrase" },
+    FILE_    = { "file", NULL, ARG_PATH, NULL, "file" },
+    WHAT     = { "what", NULL, ARG_TEXT, "every source in recipes/order", "a source by its name, or files" },
+    WITNESS  = { "witness", NULL, ARG_TEXT, NULL, "witness" },
+    WORD     = { "word", NULL, ARG_TEXT, NULL, "word" },
+    LANG     = { "language", NULL, ARG_TEXT, NULL, "languages as the resources write them: en de fr ja" },
+    FROM     = { "from", NULL, ARG_TEXT, NULL, "from" },
+    TO       = { "to", NULL, ARG_TEXT, NULL, "to" },
+    LAYOUT   = { "layout", NULL, ARG_PATH, NULL, "LAYOUT" },
+    OUT_PGN  = { "output", "-o", ARG_PATH, "standard output", "file.pgn" },
+    VERIFY   = { "verify", "--verify", ARG_FLAG, NULL, "every ID under them recomputed from its constituents with BLAKE3 alone, every leaf a codepoint" },
+    ROOT     = { "id", NULL, ARG_TEXT, NULL, "a file's, a record's or a line's ID" },
+    TABLES   = { "tables", "-T", ARG_PATH, "LAPLACE_SYZYGY, else $LAPLACE_DATA/Games/Chess/syzygy", "the Syzygy tables: ROOT/NAME.rtbw and ROOT/DIR/NAME.rtbw" },
+    TB_OPEN  = { "open", "-n", ARG_INT, "64", "tables mapped at once" },
+    TB_LINE  = { "line", "--line", ARG_FLAG, NULL, "the best-play line from each position too, and the [P, M, P'] claim of each of its moves" },
+    TB_PGN   = { "pgn", "--pgn", ARG_FLAG, NULL, "the best-play line alone, as the PGN the syzygy source records" },
+    FEN      = { "fen", NULL, ARG_TEXT, "a FEN a line of standard input", "a FEN (its first four fields)" },
+    MODEL    = { "model_dir", NULL, ARG_PATH, NULL, "model_dir" },
+    EXPORT_GGUF = { "export", "--export", ARG_PATH, NULL, "output GGUF path (laplace-blake3-v1 CPU Mold-a-Model)" },
+    CODE_FILE  = { "code_file", "--code-file", ARG_PATH, NULL, "source file for closed-loop OODA verification & repair" },
+    CODE_LANG  = { "lang", "--lang", ARG_TEXT, "c", "source grammar language (c, cpp, csharp, python)" },
+    VERIFY_CMD = { "verify_cmd", "--verify-cmd", ARG_TEXT, NULL, "toolchain verification command (ToolchainVerification = 0.90)" };
+
+/* ---- the operations */
+#define END { NULL, 0, NULL, NULL }
+#define O(p) { &(p), 0, NULL, NULL }
+static const Arg A_NONE[] = { END };
+static const Arg A_SOURCES[] = { O(CATALOG), END };
+static const Arg A_TIER0[] = { O(UCD), O(OUT_T0), END };
+static const Arg A_FLAGS[] = { O(UCD), O(OUT_FL), END };
+static const Arg A_HIGHWAY[] = { O(OUT_HW), O(FINGERPRINT), O(IDENTITIES), END };
+static const Arg A_CHESS[] = { O(OUT_CH), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(CH_VERIFY), O(CH_PRINT), { &CH_WHAT, ARG_MANY, NULL, NULL }, END };
+static const Arg A_INGEST[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), O(SOURCE), O(HIGHWAY), O(WHOLE), O(NO_LOAD), O(PLAN), O(CATALOG), O(LIST_SOURCES), O(CLAIMS), O(CLAIMS_TSV), O(ENTITIES),
+                                { &WHAT, ARG_MANY, NULL, NULL }, END };
+static const Arg A_WITNESS[] = { O(CONNINFO), O(TIER0), O(RECIPES), O(THREADS), { &WITNESS_AS, ARG_REQUIRED, NULL, NULL }, { &CLASS, ARG_REQUIRED, NULL, NULL }, O(LINEAGE), O(WITNESS_ROOT), O(NO_LOAD), O(CLAIMS),
+                                 { &STATED, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
+static const Arg A_MERGE[] = { O(CONNINFO), { &JOBS, 0, NULL, "every processor" }, END };
+static const Arg A_PROJECTION[] = { O(CONNINFO), O(APPLY), END };
+static const Arg A_FORGET[] = { O(CONNINFO), O(JOBS), O(EXCEPT), O(TRUNK), { &WITNESS, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
+static const Arg A_SWEEP[] = { O(CONNINFO), O(JOBS), O(DRY), END };
+static const Arg A_HELD[] = { O(CONNINFO), O(FILES), O(TSV), { &PART, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
+static const Arg A_REPLAY[] = { O(CONNINFO), O(WRITE), O(TSV), O(FILES), END };
+static const Arg A_JOINS[] = { O(CONNINFO), O(JOINS), END };
+static const Arg A_STRUCTURE[] = { { &NODES, 0, NULL, "60" }, { &LAYOUT, ARG_REQUIRED, NULL, NULL }, { &FILE_, ARG_REQUIRED, NULL, NULL }, END };
+static const Arg A_TREE[] = { O(RECIPES), O(GRAMMAR), { &NODES, 0, NULL, "400" }, { &FILE_, ARG_REQUIRED, NULL, NULL }, END };
+static const Arg A_TEXT[] = { O(SEGMENTS), { &TEXT, ARG_REQUIRED, NULL, NULL }, END };
+static const Arg A_FIRMWARE[] = { O(FIRMWARE), O(FW_OPERATION), END };
+static const Arg A_PULL[] = { O(CONNINFO), O(FIRMWARE), O(SEED), { &PROMPT, ARG_REQUIRED, NULL, NULL }, END };
+static const Arg A_TURN[] = { O(CONNINFO), O(FIRMWARE), O(AS), O(SESSION), O(SEED), O(READ), O(PROMPT_FILE), O(RECEIPT), O(CODE_FILE), O(CODE_LANG), O(VERIFY_CMD), O(WRITE), { &PROMPT, ARG_REQUIRED, NULL, NULL }, END };
+static const Arg A_SAID[] = { O(CONNINFO), O(FIRMWARE), O(AS), O(SESSION), O(BY), O(AS_FILES), O(RECEIPT), { &PROMPT, ARG_REQUIRED, NULL, NULL }, { &RESPONSE, ARG_REQUIRED, NULL, NULL }, END };
+static const Arg A_HOP[] = { O(CONNINFO), { &LIMIT, 0, NULL, "24" }, O(FIRMWARE), O(FAN), O(K),
+                             { &TEXT, ARG_REQUIRED | ARG_MANY, "text | subject predicate object (? for a part left open)", NULL }, END };
+static const Arg A_TRANSLATE[] = { O(CONNINFO), { &LIMIT, 0, "concepts", "4" }, O(FIRMWARE), { &WORD, ARG_REQUIRED, NULL, NULL },
+                                   { &LANG, ARG_REQUIRED, "from", NULL }, { &LANG, ARG_REQUIRED | ARG_MANY, "to...", NULL }, END };
+static const Arg A_DEGREES[] = { O(CONNINFO), O(FIRMWARE), { &LIMIT, 0, NULL, "24" }, O(FAN), O(HOPS), { &BATCH, 0, NULL, "64" }, O(K), O(PER_HOP),
+                                 { &FROM, ARG_REQUIRED, NULL, NULL }, { &TO, 0, NULL, NULL }, END };
+static const Arg A_FILLS[] = { O(CONNINFO), { &LIMIT, 0, NULL, "12" }, O(TIER0), { &PHRASE, ARG_REQUIRED, NULL, NULL }, END };
+static const Arg A_MODEL[] = { { &MODEL, ARG_REQUIRED, NULL, NULL }, O(LAYERS), O(ZMIN), O(CAP), O(EXPORT_GGUF), { &SAMPLE, ARG_MANY, NULL, NULL }, END };
+static const Arg A_PGN[] = { O(CONNINFO), O(TIER0), O(OUT_PGN), O(VERIFY), { &ROOT, ARG_REQUIRED | ARG_MANY, NULL, NULL }, END };
+static const Arg A_TABLEBASE[] = { O(TABLES), O(TB_OPEN), O(TB_LINE), O(TB_PGN), { &FEN, ARG_MANY, NULL, NULL }, END };
+
+#define R_DB EFFECT_READS_DB
+#define W_DB (EFFECT_READS_DB | EFFECT_WRITES_DB)
+#define R_F EFFECT_READS_FILES
+#define W_F (EFFECT_READS_FILES | EFFECT_WRITES_FILES)
+const Op OPS[] = {
+    { "tier0",     cmd_tier0,     "generate tier 0 from the Unicode data", A_TIER0, W_F, "tier 0's fingerprint" },
+    { "flags",     cmd_flags,     "generate the flags that go with tier 0, from the standard's own lists", A_FLAGS, W_F, "text" },
+    { "highway",   cmd_highway,   "generate the highway: the types, from the resources that list them, and the mappings between them", A_HIGHWAY, W_F, "text" },
+    { "chess",     cmd_chess,     "generate the chess perf-cache: the complete piece, square, castling and move vocabulary, and the positions and moves the sources named play", A_CHESS, W_F, "the chess perf-cache's fingerprint" },
+    { "deploy",    cmd_deploy,   "make a database a Laplace database", A_NONE, W_DB | R_F, "text" },
+    { "sources",   cmd_sources,   "the sources there are recipes for, in the order they go in", A_SOURCES, R_DB | R_F, "text" },
+    { "ingest",    cmd_ingest,    "a source by its name, or files, through their recipes", A_INGEST, W_DB | R_F, "text" },
+    { "witness",   cmd_witness,   "what a witness named at run time states, recorded as a source is: its files through their recipes, its trunk the witness of what they attest", A_WITNESS, W_DB | R_F, "text" },
+    { "merge",     cmd_merge,     "what the ingest staged, into the real tables at once", A_MERGE, W_DB, "text" },
+    { "projection",cmd_projection,"audit or repair derived coordinates while preserving content IDs and paths", A_PROJECTION, W_DB, "text" },
+    { "forget",    cmd_forget,    "what one witness said, taken back out: its trunk, what it alone holds, and the standings it touched played again", A_FORGET, W_DB | EFFECT_DESTROYS, "text" },
+    { "sweep",     cmd_sweep,     "whatever nothing holds, removed", A_SWEEP, W_DB | EFFECT_DESTROYS, "text" },
+    { "held",      cmd_held,      "who said a claim, how many times and how: a walk up the container index from it to the records, files and trunks that hold it", A_HELD, R_DB | R_F, "text" },
+    { "replay",    cmd_replay,    "the standings again from containment alone: each witness's trunk down to the claims its records say, played in the order the sources go in, and compared", A_REPLAY, W_DB | R_F, "text" },
+    { "index",     cmd_index,     "the indexes, if one was dropped: deploy makes them", A_NONE, W_DB, "text" },
+    { "structure", cmd_structure, "a file's tree, as a layout parts it", A_STRUCTURE, R_F, "text" },
+    { "tree",      cmd_tree,      "a file's syntax tree, as its recipe's grammar reads it", A_TREE, R_F, "text" },
+    { "text",      cmd_text,      "a text's ID, coordinate and constituents, computed here", A_TEXT, R_F, "text" },
+    { "firmware",  cmd_firmware,  "inspect the recipe relations a query will use, without database access", A_FIRMWARE, R_F, "JSON" },
+    { "pull",      cmd_pull,      "the forward pass: a prompt, and the segments and strands its firmware takes", A_PULL, R_DB | R_F, "text" },
+    { "turn",      cmd_turn,      "a turn of a session: the one forward program, RESOLVE to WITNESS, each emitted constituent changing the next", A_TURN, W_DB | R_F, "text" },
+    { "said",      cmd_said,      "a turn said elsewhere, witnessed: the prompt and the response another program gave, recorded as a turn of the session is, nothing generated", A_SAID, W_DB | R_F, "text" },
+    { "hop",       cmd_hop,       "everything attested about an entity", A_HOP, R_DB | R_F, "text" },
+    { "translate", cmd_translate, "a word up to its concepts and down into other languages", A_TRANSLATE, R_DB | R_F, "text" },
+    { "degrees",   cmd_degrees,   "how far one entity is from another, over rated claims", A_DEGREES, R_DB | R_F, "text" },
+    { "fills",     cmd_fills,     "what follows a phrase", A_FILLS, R_DB | R_F, "text" },
+    { "status",    status_with_joins, "what a database holds; --joins reports cross-source highway evidence", A_JOINS, R_DB | R_F, "text" },
+    { "bench",     cmd_bench,     "every native operation, measured; --joins reports corpus convergence", A_JOINS, R_DB | R_F, "text" },
+    { "model",     cmd_model,     "a transformer checkpoint read as testimony", A_MODEL, R_F, "text" },
+    { "pgn",       cmd_pgn,       "a PGN file's games written again from the database alone: the read edge of chess", A_PGN, R_DB | R_F, "PGN" },
+    { "tablebase", cmd_tablebase, "a position's endgame tablebase verdict, its legal moves ranked and its best-play line, read from the Syzygy tables alone", A_TABLEBASE, R_F, "text" },
+};
+const size_t NOPS = sizeof OPS / sizeof *OPS;
+
+const Op *op_named(const char *name){
+    for (size_t i = 0; i < NOPS; i++) if (!strcmp(OPS[i].name, name)) return &OPS[i];
+    return NULL;
+}
+
+static const char *type_name(ArgType t){
+    static const char *const n[] = { "text", "integer", "number", "flag", "path", "conninfo" };
+    return n[t];
+}
+
+void op_usage(FILE *out, const Op *op){
+    fprintf(out, "laplace %s", op->name);
+    for (const Arg *a = op->args; a->p; a++) {
+        const Param *p = a->p; const char *many = a->use & ARG_MANY ? "..." : "";
+        if (p->flag && p->type == ARG_FLAG) fprintf(out, " [%s]", p->flag);
+        else if (p->flag) fprintf(out, " [%s %s%s]", p->flag, p->name, many);
+        else if (a->use & ARG_REQUIRED) fprintf(out, " %s%s", p->name, many);
+        else fprintf(out, " [%s%s]", p->name, many);
+    }
+    fprintf(out, "\n");
+}
+
+void op_describe(FILE *out){
+    static const struct { unsigned bit; const char *name; } effects[] = {
+        { EFFECT_READS_DB, "reads_database" }, { EFFECT_WRITES_DB, "writes_database" }, { EFFECT_DESTROYS, "destroys" },
+        { EFFECT_READS_FILES, "reads_files" }, { EFFECT_WRITES_FILES, "writes_files" } };
+    fputs("{\"object\":\"laplace.operations\",\"operations\":[", out);
+    for (size_t i = 0; i < NOPS; i++) {
+        const Op *op = &OPS[i];
+        fputs(i ? ",{" : "{", out);
+        fputs("\"name\":", out); lp_fput_json(out, op->name);
+        fputs(",\"what\":", out); lp_fput_json(out, op->what);
+        fputs(",\"parameters\":[", out);
+        for (const Arg *a = op->args; a->p; a++) {
+            const Param *p = a->p;
+            fputs(a == op->args ? "{" : ",{", out);
+            fputs("\"name\":", out); lp_fput_json(out, p->name);
+            fputs(",\"flag\":", out); lp_fput_json(out, p->flag);
+            fputs(",\"type\":", out); lp_fput_json(out, type_name(p->type));
+            fprintf(out, ",\"required\":%s,\"many\":%s", a->use & ARG_REQUIRED ? "true" : "false", a->use & ARG_MANY ? "true" : "false");
+            fputs(",\"default\":", out); lp_fput_json(out, a->dflt ? a->dflt : p->dflt);
+            fputs(",\"what\":", out); lp_fput_json(out, a->what ? a->what : p->what);
+            fputc('}', out);
+        }
+        fputs("],\"effects\":[", out);
+        int first = 1;
+        for (size_t e = 0; e < sizeof effects / sizeof *effects; e++)
+            if (op->effects & effects[e].bit) { if (!first) fputc(',', out); lp_fput_json(out, effects[e].name); first = 0; }
+        fputs("],\"gives\":", out); lp_fput_json(out, op->gives);
+        fputc('}', out);
+    }
+    fputs("]}\n", out);
+}

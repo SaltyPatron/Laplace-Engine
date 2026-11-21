@@ -5,5 +5,6 @@ name sghatecheck
 witness SGHateCheck
 class AcademicCurated
 root $LAPLACE_DATA/Safety/SGHateCheck/sghatecheck-*
-except */code/* *.png
+except */code/* */experiments/* *.png *.pdf
 after unicode iso-639 hatecheck
+reads text

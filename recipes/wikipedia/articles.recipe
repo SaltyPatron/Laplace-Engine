@@ -1,0 +1,21 @@
+name wikipedia-articles
+# Wikimedia CirrusSearch JSONL articles: bind wikibase_item (Q...) onto article title, opening summary, and prose
+# when wikibase_item is present, falling back to title otherwise. Search-index and internal page counters are omitted.
+match *.jsonl *.json
+format json
+tier record by \n
+
+thing record wikibase_item
+thing record title
+metadata timestamp create_timestamp language wiki
+omit page_id namespace version popularity_score incoming_links external_link coordinates_count defaultsort _type _id
+content *
+
+relation "article title" title
+relation "opening summary" opening_text
+relation "article body" text
+relation "section heading" heading
+relation "Wikipedia category" category
+relation "linked article" outgoing_link
+relation "redirect target" redirect
+attest record *

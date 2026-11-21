@@ -7,7 +7,7 @@
  * keeps nothing of it, and a corrupt row is never visible to any other session. A fixture ID the database already
  * holds (plain content such as "AB") is read as stored, since the same ID is the same content; the nodes whose rows
  * this program must own (the deep end of the chain and the annotated node) are required not to be stored before. */
-#include "../src/read_text.c"
+#include "../src/db/read_text.c"
 #include "laplace/tier0.h"
 #include <assert.h>
 #include <stdio.h>
@@ -102,7 +102,7 @@ int main(int argc,char **argv){
     }
     if(argc==2 && !strcmp(argv[1],"--id-stdin")){
         uint8_t bytes[128];size_t count=fread(bytes,1,sizeof bytes,stdin);lp_id id;char hex[33];
-        assert(!ferror(stdin) && count && lp_id_codepoints_utf8(bytes,count,&id));lp_id_hex(&id,hex);puts(hex);return 0;
+        assert(!ferror(stdin) && count && lp_id_codepoints_utf8((const char *)bytes,count,&id));lp_id_hex(&id,hex);puts(hex);return 0;
     }
     if(argc==2){
         T0=lp_tier0_map(argv[1]);assert(T0);lp_id a,b,c,root_id,missing;
@@ -119,7 +119,7 @@ int main(int argc,char **argv){
         fputs("usage: reader_depth TIER0 | --cache-only TIER0 | --id-stdin | CONNINFO TIER0 [--cycle]\n",stderr);return 2;
     }
     T0=lp_tier0_map(argv[2]);assert(T0);
-    PGconn *pg=PQconnectdb(argv[1]);assert(PQstatus(pg)==CONNECTION_OK);
+    PGconn *pg=db_try(argv[1]);assert(pg);
     char err[256];
     const DbBinding *binding=db_contract_binding(pg,err,sizeof err);
     assert(binding && binding->id_type);

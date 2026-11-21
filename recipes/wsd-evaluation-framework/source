@@ -10,9 +10,10 @@ root $LAPLACE_DATA/WSD
 # Acquisition is declared in Laplace-Operations/data.tsv (WSD).
 # Data_Validation/sample-dataset holds semeval2015.data.xml and semeval2015.gold.key.txt, byte for byte the files of
 # Evaluation_Datasets/semeval2015: they are read there, under that directory's name.
-except */sample-dataset/*
+# Output_Systems holds external evaluated system predictions rather than ground-truth framework annotations.
+except */Data_Validation/sample-dataset* */sample-dataset/* */Output_Systems/*
 # Large training XML uses the same grammar-bounded record stream as evaluation
 # XML; its size is not a reason to exclude its sentences from the source trunk.
 # Measured when it was loaded: 6,459,459 compositions from 119 MB, at 750 bytes each with their indexes and standings.
 room 41
-after princeton-wordnet cili
+after princeton-wordnet cili iso-639

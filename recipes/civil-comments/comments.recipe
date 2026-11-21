@@ -17,10 +17,8 @@ name civil-comments-comments
 #   INSULT "Insulting, inflammatory, or negative comment towards a person or a group of people."
 #   IDENTITY_ATTACK "Negative or hateful comments targeting someone because of their identity."
 #   SEXUALLY_EXPLICIT "Contains references to sexual acts, body parts, or other lewd content."
-# Each number is the measure the raters gave the comment: a quantity of that comment, so it is no claim's value and is
-# attested of nothing. A comment is a whole text, and nothing else says that comment, so no claim could collide with a
-# claim of it; the comment is content, its words colliding with every other text through containment, and its numbers
-# stay in its row, the record, beside it.
+# Each number is the fraction of crowd raters who attributed that Perspective API subtype (0.0 benign/absent to 1.0
+# harmful/present); toxicity serves as the row's [0, 1] score so negative/risk verdicts remain weighted testimony.
 match train-*.tsv validation-*.tsv test-*.tsv
 
 tier row by \n
@@ -30,3 +28,12 @@ tier field by \t
 
 thing row text
 content text toxicity severe_toxicity obscene threat insult identity_attack sexual_explicit
+score row toxicity from 0 to 1
+relation "toxicity: rude, disrespectful, or unreasonable comment" toxicity
+relation "severe toxicity: very hateful or aggressive comment" severe_toxicity
+relation "obscene or vulgar language such as cursing" obscene
+relation "threat: intention to inflict pain, injury, or violence" threat
+relation "insult: insulting, inflammatory, or negative comment" insult
+relation "identity attack: negative or hateful comment on identity" identity_attack
+relation "sexually explicit: sexual acts, body parts, or lewd content" sexual_explicit
+attest row toxicity severe_toxicity obscene threat insult identity_attack sexual_explicit

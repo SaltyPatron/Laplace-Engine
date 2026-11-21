@@ -1,0 +1,25 @@
+name opensubtitles-bitext
+# OPUS Moses aligned subtitle bitext: any OpenSubtitles.<l1>-<l2>.<side> pair
+# (including extracted/), mapping 2/3-letter or regional codes onto [sent, iso3].
+# Aligned line numbers resolve strictly pair-locally to the lead file's sentence
+# and are never recorded as content.
+match OpenSubtitles.*-*.*
+pair OpenSubtitles.{l1}-{l2}.{lang}
+
+tier sentence by \n
+numbered aligned
+names text
+tier field by \t
+
+thing sentence text literal {iso3}
+content text
+
+when {role} is lead
+key sentence aligned within-pair
+always
+
+when {role} is partner
+refer aligned opensubtitles-bitext within-pair
+relation "translated" aligned
+attest sentence aligned
+always

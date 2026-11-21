@@ -1,0 +1,9 @@
+name project-gutenberg-ebook
+# Plain-text books from Project Gutenberg (E:\Data\Ingest\ProjectGutenberg\text\*.txt).
+# `input decode gutenberg` (gutenberg_decoder.h) strips the Project Gutenberg preamble,
+# `*** START OF ... ***` / `*** END OF ... ***` markers, and license postamble cleanly
+# into UTF-8 body text for `grammar text` (and passes through texts lacking markers
+# such as euclid.txt or newton_principia_en.txt).
+match *.txt
+grammar text
+input decode gutenberg

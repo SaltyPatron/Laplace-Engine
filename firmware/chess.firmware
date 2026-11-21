@@ -32,9 +32,12 @@
 #                              of another site, Lichess's API key, a UCI_Variant value (the convention cutechess,
 #                              Fairy-Stockfish and lichess-bot keep). A name is one law's; nothing is folded
 #   default NAME               the variant of a record that names none (the PGN standard: standard chess)
+#   search depth N quiesce N nodes N wall_ms N syzygy N book_weight N eval_scale N
+#                              search policy for lp_chess_search (depth, quiescence, node & wall budget)
 #
 # A record whose Variant no line here names is not replayed: its movetext is kept as its text and said.
 default Standard
+search depth 6 quiesce 4 nodes 200000 wall_ms 250 syzygy 7 book_weight 100 eval_scale 1.0
 variant Standard castling standard also standard chess
 variant "From Position" castling standard also fromPosition
 variant Chess960 castling chess960 also chess960 fischerandom

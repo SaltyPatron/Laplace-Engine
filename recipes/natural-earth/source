@@ -1,0 +1,9 @@
+name natural-earth
+# Natural Earth cultural and physical vector shapefiles (*.shp decoded with sibling .dbf via input decode shapefile):
+# country polygons and populated places cross-bracing WIKIDATAID (Q...), ISO 3166 codes, GEONAMESID,
+# [NAME, LATITUDE, LONGITUDE], and multilingual NAME_* lexicalizations.
+witness Natural Earth
+class StandardsDerived
+root $LAPLACE_DATA/NaturalEarth
+except *.dbf *.shx *.prj *.cpg *.txt *.html *.xml
+after unicode iso-639

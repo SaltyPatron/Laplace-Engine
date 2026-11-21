@@ -5,3 +5,4 @@ witness ProsocialDialog
 class AcademicCurated
 root $LAPLACE_DATA/Safety/ProsocialDialog/prosocial-dialog-*[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
 after unicode iso-639
+reads text

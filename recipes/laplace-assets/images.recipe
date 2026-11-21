@@ -1,0 +1,4 @@
+name laplace-assets-images
+# Supported image formats decoded losslessly to RGBA pixels via stb_image (WebP excluded in source).
+match *.png *.jpg *.jpeg *.bmp *.gif *.tga *.psd *.hdr *.pic *.pnm *.ppm *.pgm
+grammar image

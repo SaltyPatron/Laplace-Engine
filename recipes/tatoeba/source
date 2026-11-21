@@ -8,6 +8,7 @@ name tatoeba
 witness Tatoeba
 class UserCuratedResource
 root $LAPLACE_DATA/Tatoeba
+except */sentences_in_lists.csv */tag_metadata.csv */tags_detailed.csv
 # The detailed export contains the same sentence, ID and language columns plus
 # ownership and dates. Read one complete sentence export, retaining the plain
 # export as a fallback on estates without the detailed export.

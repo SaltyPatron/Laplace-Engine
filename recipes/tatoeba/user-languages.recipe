@@ -12,9 +12,9 @@ empty \\N
 
 thing row Username Lang
 content Username
-content Lang "Skill level" Details
-# "Indicates the self-reported skill levels of members in individual languages.": [[member, language], self-reported
-# skill levels, 5]. The page gives Details no wording at all (only its place in "Fields and structure"), so what it
-# states is left an unresolved obligation (Laplace-Engine#32: no documented meaning).
+content Lang "Skill level"
+# Tatoeba's Download sentences page names Details only in "Fields and structure" without documenting
+# its meaning (and real exports carry free-form user notes/spam there); omit it to avoid unresolved obligations.
+omit Details
 relation "self-reported skill levels" "Skill level"
-attest row "Skill level" Details with Username
+attest row "Skill level" with Username

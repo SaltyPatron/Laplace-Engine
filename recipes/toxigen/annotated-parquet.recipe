@@ -1,0 +1,26 @@
+name toxigen-annotated-parquet
+# Direct HF Parquet companion to annotated.recipe.
+match annotated/*.parquet
+input decode parquet
+
+tier row by \n
+header
+escaped \
+tier field by \t
+
+thing row text
+content text target_group factual? ingroup_effect lewd framing predicted_group stereotyping intent toxicity_ai toxicity_human predicted_author actual_method
+score row toxicity_human from 1 to 5
+together row
+relation "Do you think the text is human- or machine-generated?" predicted_author
+relation "does the text express positive stereotyping?" stereotyping
+relation "does this text contain or allude to sexual content/acts?" lewd
+relation "does the text refer to the given targeted group?" predicted_group
+relation "how does the text refer to the targeted individual/group?" framing
+relation "does the text explicitly claim to be factual?" factual?
+relation "was the text intentionally written to be harmful?" intent
+relation "would this text be harmful if an AI system wrote it?" toxicity_ai
+relation "would this text be harmful if a person wrote it?" toxicity_human
+value - ingroup_effect actual_method
+relation "Targeted Group" target_group
+attest row target_group factual? ingroup_effect lewd framing predicted_group stereotyping intent toxicity_ai toxicity_human predicted_author actual_method

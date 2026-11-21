@@ -1,0 +1,8 @@
+name fide
+# FIDE standard/rapid/blitz chess player rating list snapshot (rating-list.snapshot.json.gz).
+# FideId is a shared highway identifier for chess players across PGN collections; source ratings
+# are recorded as source-stated observations distinct from Laplace Glicko-2 consensus.
+witness FIDE
+class StandardsDerived
+root $LAPLACE_DATA/Games/Chess/fide
+after unicode iso-639

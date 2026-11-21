@@ -1,0 +1,53 @@
+# Inductive firmware: broad empirical generalization via DTW curve analogy and random-walk cooccurrence.
+k 1.5
+lambda 0.06
+hops 6
+top within 25
+order witness
+
+role by UPOS
+role 1 NOUN ADJ NUM
+role 0.75 PROPN
+role 0.5 VERB ADV ADP PART
+role 0.25 PRON DET CCONJ PUNCT
+role 0.15 SCONJ
+role 0.10 AUX
+
+for hop
+  fan 4096
+
+for search
+  fan 512
+
+for pull
+  fan 4096
+  lexicalization wn-lmf Sense language ili
+  up @wn-lmf/Sense
+  usages wordnet-cntlist tag_cnt
+  shape dtw
+  rounds 2
+  breadth 96
+  nearest 1024
+  walks 96
+  walkfan 512
+  steps 5
+  restart 0.2
+  sure 1.5
+  lift 1.5
+  elect cooccur walks shape grounds continuity agree heads confidence shared
+  tie first
+  seed observation
+  ooda 1
+  salience 0.05
+  multitier on
+  combine on
+  refuse predicate BNC PENN GF PT NER WSL Target Other Sent Verb Noun Adj Prep Adv UPOS XPOS DEPREL FEATS MISC LEMMA type n f itype
+  negate not no never without neither nor
+  negate_relation antonym excludes contradicts
+  scope_stop . ; : ? ! ,
+  emit 48
+  enough 0.4
+  take segment
+  take attestations 5
+  take constituents 2
+  take chain 1 @wn-lmf/Sense @wn-lmf/synset @wn-lmf/Definition | @conllu/LEMMA @wn-lmf/Sense @wn-lmf/synset @wn-lmf/Definition

@@ -1,0 +1,8 @@
+name coco
+# COCO 2017 validation images (val2017/*.jpg); each image decomposes via grammar image into
+# canonical 2D spatial/pixel structure.
+witness COCO
+class AcademicCurated
+root $LAPLACE_DATA/COCO/val2017
+except *.zip PROVENANCE.md
+after unicode

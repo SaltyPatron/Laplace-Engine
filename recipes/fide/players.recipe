@@ -1,0 +1,31 @@
+name fide-players
+# FIDE rating-list snapshot JSON object: top-level snapshot provenance in file metadata,
+# and each entry in Players[] keyed by shared highway node FideId. Zero ratings or zero BirthYear
+# represent unrated / unknown fields in FIDE snapshots and are omitted.
+match rating-list.snapshot.json
+format json
+
+thing Players FideId
+metadata Version SourceUrl FetchedAt ArchiveSha256 PlayersSha256
+when Standard is 0
+omit Standard
+always
+when Rapid is 0
+omit Rapid
+always
+when Blitz is 0
+omit Blitz
+always
+when BirthYear is 0
+omit BirthYear
+always
+content *
+
+value - Sex Title Flag
+relation "FIDE registered player name" Name
+relation "FIDE federation code" Federation
+relation "FIDE standard rating" Standard
+relation "FIDE rapid rating" Rapid
+relation "FIDE blitz rating" Blitz
+relation "birth year" BirthYear
+attest Players *

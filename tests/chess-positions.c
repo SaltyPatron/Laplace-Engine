@@ -12,7 +12,7 @@
  * NAME], [P, "Encyclopaedia of Chess Openings code", ECO]], P the position the line ends in; its texts composed by
  * Native's text (LAPLACE_TIER0). tests/opening-lines.sh compares each with the ingest's. */
 #include "chess_rules.h"
-#include "os.h"
+#include "laplace/os.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

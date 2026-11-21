@@ -1,0 +1,4 @@
+name coco-images
+# Supported image formats decoded losslessly to RGBA pixels via stb_image (no WebP).
+match *.jpg *.jpeg *.png *.bmp *.gif *.tga *.psd *.hdr *.pic *.pnm *.ppm *.pgm
+grammar image

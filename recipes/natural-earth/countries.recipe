@@ -1,0 +1,42 @@
+name natural-earth-countries
+# Natural Earth Admin 0 Countries shapefiles: polygon WKT geometry and sovereign/ISO/Wikidata crosswalks.
+match *countries*.shp *sovereignty*.shp *map_units*.shp
+input decode shapefile
+tier row by \n
+header
+escaped \
+tier field by \t
+
+thing row WIKIDATAID
+thing row ISO_A3
+thing row NAME
+when WIKIDATAID is -99
+omit WIKIDATAID
+always
+when ISO_A2 is -99
+omit ISO_A2
+always
+when ISO_A3 is -99
+omit ISO_A3
+always
+omit NE_ID MAPCOLOR* SCALERANK scalerank LABEL* MIN_ZOOM* MAX_ZOOM* MIN_LABEL* MAX_LABEL* FCLASS_* WOE_ID* NOTE_*
+content *
+
+value - shape_type ECONOMY INCOME_GRP
+relation "Well-Known Text geometry" wkt
+relation "ISO 3166-1 alpha-2 code" ISO_A2
+relation "ISO 3166-1 alpha-3 code" ISO_A3
+relation "sovereign state" SOVEREIGNT
+relation "administrative territory" ADMIN
+relation "common country name" NAME
+relation "long country name" NAME_LONG
+relation "formal English name" FORMAL_EN
+relation "formal French name" FORMAL_FR
+relation "localized name" NAME_*
+relation "geographic continent" CONTINENT
+relation "UN geographical region" REGION_UN
+relation "UN geographical subregion" SUBREGION
+relation "World Bank region" REGION_WB
+relation "estimated population" POP_EST
+relation "GDP in millions USD" GDP_MD
+attest row *

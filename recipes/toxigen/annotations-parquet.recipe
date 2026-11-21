@@ -1,0 +1,95 @@
+name toxigen-annotations-parquet
+# Direct HF Parquet companion to annotations.recipe.
+match annotations/*.parquet
+input decode parquet
+
+tier row by \n
+header
+escaped \
+tier field by \t
+
+thing row Input.text
+omit Input.time
+content HashedWorkerId
+content Input.* Answer.*
+score row Input.binary_prompt_label from 0 to 1
+default Answer.writer.1 false
+default Answer.writer.2 false
+default Answer.toPER.1 false
+default Answer.toPER.2 false
+default Answer.toPER.3 false
+default Answer.toPER.4 false
+default Answer.toPER.5 false
+default Answer.toAI.1 false
+default Answer.toAI.2 false
+default Answer.toAI.3 false
+default Answer.toAI.4 false
+default Answer.toAI.5 false
+default Answer.intent.1 false
+default Answer.intent.2 false
+default Answer.intent.3 false
+default Answer.intent.4 false
+default Answer.intent.5 false
+default Answer.lewd.1 false
+default Answer.lewd.2 false
+default Answer.lewd.3 false
+default Answer.stereo.1 false
+default Answer.stereo.2 false
+default Answer.stereo.3 false
+default Answer.inGroup.on false
+default Answer.ingroup.1 false
+default Answer.ingroup.2 false
+default Answer.ingroup.3 false
+default Answer.annotatorPolitics.1 false
+default Answer.annotatorPolitics.2 false
+default Answer.annotatorPolitics.3 false
+default Answer.annotatorPolitics.4 false
+default Answer.annotatorPolitics.5 false
+relation "the prompt used for generation" Input.prompt
+relation "Targeted Group" Input.target_group
+relation "whether or not the prompt is toxic" Input.binary_prompt_label
+value - Input.generation_method Input.prompt_label
+relation "does the text explicitly claim to be factual?" Answer.factSelect
+relation "how does the text refer to the targeted individual/group?" Answer.framingQ
+relation "does the text refer to the given targeted group?" Answer.refTarget
+relation "explaining how the individual/group is being targeted" Answer.stateFrame
+relation "refers directly/indirectly to one or more other groups" Answer.stateGroup
+relation "Do you think the text is human-written?" Answer.writer.1
+relation "Do you think the text is machine-generated?" Answer.writer.2
+relation "harmful if person wrote it (1 = benign)" Answer.toPER.1
+relation "harmful if person wrote it (2 = slightly benign)" Answer.toPER.2
+relation "harmful if person wrote it (3 = neutral)" Answer.toPER.3
+relation "harmful if person wrote it (4 = somewhat offensive)" Answer.toPER.4
+relation "harmful if person wrote it (5 = clearly offensive)" Answer.toPER.5
+relation "harmful if AI wrote it (1 = benign)" Answer.toAI.1
+relation "harmful if AI wrote it (2 = slightly benign)" Answer.toAI.2
+relation "harmful if AI wrote it (3 = neutral)" Answer.toAI.3
+relation "harmful if AI wrote it (4 = somewhat offensive)" Answer.toAI.4
+relation "harmful if AI wrote it (5 = clearly offensive)" Answer.toAI.5
+relation "intentionally written to be harmful (1 = no)" Answer.intent.1
+relation "intentionally written to be harmful (2 = unlikely)" Answer.intent.2
+relation "intentionally written to be harmful (3 = unclear)" Answer.intent.3
+relation "intentionally written to be harmful (4 = likely)" Answer.intent.4
+relation "intentionally written to be harmful (5 = yes)" Answer.intent.5
+relation "sexual content choice: contains sexual content" Answer.lewd.1
+relation "sexual content choice: might contain sexual content" Answer.lewd.2
+relation "sexual content choice: no sexual content" Answer.lewd.3
+relation "positive stereotyping choice: expresses it" Answer.stereo.1
+relation "positive stereotyping choice: maybe expresses it" Answer.stereo.2
+relation "positive stereotyping choice: does not express it" Answer.stereo.3
+relation "uses in-group language" Answer.inGroup.on
+relation "in-group effect choice: harmful even if in-group" Answer.ingroup.1
+relation "in-group effect choice: maybe less harmful in-group" Answer.ingroup.2
+relation "in-group effect choice: harmless as in-group" Answer.ingroup.3
+relation "self-reported worker age" Answer.annotatorAge
+relation "self-reported worker gender" Answer.annotatorGender
+relation "self-reported worker minority status" Answer.annotatorMinority
+relation "self-reported worker race" Answer.annotatorRace
+relation "self-reported political stance choice 1" Answer.annotatorPolitics.1
+relation "self-reported political stance choice 2" Answer.annotatorPolitics.2
+relation "self-reported political stance choice 3" Answer.annotatorPolitics.3
+relation "self-reported political stance choice 4" Answer.annotatorPolitics.4
+relation "self-reported political stance choice 5" Answer.annotatorPolitics.5
+attest row Input.prompt Input.generation_method Input.prompt_label Input.target_group Input.binary_prompt_label
+attest row Answer.factSelect Answer.framingQ Answer.inGroup* Answer.ingroup* Answer.intent* Answer.lewd* Answer.refTarget Answer.stateFrame Answer.stateGroup Answer.stereo* Answer.toAI* Answer.toPER* Answer.writer* with HashedWorkerId
+attest row Answer.annotator* of HashedWorkerId

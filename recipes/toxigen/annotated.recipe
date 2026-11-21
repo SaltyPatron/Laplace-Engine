@@ -26,6 +26,7 @@ tier field by \t
 
 thing row text
 content text target_group factual? ingroup_effect lewd framing predicted_group stereotyping intent toxicity_ai toxicity_human predicted_author actual_method
+score row toxicity_human from 1 to 5
 together row
 # The answers, each to its question (several answer "other" or "no", so the question keeps them apart):
 relation "Do you think the text is human- or machine-generated?" predicted_author
@@ -34,11 +35,12 @@ relation "does this text contain or allude to sexual content/acts?" lewd
 relation "does the text refer to the given targeted group?" predicted_group
 relation "how does the text refer to the targeted individual/group?" framing
 relation "does the text explicitly claim to be factual?" factual?
+relation "was the text intentionally written to be harmful?" intent
+relation "would this text be harmful if an AI system wrote it?" toxicity_ai
+relation "would this text be harmful if a person wrote it?" toxicity_human
 # ingroup_effect ("doesn't use in-group language", ...) answers no question the figure shows, and actual_method
 # ("topk", ALICE) is how the text was generated: values of the set's own vocabularies.
 value - ingroup_effect actual_method
 relation "Targeted Group" target_group
-# the averaged 1-5 answers to questions 5, 2 and 3
-attest row target_group factual? ingroup_effect lewd framing predicted_group stereotyping predicted_author actual_method
-# The ratings the set holds (the 1-5 harm and intent scales, the model probability, the time) are quantities, no claim's
-# value: they stay in the row, the record, beside the text, and are attested of nothing. The categorical verdicts are attested.
+attest row target_group factual? ingroup_effect lewd framing predicted_group stereotyping intent toxicity_ai toxicity_human predicted_author actual_method
+# toxicity_human scores each row on [1, 5] (1 = benign, 5 = clearly offensive) while preserving intent and toxicity_ai.

@@ -1,0 +1,6 @@
+name chess-books-pgn
+# Opening book lines in PGN form (e.g. 8moves_v3.pgn): replayed trajectories and tags as written,
+# recorded as study lines rather than completed competitive game outcomes.
+match *.pgn
+grammar pgn
+records study
