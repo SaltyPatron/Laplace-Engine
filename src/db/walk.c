@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /* The witnesses of claims, read from the attestation records (laplace_attested, laplace_witness_trust). Standings and
  * the testimony under a trunk are folded inside PostgreSQL by the Native law (lp_dag_multiplicity, lp_tally_edge,
  * lp_series); nothing here walks containment or counts. */
@@ -42,11 +43,10 @@ Attested *attested(PGconn *pg, const lp_id *claims, int n, int *nout, uint64_t *
 
 typedef struct { lp_id witness; double info; double trust; uint64_t games; } WitAcc;
 
-static int att_claim_cmp_r(const void *a, const void *b, void *ctx){
-    const Attested *att = ctx;
-    int ia = *(const int *)a, ib = *(const int *)b;
-    int c = lp_id_cmp(&att[ia].claim, &att[ib].claim);
-    return c ? c : lp_id_cmp(&att[ia].trunk, &att[ib].trunk);
+static int att_ptr_cmp(const void *a, const void *b){
+    const Attested *xa = *(const Attested *const *)a, *xb = *(const Attested *const *)b;
+    int c = lp_id_cmp(&xa->claim, &xb->claim);
+    return c ? c : lp_id_cmp(&xa->trunk, &xb->trunk);
 }
 static int share_info_cmp(const void *a, const void *b){
     const LpWitnessShare *x = a, *y = b;
@@ -58,9 +58,9 @@ int witness_attribution_bp(const Attested *att, int natt, const lp_id *witness_s
     if (!out || cap <= 0 || !att || natt <= 0) return 0;
     if (scoped && (!witness_scope || nscope <= 0)) return 0;
 
-    int *ord = malloc(sizeof(int) * (size_t)natt);
-    for (int i = 0; i < natt; i++) ord[i] = i;
-    qsort_r(ord, (size_t)natt, sizeof(int), att_claim_cmp_r, (void *)att);
+    const Attested **ord = malloc(sizeof(*ord) * (size_t)natt);
+    for (int i = 0; i < natt; i++) ord[i] = &att[i];
+    qsort(ord, (size_t)natt, sizeof(*ord), att_ptr_cmp);
 
     lp_authority_scope sc = {
         .witnesses = witness_scope,
@@ -77,10 +77,10 @@ int witness_attribution_bp(const Attested *att, int natt, const lp_id *witness_s
 
     for (int i = 0; i < natt;) {
         int j = i + 1;
-        while (j < natt && lp_id_eq(&att[ord[j]].claim, &att[ord[i]].claim)) j++;
+        while (j < natt && lp_id_eq(&ord[j]->claim, &ord[i]->claim)) j++;
         size_t m = 0;
         for (int k = i; k < j; k++) {
-            const Attested *a = &att[ord[k]];
+            const Attested *a = ord[k];
             double g = floor(a->games + 0.5);
             if (g < 1.0 || g > 9007199254740992.0) continue;
             double wins = a->score;
