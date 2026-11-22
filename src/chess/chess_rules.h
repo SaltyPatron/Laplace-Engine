@@ -118,11 +118,14 @@ int lp_chess_fen_position(const char *fen, size_t n, lp_id *out);
  * position it makes. The moves written (at most cap), or -1 when it is no FEN; 0 is a position with no legal move. */
 typedef struct { char san[16]; lp_id position; uint8_t zeroing; } LpChessSuccessor;      /* zeroing: a capture or a pawn move (the 50-move rule starts again) */
 int lp_chess_successors(const char *fen, size_t n, lp_id *position, LpChessSuccessor *out, int cap);
+/* The legal move from before whose resulting canonical position has ID next_pos, returning its index in all_out
+ * (0..*nall_out - 1), or -1 when no legal move from before produces next_pos. */
+int lp_chess_find_transition(const Bd *before, const lp_id *next_pos, Mv *all_out, int *nall_out);
 /* A game as PGN (tag pairs, movetext, a result) or movetext alone (an opening book's line), parsed by the tree-sitter
  * language given (the engine's grammars pgn or pgn_moves: LAPLACE_GRAMMARS), its main line replayed under the law its
  * Variant tag names (lp_chess_law_named; no tag: the default law, Standard when no laws are loaded) from its FEN tag's
  * position or the law's start: positions[i] the position after ply i (positions[0] the
- * one it starts in), and line the ID of [P0, M0, P1, ..., Pn] (a line of no moves is its position). Variations,
+ * one it starts in), and line the ID of [P0, P1, ..., Pn] (a line of no moves is its position P0). Variations,
  * comments and NAGs are annotations, not the line. Returns n + 1, the positions written (at most cap; a longer game
  * stops there), or 0 when the text does not parse or a move is not legal where it is played. */
 size_t lp_chess_pgn_positions(const void *ts_language, const char *text, size_t n, lp_id *positions, size_t cap, lp_id *line);

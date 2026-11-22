@@ -19,7 +19,7 @@
  *                 rank (castling is the king onto its own rook), in the enumeration (piece, from, to, promotion);
  *                 then every drop [piece, @, to], a pawn, knight, bishop, rook or queen of either colour put from hand
  *                 onto a square (a pawn not onto its first or last rank), in the enumeration (piece, to).
- * Sparse, admitted: the positions, their boards and the [P, M, P'] transitions of every move the sources named play,
+ * Sparse, admitted: the positions, their boards and the [P_k, P_{k+1}] transitions of every move the sources named play,
  * as chess.c composes them when it reads them, sorted by ID (lookup O(1) expected through the module's ID index), and
  * the deterministic (P, M) -> P' as a pair table (O(log n) binary search on the full key). A miss is no absence: the
  * caller composes canonically.
@@ -280,7 +280,7 @@ static int verify(const lp_perfcache *pc, const lp_section **sec){
             const lp_pair *pr = lp_perfcache_pair(pc, sec[S_NEXT], &p.id, &mv.id); if (!pr) continue;
             Bd t = o.b; make(&t, &all[i]); Ref next = position_ref(&t, NULL); lp_id rules_next, rules_move;
             id_position(&t, &rules_next); id_move(&o.b, &all[i], &rules_move);
-            Ref tr[3] = { p, mv, next }; Ref transition = comp(tr, 3);
+            Ref tr[2] = { p, next }; Ref transition = comp(tr, 2);
             const lp_tier0_record *xm = lp_perfcache_find(pc, &mv.id, NULL), *xt = lp_perfcache_find(pc, &transition.id, NULL);
             if (!lp_id_eq(&pr->c, &next.id) || !lp_id_eq(&rules_next, &next.id) || !lp_id_eq(&rules_move, &mv.id)
                 || !xm || !record_is(xm, &mv) || !xt || !record_is(xt, &transition)) { if (bad < 5) fputs("chess cache: a transition is not the rules' move\n", stderr); bad++; continue; }
@@ -353,7 +353,7 @@ int cmd_chess(int argc, char **argv){
         const Played *x = lp_idmap_at(played, i); Ref b0, b1; lp_id rp, rn, rm;
         Ref p = position_ref(&x->before, &b0), q = position_ref(&x->after, &b1), mv = move_of(&x->before, &x->m);
         id_position(&x->before, &rp); id_position(&x->after, &rn); id_move(&x->before, &x->m, &rm);
-        Ref tr[3] = { p, mv, q }; Ref t = comp(tr, 3);
+        Ref tr[2] = { p, q }; Ref t = comp(tr, 2);
         if (!same(&p, &x->p) || !same(&q, &x->next) || !same(&mv, &x->move) || !lp_id_eq(&rp, &p.id) || !lp_id_eq(&rn, &q.id) || !lp_id_eq(&rm, &mv.id)) { bad++; continue; }
         lp_push(&board, record_of(b0, 0)); lp_push(&board, record_of(b1, 0));
         lp_push(&position, record_of(p, 0)); lp_push(&position, record_of(q, 0));

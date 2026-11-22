@@ -435,6 +435,18 @@ int lp_chess_fen_position(const char *fen, size_t n, lp_id *out){
     Bd b; if (!fen || !board_fen(&b, fen, n, 0) || king_sq(&b, 0) < 0 || king_sq(&b, 1) < 0) return 0;
     id_position(&b, out); return 1;
 }
+int lp_chess_find_transition(const Bd *before, const lp_id *next_pos, Mv *all_out, int *nall_out){
+    int na = gen(before, all_out);
+    if (nall_out) *nall_out = na;
+    for (int i = 0; i < na; i++) {
+        Bd t = *before;
+        make(&t, &all_out[i]);
+        lp_id id;
+        id_position(&t, &id);
+        if (lp_id_eq(&id, next_pos)) return i;
+    }
+    return -1;
+}
 /* The main line of the first game the text holds: its tag pairs (FEN, Variant) and its SAN in order. The grammar's own
  * symbols are found by name in the language given, as chess.c's recipe finds them; nothing here scans the bytes. */
 static size_t pgn_replay(const void *ts_language, const char *text, size_t n, lp_id *positions, size_t cap, lp_id *line, Bd *end){
@@ -458,16 +470,14 @@ static size_t pgn_replay(const void *ts_language, const char *text, size_t n, lp
         else if (kl == 7 && !memcmp(k, "Variant", 7)) { variant = vv; vl = vn; } }
     const LpChessLaw *law = lp_chess_law_named(variant, vl); if (!law) goto done;
     if (fen ? !board_law_fen(&b, fen, fl, law) : !board_law_start(&b, law)) goto done;
-    lp_id *traj = malloc(sizeof(lp_id) * (2 * cap)); if (!traj) goto done;
-    size_t nt = 0; id_position(&b, &positions[0]); traj[nt++] = positions[0]; written = 1;
+    id_position(&b, &positions[0]); written = 1;
     for (uint32_t i = 0; i < ts_node_named_child_count(node) && written < cap; i++) { TSNode c = ts_node_named_child(node, i); if (ts_node_symbol(c) != san) continue;
         Mv all[LP_CHESS_MOVES]; int na = gen(&b, all);
         int k = san_match(&b, text + ts_node_start_byte(c), ts_node_end_byte(c) - ts_node_start_byte(c), all, na);
         if (k < 0) { written = 0; break; }
-        id_move(&b, &all[k], &traj[nt++]); make(&b, &all[k]); id_position(&b, &positions[written]); traj[nt++] = positions[written++]; }
-    if (written && line) lp_id_compose(traj, nt, line);
+        make(&b, &all[k]); id_position(&b, &positions[written++]); }
+    if (written && line) lp_id_compose(positions, written, line);
     if (written && end) *end = b;
-    free(traj);
 done:
     ts_tree_delete(tree); return written;
 }

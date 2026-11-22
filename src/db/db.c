@@ -257,7 +257,6 @@ static void copy_rows(PGconn *pg,int lane,const Row *rows,size_t lo,size_t hi){
     copy_close(&copy);lp_buf_free(&copy.buf);
     free(path.ids);free(path.runs);free(path.spare);free(path.bytes);
 }
-typedef lp_vec(uint32_t) IndexPartitions;
 static void maintenance_partitions(IndexPartitions *out,const PGresult *q){
     size_t bytes=(size_t)PQgetlength(q,0,3);const uint8_t *p=(const uint8_t *)PQgetvalue(q,0,3);
     if(PQgetisnull(q,0,3) || bytes<12 || lp_be(p+4,4) || lp_be(p+8,4)!=26)goto invalid;
@@ -279,15 +278,35 @@ invalid:
 static int partition_order(const void *a,const void *b){
     uint32_t x=*(const uint32_t *)a,y=*(const uint32_t *)b;return (x>y)-(x<y);
 }
-static void maintain_window(PGconn *pg,IndexPartitions *partitions){
-    if(!partitions->n)return;
+static void deduplicate_partitions(IndexPartitions *partitions){
+    if(partitions->n<=1)return;
     qsort(partitions->v,partitions->n,sizeof *partitions->v,partition_order);
     size_t n=0;
     for(size_t i=0;i<partitions->n;i++)
         if(!i || partitions->v[i]!=partitions->v[i-1])partitions->v[n++]=partitions->v[i];
-    Args input={0};arg_oid_array(&input,partitions->v,n);
-    db_exec_contract(pg,LP_SQL_CLEAN_PARTITIONS,&input);
-    args_free(&input);
+    partitions->n=n;
+}
+/* Clean each touched physicality partition's GIN pending list ONCE at the end
+ * of the load, with disjoint partition slices across at most n_unique backends
+ * (<= 9 tier partitions, zero duplicate OIDs across connections). Intermediate
+ * windows rely on PostgreSQL's gin_pending_list_limit = 32 MB per partition. */
+static void flush_touched_partitions(LoadStats *stats){
+    deduplicate_partitions(&writer.touched_partitions);
+    size_t total=writer.touched_partitions.n;
+    if(!total || writer.ncopy<=0)return;
+    unsigned workers=total<(size_t)writer.ncopy?(unsigned)total:(unsigned)writer.ncopy;
+    double phase=now();
+    #pragma omp parallel for num_threads(workers) schedule(static,1)
+    for(unsigned w=0;w<workers;w++){
+        size_t lo=(total*w)/workers, hi=(total*(w+1u))/workers;
+        if(lo<hi){
+            Args input={0};arg_oid_array(&input,writer.touched_partitions.v+lo,hi-lo);
+            db_exec_contract(writer.copy[w],LP_SQL_CLEAN_PARTITIONS,&input);
+            args_free(&input);
+        }
+    }
+    writer.touched_partitions.n=0;
+    if(stats){double elapsed=now()-phase;stats->t_index+=elapsed;stats->t_publish+=elapsed;}
 }
 int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     start_loader(conninfo,npg);table_kinds();
@@ -398,10 +417,10 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     }
     free(bounds);st->publish_waves+=waves;
     if(writer.window_index){
-        double phase=now();
-        #pragma omp parallel for num_threads(lanes) schedule(static,1)
-        for(unsigned lane=0;lane<lanes;lane++)maintain_window(writer.copy[lane],maintenance+lane);
-        double elapsed=now()-phase;st->t_index+=elapsed;st->t_publish+=elapsed;
+        for(unsigned lane=0;lane<lanes;lane++)
+            for(size_t k=0;k<maintenance[lane].n;k++)
+                lp_push(&writer.touched_partitions,maintenance[lane].v[k]);
+        deduplicate_partitions(&writer.touched_partitions);
     }
     for(unsigned lane=0;lane<lanes;lane++)lp_vec_free(maintenance+lane);
     free(maintenance);
@@ -485,6 +504,10 @@ int load_register(const char *conninfo,int npg,const LoadWitness *roots,size_t c
 }
 int merge(const char *conninfo,int npg,LoadStats *stats){
     (void)conninfo;(void)npg;if(!writer.series)return 0;
+    if(writer.window_index && writer.touched_partitions.n){
+        if(PQtransactionStatus(writer.series)!=PQTRANS_IDLE)db_tx(writer.series,LP_SQL_TX_COMMIT);
+        flush_touched_partitions(stats);
+    }
     if(PQtransactionStatus(writer.series)==PQTRANS_IDLE)db_tx(writer.series,LP_SQL_TX_BEGIN_RC);
     uint64_t admitted=0;
     if(lp_idmap_count(writer.registered) && (writer.series_changed || writer.witness_changed || writer.counts_unknown)){
@@ -513,7 +536,8 @@ int merge(const char *conninfo,int npg,LoadStats *stats){
     if(stats){stats->attestations+=admitted;stats->attestations_measured=1;}
     PQfinish(writer.series);for(int i=0;i<writer.ncopy;i++)PQfinish(writer.copy[i]);
     free(writer.copy);free(writer.entity);free(writer.path);lp_idmap_free(writer.known);
-    lp_idmap_free(writer.registered);lp_idmap_free(writer.new_witnesses);writer=(Loader){0};return 0;
+    lp_idmap_free(writer.registered);lp_idmap_free(writer.new_witnesses);
+    lp_vec_free(&writer.touched_partitions);writer=(Loader){0};return 0;
 }
 int cmd_merge(int argc,char **argv){
     const char *conninfo=laplace_db();

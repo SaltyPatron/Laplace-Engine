@@ -91,7 +91,7 @@ static const Param
     ROOT     = { "id", NULL, ARG_TEXT, NULL, "a file's, a record's or a line's ID" },
     TABLES   = { "tables", "-T", ARG_PATH, "LAPLACE_SYZYGY, else $LAPLACE_DATA/Games/Chess/syzygy", "the Syzygy tables: ROOT/NAME.rtbw and ROOT/DIR/NAME.rtbw" },
     TB_OPEN  = { "open", "-n", ARG_INT, "64", "tables mapped at once" },
-    TB_LINE  = { "line", "--line", ARG_FLAG, NULL, "the best-play line from each position too, and the [P, M, P'] claim of each of its moves" },
+    TB_LINE  = { "line", "--line", ARG_FLAG, NULL, "the best-play line from each position too, and the [P_k, P_{k+1}] claim of each of its moves" },
     TB_PGN   = { "pgn", "--pgn", ARG_FLAG, NULL, "the best-play line alone, as the PGN the syzygy source records" },
     FEN      = { "fen", NULL, ARG_TEXT, "a FEN a line of standard input", "a FEN (its first four fields)" },
     MODEL    = { "model_dir", NULL, ARG_PATH, NULL, "model_dir" },

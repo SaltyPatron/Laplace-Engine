@@ -38,10 +38,10 @@ moves=$(tb '8/8/8/8/8/8/1Q6/K6k w - -')
 # the best-play line: to mate, its result under the 50-move rule
 line=$(tb --line '7k/1Q6/8/8/8/8/8/K7 b - -' | awk -F'\t' '$1 == "line"')
 [ "$(cut -f3,4,5 <<<"$line")" = "$(printf '1-0\t12\tKg8 Kb2 Kh8 Kc3 Kg8 Kd4 Kh8 Ke5 Kg8 Kf6 Kh8 Qg7#')" ] || fail "the best-play line is not 12 plies to Qg7#: $line"
-[ "$(cut -f2 <<<"$line")" = 6554c79ccee9acdcb4aa4adfa1b4a6d3 ] || fail "the line is no longer [P0, M0, ..., P12] 6554c79c...: $line"
+[ "$(cut -f2 <<<"$line")" = b8deb32ea992db34bb6e765a027153a7 ] || fail "the line is no longer [P0, P1, ..., P12] b8deb32e...: $line"
 [ -z "$(tb --line 'k7/8/1Q6/8/8/8/8/7K b - -' | awk -F'\t' '$1 == "line" && $4 != 0')" ] || fail "a drawn position has a line"
 
-# the line as the source records it, read as a game is: each ply a [P, M, P'] claim scored for the side that moves
+# the line as the source records it, read as a game is: each ply a [P_k, P_{k+1}] claim scored for the side that moves
 tb --pgn '7k/1Q6/8/8/8/8/8/K7 b - -' >"$scratch/line.pgn"
 grep -q '^\[FEN "7k/1Q6/8/8/8/8/8/K7 b - -"\]$' "$scratch/line.pgn" || fail "the PGN does not begin at its FEN: $(cat "$scratch/line.pgn")"
 lines=$(LAPLACE_DATA=$scratch "$L" ingest --claims-tsv "$scratch/line.pgn" 2>&1 | tr -d '\r') || fail "the line's PGN did not read as a game: $lines"
@@ -49,10 +49,10 @@ lines=$(LAPLACE_DATA=$scratch "$L" ingest --claims-tsv "$scratch/line.pgn" 2>&1 
 [ "$(awk -F'\t' '$1 == "claim" { print $3 }' <<<"$lines" | sort | uniq -c | awk '{ printf "%s:%s ", $2, $1 }')" = "0:6 1:6 " ] || fail "the winner's moves are not scored 1 and the loser's 0"
 
 # a game that reaches the table (1. Qxb7 takes Black's last pawn) and plays the tables' move (1... Kg8) claims the
-# transition the tablebase line claims: the same [P, M, P'], the same score
+# transition the tablebase line claims: the same [P_k, P_{k+1}], the same score
 game=$(LAPLACE_DATA=$scratch "$L" ingest --claims-tsv -s chess-com "$here/chess/syzygy/reaches.pgn" 2>&1 | tr -d '\r') || fail "chess-com's recipe did not read reaches.pgn: $game"
-shared=$(comm -12 <(awk -F'\t' '$1 == "claim" { print $3 "\t" $4 "\t" $5 "\t" $6 }' <<<"$game" | sort) <(awk -F'\t' '$1 == "claim" { print $3 "\t" $4 "\t" $5 "\t" $6 }' <<<"$lines" | sort))
-[ "$shared" = "$(printf '0\tKa1Qb7kh8b00-\tkh8g8\tKa1Qb7kg8w00-')" ] || fail "the game and the tablebase line do not share 1... Kg8: $shared"
+shared=$(comm -12 <(awk -F'\t' '$1 == "claim" { print $3 "\t" $4 "\t" $5 }' <<<"$game" | sort) <(awk -F'\t' '$1 == "claim" { print $3 "\t" $4 "\t" $5 }' <<<"$lines" | sort))
+[ "$shared" = "$(printf '0\tKa1Qb7kh8b00-\tKa1Qb7kg8w00-')" ] || fail "the game and the tablebase line do not share 1... Kg8: $shared"
 
 # the source's recipe reads the tables as games (grammar pgn) through the decoder
 plan=$("$L" ingest --plan -s syzygy "$T/KQvK.rtbw" 2>&1 | tr -d '\r') || fail "the syzygy source does not plan: $plan"

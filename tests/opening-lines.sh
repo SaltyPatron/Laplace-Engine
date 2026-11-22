@@ -26,9 +26,9 @@ game=$(LAPLACE_DATA=$scratch "$L" ingest --claims-tsv -s chess-com "$here/chess/
 
 # the rows that name nothing: each record is its line (1. e4; 1. e4 e5 2. Nf3 Nc6; the castling line)
 lines=$(awk -F'\t' '$1 == "record" { print $4 }' <<<"$book" | head -3)
-want='b17034a030605a7b729131993c5ca42d
-2559928d51a3fa236734fbb1a71ac18b
-bd4dc4877779bb570ebebe65c5b474dc'
+want='aa9a24415d37db0497aa2bf1f8e99f8e
+193e5b5676f2c6fbec93eb4070dafba3
+a94bc1ab79b97c852a250fa0166b0cec'
 [ "$lines" = "$want" ] || fail "an opening's line is not the line chess-identity pins for the same moves:
 got:
 $lines

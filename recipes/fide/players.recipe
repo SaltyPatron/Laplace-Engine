@@ -5,7 +5,7 @@ name fide-players
 match rating-list.snapshot.json
 format json
 
-thing Players FideId
+thing Players literal FIDE FideId
 metadata Version SourceUrl FetchedAt ArchiveSha256 PlayersSha256
 when Standard is 0
 omit Standard

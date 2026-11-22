@@ -592,14 +592,14 @@ int db_stage_drop(PGconn *pg, const char *const *tables, size_t n) {
 }
 
 int db_stage_create_pair(PGconn *pg, const char *entity_tbl, const char *path_tbl) {
-    char qe[200], qp[200], sql[1024];
+    char qe[200], qp[200], sql[1152];
     if (format_escaped_rel(pg, entity_tbl, qe, sizeof qe) != 0 ||
         format_escaped_rel(pg, path_tbl, qp, sizeof qp) != 0)
         return -1;
     int n = snprintf(sql, sizeof sql,
-        "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS, present boolean NOT NULL);"
+        "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS, present boolean NOT NULL) WITH (autovacuum_enabled = false);"
         "ALTER TABLE %s ALTER coord DROP NOT NULL, ALTER hilbert DROP NOT NULL;"
-        "CREATE UNLOGGED TABLE %s (LIKE stage.physicality INCLUDING DEFAULTS, present boolean NOT NULL);"
+        "CREATE UNLOGGED TABLE %s (LIKE stage.physicality INCLUDING DEFAULTS, present boolean NOT NULL) WITH (autovacuum_enabled = false);"
         "ALTER TABLE %s ALTER path DROP NOT NULL, ALTER hilbert DROP NOT NULL",
         qe, qe, qp, qp);
     if (n <= 0 || (size_t)n >= sizeof sql) return -1;
@@ -609,28 +609,28 @@ int db_stage_create_pair(PGconn *pg, const char *entity_tbl, const char *path_tb
 int db_stage_create_series(PGconn *pg, const char *delta_tbl, const char *pending_tbl, const char *wit_tbl, const char *affected_tbl) {
     const DbBinding *b = db_contract_binding(pg, NULL, 0);
     if (!b) return -1;
-    char qd[200], qp[200], qw[200], qa[200], sql[2048];
+    char qd[200], qp[200], qw[200], qa[200], sql[2304];
     if (format_escaped_rel(pg, delta_tbl, qd, sizeof qd) != 0 ||
         format_escaped_rel(pg, pending_tbl, qp, sizeof qp) != 0 ||
         format_escaped_rel(pg, wit_tbl, qw, sizeof qw) != 0 ||
         format_escaped_rel(pg, affected_tbl, qa, sizeof qa) != 0)
         return -1;
     int n = snprintf(sql, sizeof sql,
-        "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, wins double precision NOT NULL);"
+        "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, wins double precision NOT NULL) WITH (autovacuum_enabled = false);"
         "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS, wins double precision NOT NULL,"
-        " CHECK(games > 0 AND games <= 9007199254740992 AND wins >= 0 AND wins <= games));"
+        " CHECK(games > 0 AND games <= 9007199254740992 AND wins >= 0 AND wins <= games)) WITH (autovacuum_enabled = false);"
         "CREATE UNIQUE INDEX ON %s (claim, witness, lineage) NULLS NOT DISTINCT;"
-        "CREATE UNLOGGED TABLE %s (id %s.blake3 PRIMARY KEY, lineage %s.blake3, trust double precision NOT NULL);"
-        "CREATE UNLOGGED TABLE %s (claim %s.blake3 PRIMARY KEY)",
+        "CREATE UNLOGGED TABLE %s (id %s.blake3 PRIMARY KEY, lineage %s.blake3, trust double precision NOT NULL) WITH (autovacuum_enabled = false);"
+        "CREATE UNLOGGED TABLE %s (claim %s.blake3 PRIMARY KEY) WITH (autovacuum_enabled = false)",
         qd, qp, qp, qw, b->native_schema, b->native_schema, qa, b->native_schema);
     if (n <= 0 || (size_t)n >= sizeof sql) return -1;
     return exec_direct(pg, sql);
 }
 
 int db_stage_create_attestation(PGconn *pg, const char *tbl) {
-    char qt[200], sql[384];
+    char qt[200], sql[448];
     if (format_escaped_rel(pg, tbl, qt, sizeof qt) != 0) return -1;
-    snprintf(sql, sizeof sql, "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS)", qt);
+    snprintf(sql, sizeof sql, "CREATE UNLOGGED TABLE %s (LIKE stage.attestation INCLUDING DEFAULTS) WITH (autovacuum_enabled = false)", qt);
     return exec_direct(pg, sql);
 }
 

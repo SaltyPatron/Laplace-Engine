@@ -475,11 +475,11 @@ static void uci_of(const Mv *m, char *out){
     char *o = out; *o++ = (char)('a' + (m->from & 7)); *o++ = (char)('1' + (m->from >> 3)); *o++ = (char)('a' + (to & 7)); *o++ = (char)('1' + (to >> 3));
     if (m->promo) *o++ = ".pnbrqk"[m->promo]; *o = 0;
 }
-/* A move from b: its SAN, UCI, its ID, the position it makes and the [P, M, P'] claim's ID, as chess.c composes them. */
+/* A move from b: its SAN, UCI, its ID, the position it makes and the [P_k, P_{k+1}] claim's ID, as chess.c composes them. */
 static void move_ids(const Bd *b, const lp_id *P, const Mv *m, const Mv *all, int na, char san[16], char uci[8], lp_id *mid, lp_id *pos, lp_id *claim){
     san_of(b, m, all, na, 1, san); uci_of(m, uci); id_move(b, m, mid);
     Bd t = *b; make(&t, m); id_position(&t, pos);
-    lp_id three[3] = { *P, *mid, *pos }; lp_id_compose(three, 3, claim);
+    lp_id two[2] = { *P, *pos }; lp_id_compose(two, 2, claim);
 }
 static int fen_board(const char *fen, size_t n, Bd *b){ return fen && board_fen(b, fen, n, 0) && king_sq(b, 0) >= 0 && king_sq(b, 1) >= 0; }
 int lp_tablebase_probe_fen(LpTablebase *tb, const char *fen, size_t n, LpTbProbe *out){
@@ -497,11 +497,11 @@ int lp_tablebase_line_fen(LpTablebase *tb, const char *fen, size_t n, LpTbPly *o
     Bd b; if (!tb || !fen_board(fen, n, &b)) return -1;
     Mv *mv = malloc(sizeof(Mv) * (size_t)(cap > 0 ? cap : 1)); int plies = lp_tablebase_line(tb, &b, mv, cap, result);
     if (plies < 0) { free(mv); return -1; }
-    lp_id *traj = malloc(sizeof(lp_id) * (size_t)(2 * plies + 1)); size_t nt = 0; id_position(&b, &traj[nt++]);
+    lp_id *traj = malloc(sizeof(lp_id) * (size_t)(plies + 1)); size_t nt = 0; id_position(&b, &traj[nt++]);
     Bd cur = b;
     for (int i = 0; i < plies; i++) { Mv all[256]; int na = gen(&cur, all); LpTbPly *p = &out[i];
         move_ids(&cur, &traj[nt - 1], &mv[i], all, na, p->san, p->uci, &p->move, &p->position, &p->claim);
-        traj[nt++] = p->move; traj[nt++] = p->position; make(&cur, &mv[i]); }
+        traj[nt++] = p->position; make(&cur, &mv[i]); }
     if (line) { if (nt == 1) *line = traj[0]; else lp_id_compose(traj, nt, line); }
     if (!plies) result[0] = 0;
     free(traj); free(mv); return plies;

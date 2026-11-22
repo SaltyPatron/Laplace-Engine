@@ -51,11 +51,11 @@ size_t lp_tablebase_pgn(const Bd *b, const Mv *moves, int plies, const char *res
 typedef struct { char san[16], uci[8]; lp_id move, position, claim; int wdl, dtz, value; uint8_t zeroing, mate; } LpTbMove;
 typedef struct { lp_id position; int covered, wdl, dtz, nmoves; LpTbMove move[LP_TB_MOVES]; } LpTbProbe;
 /* The position a FEN gives, its verdict and its legal moves (ranked best first where covered, gen's order where not):
- * each its SAN, UCI, the move's and the position's IDs and the transition's [P, M, P'] claim ID, the ID a game that
+ * each its SAN, UCI, the move's and the position's IDs and the transition's [P_k, P_{k+1}] claim ID, the ID a game that
  * plays it records. 1 covered, 0 not covered (the moves without verdicts), -1 no FEN. */
 int lp_tablebase_probe_fen(LpTablebase *, const char *fen, size_t n, LpTbProbe *out);
 typedef struct { char san[16], uci[8]; lp_id move, position, claim; } LpTbPly;
-/* The best-play line from a FEN's position: its plies (at most cap), line the ID of [P0, M0, P1, ..., Pn] as a game's
+/* The best-play line from a FEN's position: its plies (at most cap), line the ID of [P0, P1, ..., Pn] as a game's
  * line is composed, result its termination. The plies; 0 a draw (line is P0); -1 no FEN or not covered. */
 int lp_tablebase_line_fen(LpTablebase *, const char *fen, size_t n, LpTbPly *out, int cap, lp_id *line, char result[8]);
 

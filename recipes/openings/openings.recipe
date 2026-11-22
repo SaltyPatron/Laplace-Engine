@@ -3,9 +3,9 @@ match a.tsv b.tsv c.tsv d.tsv e.tsv
 tier opening by \n
 header
 tier field by \t
-# An opening is an incomplete game: its pgn is movetext with no tag pairs and no result, read by chess (src/chess.c,
-# the native grammar pgn) as the line a game of the same moves plays, [P0, M0, P1, ..., Pn], replayed from the standard
-# start position. The line is the row's content, the route the book gives, so it shares its positions and moves with
+# An opening is an incomplete game: its pgn is movetext with no tag pairs and no result, read by chess (src/chess/chess.c,
+# the native grammar pgn) as the board-state trajectory a game of the same moves plays, [P0, P1, ..., Pn], replayed from
+# the standard start position. The line is the row's content, the route the book gives, so it shares its positions with
 # every game that plays it.
 part pgn grammar pgn
 content eco name pgn

@@ -150,10 +150,10 @@ static void records_under(PGconn *pg, const IdList *trunks, IdList *records){
     lp_vec_free(&level); lp_idmap_free(seen);
 }
 /* From records to the lines they hold, at most three levels down (a record held as [record, its claims...], a record
- * [line, tags, layer], a row whose field is the line): a line is a composition of an odd number of constituents, three
- * or more, whose first and last are positions. Below a composition its first constituent is looked at, and its last
- * where it has at most three (a row's last field); a record whose line of more than one move is found is looked at no
- * further. A claim [P, M, P'] is a line too, of the one move it is: what it holds is in its game's line as well. */
+ * [line, meta(, clocks, notes)], a row whose field is the line): a line is a composition of at least two canonical
+ * board positions ([P0, P1, ..., Pn]) whose first and last constituents are positions. Below a composition its first
+ * constituent is looked at, and its last where it has at most three (a row's last field); a record whose line of more
+ * than one move is found is looked at no further. */
 typedef struct { lp_id id; size_t rec; } Cand;
 static void lines_of(PGconn *pg, const Decode *d, const lp_id *records, size_t n, IdList *lines, IdList *ends){
     lp_vec(Cand) cand = { 0 }; for (size_t i = 0; i < n; i++) { Cand c = { records[i], i }; lp_push(&cand, c); }
@@ -161,12 +161,12 @@ static void lines_of(PGconn *pg, const Decode *d, const lp_id *records, size_t n
     for (int depth = 0; depth < 4 && cand.n; depth++) {
         ids.n = 0; for (size_t i = 0; i < cand.n; i++) lp_push(&ids, cand.v[i].id);
         size_t ne = 0; Ends *e = ends_of(pg, ids.v, ids.n, &ne);
-        IdList check = { 0 }; for (size_t j = 0; j < ne; j++) if (e[j].length >= 3 && (e[j].length & 1)) { lp_push(&check, e[j].first); lp_push(&check, e[j].last); }
+        IdList check = { 0 }; for (size_t j = 0; j < ne; j++) if (e[j].length >= 2) { lp_push(&check, e[j].first); lp_push(&check, e[j].last); }
         uint8_t *pos = malloc(check.n ? check.n : 1), *line = calloc(ne ? ne : 1, 1); positions_are(pg, d, check.v, check.n, pos);
-        for (size_t j = 0, c = 0; j < ne; j++) if (e[j].length >= 3 && (e[j].length & 1)) { line[j] = pos[c] && pos[c + 1]; c += 2;
+        for (size_t j = 0, c = 0; j < ne; j++) if (e[j].length >= 2) { line[j] = pos[c] && pos[c + 1]; c += 2;
             if (!line[j]) continue;
             lp_push(lines, e[j].entity); lp_push(ends, e[j].last);
-            if (e[j].length > 3) done[cand.v[e[j].src].rec] = 1; }
+            if (e[j].length > 2) done[cand.v[e[j].src].rec] = 1; }
         lp_vec(Cand) next = { 0 };
         for (size_t j = 0; j < ne; j++) { size_t rec = cand.v[e[j].src].rec; if (line[j] || done[rec]) continue;
             Cand f = { e[j].first, rec }; lp_push(&next, f);
@@ -190,7 +190,7 @@ static void reach_read(PGconn *pg, const Decode *d, Reach *r){
         /* their positions, every one: the paths of the lines that end within the tables */
         IdList positions = { 0 }; Ids parts = { 0 };
         for (size_t j = 0; j < ending.n; j += 4096) { int nh = 0; size_t m = ending.n - j < 4096 ? ending.n - j : 4096; Hold *h = paths_of(pg, ending.v + j, (int)m, &nh);
-            for (int x = 0; x < nh; x++) { path_into(&parts, lp_path_of(h[x].path, (size_t)h[x].path_len)); for (size_t v = 0; v < parts.n; v += 2) lp_push(&positions, parts.v[v]); }
+            for (int x = 0; x < nh; x++) { path_into(&parts, lp_path_of(h[x].path, (size_t)h[x].path_len)); for (size_t v = 0; v < parts.n; v++) lp_push(&positions, parts.v[v]); }
             holds_free(h, nh); }
         ids_unique(&positions); r->positions += positions.n;
         b = malloc(sizeof(Bd) * (positions.n ? positions.n : 1)); ok = malloc(positions.n ? positions.n : 1);

@@ -299,8 +299,8 @@ int lp_chess_search(PGconn *pg, const char *fen, const char *variant,
             lp_chess_san_of(&root, &bm, legal, nm, 1, out->best_san);
             lp_chess_id_move(&root, &bm, &out->move_id);
             lp_chess_id_position(&nb, &out->next_position_id);
-            lp_id c3[3] = { out->position_id, out->move_id, out->next_position_id };
-            lp_id_compose(c3, 3, &out->claim_id);
+            lp_id c2[2] = { out->position_id, out->next_position_id };
+            lp_id_compose(c2, 2, &out->claim_id);
             out->syzygy_wdl = wdl;
             out->from_syzygy = 1;
             out->score_cp = wdl > 0 ? 10000 - ranked[0].dtz : wdl < 0 ? -10000 - ranked[0].dtz : 0;
@@ -312,7 +312,7 @@ int lp_chess_search(PGconn *pg, const char *fen, const char *variant,
         }
     }
 
-    /* Up to 1 batched DB probe for root [P, M, P'] standing priors; zero DB calls during tree recursion. */
+    /* Up to 1 batched DB probe for root [P_k, P_{k+1}] standing priors; zero DB calls during tree recursion. */
     int root_priors[LP_CHESS_MOVES];
     memset(root_priors, 0, sizeof root_priors);
     if (pg && pol.book_weight > 0) {
@@ -321,12 +321,11 @@ int lp_chess_search(PGconn *pg, const char *fen, const char *variant,
         int64_t *matches = calloc((size_t)nm, sizeof(int64_t));
         uint8_t *has = calloc((size_t)nm, 1);
         for (int i = 0; i < nm; i++) {
-            lp_id mid, pid;
+            lp_id pid;
             Bd nb = root; lp_chess_make(&nb, &legal[i]);
-            lp_chess_id_move(&root, &legal[i], &mid);
             lp_chess_id_position(&nb, &pid);
-            lp_id c3[3] = { out->position_id, mid, pid };
-            lp_id_compose(c3, 3, &cids[i]);
+            lp_id c2[2] = { out->position_id, pid };
+            lp_id_compose(c2, 2, &cids[i]);
         }
         standings_of_ids(pg, cids, nm, witnesses, nwitnesses, scoped, rats, matches, has);
         out->db_probes = 1;
@@ -390,8 +389,8 @@ int lp_chess_search(PGconn *pg, const char *fen, const char *variant,
     lp_chess_san_of(&root, &best_mv, legal, nm, 1, out->best_san);
     lp_chess_id_move(&root, &best_mv, &out->move_id);
     lp_chess_id_position(&nb, &out->next_position_id);
-    lp_id c3[3] = { out->position_id, out->move_id, out->next_position_id };
-    lp_id_compose(c3, 3, &out->claim_id);
+    lp_id c2[2] = { out->position_id, out->next_position_id };
+    lp_id_compose(c2, 2, &out->claim_id);
     out->score_cp = best_score;
     out->depth_reached = depth_done;
     out->nodes_searched = ctx.nodes;
