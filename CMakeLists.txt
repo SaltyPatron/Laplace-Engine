@@ -8,6 +8,9 @@ project(LaplaceEngine VERSION 0.2.0 LANGUAGES C CXX ASM)
 # LaplaceNative_DIR; a build that includes Native provides the same package, which also gives the floating-point
 # contract, LP_C_FLAGS, laplace_path() and laplace_utf8_executable()). Recipes load tree-sitter grammars at run time.
 set(CMAKE_C_STANDARD 17)
+if(UNIX)
+  add_compile_definitions(_GNU_SOURCE)
+endif()
 find_package(LaplaceNative CONFIG REQUIRED)
 find_package(OpenMP REQUIRED)
 
