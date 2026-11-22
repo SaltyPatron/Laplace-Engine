@@ -443,10 +443,14 @@ def main():
 
         bias_frames = Path(__file__).resolve().parent / 'fixtures/social-bias-frames'
         expected_bias_frames = [('Sample text.', relation, value) for relation, value in [
+            ('group vs. individual target', '0.5'),
+            ('was the intent behind the statement to offend', '1'),
+            ('is the post a sexual or lewd reference', '0'),
+            ('could the post be offensive to anyone', '0.5'),
             ('demographic group targeted', 'group, one'), ('demographic group targeted', 'group two'),
             ('high-level category of the demographic group(s) targeted', 'category'),
             ('implied statement', 'A quoted "word".'), ('implied statement', 'Ω text'),
-            ('source of the post', 'fixture')]]      # the aggregated ratings (their mean, a fraction of annotators) are the record's, not claims
+            ('source of the post', 'fixture')]]
         for workers in (1, 4):
             text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'social-bias-frames', bias_frames)
             claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
