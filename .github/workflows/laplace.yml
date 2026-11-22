@@ -109,9 +109,9 @@ jobs:
           cp -a --reflink=auto --no-preserve=ownership "$LAPLACE_FLAGS" "$RUNNER_TEMP/engine/inputs/tier0.flags"
           cp -a --reflink=auto --no-preserve=ownership "${LAPLACE_FLAGS}.layout" "$RUNNER_TEMP/engine/inputs/tier0.flags.layout"
           cp -a --reflink=auto --no-preserve=ownership "$LAPLACE_HIGHWAY" "$RUNNER_TEMP/engine/inputs/highway.bin"
-      # The run's binary, for its plan job: a later run's build cannot replace it (one name per run; a job run
-      # again replaces it with its own build).
+      # The run's binary, for its plan job: uploaded only when the estate audit job was requested.
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.verify_estate
         with: { name: laplace-engine, path: "${{ runner.temp }}/engine/", retention-days: 1, overwrite: true, if-no-files-found: error }
       - name: checks
         run: |
