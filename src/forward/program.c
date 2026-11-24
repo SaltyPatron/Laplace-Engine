@@ -113,7 +113,9 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
             path_into(&rn, lp_path_of(hh[r].path, (size_t)hh[r].path_len));
             if (!head_read(fw, rn.v, rn.n)) { st->refused++; continue; }
             int other = lp_tuple_other(rn.v, rn.n, &at->id); if (other < 0) continue;
-            if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
+            if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->handle) ||
+                              lp_id_eq(&rn.v[0], &st->prompt) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
+            if (lp_id_eq(&rn.v[other], &st->prompt) || lp_id_eq(&rn.v[other], &st->handle)) continue;
             lp_rating rt = hh[r].r;
             double sw = strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n); if (sw <= 0.0) continue;
             double cost = at->cost + lp_cost(&rt, fw->k, fw->lambda) - log(sw);
@@ -364,7 +366,7 @@ static Claim *session_turns(PGconn *pg, const Firmware *fw, const lp_id *handle,
     }
     *nturn = kept; return tc;
 }
-static int turn_witness(const char *conninfo, Ref who, Ref by, Ref handle, Ref pr, Ref resp, int ordinal, LoadStats *ls, lp_id *turn_id){
+static int turn_witness(PGconn *pg, const char *conninfo, Ref who, Ref by, Ref handle, Ref pr, Ref resp, int ordinal, LoadStats *ls, lp_id *turn_id){
     Ref tp[2] = { pr, resp }; tp[0].said = tp[1].said = 0;
     Ref turn = compose(tp, 2, ref_above(tp, 2));
     const lp_trust_class *uc = lp_trust_class_named("UserPromptContent"), *rc = lp_trust_class_named("ResponseContent");
@@ -383,9 +385,11 @@ static int turn_witness(const char *conninfo, Ref who, Ref by, Ref handle, Ref p
     Event e2 = { .claim = c2.id, .witnessed = c2.id, .score = 1.0f, .enter_rating = 1500.0f, .kind = EV_CLAIM }; ev_push(&f[1].ev, &e2);
     Fold *fold = fold_new(); fold_events(fold, f, 2);
     LoadWitness lw[2] = { { .id = u_trunk.id, .lineage = who.id, .trust = f[0].trust, .has_lineage = 1 }, { .id = r_trunk.id, .lineage = by.id, .trust = f[1].trust, .has_lineage = 1 } };
-    int rc_ = load(conninfo, 2, f, 2, ls); fold_free(fold);
+    int rc_ = (pg && lp_stage_publish_fast(pg, fold, lw, 2, f, 2, ls) == 0) ? 0
+        : (load(conninfo, 1, f, 2, ls) || load_register(conninfo, 1, lw, 2, f, 2) || merge(conninfo, 1, ls));
+    fold_free(fold);
     free(f[0].ev.e); free(f[1].ev.e);
-    if (rc_ || load_register(conninfo, 2, lw, 2, f, 2) || merge(conninfo, 2, ls)) return 1;
+    if (rc_) return 1;
     *turn_id = turn.id; return 0;
 }
 
@@ -480,7 +484,7 @@ int cmd_said(int argc, char **argv){
         receipt_unwitnessed(rcp, &turn.id, held, "the turn is held by the session: nothing is witnessed again");
     } else {
         LoadStats ls = { 0 }; lp_id id;
-        if (turn_witness(conninfo, who, speaker, handle, pr, resp, ordinal, &ls, &id)) { if (rcp) fclose(rcp); free(prompt); free(response); return 1; }
+        if (turn_witness(NULL, conninfo, who, speaker, handle, pr, resp, ordinal, &ls, &id)) { if (rcp) fclose(rcp); free(prompt); free(response); return 1; }
         printf("WITNESS    turn %s, at %d in the session: %llu entities new, the user's [session, turn] and %s's [response, prompt]\n", ti, ordinal, (unsigned long long)ls.ent_rows, by);
         receipt_witnessed(rcp, &id, &resp.id, ordinal, (unsigned long long)ls.ent_rows);
     }
@@ -505,6 +509,26 @@ static void append_out(char **out, size_t *outn, const char *tx, int is_follow, 
     memcpy(*out + *outn, tx, tl);
     *outn += tl;
     (*out)[*outn] = 0;
+}
+
+static int is_salience_grounded(const State *st, const Field *fd, int include_layer){
+    if (!fd || fd->n <= 0) return 0;
+    Bits covered = { 0 };
+    for (int z = 0; z < fd->n; z++) {
+        const Cell *x = &fd->c[z];
+        if (x->hub || (!x->has_r && !x->routes[R_CLAIM] && !(include_layer && x->routes[R_LAYER]))) continue;
+        for (int w = 0; w < MAXOCC / 64; w++) covered.w[w] |= x->support.w[w];
+    }
+    int owed_all = owed(st, &st->open, &st->open);
+    int owed_cov = owed(st, &covered, &st->open);
+    if (owed_all <= 0) return 0;
+    double sal_gate = st->max_salience > 0.0 ? 0.40 * st->max_salience : 1e30;
+    for (int i = 0; i < st->nocc; i++) {
+        if (!st->composed[i] || !((st->open.w[i >> 6] >> (i & 63)) & 1)) continue;
+        int is_top = st->role[i] >= 0.75 || (include_layer && st->salience[i] >= sal_gate);
+        if (is_top && !((covered.w[i >> 6] >> (i & 63)) & 1)) return 0;
+    }
+    return (double)owed_cov >= (1.0 - st->fw->enough) * (double)owed_all;
 }
 
 int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
@@ -563,6 +587,7 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
     if (!pg) { pg = db_read(conninfo); owns_pg = 1; }
     st->pg = pg;
     st->rd = reader_new(pg);
+    st->t_start_s = now();
 
     const char *user = (req->user && *req->user) ? req->user : "user";
     const char *session = (req->session && *req->session) ? req->session : "session";
@@ -618,6 +643,7 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
     st->ntraj = st->nocc;
 
     if (st->trace_out) {
+        double t_tr = now();
         char idt[33]; lp_id_hex(&pr.id, idt);
         fprintf(st->trace_out, "RESOLVE    prompt %s, tier %d, %d occurrences; session \"%s\" of %s, turn %d (%d before it, %d discourse entities)\n",
                 idt, pr.tier, st->nocc, session, user, ordinal, nturn, st->ndisc);
@@ -634,6 +660,7 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
             }
         }
         fprintf(st->trace_out, "\n");
+        st->t_start_s += now() - t_tr;
     }
 
     lp_id emitted[512]; int nemit = 0;
@@ -709,26 +736,8 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
             for (int k = 0; k < R_KINDS; k++) if (routes[k]) fprintf(st->trace_out, " %d by %s", routes[k], RK[k]);
             fprintf(st->trace_out, "   (%.1f ms)\n", (now() - tc) * 1000);
         }
-        int salience_grounded = 0;
-        if (fd.n > 0) {
-            Bits covered = { 0 };
-            for (int z = 0; z < fd.n; z++) {
-                const Cell *x = &fd.c[z];
-                if (x->hub || (!x->has_r && !x->routes[R_CLAIM])) continue;
-                for (int w = 0; w < MAXOCC / 64; w++) covered.w[w] |= x->support.w[w];
-            }
-            int owed_all = owed(st, &st->open, &st->open);
-            int owed_cov = owed(st, &covered, &st->open);
-            int top_ok = 1;
-            for (int i = 0; i < st->nocc && top_ok; i++) {
-                if (st->composed[i] && ((st->open.w[i >> 6] >> (i & 63)) & 1) && st->role[i] >= 0.75) {
-                    if (!((covered.w[i >> 6] >> (i & 63)) & 1)) top_ok = 0;
-                }
-            }
-            if (owed_all > 0 && top_ok && (double)owed_cov >= (1.0 - fw.enough) * (double)owed_all)
-                salience_grounded = 1;
-        }
-        int tight_env = (st->envelope && st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 500000);
+        int salience_grounded = is_salience_grounded(st, &fd, 0);
+        int tight_env = (st->envelope && (st->envelope->preset <= LP_ENVELOPE_STANDARD || (st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 500000)));
         int fast_grounded = salience_grounded || (tight_env && fd.n > 0);
         for (int round = 1; round < fw.rounds && !fast_grounded && !envelope_hit(st); round++) {
             if (st->envelope && st->work.db_probes + 4 >= st->envelope->max_db_probes) break;
@@ -737,6 +746,7 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
             if (st->trace_out) heads_say(st, hm, "heads");
             lp_idmap_free(hm);
             if (!fresh_n) break;
+            if (round == 1 && is_salience_grounded(st, &fd, 1)) fast_grounded = 1;
         }
         st->npos = st->nocc;
         if (!fast_grounded && (!st->envelope || (st->work.db_probes + 3 < st->envelope->max_db_probes && !envelope_hit(st))))
@@ -793,24 +803,8 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
         }
     }
     if (st->trace_out) fprintf(st->trace_out, "ROUTE      hops %d, fan %d, k %g, lambda %g, emit at most %d, from %d centre%s\n", fw.hops, fw.fan, fw.k, fw.lambda, max_emit_eff, ncentre, ncentre == 1 ? "" : "s");
-    int can_skip_scan = 0;
-    if (fd.n > 0) {
-        Bits cov = { 0 };
-        for (int z = 0; z < fd.n; z++) {
-            const Cell *x = &fd.c[z];
-            if (x->hub || (!x->has_r && !x->routes[R_CLAIM])) continue;
-            for (int w = 0; w < MAXOCC / 64; w++) cov.w[w] |= x->support.w[w];
-        }
-        int owed_all = owed(st, &st->open, &st->open), owed_cov = owed(st, &cov, &st->open);
-        int top_ok = 1;
-        for (int i = 0; i < st->nocc && top_ok; i++) {
-            if (st->composed[i] && ((st->open.w[i >> 6] >> (i & 63)) & 1) && st->role[i] >= 0.75) {
-                if (!((cov.w[i >> 6] >> (i & 63)) & 1)) top_ok = 0;
-            }
-        }
-        if (owed_all > 0 && top_ok && (double)owed_cov >= (1.0 - fw.enough) * (double)owed_all) can_skip_scan = 1;
-    }
-    if (!can_skip_scan && !(st->envelope && st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 500000 && fd.n > 0) &&
+    int can_skip_scan = is_salience_grounded(st, &fd, 1);
+    if (!can_skip_scan && !(st->envelope && (st->envelope->preset <= LP_ENVELOPE_STANDARD || (st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 500000)) && fd.n > 0) &&
         !envelope_hit(st) && ncentre > 0 && (!st->envelope || st->work.db_probes + 4 < st->envelope->max_db_probes))
         scan(st, &fd, centre, ncentre);
     if (st->trace_out) fprintf(st->trace_out, "COMPOSE    a frontier of %d\n", fd.n);
@@ -823,12 +817,31 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
     const lp_highway *hw = lp_highway_map(NULL);
 
     for (int step = 0; step < budget; step++) {
+        if (step == 0 && (fd.n > 0 || nn0 > 0)) {
+            lp_id pref[MAXOCC * 2]; size_t npref = 0;
+            size_t pref_cap = (st->trace_out || (st->envelope && st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 500000)) ? 16 : (MAXOCC * 2);
+            for (int i = 0; i < nn0 && npref < pref_cap; i++) {
+                if (!lp_id_eq(&nx0[i].id, &st->prompt) && !lp_id_eq(&nx0[i].id, &st->handle)) pref[npref++] = nx0[i].id;
+            }
+            for (int z = 0; z < fd.n && npref < pref_cap; z++) {
+                const Cell *x = &fd.c[z];
+                if (!x->hub && !lp_id_eq(&x->id, &st->prompt) && !lp_id_eq(&x->id, &st->handle)) pref[npref++] = x->id;
+            }
+            if (npref) {
+                double t_pr = now();
+                uint64_t b = reader_trips(st->rd);
+                reader_prefetch(st->rd, pref, npref, pref_cap <= 16 ? 160 : 400);
+                st->trips += reader_trips(st->rd) - b;
+                if (st->trace_out) st->t_start_s += now() - t_pr;
+            }
+        }
         if (step > 0 && envelope_hit(st)) break;
         Prop *pp = malloc(sizeof(Prop) * 192); int np = 0;
         Next nx[64];
         int nn = (step == 0) ? nn0 : follows(st, nx, 64);
         if (step == 0 && nn0) memcpy(nx, nx0, sizeof(Next) * (size_t)nn0);
         for (int i = 0; i < nn && np < 128; i++) {
+            if (lp_id_eq(&nx[i].id, &st->prompt) || lp_id_eq(&nx[i].id, &st->handle)) continue;
             if (hw && lp_highway_bank_of(hw, &nx[i].id, NULL)) continue;
             Prop p; memset(&p, 0, sizeof p);
             p.id = nx[i].id; p.kind = P_FOLLOW; p.cont = nx[i].len; p.times = nx[i].times; p.occ = -1; p.shape = INFINITY;
@@ -846,12 +859,13 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
         for (int z = 0; z < fd.n && np < 160; z++) {
             const Cell *x = &fd.c[z];
             if (x->hub || !bit_count_and(&x->support, &st->open)) continue;
-            if (have_attested_claim && !x->has_r && !x->routes[R_CLAIM] && !x->routes[R_SCAN] && !x->routes[R_LAYER] &&
-                bit_count_and(&x->support, &st->open) < 2)
+            if (have_attested_claim && !x->has_r && !x->routes[R_CLAIM] && !x->routes[R_SCAN] && !x->routes[R_LAYER])
                 continue;
+            if (fw.nalt > 0 && fw.nchain[0] > 1 && x->has_r && lp_id_eq(&x->rel, &fw.id.chain[0][0])) continue;
             if (hw && lp_highway_bank_of(hw, &x->id, NULL)) continue;
             int list; uint32_t slot;
             if (hw && reading_of(hw, &x->id, &list, &slot)) continue;
+            if (lp_id_eq(&x->id, &st->prompt) || lp_id_eq(&x->id, &st->handle)) continue;
             int already = 0;
             for (int k = 0; k < nemit && !already; k++) already = lp_id_eq(&emitted[k], &x->id);
             for (int k = 0; k < st->nocc && !already; k++) already = lp_id_eq(&st->occ[k], &x->id);
@@ -906,6 +920,7 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
                     if (lp_tier0_codepoint(T0, &an[c_].v[k]) < 0) { nxt = k; break; }
                 if (nxt < 0) continue;
                 const lp_id *id = &an[c_].v[nxt];
+                if (lp_id_eq(id, &st->prompt) || lp_id_eq(id, &st->handle)) continue;
                 int have = -1; for (int z = 0; z < np; z++) if (lp_id_eq(&pp[z].id, id)) have = z;
                 if (have >= 0) { if (an[c_].d < pp[have].shape) pp[have].shape = an[c_].d; continue; }
                 if (np >= 192 || (hw && lp_highway_bank_of(hw, id, NULL))) continue;
@@ -955,6 +970,16 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
 
         reader_want(st->rd, &sel.id);
         char *tx = reader_text(st->rd, &sel.id, 400);
+        if (tx && req->prompt_len > 0 && req->prompt_len < 400 && strlen(tx) >= req->prompt_len &&
+            memcmp(tx, req->prompt_text, req->prompt_len) == 0 &&
+            (tx[req->prompt_len] == 0 || tx[req->prompt_len] == ' ' || tx[req->prompt_len] == '\t' || tx[req->prompt_len] == '\n' ||
+             strchr("?!.,;:", (char)req->prompt_text[req->prompt_len - 1]) != NULL)) {
+            /* Skip turn/prompt wrapper echoing the exact prompt prefix; mark emitted to avoid loop and continue */
+            free(tx);
+            if (nemit < 512) emitted[nemit++] = sel.id;
+            const Cell *x = cell_find(&fd, &sel.id); if (x) bit_clear(&st->open, &x->support);
+            continue;
+        }
         size_t at = outn;
         append_out(&out_buf, &outn, tx, sel.kind == P_FOLLOW, fw.combine_clauses);
         const char *skind = sel.kind == P_FOLLOW ? "follows" : sel.kind == P_SHAPE ? "like" : "answers";
@@ -1018,11 +1043,11 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
         receipt_realize(req->receipt_out, &fw.id.image_id, &st->program_id, &decision_id, out_buf, disposition);
     }
 
-    if (!req->read_only && outn && conninfo) {
+    if (!req->read_only && outn && (st->pg || conninfo)) {
         Ref resp = text_ref(CTX[0], (const uint8_t *)out_buf, outn);
         Ref lap = text_ref(CTX[0], (const uint8_t *)responder, strlen(responder));
         LoadStats ls = { 0 }; lp_id turn = { 0 };
-        if (turn_witness(conninfo, who, lap, handle, pr, resp, ordinal, &ls, &turn)) {
+        if (turn_witness(st->pg, conninfo, who, lap, handle, pr, resp, ordinal, &ls, &turn)) {
             free(out_buf); free(bind); field_free(&fd); reader_free(st->rd);
             if (owns_pg) PQfinish(pg); state_free(st); lp_text_free(c);
             out->exit_code = 1; return 1;
@@ -1037,11 +1062,13 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
                     ti, ordinal, (unsigned long long)ls.ent_rows, responder);
         }
         receipt_witnessed(req->receipt_out, &turn, &resp.id, ordinal, (unsigned long long)ls.ent_rows);
-    } else if (!req->read_only && !outn && conninfo) {
+    } else if (!req->read_only && !outn && (st->pg || conninfo)) {
         File pf; memset(&pf, 0, sizeof pf);
         pf.path = "the prompt"; pf.witness = who; pf.trust = 0.0; pf.trunk = pr;
         LoadStats ls = { 0 };
-        if (load(conninfo, 2, &pf, 1, &ls) || merge(conninfo, 2, &ls)) {
+        int prc = (st->pg && lp_stage_publish_fast(st->pg, NULL, NULL, 0, &pf, 1, &ls) == 0) ? 0
+            : (load(conninfo, 1, &pf, 1, &ls) || merge(conninfo, 1, &ls));
+        if (prc) {
             free(out_buf); free(bind); field_free(&fd); reader_free(st->rd);
             if (owns_pg) PQfinish(pg); state_free(st); lp_text_free(c);
             out->exit_code = 1; return 1;
@@ -1143,6 +1170,10 @@ int cmd_turn(int argc, char **argv){
     if (receipt && !rcp) { fprintf(stderr, "the receipt %s: %s\n", receipt, strerror(errno)); free(prompt_text); return 1; }
     if (getenv("LAPLACE_TIMES")) setvbuf(stdout, NULL, _IONBF, 0);
 
+    lp_envelope cli_env = lp_envelope_preset(LP_ENVELOPE_STANDARD);
+    cli_env.max_wall_us = 2000000;
+    if (fw.emit > (int)cli_env.max_tokens_out) cli_env.max_tokens_out = (uint32_t)fw.emit;
+    const char *unbounded = getenv("LAPLACE_UNBOUNDED");
     LpForwardRequest req = {
         .conninfo = conninfo,
         .fw = &fw,
@@ -1154,6 +1185,7 @@ int cmd_turn(int argc, char **argv){
         .seed_value = seedv,
         .read_only = read_only,
         .temperature = -1.0,
+        .envelope = (unbounded && *unbounded) ? NULL : &cli_env,
         .trace_out = stdout,
         .receipt_out = rcp
     };

@@ -359,7 +359,32 @@ int32_t lp_engine_mold_checkpoint(LpEngineHandle *h, const LpEngineMoldRequest *
     uint32_t n_heads = req->n_heads ? req->n_heads : 4u;
 
     lp_idmap *vmap = lp_idmap_new();
-    size_t cap_e = 512, n_edges = 0;
+    size_t seeded_count = (max_vocab >= 320u) ? 259u : 3u;
+    char **seeded_strs = calloc(seeded_count, sizeof(char *));
+    const lp_tier0_record *t0_seed = T0 ? T0 : lp_tier0_map(NULL);
+    lp_text *tx_seed = t0_seed ? lp_text_new(t0_seed) : NULL;
+    for (size_t si = 0; si < seeded_count; si++) {
+        char buf[16];
+        if (si == 0) snprintf(buf, sizeof buf, "<unk>");
+        else if (si == 1) snprintf(buf, sizeof buf, "<s>");
+        else if (si == 2) snprintf(buf, sizeof buf, "</s>");
+        else snprintf(buf, sizeof buf, "<0x%02X>", (unsigned)(si - 3u));
+        seeded_strs[si] = strdup(buf);
+        lp_id sid;
+        if (tx_seed) {
+            lp_ref sr = lp_text_decompose(tx_seed, (const uint8_t *)buf, strlen(buf), NULL, NULL);
+            sid = sr.id;
+        } else {
+            memset(&sid, 0, sizeof sid);
+            sid.b[0] = (uint8_t)(si & 0xFFu);
+            sid.b[1] = (uint8_t)(((si >> 8) & 0x7Fu) | 0x80u);
+        }
+        lp_idmap_put(vmap, &sid, NULL);
+    }
+    if (tx_seed) lp_text_free(tx_seed);
+
+    size_t cap_e = (size_t)max_vocab * 4u, n_edges = 0;
+    if (cap_e < 512u) cap_e = 512u;
     int *rows = malloc(sizeof(int) * cap_e);
     int *cols = malloc(sizeof(int) * cap_e);
     double *weights = malloc(sizeof(double) * cap_e);
@@ -369,41 +394,45 @@ int32_t lp_engine_mold_checkpoint(LpEngineHandle *h, const LpEngineMoldRequest *
         pthread_mutex_lock(&h->mu);
         PGconn *pg = ensure_pg_locked(h);
         if (pg) {
-            Args a = { 0 }; arg_bool(&a, false);
-            PGresult *q = db_call_try(pg, LP_SQL_REPLAY_EXPORT, &a, out->error, sizeof out->error);
+            Args a = { 0 };
+            int32_t row_limit = (int32_t)(max_vocab < 2048u ? max_vocab : 2048u);
+            arg_i32(&a, row_limit);
+            int scoped = (req->authority && req->authority->scoped && req->authority->witnesses && req->authority->nwitnesses > 0);
+            if (scoped) arg_ids(&a, req->authority->witnesses, (size_t)req->authority->nwitnesses);
+            PGresult *q = db_call_try(pg, scoped ? LP_SQL_MOLD_CLAIMS_SCOPED : LP_SQL_MOLD_CLAIMS, &a, out->error, sizeof out->error);
             args_free(&a);
             if (q) {
                 int nr = PQntuples(q);
-                int lim = nr < 256 ? nr : 256;
-                lp_id *cids = malloc(sizeof(lp_id) * (size_t)(lim ? lim : 1));
-                lp_id *wids = malloc(sizeof(lp_id) * (size_t)(lim ? lim : 1));
-                double *scores = malloc(sizeof(double) * (size_t)(lim ? lim : 1));
-                for (int r = 0; r < lim; r++) {
-                    cids[r] = *col_id(q, r, 0);
-                    wids[r] = *col_id(q, r, 1);
-                    scores[r] = col_f64(q, r, 4) > 0.0 ? col_f64(q, r, 4) : 1.0;
+                for (int r = 0; r < nr && n_edges < cap_e; r++) {
+                    lp_path path = lp_path_of((const uint8_t *)PQgetvalue(q, r, 1), (size_t)PQgetlength(q, r, 1));
+                    lp_rating lr = lp_rating_stock();
+                    lr.rating = col_f64(q, r, 2);
+                    lr.deviation = col_f64(q, r, 3);
+                    double score = lp_confidence(&lr, 2.0);
+                    if (!(score > 0.0)) score = 0.5;
+                    const lp_id *wid = col_id(q, r, 4);
+                    if (path.n < 2) continue;
+                    Ids pts = { 0 };
+                    path_into(&pts, path);
+                    if (pts.n >= 2) {
+                        for (size_t k = 0; k + 1 < pts.n && n_edges < cap_e; k++) {
+                            if (lp_id_eq(&pts.v[k], &pts.v[k + 1])) continue;
+                            if (lp_idmap_find(vmap, &pts.v[k]) < 0 && lp_idmap_count(vmap) >= max_vocab) continue;
+                            size_t i0 = lp_idmap_put(vmap, &pts.v[k], NULL);
+                            if (lp_idmap_find(vmap, &pts.v[k + 1]) < 0 && lp_idmap_count(vmap) >= max_vocab) continue;
+                            size_t i1 = lp_idmap_put(vmap, &pts.v[k + 1], NULL);
+                            rows[n_edges] = (int)i0;
+                            cols[n_edges] = (int)i1;
+                            weights[n_edges] = score;
+                            wlabels[n_edges] = malloc(33);
+                            lp_id_hex(wid, wlabels[n_edges]);
+                            n_edges++;
+                        }
+                    }
+                    lp_vec_free(&pts);
+                    if (lp_idmap_count(vmap) >= max_vocab) break;
                 }
                 PQclear(q);
-                int nh = 0;
-                Hold *hh = lim ? paths_of(pg, cids, lim, &nh) : NULL;
-                Ids pts = { 0 };
-                for (int i = 0; i < nh && n_edges < cap_e; i++) {
-                    path_into(&pts, lp_path_of(hh[i].path, (size_t)hh[i].path_len));
-                    if (pts.n < 2) continue;
-                    size_t i0 = lp_idmap_put(vmap, &pts.v[0], NULL);
-                    size_t i1 = lp_idmap_put(vmap, &pts.v[pts.n - 1], NULL);
-                    if (lp_idmap_count(vmap) >= max_vocab) break;
-                    rows[n_edges] = (int)i0;
-                    cols[n_edges] = (int)i1;
-                    int src = hh[i].src >= 0 && hh[i].src < lim ? hh[i].src : 0;
-                    weights[n_edges] = scores[src];
-                    wlabels[n_edges] = malloc(33);
-                    lp_id_hex(&wids[src], wlabels[n_edges]);
-                    n_edges++;
-                }
-                lp_vec_free(&pts);
-                holds_free(hh, nh);
-                free(cids); free(wids); free(scores);
             }
         }
         pthread_mutex_unlock(&h->mu);
@@ -413,35 +442,37 @@ int32_t lp_engine_mold_checkpoint(LpEngineHandle *h, const LpEngineMoldRequest *
     size_t nv = lp_idmap_count(vmap);
     char **tokens = NULL;
     lp_id *token_ids = NULL;
-    if (nv >= 8 && n_edges > 0) {
+    if (nv > seeded_count && n_edges > 0) {
         token_ids = malloc(sizeof(lp_id) * nv);
         tokens = malloc(sizeof(char *) * nv);
         memcpy(token_ids, lp_idmap_keys(vmap), sizeof(lp_id) * nv);
+        for (size_t i = 0; i < seeded_count && i < nv; i++)
+            tokens[i] = strdup(seeded_strs[i]);
         if (h) {
             pthread_mutex_lock(&h->mu);
             PGconn *pg = ensure_pg_locked(h);
             Reader *rd = pg ? reader_new(pg) : NULL;
             if (rd) {
-                for (size_t i = 0; i < nv; i++) reader_want(rd, &token_ids[i]);
-                for (size_t i = 0; i < nv; i++) tokens[i] = reader_text(rd, &token_ids[i], 64);
+                for (size_t i = seeded_count; i < nv; i++) reader_want(rd, &token_ids[i]);
+                for (size_t i = seeded_count; i < nv; i++) tokens[i] = reader_text(rd, &token_ids[i], 64);
                 reader_free(rd);
             } else {
-                for (size_t i = 0; i < nv; i++) { tokens[i] = malloc(33); lp_id_hex(&token_ids[i], tokens[i]); }
+                for (size_t i = seeded_count; i < nv; i++) { tokens[i] = malloc(33); lp_id_hex(&token_ids[i], tokens[i]); }
             }
             pthread_mutex_unlock(&h->mu);
         } else {
-            for (size_t i = 0; i < nv; i++) { tokens[i] = malloc(33); lp_id_hex(&token_ids[i], tokens[i]); }
+            for (size_t i = seeded_count; i < nv; i++) { tokens[i] = malloc(33); lp_id_hex(&token_ids[i], tokens[i]); }
         }
     } else {
-        static const char *FALLBACK[16] = {
-            "<bos>", "<eos>", "laplace", "salience", "geometry", "manifold", "curve", "witness",
+        static const char *FALLBACK[17] = {
+            "<unk>", "<s>", "</s>", "laplace", "salience", "geometry", "manifold", "curve", "witness",
             "consensus", "token", "merkle", "blake3", "ooda", "verify", "proof", "synthesis"
         };
         for (size_t i = 0; i < n_edges; i++) free(wlabels[i]);
-        nv = 16; n_edges = 0;
+        nv = 17; n_edges = 0;
         tokens = malloc(sizeof(char *) * nv);
         for (size_t i = 0; i < nv; i++) tokens[i] = strdup(FALLBACK[i]);
-        for (size_t i = 2; i + 1 < nv && n_edges < cap_e; i++) {
+        for (size_t i = 3; i + 1 < nv && n_edges < cap_e; i++) {
             rows[n_edges] = (int)i;
             cols[n_edges] = (int)(i + 1);
             weights[n_edges] = 1.0;
@@ -449,6 +480,8 @@ int32_t lp_engine_mold_checkpoint(LpEngineHandle *h, const LpEngineMoldRequest *
             n_edges++;
         }
     }
+    for (size_t si = 0; si < seeded_count; si++) free(seeded_strs[si]);
+    free(seeded_strs);
     lp_idmap_free(vmap);
 
     LpMoldSpec spec = {
@@ -457,8 +490,8 @@ int32_t lp_engine_mold_checkpoint(LpEngineHandle *h, const LpEngineMoldRequest *
         .n_vocab = nv,
         .tokens = (const char **)tokens,
         .token_ids = token_ids,
-        .bos_id = 0,
-        .eos_id = nv > 1 ? 1 : 0,
+        .bos_id = 1,
+        .eos_id = nv > 2 ? 2 : 0,
         .n_edges = n_edges,
         .rows = rows,
         .cols = cols,

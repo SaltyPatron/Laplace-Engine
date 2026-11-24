@@ -539,6 +539,137 @@ int merge(const char *conninfo,int npg,LoadStats *stats){
     lp_idmap_free(writer.registered);lp_idmap_free(writer.new_witnesses);
     lp_vec_free(&writer.touched_partitions);writer=(Loader){0};return 0;
 }
+/* Single-connection interactive turn publisher: reuses an idle/read-ended PGconn without spawning extra worker connections. */
+int lp_stage_publish_fast(PGconn *pg,Fold *f,const LoadWitness *roots,size_t nroots,File *files,int nfiles,LoadStats *st){
+    if(!pg)return 1;
+    if(!db_read_end(pg))return 1;
+    if(PQtransactionStatus(pg)!=PQTRANS_IDLE){
+        db_tx_try(pg,LP_SQL_TX_ROLLBACK,NULL,0);
+        if(PQtransactionStatus(pg)!=PQTRANS_IDLE)return 1;
+    }
+    PGconn *lane_conn=pg;
+    char ent_tbl[96],path_tbl[96];
+    memset(&writer,0,sizeof writer);
+    writer.from_ingest=1;
+    writer.ncopy=1;
+    writer.copy=&lane_conn;
+    writer.series=pg;
+    writer.known=lp_idmap_sized(sizeof(Published));
+    db_exec_contract(pg,LP_SQL_ENSURE_STAGE,NULL);
+    PGresult *xq=db_call(pg,LP_SQL_CURRENT_XACT,NULL);
+    if(!xq || PQntuples(xq)!=1 || PQgetisnull(xq,0,0)){if(xq)PQclear(xq);lp_idmap_free(writer.known);writer=(Loader){0};return 1;}
+    int64_t xid=col_i64(xq,0,0);PQclear(xq);
+    snprintf(ent_tbl,sizeof ent_tbl,"stage.lp_entity_%lld_0",(long long)xid);
+    snprintf(path_tbl,sizeof path_tbl,"stage.lp_path_%lld_0",(long long)xid);
+    writer.entity=(char (*)[96])ent_tbl;
+    writer.path=(char (*)[96])path_tbl;
+    snprintf(writer.delta,sizeof writer.delta,"stage.lp_delta_%lld",(long long)xid);
+    snprintf(writer.pending,sizeof writer.pending,"stage.lp_pending_%lld",(long long)xid);
+    snprintf(writer.witnesses,sizeof writer.witnesses,"stage.lp_witness_%lld",(long long)xid);
+    snprintf(writer.affected,sizeof writer.affected,"stage.lp_affected_%lld",(long long)xid);
+
+    db_tx(pg,LP_SQL_TX_BEGIN);
+    if(db_stage_create_pair(pg,ent_tbl,path_tbl)!=0 ||
+       db_stage_create_series(pg,writer.delta,writer.pending,writer.witnesses,writer.affected)!=0){
+        db_tx_try(pg,LP_SQL_TX_ROLLBACK,NULL,0);lp_idmap_free(writer.known);writer=(Loader){0};return 1;
+    }
+    const char *owned[6]={ent_tbl,path_tbl,writer.delta,writer.pending,writer.witnesses,writer.affected};
+    Args ownership={0};arg_i64(&ownership,xid);arg_text_array(&ownership,owned,6);
+    db_exec_contract(pg,LP_SQL_STAGE_OWN,&ownership);args_free(&ownership);
+    db_tx(pg,LP_SQL_TX_COMMIT);
+
+    table_kinds();
+    for(int i=0;i<nfiles;i++)for(uint64_t j=0;j<files[i].ev.n;j++){
+        const Event *event=&files[i].ev.e[j];Node *node=table_find(&event->claim);
+        if(node)node->kind|=(uint8_t)(1u<<(event->kind==EV_RECORD?LP_KIND_RECORD:node->len>=2?LP_KIND_CLAIM:LP_KIND_TUPLE));
+    }
+    TABLE_EACH(x) if(x->len<2)x->kind&=(uint8_t)~(1u<<LP_KIND_CLAIM);
+    LoadStats local={0};if(!st)st=&local;
+    prune(files,nfiles,st);
+    lp_vec(Row) selected={0};
+    TABLE_EACH(x)if(x->keep==1 || x->keep==2){
+        lp_mask lexical=tuple_mask(x);uint8_t annotations=x->keep==2?path_annotations(x):0;
+        if(x->keep==2 && !x->kind && !lexical && !annotations)continue;
+        uint64_t hilbert=0;
+        if(x->keep==1){lp_coord c;memcpy(c.m,x->m,sizeof c.m);hilbert=lp_hilbert4(&c);}
+        lp_push(&selected,((Row){.node=x,.hilbert=hilbert,.lexical=lexical,.annotations=annotations}));
+    }
+    size_t count=selected.n;Row *rows=selected.v;
+    if(count){
+        unsigned lanes=1;
+        size_t nodes=(size_t)table_end();
+        size_t *levels=malloc(nodes*sizeof *levels);
+        if(!levels || !lp_dag_levels(nodes,publication_child,&lanes,levels)){
+            free(levels);lp_vec_free(&selected);lp_idmap_free(writer.known);writer=(Loader){0};return 1;
+        }
+        for(size_t i=0;i<count;i++){
+            size_t depth=rows[i].node->keep==1?levels[rows[i].node-NODE]:1;
+            rows[i].wave=(uint32_t)depth;
+            rows[i].lane=0;
+        }
+        free(levels);
+        qsort(rows,count,sizeof *rows,hilbert_order);
+        for(size_t lo=0;lo<count;){
+            size_t hi=lo+1;while(hi<count && rows[hi].wave==rows[lo].wave)hi++;
+            copy_rows(pg,0,rows,lo,hi);
+            Args ma={0};arg_text(&ma,ent_tbl);arg_text(&ma,path_tbl);
+            char err[512];PGresult *q=db_call_try(pg,LP_SQL_MERGE_STAGE_DEFAULT,&ma,err,sizeof err);args_free(&ma);
+            if(!q){merge_failure(pg,ent_tbl,path_tbl,err);lp_vec_free(&selected);lp_idmap_free(writer.known);writer=(Loader){0};return 1;}
+            st->ent_rows+=(uint64_t)col_i64(q,0,0);st->phy_rows+=(uint64_t)col_i64(q,0,1);
+            PQclear(q);lo=hi;
+        }
+    }
+    lp_vec_free(&selected);
+    flush_series(f);
+
+    uint64_t admitted=0;
+    if(nroots>0 && roots){
+        db_tx(pg,LP_SQL_TX_BEGIN_RC);
+        writer.registered=lp_idmap_new();writer.new_witnesses=lp_idmap_new();
+        lp_id *wids=malloc(nroots*sizeof *wids);
+        for(size_t i=0;i<nroots;i++){wids[i]=roots[i].id;lp_idmap_put(writer.registered,wids+i,NULL);}
+        Args ea={0};arg_ids(&ea,wids,nroots);free(wids);
+        PGresult *eq=db_call(pg,LP_SQL_WITNESSES_EXISTING,&ea);
+        lp_idmap *known_w=lp_idmap_new();
+        for(int r=0;r<PQntuples(eq);r++)lp_idmap_put(known_w,col_id(eq,r,0),NULL);
+        for(size_t i=0;i<nroots;i++)if(lp_idmap_find(known_w,&roots[i].id)<0){
+            lp_idmap_put(writer.new_witnesses,&roots[i].id,NULL);writer.witness_changed=1;
+        }
+        lp_idmap_free(known_w);PQclear(eq);args_free(&ea);
+        lp_copy wcopy={0};db_copy_open_stage_witnesses(&wcopy,pg,writer.witnesses);
+        for(size_t i=0;i<nroots;i++){
+            lp_copy_row(&wcopy,3);lp_copy_id(&wcopy,&roots[i].id);
+            if(roots[i].has_lineage)lp_copy_id(&wcopy,&roots[i].lineage);else lp_copy_null(&wcopy);
+            lp_copy_f64(&wcopy,roots[i].trust);
+        }
+        copy_close(&wcopy);lp_buf_free(&wcopy.buf);
+        if(writer.series_changed || writer.witness_changed){
+            Args pa={0};arg_text(&pa,writer.pending);
+            arg_text(&pa,writer.affected);
+            if(lp_idmap_count(writer.new_witnesses))
+                arg_ids(&pa,lp_idmap_keys(writer.new_witnesses),lp_idmap_count(writer.new_witnesses));
+            else arg_null(&pa);
+            PGresult *pub=db_call(pg,LP_SQL_STAGE_PUBLISH_ATTESTATIONS,&pa);args_free(&pa);
+            if(!pub || PQntuples(pub)!=1 || PQgetisnull(pub,0,0)){
+                if(pub)PQclear(pub);db_tx_try(pg,LP_SQL_TX_ROLLBACK,NULL,0);
+                lp_idmap_free(writer.known);lp_idmap_free(writer.registered);lp_idmap_free(writer.new_witnesses);
+                writer=(Loader){0};return 1;
+            }
+            admitted=(uint64_t)col_i64(pub,0,0);PQclear(pub);
+        }
+        db_tx(pg,LP_SQL_TX_COMMIT);
+    }
+    db_tx(pg,LP_SQL_TX_BEGIN_RC);
+    db_stage_drop(pg,owned,6);
+    db_tx(pg,LP_SQL_TX_COMMIT);
+    st->attestations+=admitted;st->attestations_measured=1;
+    lp_idmap_free(writer.known);
+    if(writer.registered)lp_idmap_free(writer.registered);
+    if(writer.new_witnesses)lp_idmap_free(writer.new_witnesses);
+    writer=(Loader){0};
+    TABLE_EACH(x) x->keep=0;
+    return 0;
+}
 int cmd_merge(int argc,char **argv){
     const char *conninfo=laplace_db();
     int at=opts(argc,argv,(const Opt[]){ {.flag="-d",.kind='s',.at=&conninfo}, {0} });

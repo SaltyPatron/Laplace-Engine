@@ -431,7 +431,22 @@ static void test_mold_gguf_export(void){
 
     int64_t ti = lp_gguf_find_kv(g, "tokenizer.ggml.model");
     size_t tl = 0; const char *tm = lp_gguf_kv_str(g, (size_t)ti, &tl);
-    assert(ti >= 0 && tm && tl == 17 && !memcmp(tm, "laplace-blake3-v1", 17));
+    assert(ti >= 0 && tm && tl == 5 && !memcmp(tm, "llama", 5));
+
+    int64_t lsi = lp_gguf_find_kv(g, "laplace.tokenizer.scheme");
+    size_t lsl = 0; const char *lsm = lp_gguf_kv_str(g, (size_t)lsi, &lsl);
+    assert(lsi >= 0 && lsm && lsl == 17 && !memcmp(lsm, "laplace-blake3-v1", 17));
+
+    int64_t vsi = lp_gguf_find_kv(g, "laplace.vocab.size");
+    uint64_t vs = 0; assert(vsi >= 0 && lp_gguf_kv_u64(g, (size_t)vsi, &vs) && vs == V);
+
+    int64_t sci = lp_gguf_find_kv(g, "tokenizer.ggml.scores");
+    assert(sci >= 0 && lp_gguf_kv_array_type(g, (size_t)sci) == LP_GGUF_TYPE_FLOAT32);
+    assert(lp_gguf_kv_array_len(g, (size_t)sci) == V);
+
+    int64_t tti = lp_gguf_find_kv(g, "tokenizer.ggml.token_type");
+    assert(tti >= 0 && lp_gguf_kv_array_type(g, (size_t)tti) == LP_GGUF_TYPE_INT32);
+    assert(lp_gguf_kv_array_len(g, (size_t)tti) == V);
 
     int64_t bi = lp_gguf_find_kv(g, "laplace.vocab.blake3_ids");
     assert(bi >= 0 && lp_gguf_kv_array_type(g, (size_t)bi) == LP_GGUF_TYPE_UINT8);

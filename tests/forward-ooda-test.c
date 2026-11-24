@@ -26,7 +26,7 @@ static void test_firmware_suite(void){
     snprintf(fdir, sizeof fdir, "%s/../firmware", root);
 
     static const struct { const char *name; int min_ooda, tie, shape; } CASES[] = {
-        { "program.firmware",      0, FW_TIE_FIRST, FW_FRECHET },
+        { "program.firmware",      1, FW_TIE_FIRST, FW_FRECHET },
         { "coding.firmware",       3, FW_TIE_FIRST, FW_FRECHET },
         { "deductive.firmware",    2, FW_TIE_ASK,   FW_FRECHET },
         { "inductive.firmware",    1, FW_TIE_FIRST, FW_DTW },
@@ -47,6 +47,13 @@ static void test_firmware_suite(void){
         assert(fw.shape == CASES[i].shape);
         assert(fw.multi_tier == 1);
         assert(fw.combine_clauses == 1);
+    }
+
+    {
+        Firmware short_fw = { 0 };
+        char short_err[512] = "";
+        assert(firmware_load_checked("deductive", FW_PULL, &short_fw, short_err, sizeof short_err) == 0 && short_err[0] == 0);
+        assert(short_fw.id.ready == 1);
     }
 
     char chess_fw[4300];
@@ -468,6 +475,18 @@ static void test_live_db(const AbiVtable *abi){
         assert(resp.text && resp.text_len > 0);
         abi->turn_free(&resp);
         printf("[PASS] Non-muted polysemous turn produced non-empty response under deductive firmware\n");
+    }
+
+    /* Refused metadata labels (Synset/vaframe) must not win under deductive firmware on real query */
+    {
+        LpEngineTurnRequest tr = { .model_name = "deductive", .prompt = "How does lightning work?", .read_only = 1, .envelope = &fast_env };
+        LpEngineTurnResponse resp = { 0 };
+        assert(abi->turn(h, &tr, &resp) == 0);
+        assert(resp.text && resp.text_len > 0);
+        assert(strstr(resp.text, "Synset") == NULL && strstr(resp.text, "vaframe") == NULL);
+        printf("[PASS] Live deductive turn filtered metadata labels (probes=%llu, wall=%.2f ms, text=\"%s\")\n",
+               (unsigned long long)resp.work.db_probes, (double)resp.work.wall_us / 1000.0, resp.text);
+        abi->turn_free(&resp);
     }
 
     /* Closed-loop OODA icx self-repair against live DB */

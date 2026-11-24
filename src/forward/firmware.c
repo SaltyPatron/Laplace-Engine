@@ -75,6 +75,21 @@ static int firmware_parse(const char *path, int op, Firmware *out, char *err, si
     }
     snprintf(fw.path, sizeof fw.path, "%s", path && *path ? path : firmware_path());
     FILE *f = fopen(fw.path, "r");
+    if (!f && path && *path && !strchr(path, '/') && !strchr(path, '\\')) {
+        char base[4200];
+        snprintf(base, sizeof base, "%s", firmware_path());
+        char *slash = strrchr(base, '/'), *bslash = strrchr(base, '\\');
+        if (bslash > slash) slash = bslash;
+        if (slash) {
+            *slash = 0;
+            size_t plen = strlen(path);
+            int has_ext = plen > 9 && strcmp(path + plen - 9, ".firmware") == 0;
+            char alt[4300];
+            snprintf(alt, sizeof alt, "%s/%s%s", base, path, has_ext ? "" : ".firmware");
+            f = fopen(alt, "r");
+            if (f) snprintf(fw.path, sizeof fw.path, "%s", alt);
+        }
+    }
     if (!f) {
         char alt[4200];
         snprintf(alt, sizeof alt, "%s/program.firmware", fw.path);

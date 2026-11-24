@@ -357,16 +357,86 @@ int lp_mold_export(const LpMoldSpec *spec){
         return -1;
     }
 
+    size_t nl = 0; /* unused placeholder removed? */ (void)nl;
+    const char **ggml_tokens = malloc(sizeof(char *) * n);
+    char **owned_tokens = calloc(n, sizeof(char *));
+    float *scores = malloc(sizeof(float) * n);
+    int32_t *tok_types = malloc(sizeof(int32_t) * n);
+    lp_strmap *seen_tok = lp_strmap_sized(sizeof(uint8_t));
+    uint32_t unk_id = (spec->bos_id != 0) ? 0u : (uint32_t)spec->eos_id;
+    int found_unk = 0;
+    for (size_t i = 0; i < n; i++) {
+        const char *raw = (spec->tokens && spec->tokens[i] && *spec->tokens[i]) ? spec->tokens[i] : NULL;
+        const char *chosen = raw;
+        if (!chosen) {
+            char tmp[48];
+            uint64_t hi = 0;
+            memcpy(&hi, ids16 + i * 16u, sizeof hi);
+            snprintf(tmp, sizeof tmp, "<lp:%016llx>", (unsigned long long)hi);
+            owned_tokens[i] = strdup(tmp);
+            chosen = owned_tokens[i];
+        }
+        bool fresh = false;
+        lp_strmap_get(seen_tok, chosen, strlen(chosen), &fresh);
+        if (!fresh) {
+            char uniq[96];
+            snprintf(uniq, sizeof uniq, "%s#%zu", chosen, i);
+            for (size_t salt = 0; ; salt++) {
+                bool ufresh = false;
+                lp_strmap_get(seen_tok, uniq, strlen(uniq), &ufresh);
+                if (ufresh) break;
+                snprintf(uniq, sizeof uniq, "<lp:%zu:%zu>", i, salt);
+            }
+            free(owned_tokens[i]);
+            owned_tokens[i] = strdup(uniq);
+            chosen = owned_tokens[i];
+        }
+        ggml_tokens[i] = chosen;
+        size_t clen = strlen(chosen);
+        int is_byte = (clen == 6 && chosen[0] == '<' && chosen[1] == '0' && chosen[2] == 'x' && chosen[5] == '>');
+        int is_ctrl = (!strcmp(chosen, "<s>") || !strcmp(chosen, "</s>")
+                       || !strcmp(chosen, "<bos>") || !strcmp(chosen, "<eos>")
+                       || i == (size_t)spec->bos_id || i == (size_t)spec->eos_id);
+        int is_unk = (!strcmp(chosen, "<unk>") || (spec->bos_id != 0 && i == 0u && !is_ctrl));
+        if (!found_unk && !strcmp(chosen, "<unk>")) {
+            unk_id = (uint32_t)i;
+            found_unk = 1;
+        }
+        if (is_unk) {
+            tok_types[i] = 2; /* LLAMA_TOKEN_TYPE_UNKNOWN */
+            scores[i] = 0.0f;
+        } else if (is_ctrl) {
+            tok_types[i] = 3; /* LLAMA_TOKEN_TYPE_CONTROL */
+            scores[i] = 0.0f;
+        } else if (is_byte) {
+            tok_types[i] = 6; /* LLAMA_TOKEN_TYPE_BYTE */
+            scores[i] = 0.0f;
+        } else {
+            tok_types[i] = 1; /* LLAMA_TOKEN_TYPE_NORMAL */
+            scores[i] = -(float)i;
+        }
+    }
+    lp_strmap_free(seen_tok);
+
     const char *mname = (spec->name && *spec->name) ? spec->name : "laplace-molded";
     int rc = 0;
     rc |= lp_gguf_writer_add_str(gw, "general.architecture", "llama");
     rc |= lp_gguf_writer_add_str(gw, "general.name", mname);
     rc |= lp_gguf_writer_add_u32(gw, "general.file_type", spec->f16_weights ? 1u : 0u);
-    rc |= lp_gguf_writer_add_str(gw, "tokenizer.ggml.model", "laplace-blake3-v1");
-    rc |= lp_gguf_writer_add_str_array(gw, "tokenizer.ggml.tokens", spec->tokens, n);
+    rc |= lp_gguf_writer_add_str(gw, "tokenizer.ggml.model", "llama");
+    rc |= lp_gguf_writer_add_str_array(gw, "tokenizer.ggml.tokens", ggml_tokens, n);
+    rc |= lp_gguf_writer_add_f32_array(gw, "tokenizer.ggml.scores", scores, n);
+    rc |= lp_gguf_writer_add_i32_array(gw, "tokenizer.ggml.token_type", tok_types, n);
+    rc |= lp_gguf_writer_add_u32(gw, "tokenizer.ggml.unk_token_id", unk_id);
     rc |= lp_gguf_writer_add_u32(gw, "tokenizer.ggml.bos_token_id", (uint32_t)spec->bos_id);
     rc |= lp_gguf_writer_add_u32(gw, "tokenizer.ggml.eos_token_id", (uint32_t)spec->eos_id);
+    rc |= lp_gguf_writer_add_u32(gw, "tokenizer.ggml.padding_token_id", (uint32_t)spec->eos_id);
+    rc |= lp_gguf_writer_add_bool(gw, "tokenizer.ggml.add_space_prefix", 0);
+    rc |= lp_gguf_writer_add_str(gw, "laplace.tokenizer.scheme", "laplace-blake3-v1");
+    rc |= lp_gguf_writer_add_u32(gw, "laplace.vocab.size", (uint32_t)n);
     rc |= lp_gguf_writer_add_u8_array(gw, "laplace.vocab.blake3_ids", ids16, 16u * n);
+    for (size_t i = 0; i < n; i++) free(owned_tokens[i]);
+    free(owned_tokens); free(ggml_tokens); free(scores); free(tok_types);
     rc |= lp_gguf_writer_add_u32(gw, "laplace.mold.embedding_rank", (uint32_t)rank);
     rc |= lp_gguf_writer_add_u32(gw, "laplace.mold.fisher_total_bp", 10000u);
     rc |= lp_gguf_writer_add_str_array(gw, "laplace.mold.witnesses", (const char *const *)witnesses, n_witness);

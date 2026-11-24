@@ -320,6 +320,7 @@ Attested *lp_provenance_of(PGconn *, const lp_id *, size_t, int files, int *nout
 int standings_replay(PGconn *pg, const lp_id *claims, size_t n, uint64_t *played, uint64_t *orphaned);   /* their standings again, from the witnesses that hold them */
 int db_all_recorded(const char *conninfo, const lp_id *ids, const uint8_t *tiers, uint64_t n);   /* every one of them recorded (in its tier's partition) */
 int merge(const char *conninfo, int npg, LoadStats *stats); /* source publication and its measured assertions */
+int lp_stage_publish_fast(PGconn *pg, Fold *f, const LoadWitness *roots, size_t nroots, File *files, int nfiles, LoadStats *st);
 uint8_t *db_recorded(const char *conninfo, const lp_id *ids, uint64_t n);   /* which are recorded, real tables or stage: nothing written */
 int cmd_merge(int argc, char **argv);
 int cmd_projection(int argc, char **argv);

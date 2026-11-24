@@ -128,11 +128,11 @@ static void apply_salience_roles(State *st, const double *best_upos_score){
             double lift = 0.75 + 0.25 * sn;
             if (lift > st->role[i]) st->role[i] = lift;
         } else if (st->role_votes[i] == 0 && (!best_upos_score || best_upos_score[i] < 0.0)) {
-            double damped = st->role[i] * (0.20 + 0.80 * sn);
+            double damped = st->role[i] * (sn < 0.25 ? (0.10 + 0.50 * sn) : (0.20 + 0.80 * sn));
             if (st->polarity[i] < 0 && damped < 0.35) damped = 0.35;
             st->role[i] = damped;
         } else if (sn < 0.25 && st->salience[i] < fw->salience_floor && st->role[i] <= 0.55) {
-            double damped = st->role[i] * (0.35 + 0.65 * sn);
+            double damped = st->role[i] * (0.10 + 0.50 * sn);
             if (st->polarity[i] < 0 && damped < 0.35) damped = 0.35;
             st->role[i] = damped;
         }
@@ -442,9 +442,10 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
         if (lp_is_internal_metadata_path(st->c, h[r].path, (size_t)h[r].path_len)) continue;
         path_into(&rn, lp_path_of(h[r].path, (size_t)h[r].path_len));
         if (rn.n < 2 || !head_read(fw, rn.v, rn.n)) continue;
-        if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
+        if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->handle) ||
+                          lp_id_eq(&rn.v[0], &st->prompt) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
         int other = lp_tuple_other(rn.v, rn.n, &keys[s]);
-        if (other < 0 || lp_id_eq(&rn.v[other], &keys[s]) || lp_id_eq(&rn.v[other], &st->prompt)) continue;
+        if (other < 0 || lp_id_eq(&rn.v[other], &keys[s]) || lp_id_eq(&rn.v[other], &st->prompt) || lp_id_eq(&rn.v[other], &st->handle)) continue;
         lp_id rel = rn.n >= 3 ? rn.v[1] : keys[s];
         int flip = 0;
         for (size_t p = 1; p + 1 < rn.n && !flip; p++) flip = is_neg_rel(st, &rn.v[p]);
@@ -584,9 +585,10 @@ void couple_ingest_holds(State *st, Field *fd, const Hold *h, int nh, const int 
             if (!h[i].stood) continue;
             path_into(&rn, lp_path_of(h[i].path, (size_t)h[i].path_len));
             if (rn.n < 2 || !head_read(fw, rn.v, rn.n)) { st->refused += !head_read(fw, rn.v, rn.n); continue; }
-            if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
+            if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->handle) ||
+                              lp_id_eq(&rn.v[0], &st->prompt) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
             int other = lp_tuple_other(rn.v, rn.n, &keys[s]);
-            if (other < 0 || lp_id_eq(&rn.v[other], &st->prompt)) continue;
+            if (other < 0 || lp_id_eq(&rn.v[other], &st->prompt) || lp_id_eq(&rn.v[other], &st->handle)) continue;
             lp_id rel = rn.n >= 3 ? rn.v[1] : keys[s];
             int flip_occ = 0;
             for (size_t p = 1; p + 1 < rn.n && !flip_occ; p++) flip_occ = is_neg_rel(st, &rn.v[p]);
