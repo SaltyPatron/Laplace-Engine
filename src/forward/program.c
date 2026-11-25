@@ -819,13 +819,12 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
             fprintf(st->trace_out, "   (%.1f ms)\n", (now() - tc) * 1000);
         }
         const lp_highway *hw_chk = lp_highway_map(NULL);
-        int salience_grounded = is_salience_grounded(st, &fd, 0);
         int tight_env = (st->envelope && (st->envelope->preset == LP_ENVELOPE_FAST || (st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 100000)));
-        int multi_ready = has_multi_anchor_answer(st, &fd);
-        int has_bridges = has_unexpanded_bridge_cells(&fd, hw_chk, 0);
-        int layer_done = ((salience_grounded && !has_bridges) || (tight_env && fd.n > 0)) && multi_ready;
+        int std_or_fast = (st->envelope && st->envelope->preset <= LP_ENVELOPE_STANDARD);
+        int layer_done = (tight_env && fd.n > 0)
+            || (std_or_fast && !has_unexpanded_bridge_cells(&fd, hw_chk, 0) && has_multi_anchor_answer(st, &fd) && is_salience_grounded(st, &fd, 1));
         for (int round = 1; round < fw.rounds && !layer_done && !envelope_hit(st); round++) {
-            if (st->envelope && st->work.db_probes + 4 >= st->envelope->max_db_probes) break;
+            if (st->envelope && st->envelope->max_db_probes > 0 && st->work.db_probes + 4 >= st->envelope->max_db_probes) break;
             lp_idmap *hm = lp_idmap_sized(sizeof(HeadStat));
             int fresh_n = layer_round(st, &fd, round, hm);
             if (st->trace_out) heads_say(st, hm, "heads");
@@ -835,7 +834,7 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
         }
         st->npos = st->nocc;
         int grounded_ready = is_salience_grounded(st, &fd, 1) && has_multi_anchor_answer(st, &fd);
-        if (!layer_done && !grounded_ready && !tight_env && (!st->envelope || (st->work.db_probes + 3 < st->envelope->max_db_probes && !envelope_hit(st))))
+        if (!layer_done && !grounded_ready && !tight_env && (!st->envelope || !st->envelope->max_db_probes || st->work.db_probes + 3 < st->envelope->max_db_probes) && !envelope_hit(st))
             walk(st, 0, st->nocc);
         if (!layer_done && !grounded_ready && !tight_env && !envelope_hit(st)) context(st, 0, st->nocc);
     }
@@ -894,7 +893,7 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
     if (st->trace_out) fprintf(st->trace_out, "ROUTE      hops %d, fan %d, k %g, lambda %g, emit at most %d, from %d centre%s\n", fw.hops, fw.fan, fw.k, fw.lambda, max_emit_eff, ncentre, ncentre == 1 ? "" : "s");
     int can_skip_scan = is_salience_grounded(st, &fd, 1) && has_multi_anchor_answer(st, &fd);
     if (!can_skip_scan && !(st->envelope && (st->envelope->preset == LP_ENVELOPE_FAST || (st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 100000)) && fd.n > 0) &&
-        !envelope_hit(st) && ncentre > 0 && (!st->envelope || st->work.db_probes + 4 < st->envelope->max_db_probes))
+        !envelope_hit(st) && ncentre > 0 && (!st->envelope || !st->envelope->max_db_probes || st->work.db_probes + 4 < st->envelope->max_db_probes))
         scan(st, &fd, centre, ncentre);
     if (st->trace_out) fprintf(st->trace_out, "COMPOSE    a frontier of %d\n", fd.n);
 

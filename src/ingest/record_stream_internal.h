@@ -4,6 +4,7 @@
 #include "record_worker.h"
 #include "record_select.h"
 #include "context_stream.h"
+#include "laplace/laplace.h"
 #include <stdio.h>
 
 enum { RECORD_WINDOW = 1024, RECORDS_PER_LANE = 16, MAX_RECORD_LANES = RECORD_WINDOW / RECORDS_PER_LANE };
@@ -14,7 +15,8 @@ typedef struct DeferredJob {
 } DeferredJob;
 
 typedef struct {
-    FILE *operands, *products; DeferredJob *first, *last, *free;
+    lp_buf operands_buf, products_buf;
+    DeferredJob *first, *last, *free;
     uint64_t waiting, bound_revision, evaluated_revision;
     SayScratch jobs, read;
 } DeferredRecords;
