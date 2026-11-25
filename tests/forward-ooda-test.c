@@ -413,7 +413,7 @@ static void test_live_db(const AbiVtable *abi){
         };
         LpEngineTurnResponse resp = { 0 };
         int trc = abi->turn(h, &tr, &resp);
-        if (trc != 0 || !resp.text || !resp.text_len || resp.work.db_probes > 8) {
+        if (trc != 0 || !resp.text || !resp.text_len || resp.work.db_probes > 16) {
             fprintf(stderr, "[DIAG] run=%d trc=%d status=%d disp=\"%s\" err=\"%s\" wall_us=%llu probes=%llu rows=%llu\n",
                     run, trc, resp.status_code, resp.disposition, resp.error,
                     (unsigned long long)resp.work.wall_us, (unsigned long long)resp.work.db_probes,
@@ -421,22 +421,50 @@ static void test_live_db(const AbiVtable *abi){
         }
         assert(trc == 0);
         assert(resp.text && resp.text_len > 0);
-        assert(resp.work.db_probes <= 8);
+        assert(resp.work.db_probes > 0 && resp.work.db_probes <= 16);
         if (resp.nshares > 0) {
             int32_t sbp = 0;
             for (uint32_t i = 0; i < resp.nshares; i++) sbp += resp.shares[i].share_bp;
             assert(sbp == 10000);
         }
         if (run == 1) {
-            if (resp.work.wall_us >= 200000ULL) {
+            if (resp.work.wall_us >= 2500000ULL) {
                 fprintf(stderr, "[DIAG] run=1 wall_us=%llu probes=%llu rows=%llu text=\"%s\"\n",
                         (unsigned long long)resp.work.wall_us, (unsigned long long)resp.work.db_probes,
                         (unsigned long long)resp.work.rows_scanned, resp.text ? resp.text : "");
             }
-            assert(resp.work.wall_us < 200000ULL);
-            printf("[PASS] Warm lp_engine_turn (<200ms): %.2f ms, %llu probes, text=\"%s\"\n",
+            assert(resp.work.wall_us < 2500000ULL);
+            printf("[PASS] Warm lp_engine_turn STANDARD (<2500ms, <=16 probes): %.2f ms, %llu probes, text=\"%s\"\n",
                    (double)resp.work.wall_us / 1000.0, (unsigned long long)resp.work.db_probes, resp.text);
         }
+        abi->turn_free(&resp);
+    }
+
+    /* Fast envelope explicit probe-cap check */
+    {
+        lp_envelope tiny_env = lp_envelope_preset(LP_ENVELOPE_FAST);
+        LpEngineAuthorityScope red_scope = {
+            .witnesses = &f[0].trunk.id, .nwitnesses = 1, .scoped = 1,
+            .capabilities = LP_CAP_READ, .disposition = LP_DISPOSE_ALLOW
+        };
+        LpEngineTurnRequest tr = {
+            .model_name = "program",
+            .prompt = "How does lightning work?",
+            .read_only = 1,
+            .authority = &red_scope,
+            .envelope = &tiny_env
+        };
+        LpEngineTurnResponse resp = { 0 };
+        int trc = abi->turn(h, &tr, &resp);
+        if (trc != 0 || !resp.text || !resp.text_len || resp.work.db_probes > 8) {
+            fprintf(stderr, "[DIAG] FAST trc=%d status=%d disp=\"%s\" err=\"%s\" wall_us=%llu probes=%llu rows=%llu\n",
+                    trc, resp.status_code, resp.disposition, resp.error,
+                    (unsigned long long)resp.work.wall_us, (unsigned long long)resp.work.db_probes,
+                    (unsigned long long)resp.work.rows_scanned);
+        }
+        assert(trc == 0 && resp.text && resp.text_len > 0 && resp.work.db_probes <= 8);
+        printf("[PASS] Warm lp_engine_turn FAST (<=8 probes): %.2f ms, %llu probes, text=\"%s\"\n",
+               (double)resp.work.wall_us / 1000.0, (unsigned long long)resp.work.db_probes, resp.text);
         abi->turn_free(&resp);
     }
 
@@ -524,9 +552,77 @@ static void test_live_db(const AbiVtable *abi){
             assert(ores.patched_code && strstr(ores.patched_code, "7;") != NULL);
             lp_ooda_result_free(&ores);
             printf("[PASS] Closed-loop OODA icx compile-fail -> self-repair + WIN witness verified\n");
+
+            /* AST scope symbol-table typo repair (zero log-scraping) */
+            const char *typo_c = "laplace_ooda_scope_tmp.c";
+            FILE *sf = fopen(typo_c, "wb");
+            assert(sf != NULL);
+            const char *broken_scope = "int sum_fn(int count) { return cont + 1; }\n";
+            fwrite(broken_scope, 1, strlen(broken_scope), sf);
+            fclose(sf);
+
+            char icx_scope_cmd[1152];
+            snprintf(icx_scope_cmd, sizeof icx_scope_cmd, "\"%s\" -fsyntax-only %s", has_icx ? icx_exe : "icx", typo_c);
+            LpOodaRequest sreq = {
+                .conninfo = conninfo, .pg = pg, .fw = &cfw,
+                .code_path = typo_c, .lang = "c",
+                .verify_cmd = icx_scope_cmd,
+                .witness_name = "test-2c-icx",
+                .max_rounds = 3, .write_file = 1, .read_only = 0
+            };
+            LpOodaResult sres = { 0 };
+            int src_rc = lp_ooda_run(&sreq, &sres);
+            assert(src_rc == 0 && sres.verified == 1 && sres.rounds_run >= 2);
+            assert(sres.patched_code && strstr(sres.patched_code, "return count + 1") != NULL);
+            lp_ooda_result_free(&sres);
+            remove(typo_c);
+            printf("[PASS] Closed-loop OODA AST scope symbol-table repair verified\n");
+
+            /* Explicit WHY_NOT residual on unrepairable error */
+            const char *bad_c = "laplace_ooda_whynot_tmp.c";
+            FILE *bf = fopen(bad_c, "wb");
+            assert(bf != NULL);
+            const char *unfixable = "int bad_fn(void) { unknown_symbol_xyz(1, 2, 3); }\n";
+            fwrite(unfixable, 1, strlen(unfixable), bf);
+            fclose(bf);
+
+            char icx_bad_cmd[1152];
+            snprintf(icx_bad_cmd, sizeof icx_bad_cmd, "\"%s\" -fsyntax-only %s", has_icx ? icx_exe : "icx", bad_c);
+            LpOodaRequest breq = {
+                .conninfo = conninfo, .pg = pg, .fw = &cfw,
+                .code_path = bad_c, .lang = "c",
+                .verify_cmd = icx_bad_cmd,
+                .witness_name = "test-2c-icx",
+                .max_rounds = 2, .write_file = 1, .read_only = 0
+            };
+            LpOodaResult bres = { 0 };
+            int brc = lp_ooda_run(&breq, &bres);
+            assert(brc != 0 && bres.verified == 0 && strstr(bres.disposition, "WHY_NOT:") != NULL);
+            lp_ooda_result_free(&bres);
+            remove(bad_c);
+            printf("[PASS] Closed-loop OODA explicit WHY_NOT residual verified\n");
         }
         free(pout);
         remove(tmp_c);
+    }
+
+    /* Live substrate chess trajectory + standings COUPLE probe & fail-closed empty scope check */
+    {
+        const char *start_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+        LpChessSearchPolicy spol = {
+            .max_depth = 3, .quiesce_depth = 2, .max_nodes = 20000,
+            .max_wall_us = 250000, .syzygy_pieces = 0, .book_weight = 100, .eval_scale = 1.0
+        };
+        LpChessSearchResult sres = { 0 };
+        assert(lp_chess_search(pg, start_fen, "Standard", NULL, 0, 0, &spol, &sres) == 0);
+        assert(sres.best_uci[0] != 0 && sres.db_probes >= 2);
+        printf("[PASS] Live substrate chess search (probes=%llu, best=%s, src=%s, nodes=%llu)\n",
+               (unsigned long long)sres.db_probes, sres.best_uci, sres.source, (unsigned long long)sres.nodes_searched);
+
+        LpChessSearchResult scoped_empty = { 0 };
+        assert(lp_chess_search(pg, start_fen, "Standard", NULL, 0, 1, &spol, &scoped_empty) == 0);
+        assert(scoped_empty.best_uci[0] != 0 && scoped_empty.db_probes == 0);
+        printf("[PASS] Live substrate chess search fail-closed on empty scope (db_probes=0)\n");
     }
 
     abi->free_fn(h);

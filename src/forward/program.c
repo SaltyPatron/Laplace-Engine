@@ -102,7 +102,7 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
             st->witness_scope, st->nwitness_scope, st->witness_scoped, hub, &nh);
         st->trips++; st->work.db_probes++; st->work.rows_scanned += (uint64_t)nh;
 
-        typedef struct { lp_id target, from, entity, via, rel; lp_rating r; double g; Bits sup, nsup; int flip; uint32_t hops; } ScanPush;
+        typedef struct { lp_id target, from, entity, via, rel; lp_rating r; double g; Bits sup, nsup; int flip, is_bridge; uint32_t hops; } ScanPush;
         ScanPush *pushes = malloc(sizeof(ScanPush) * (size_t)(nh ? nh : 1));
         lp_id *tids = malloc(sizeof(lp_id) * (size_t)(nh ? nh : 1));
         int npush = 0;
@@ -124,10 +124,13 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
             int flip = 0;
             for (size_t p = 1; p + 1 < rn.n && !flip; p++)
                 for (int ni = 0; ni < fw->nnegate_relation && !flip; ni++) flip = lp_id_eq(&fw->id.negate_relation[ni], &rn.v[p]);
+            int is_bridge = (rn.n >= 3 && is_lexical_sense_rel(st, &rel))
+                ? (((size_t)other == rn.n - 1) ? 1 : (other == 0 ? -1 : 0))
+                : 0;
             tids[npush] = rn.v[other];
             pushes[npush++] = (ScanPush){
                 rn.v[other], at->id, hh[r].entity, at->id, rel, rt, cost,
-                ca ? ca->support : (Bits){ 0 }, ca ? ca->neg_support : (Bits){ 0 }, flip, at->hops + 1
+                ca ? ca->support : (Bits){ 0 }, ca ? ca->neg_support : (Bits){ 0 }, flip, is_bridge, at->hops + 1
             };
         }
         double *pts = (has_goal && npush > 0) ? malloc(sizeof(double) * 4 * (size_t)npush) : NULL;
@@ -145,6 +148,8 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
             }
             lp_frontier_reach(fr, &sp->target, &sp->from, &sp->entity, sp->g, h_est, sp->hops);
             Cell *cx = cell(fd, &sp->target); cx->routes[R_SCAN]++;
+            if (sp->is_bridge > 0) cx->bridge = 1;
+            else if (sp->is_bridge < 0) cx->bridge = 0;
             for (int w = 0; w < MAXOCC / 64; w++) {
                 cx->support.w[w] |= (sp->flip ? sp->nsup.w[w] : sp->sup.w[w]);
                 cx->neg_support.w[w] |= (sp->flip ? sp->sup.w[w] : sp->nsup.w[w]);
@@ -287,7 +292,7 @@ static void readings_build(State *st, Field *fd, Bind *bind, Readings *R){
         if (!st->composed[i] || st->role[i] <= 0.0) continue;
         for (int z = 0; z < fd->n; z++) {
             const Cell *x = &fd->c[z]; int list; uint32_t slot;
-            if (!x->routes[R_CLAIM] || !((x->support.w[i >> 6] >> (i & 63)) & 1) || !reading_of(R->h, &x->id, &list, &slot)) continue;
+            if ((!x->routes[R_CLAIM] && !x->routes[R_LAYER]) || !((x->support.w[i >> 6] >> (i & 63)) & 1) || !reading_of(R->h, &x->id, &list, &slot)) continue;
             if (lp_highway_bank_of(R->h, &x->rel, NULL)) continue;
             size_t c_ = (size_t)cc; lp_reserve((void **)&R->cand, &c_, (size_t)R->nc + 1, sizeof(Cand)); cc = (int)c_;
             R->cand[R->nc++] = (Cand){ z, i, list, slot };
@@ -511,12 +516,59 @@ static void append_out(char **out, size_t *outn, const char *tx, int is_follow, 
     (*out)[*outn] = 0;
 }
 
+static int is_intermediate_chain_rel(const Firmware *fw, const lp_id *rel){
+    for (int a = 0; a < fw->nalt; a++) {
+        for (int j = 0; j + 1 < fw->nchain[a]; j++) {
+            if (lp_id_eq(rel, &fw->id.chain[a][j])) return 1;
+        }
+    }
+    return 0;
+}
+
+static int is_realizable_answer_cell(const State *st, const lp_highway *hw, const Cell *x){
+    if (!x || x->hub || (x->segment && !x->has_r && !x->routes[R_CLAIM] && !x->routes[R_LAYER] && !x->routes[R_SCAN])) return 0;
+    if (x->bridge || (x->has_r && is_intermediate_chain_rel(st->fw, &x->rel))) return 0;
+    if (lp_id_eq(&x->id, &st->prompt) || lp_id_eq(&x->id, &st->handle)) return 0;
+    for (int i = 0; i < st->nocc; i++) if (lp_id_eq(&st->occ[i], &x->id)) return 0;
+    for (int k = 0; k < st->nspans; k++) if (lp_id_eq(&st->spans[k], &x->id)) return 0;
+    if (hw && lp_highway_bank_of(hw, &x->id, NULL)) return 0;
+    int list; uint32_t slot;
+    if (hw && reading_of(hw, &x->id, &list, &slot)) return 0;
+    return 1;
+}
+
+static int has_unexpanded_bridge_cells(const Field *fd, const lp_highway *hw, int layer){
+    if (!fd) return 0;
+    for (int z = 0; z < fd->n; z++) {
+        const Cell *x = &fd->c[z];
+        if (x->hub || x->layer != layer) continue;
+        if (x->bridge) return 1;
+        int list; uint32_t slot;
+        if (hw && reading_of(hw, &x->id, &list, &slot)) return 1;
+    }
+    return 0;
+}
+
+static int is_lexical_tuple_id(const State *st, const lp_highway *hw, const lp_id *id){
+    if (!st || st->lexical.np <= 0 || !st->rd || !id) return 0;
+    lp_id parts[16];
+    size_t np = reader_parts(st->rd, id, parts, 16);
+    if (np != (size_t)st->lexical.np) return 0;
+    if (!hw) return 1;
+    int list; uint32_t slot;
+    if (st->lexical.concept >= 0 && (size_t)st->lexical.concept < np && reading_of(hw, &parts[st->lexical.concept], &list, &slot)) return 1;
+    if (st->lexical.lang >= 0 && (size_t)st->lexical.lang < np && lp_highway_bank_of(hw, &parts[st->lexical.lang], NULL)) return 1;
+    return 0;
+}
+
 static int is_salience_grounded(const State *st, const Field *fd, int include_layer){
     if (!fd || fd->n <= 0) return 0;
+    const lp_highway *hw = lp_highway_map(NULL);
     Bits covered = { 0 };
     for (int z = 0; z < fd->n; z++) {
         const Cell *x = &fd->c[z];
-        if (x->hub || (!x->has_r && !x->routes[R_CLAIM] && !(include_layer && x->routes[R_LAYER]))) continue;
+        if (!x->has_r && !x->routes[R_CLAIM] && !(include_layer && x->routes[R_LAYER]) && !x->routes[R_SCAN]) continue;
+        if (!is_realizable_answer_cell(st, hw, x)) continue;
         for (int w = 0; w < MAXOCC / 64; w++) covered.w[w] |= x->support.w[w];
     }
     int owed_all = owed(st, &st->open, &st->open);
@@ -531,6 +583,24 @@ static int is_salience_grounded(const State *st, const Field *fd, int include_la
     return (double)owed_cov >= (1.0 - st->fw->enough) * (double)owed_all;
 }
 
+static int has_multi_anchor_answer(const State *st, const Field *fd){
+    Bits anc = { 0 };
+    for (int i = 0; i < st->nocc; i++) {
+        if (!st->composed[i] || !((st->open.w[i >> 6] >> (i & 63)) & 1)) continue;
+        if (st->role[i] >= 0.75) bit_set(&anc, i);
+    }
+    if (bit_count_and(&anc, &anc) < 2) return 1;
+    const lp_highway *hw = lp_highway_map(NULL);
+    for (int z = 0; z < fd->n; z++) {
+        const Cell *x = &fd->c[z];
+        if (!x->has_r && !x->routes[R_CLAIM] && !x->routes[R_LAYER] && !x->routes[R_SCAN]) continue;
+        if (!is_realizable_answer_cell(st, hw, x)) continue;
+        if (bit_count_and(&x->support, &anc) < 2) continue;
+        return 1;
+    }
+    return 0;
+}
+
 int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
     if (!req || !out || !req->fw || !req->prompt_text || !req->prompt_len) return 2;
     memset(out, 0, sizeof *out);
@@ -543,7 +613,10 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
     if (req->envelope && req->envelope->max_tokens_out > 0 && (int)req->envelope->max_tokens_out < max_emit_eff)
         max_emit_eff = (int)req->envelope->max_tokens_out;
     if (req->envelope && req->envelope->max_rows_scanned > 0) {
-        if (fw.fan > 256) fw.fan = 256;
+        int min_fan = (req->envelope->preset == LP_ENVELOPE_FAST) ? 512 : 1024;
+        int env_fan = (int)(req->envelope->max_rows_scanned / 16ull);
+        if (env_fan < min_fan) env_fan = min_fan;
+        if (fw.fan > env_fan) fw.fan = env_fan;
         if (fw.walk_fan > 128) fw.walk_fan = 128;
         if (fw.nearest > 64) fw.nearest = 64;
     }
@@ -566,6 +639,7 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
     st->nwitness_scope = req->nwitness_scope;
     st->witness_scoped = req->witness_scoped;
     st->envelope = req->envelope;
+    if (fw.lexical[0][0] && !st->lexical.np) lexicalization_of(st->c, &fw, &st->lexical);
 
     size_t occurrences = 0;
     Ref pr = text_occurrences(CTX[0], req->prompt_text, req->prompt_len, st->occ, MAXOCC, &occurrences);
@@ -632,6 +706,8 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
     }
 
     /* Probe 1: microsecond trajectory salience over prompt occurrences */
+    st->prompt_text = req->prompt_text;
+    st->prompt_len = req->prompt_len;
     resolve_salience(st);
     out->top_salience = st->max_salience;
     for (int i = 0; i < st->nocc; i++) {
@@ -664,6 +740,7 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
     }
 
     lp_id emitted[512]; int nemit = 0;
+    lp_id skipped[64]; int nskipped = 0;
     char *out_buf = calloc(1, 1); size_t outn = 0;
     const char *disposition = "nothing responds";
     Field fd = { 0 }; Curve near[8]; int nnear = 0;
@@ -689,7 +766,8 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
                 st->ctx_hub[i] = 1;
                 continue;
             }
-            if (n_anchor > 0 && st->df_ready && st->df[i] > fw.fan &&
+            int is_salient_anchor = (st->max_salience > 0.0 && st->salience[i] >= 0.40 * st->max_salience);
+            if (n_anchor > 0 && !is_salient_anchor && st->df_ready && st->df[i] > fw.fan &&
                 ((!st->witness_scoped) || (st->envelope && st->max_salience > 0.0 && st->salience[i] < 0.15 * st->max_salience))) {
                 st->ctx_hub[i] = 1;
                 continue;
@@ -700,6 +778,10 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
         for (int i = 0; i < st->nspans && nb < MAXOCC * 2; i++) {
             bool fresh; lp_idmap_put(uniq, &st->spans[i], &fresh);
             if (fresh) { bkeys[nb] = st->spans[i]; bocc[nb] = -3 - i; nb++; }
+        }
+        if (st->has_occ0_lower && nb < MAXOCC * 2) {
+            bool fresh; lp_idmap_put(uniq, &st->occ0_lower, &fresh);
+            if (fresh) { bkeys[nb] = st->occ0_lower; bocc[nb] = -1000; nb++; }
         }
         {
             bool fresh; lp_idmap_put(uniq, &st->prompt, &fresh);
@@ -736,22 +818,26 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
             for (int k = 0; k < R_KINDS; k++) if (routes[k]) fprintf(st->trace_out, " %d by %s", routes[k], RK[k]);
             fprintf(st->trace_out, "   (%.1f ms)\n", (now() - tc) * 1000);
         }
+        const lp_highway *hw_chk = lp_highway_map(NULL);
         int salience_grounded = is_salience_grounded(st, &fd, 0);
-        int tight_env = (st->envelope && (st->envelope->preset <= LP_ENVELOPE_STANDARD || (st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 500000)));
-        int fast_grounded = salience_grounded || (tight_env && fd.n > 0);
-        for (int round = 1; round < fw.rounds && !fast_grounded && !envelope_hit(st); round++) {
+        int tight_env = (st->envelope && (st->envelope->preset == LP_ENVELOPE_FAST || (st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 100000)));
+        int multi_ready = has_multi_anchor_answer(st, &fd);
+        int has_bridges = has_unexpanded_bridge_cells(&fd, hw_chk, 0);
+        int layer_done = ((salience_grounded && !has_bridges) || (tight_env && fd.n > 0)) && multi_ready;
+        for (int round = 1; round < fw.rounds && !layer_done && !envelope_hit(st); round++) {
             if (st->envelope && st->work.db_probes + 4 >= st->envelope->max_db_probes) break;
             lp_idmap *hm = lp_idmap_sized(sizeof(HeadStat));
             int fresh_n = layer_round(st, &fd, round, hm);
             if (st->trace_out) heads_say(st, hm, "heads");
             lp_idmap_free(hm);
             if (!fresh_n) break;
-            if (round == 1 && is_salience_grounded(st, &fd, 1)) fast_grounded = 1;
+            if (!has_unexpanded_bridge_cells(&fd, hw_chk, round) && has_multi_anchor_answer(st, &fd) && (tight_env || is_salience_grounded(st, &fd, 1))) layer_done = 1;
         }
         st->npos = st->nocc;
-        if (!fast_grounded && (!st->envelope || (st->work.db_probes + 3 < st->envelope->max_db_probes && !envelope_hit(st))))
+        int grounded_ready = is_salience_grounded(st, &fd, 1) && has_multi_anchor_answer(st, &fd);
+        if (!layer_done && !grounded_ready && !tight_env && (!st->envelope || (st->work.db_probes + 3 < st->envelope->max_db_probes && !envelope_hit(st))))
             walk(st, 0, st->nocc);
-        if (!fast_grounded && !envelope_hit(st)) context(st, 0, st->nocc);
+        if (!layer_done && !grounded_ready && !tight_env && !envelope_hit(st)) context(st, 0, st->nocc);
     }
 
     Bind *bind = calloc((size_t)st->nocc + 1, sizeof(Bind));
@@ -780,8 +866,11 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
         Bits slots; memset(&slots, 0, sizeof slots); int nslot = 0, nframe = 0;
         for (int i = 0; i < st->nocc; i++) {
             if (!((st->open.w[i >> 6] >> (i & 63)) & 1)) continue;
+            int is_anchor = (st->max_salience > 0.0 && st->salience[i] >= 0.50 * st->max_salience);
             int held = 0;
-            for (int k = 0; k < near[0].nv && !held; k++) held = lp_id_eq(&near[0].v[k], &st->occ[i]);
+            if (!is_anchor) {
+                for (int k = 0; k < near[0].nv && !held; k++) held = lp_id_eq(&near[0].v[k], &st->occ[i]);
+            }
             if (held) nframe++; else { bit_set(&slots, i); nslot++; }
         }
         if (nframe && nslot) for (int w = 0; w < MAXOCC / 64; w++) st->open.w[w] &= slots.w[w];
@@ -803,8 +892,8 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
         }
     }
     if (st->trace_out) fprintf(st->trace_out, "ROUTE      hops %d, fan %d, k %g, lambda %g, emit at most %d, from %d centre%s\n", fw.hops, fw.fan, fw.k, fw.lambda, max_emit_eff, ncentre, ncentre == 1 ? "" : "s");
-    int can_skip_scan = is_salience_grounded(st, &fd, 1);
-    if (!can_skip_scan && !(st->envelope && (st->envelope->preset <= LP_ENVELOPE_STANDARD || (st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 500000)) && fd.n > 0) &&
+    int can_skip_scan = is_salience_grounded(st, &fd, 1) && has_multi_anchor_answer(st, &fd);
+    if (!can_skip_scan && !(st->envelope && (st->envelope->preset == LP_ENVELOPE_FAST || (st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 100000)) && fd.n > 0) &&
         !envelope_hit(st) && ncentre > 0 && (!st->envelope || st->work.db_probes + 4 < st->envelope->max_db_probes))
         scan(st, &fd, centre, ncentre);
     if (st->trace_out) fprintf(st->trace_out, "COMPOSE    a frontier of %d\n", fd.n);
@@ -819,7 +908,7 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
     for (int step = 0; step < budget; step++) {
         if (step == 0 && (fd.n > 0 || nn0 > 0)) {
             lp_id pref[MAXOCC * 2]; size_t npref = 0;
-            size_t pref_cap = (st->trace_out || (st->envelope && st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 500000)) ? 16 : (MAXOCC * 2);
+            size_t pref_cap = (st->trace_out || (st->envelope && (st->envelope->preset <= LP_ENVELOPE_STANDARD || (st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 500000)))) ? 16 : (MAXOCC * 2);
             for (int i = 0; i < nn0 && npref < pref_cap; i++) {
                 if (!lp_id_eq(&nx0[i].id, &st->prompt) && !lp_id_eq(&nx0[i].id, &st->handle)) pref[npref++] = nx0[i].id;
             }
@@ -836,6 +925,16 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
             }
         }
         if (step > 0 && envelope_hit(st)) break;
+        Bits anchor_mask = { 0 };
+        for (int i = 0; i < st->nocc; i++) {
+            if (!st->composed[i] || !((st->open.w[i >> 6] >> (i & 63)) & 1)) continue;
+            if (st->role[i] >= 0.75) bit_set(&anchor_mask, i);
+        }
+        if (!bit_count_and(&anchor_mask, &anchor_mask)) {
+            for (int i = 0; i < st->nocc; i++) {
+                if (st->composed[i] && ((st->open.w[i >> 6] >> (i & 63)) & 1)) bit_set(&anchor_mask, i);
+            }
+        }
         Prop *pp = malloc(sizeof(Prop) * 192); int np = 0;
         Next nx[64];
         int nn = (step == 0) ? nn0 : follows(st, nx, 64);
@@ -843,6 +942,9 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
         for (int i = 0; i < nn && np < 128; i++) {
             if (lp_id_eq(&nx[i].id, &st->prompt) || lp_id_eq(&nx[i].id, &st->handle)) continue;
             if (hw && lp_highway_bank_of(hw, &nx[i].id, NULL)) continue;
+            int was_skipped = 0;
+            for (int k = 0; k < nskipped && !was_skipped; k++) was_skipped = lp_id_eq(&skipped[k], &nx[i].id);
+            if (was_skipped) continue;
             Prop p; memset(&p, 0, sizeof p);
             p.id = nx[i].id; p.kind = P_FOLLOW; p.cont = nx[i].len; p.times = nx[i].times; p.occ = -1; p.shape = INFINITY;
             const Cell *x = cell_find(&fd, &nx[i].id);
@@ -858,17 +960,13 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
         }
         for (int z = 0; z < fd.n && np < 160; z++) {
             const Cell *x = &fd.c[z];
-            if (x->hub || !bit_count_and(&x->support, &st->open)) continue;
+            if (!bit_count_and(&x->support, &st->open)) continue;
             if (have_attested_claim && !x->has_r && !x->routes[R_CLAIM] && !x->routes[R_SCAN] && !x->routes[R_LAYER])
                 continue;
-            if (fw.nalt > 0 && fw.nchain[0] > 1 && x->has_r && lp_id_eq(&x->rel, &fw.id.chain[0][0])) continue;
-            if (hw && lp_highway_bank_of(hw, &x->id, NULL)) continue;
-            int list; uint32_t slot;
-            if (hw && reading_of(hw, &x->id, &list, &slot)) continue;
-            if (lp_id_eq(&x->id, &st->prompt) || lp_id_eq(&x->id, &st->handle)) continue;
+            if (!is_realizable_answer_cell(st, hw, x)) continue;
             int already = 0;
             for (int k = 0; k < nemit && !already; k++) already = lp_id_eq(&emitted[k], &x->id);
-            for (int k = 0; k < st->nocc && !already; k++) already = lp_id_eq(&st->occ[k], &x->id);
+            for (int k = 0; k < nskipped && !already; k++) already = lp_id_eq(&skipped[k], &x->id);
             for (int k = 0; k < np && !already; k++) already = lp_id_eq(&pp[k].id, &x->id);
             if (already) continue;
             Prop fp; memset(&fp, 0, sizeof fp); fp.id = x->id; fp.kind = P_CHAIN; fp.occ = -1; fp.shape = INFINITY;
@@ -876,34 +974,62 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
             weigh_prop(st, &fd, &fp);
             if (fp.grounds > 0) pp[np++] = fp;
         }
-        /* Follow firmware chain when step 0 has no direct high-confidence answer beyond a chain entry link (e.g. @wn-lmf/Sense). */
+        /* Follow firmware chain only if COUPLE/FOLLOWS/WALK/CONTEXT/SCAN produced zero proposals. */
         int need_chain = (np == 0);
-        if (!need_chain && fw.nalt > 0 && fw.nchain[0] > 0 && st->nocc > 0) {
-            need_chain = 1;
-            for (int k = 0; k < np; k++) {
-                const Cell *x = cell_find(&fd, &pp[k].id);
-                if (x && x->has_r && pp[k].conf >= 0.25 && !lp_id_eq(&x->rel, &fw.id.chain[0][0])) {
-                    need_chain = 0; break;
-                }
-            }
+        int have_attested_prop = 0;
+        for (int k = 0; k < np && !have_attested_prop; k++) {
+            if (pp[k].conf > 0.0 && pp[k].grounds > 0) have_attested_prop = 1;
         }
-        if (step == 0 && need_chain && fw.nalt > 0 && st->nocc > 0 && !envelope_hit(st)) {
-            int best_occ = -1; double best_r = -1.0;
+        int allow_chain = !envelope_hit(st) || (!have_attested_prop && (!st->envelope || !st->envelope->max_db_probes || st->work.db_probes < st->envelope->max_db_probes));
+        if (step == 0 && need_chain && fw.nalt > 0 && st->nocc > 0 && allow_chain) {
+            int cand_occ[MAXOCC]; double cand_sc[MAXOCC]; int ncand_occ = 0;
             for (int i = 0; i < st->nocc; i++) {
-                if (st->composed[i] && ((st->open.w[i >> 6] >> (i & 63)) & 1) && st->role[i] > best_r) {
-                    best_r = st->role[i]; best_occ = i;
+                if (!st->composed[i] || !((st->open.w[i >> 6] >> (i & 63)) & 1)) continue;
+                int is_pref = (st->max_salience > 0.0 && st->salience[i] >= 0.40 * st->max_salience) || st->role[i] >= 0.75;
+                if (!is_pref) continue;
+                int dup = 0;
+                for (int k = 0; k < ncand_occ && !dup; k++) dup = lp_id_eq(&st->occ[cand_occ[k]], &st->occ[i]);
+                if (!dup) {
+                    cand_occ[ncand_occ] = i;
+                    cand_sc[ncand_occ] = (st->role[i] > 0.0 ? st->role[i] : 0.1) * (st->salience[i] > 0.0 ? st->salience[i] : 1.0);
+                    ncand_occ++;
                 }
             }
-            if (best_occ >= 0) {
+            if (ncand_occ == 0) {
+                int best_occ = -1; double best_r = -1.0;
+                for (int i = 0; i < st->nocc; i++) {
+                    if (st->composed[i] && ((st->open.w[i >> 6] >> (i & 63)) & 1) && st->role[i] > best_r) {
+                        best_r = st->role[i]; best_occ = i;
+                    }
+                }
+                if (best_occ >= 0) { cand_occ[0] = best_occ; cand_sc[0] = best_r; ncand_occ = 1; }
+            }
+            for (int a = 1; a < ncand_occ; a++) {
+                int ci = cand_occ[a]; double cs = cand_sc[a]; int p = a;
+                while (p > 0 && cand_sc[p - 1] < cs) { cand_occ[p] = cand_occ[p - 1]; cand_sc[p] = cand_sc[p - 1]; p--; }
+                cand_occ[p] = ci; cand_sc[p] = cs;
+            }
+            int max_try = ncand_occ < 3 ? ncand_occ : 3;
+            int max_ok = fw.combine_clauses ? 2 : 1;
+            int got_ok = 0;
+            for (int ci = 0; ci < max_try && got_ok < max_ok && np < 192; ci++) {
+                int idx = cand_occ[ci];
                 lp_id ans; lp_rating rt;
-                const lp_id *rd_id = (bind[best_occ].choice >= 0) ? &fd.c[bind[best_occ].choice].id : NULL;
-                if (chain_from(st, &st->occ[best_occ], rd_id, &ans, &rt)) {
-                    Prop cp; memset(&cp, 0, sizeof cp); cp.id = ans; cp.kind = P_CHAIN; cp.occ = best_occ; cp.shape = INFINITY;
-                    cp.conf = lp_confidence(&rt, fw.k); bit_set(&cp.by[CH_STRAND], best_occ); cp.agree = 1;
-                    cp.cont = 4; cp.tier = 4;
+                const lp_id *rd_id = (bind[idx].choice >= 0) ? &fd.c[bind[idx].choice].id : NULL;
+                if (chain_from(st, &st->occ[idx], rd_id, &ans, &rt)) {
+                    int already = 0;
+                    for (int k = 0; k < nemit && !already; k++) already = lp_id_eq(&emitted[k], &ans);
+                    for (int k = 0; k < nskipped && !already; k++) already = lp_id_eq(&skipped[k], &ans);
+                    for (int k = 0; k < st->nocc && !already; k++) already = lp_id_eq(&st->occ[k], &ans);
+                    for (int k = 0; k < np && !already; k++) already = lp_id_eq(&pp[k].id, &ans);
+                    if (already) continue;
+                    Prop cp; memset(&cp, 0, sizeof cp); cp.id = ans; cp.kind = P_CHAIN; cp.occ = idx; cp.shape = INFINITY;
+                    cp.conf = lp_confidence(&rt, fw.k); bit_set(&cp.by[CH_STRAND], idx); cp.agree = 1;
+                    cp.cont = 0; cp.tier = 0;
                     cp.grounds = owed(st, &cp.by[CH_STRAND], &st->open);
-                    if (cp.grounds == 0) cp.grounds = (int)(best_r * 1000.0 + 0.5);
+                    if (cp.grounds == 0) cp.grounds = (int)(st->role[idx] * 1000.0 + 0.5);
                     pp[np++] = cp;
+                    got_ok++;
                 }
             }
         }
@@ -921,6 +1047,9 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
                 if (nxt < 0) continue;
                 const lp_id *id = &an[c_].v[nxt];
                 if (lp_id_eq(id, &st->prompt) || lp_id_eq(id, &st->handle)) continue;
+                int was_skipped = 0;
+                for (int k = 0; k < nskipped && !was_skipped; k++) was_skipped = lp_id_eq(&skipped[k], id);
+                if (was_skipped) continue;
                 int have = -1; for (int z = 0; z < np; z++) if (lp_id_eq(&pp[z].id, id)) have = z;
                 if (have >= 0) { if (an[c_].d < pp[have].shape) pp[have].shape = an[c_].d; continue; }
                 if (np >= 192 || (hw && lp_highway_bank_of(hw, id, NULL))) continue;
@@ -929,6 +1058,28 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
                 weigh_prop(st, &fd, &sp); pp[np++] = sp;
             }
             for (int c_ = 0; c_ < na; c_++) free(an[c_].v);
+        }
+
+        {
+            int has_attested_valid = 0;
+            for (int z = 0; z < np; z++) {
+                if (pp[z].conf <= 0.0) {
+                    Bits sup_all = { 0 };
+                    for (int c_ = 0; c_ < 3; c_++)
+                        for (int w = 0; w < MAXOCC / 64; w++) sup_all.w[w] |= pp[z].by[c_].w[w];
+                    const Cell *cx = cell_find(&fd, &pp[z].id);
+                    if (cx) for (int w = 0; w < MAXOCC / 64; w++) sup_all.w[w] |= cx->support.w[w];
+                    if (!bit_count_and(&sup_all, &anchor_mask)) pp[z].grounds = 0;
+                }
+                if (pp[z].conf > 0.0 && pp[z].grounds > 0) has_attested_valid = 1;
+            }
+            if (has_attested_valid) {
+                int keep_n = 0;
+                for (int z = 0; z < np; z++) {
+                    if (pp[z].conf > 0.0) pp[keep_n++] = pp[z];
+                }
+                np = keep_n;
+            }
         }
 
         if (!np) {
@@ -944,7 +1095,34 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
             break;
         }
         qsort(pp, (size_t)np, sizeof(Prop), elect);
-        if (!pp[0].grounds && bit_count_and(&st->open, &st->open)) {
+        if (np > 0 && st->rd) {
+            size_t npre = (size_t)(np < 24 ? np : 24);
+            lp_id top_ids[24];
+            for (size_t z = 0; z < npre; z++) { top_ids[z] = pp[z].id; reader_want(st->rd, &top_ids[z]); }
+            reader_prefetch(st->rd, top_ids, npre, 400);
+            int keep_n = 0;
+            for (int z = 0; z < np; z++) {
+                if ((size_t)z < npre && is_lexical_tuple_id(st, hw, &pp[z].id)) {
+                    if (nskipped < 64) skipped[nskipped++] = pp[z].id;
+                    continue;
+                }
+                pp[keep_n++] = pp[z];
+            }
+            np = keep_n;
+            if (!np) {
+                free(pp);
+                if (!nemit) disposition = ncentre ? "unresolved: nothing follows and nothing grounds what is open" : disposition;
+                break;
+            }
+        }
+        if (nemit > 0 && pp[0].conf <= 0.0) {
+            free(pp);
+            disposition = bit_count_and(&st->open, &st->open)
+                ? "complete: what is still owed is within what the firmware leaves open"
+                : "complete: every obligation is grounded";
+            break;
+        }
+        if (!pp[0].grounds && (nemit == 0 || bit_count_and(&st->open, &st->open))) {
             free(pp); if (!nemit) disposition = "unresolved: what follows grounds nothing that is owed"; break;
         }
 
@@ -968,16 +1146,41 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
         }
         Prop sel = pp[pick]; free(pp);
 
-        reader_want(st->rd, &sel.id);
-        char *tx = reader_text(st->rd, &sel.id, 400);
-        if (tx && req->prompt_len > 0 && req->prompt_len < 400 && strlen(tx) >= req->prompt_len &&
+        lp_id realize_id = sel.id;
+        {
+            lp_id rparts[4];
+            size_t rnp = reader_parts(st->rd, &sel.id, rparts, 4);
+            int rl0 = 0, rl1 = 0; uint32_t rs0 = 0, rs1 = 0;
+            int tail_is_tag = hw && rnp == 2 && (lp_highway_bank_of(hw, &rparts[1], NULL) || reading_of(hw, &rparts[1], &rl1, &rs1));
+            int head_is_tag = hw && rnp == 2 && (lp_highway_bank_of(hw, &rparts[0], NULL) || reading_of(hw, &rparts[0], &rl0, &rs0));
+            if (rnp == 2 && tail_is_tag && !head_is_tag) {
+                realize_id = rparts[0];
+            }
+        }
+        reader_want(st->rd, &realize_id);
+        char *tx = reader_text(st->rd, &realize_id, 400);
+        size_t tl = tx ? strlen(tx) : 0;
+        int echo_skip = 0;
+        if (tx && req->prompt_len > 0 && req->prompt_len < 400 && tl >= req->prompt_len &&
             memcmp(tx, req->prompt_text, req->prompt_len) == 0 &&
             (tx[req->prompt_len] == 0 || tx[req->prompt_len] == ' ' || tx[req->prompt_len] == '\t' || tx[req->prompt_len] == '\n' ||
              strchr("?!.,;:", (char)req->prompt_text[req->prompt_len - 1]) != NULL)) {
-            /* Skip turn/prompt wrapper echoing the exact prompt prefix; mark emitted to avoid loop and continue */
+            echo_skip = 1;
+        } else if (tx && sel.kind != P_FOLLOW && tl >= 3 && tl < req->prompt_len) {
+            for (size_t pos = 0; pos + tl <= req->prompt_len; pos++) {
+                if (memcmp(req->prompt_text + pos, tx, tl) != 0) continue;
+                unsigned char prev = pos > 0 ? req->prompt_text[pos - 1] : 0;
+                unsigned char next = (pos + tl < req->prompt_len) ? req->prompt_text[pos + tl] : 0;
+                int prev_alnum = (prev >= '0' && prev <= '9') || (prev >= 'A' && prev <= 'Z') || (prev >= 'a' && prev <= 'z');
+                int next_alnum = (next >= '0' && next <= '9') || (next >= 'A' && next <= 'Z') || (next >= 'a' && next <= 'z');
+                if (!prev_alnum && !next_alnum) { echo_skip = 1; break; }
+            }
+        }
+        if (!echo_skip && is_lexical_tuple_id(st, hw, &sel.id)) echo_skip = 1;
+        if (echo_skip) {
+            /* Skip turn/prompt wrapper, internal lexicalization tuple, or prompt-contained span without clearing open obligations */
             free(tx);
-            if (nemit < 512) emitted[nemit++] = sel.id;
-            const Cell *x = cell_find(&fd, &sel.id); if (x) bit_clear(&st->open, &x->support);
+            if (nskipped < 64) { skipped[nskipped++] = sel.id; if (step >= 0 && nskipped < 32) step--; }
             continue;
         }
         size_t at = outn;
@@ -1007,6 +1210,15 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
 
         { const Cell *x = cell_find(&fd, &sel.id); if (x) bit_clear(&st->open, &x->support); }
         for (int c_ = 0; c_ < 3; c_++) bit_clear(&st->open, &sel.by[c_]);
+
+        if (step + 1 < budget && !envelope_hit(st) && bit_count_and(&st->open, &st->open) > 0 &&
+            (!st->envelope || !st->envelope->max_db_probes || st->work.db_probes + 2 < st->envelope->max_db_probes)) {
+            int emit_occ = -2;
+            int before_n = fd.n;
+            couple(st, &fd, &sel.id, 1, &emit_occ, R_LAYER, NULL, 0);
+            if (st->trace_out)
+                fprintf(st->trace_out, "RECOUPLE   step %d -> frontier %d (%+d)\n", step + 1, fd.n, fd.n - before_n);
+        }
 
         int rem = owed(st, &st->open, &st->open);
         if (sel.kind != P_FOLLOW && rem <= (int)(fw.enough * owed0 + 0.5)) {
@@ -1171,7 +1383,7 @@ int cmd_turn(int argc, char **argv){
     if (getenv("LAPLACE_TIMES")) setvbuf(stdout, NULL, _IONBF, 0);
 
     lp_envelope cli_env = lp_envelope_preset(LP_ENVELOPE_STANDARD);
-    cli_env.max_wall_us = 2000000;
+    cli_env.max_wall_us = 10000000;
     if (fw.emit > (int)cli_env.max_tokens_out) cli_env.max_tokens_out = (uint32_t)fw.emit;
     const char *unbounded = getenv("LAPLACE_UNBOUNDED");
     LpForwardRequest req = {

@@ -91,9 +91,9 @@ set(ENGINE_SOURCES
 )
 list(REMOVE_ITEM ENGINE_SOURCES src/core/main.c)
 if(TARGET Laplace::model)
-  list(APPEND ENGINE_SOURCES src/model/model.c src/model/gguf_writer.c src/model/mold.c)
+  list(APPEND ENGINE_SOURCES src/model/model.c src/model/gguf_writer.c src/model/safetensors_writer.c src/model/mold.c)
 else()
-  list(APPEND ENGINE_SOURCES src/model/model_none.c src/model/gguf_writer.c src/model/mold.c)
+  list(APPEND ENGINE_SOURCES src/model/model_none.c src/model/gguf_writer.c src/model/safetensors_writer.c src/model/mold.c)
 endif()
 
 add_library(laplace_media_tp STATIC src/codecs/third_party/media_impl.c)

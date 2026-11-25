@@ -249,9 +249,204 @@ static void emit_monologue_witness(const char *conninfo, const Ref *subject, con
     }
 }
 
-/* Synthesize minimal targeted AST/line patch Δ guided by loss_contrast culprit + compiler log + optional prompt/substrate. */
-static int synthesize_delta(PGconn *pg, Firmware *fw, const char *prompt, const char *src, size_t len,
-                            const char *log, uint32_t culprit_sb, uint32_t culprit_eb,
+static TSTree *parse_cst(const char *src, size_t len, const char *lang){
+    if (!src || !lang || !*lang) return NULL;
+    uint16_t gid = grammar_id_for(lang);
+    TSParser *ps = gid ? lp_tls_parser(gid) : NULL;
+    return ps ? ts_parser_parse_string(ps, NULL, src, (uint32_t)len) : NULL;
+}
+
+static int count_cst_errors(TSNode node){
+    if (ts_node_is_null(node)) return 0;
+    int err = (ts_node_is_error(node) || ts_node_is_missing(node)) ? 1 : 0;
+    uint32_t nc = ts_node_child_count(node);
+    for (uint32_t i = 0; i < nc; i++) {
+        err += count_cst_errors(ts_node_child(node, i));
+    }
+    return err;
+}
+
+static int find_first_missing_token(TSNode node, uint32_t *byte_out, const char **tok_out){
+    if (ts_node_is_null(node)) return 0;
+    if (ts_node_is_missing(node) && !ts_node_is_named(node)) {
+        const char *tp = ts_node_type(node);
+        size_t tlen = tp ? strlen(tp) : 0;
+        if (tlen >= 1 && tlen <= 8) {
+            int ok = 1;
+            for (size_t k = 0; k < tlen; k++) {
+                unsigned char ch = (unsigned char)tp[k];
+                if (ch < 0x20 || ch >= 0x7f) { ok = 0; break; }
+            }
+            if (ok) {
+                *byte_out = ts_node_start_byte(node);
+                *tok_out = tp;
+                return 1;
+            }
+        }
+    }
+    uint32_t nc = ts_node_child_count(node);
+    for (uint32_t i = 0; i < nc; i++) {
+        if (find_first_missing_token(ts_node_child(node, i), byte_out, tok_out)) return 1;
+    }
+    return 0;
+}
+
+static void find_unclosed_delimiter_cst(TSNode node, const char *src, size_t len, char *stack, int *sp, int cap){
+    if (ts_node_is_null(node)) return;
+    const char *tp = ts_node_type(node);
+    if (tp && (!strcmp(tp, "string_literal") || !strcmp(tp, "char_literal") ||
+               !strcmp(tp, "comment") || !strcmp(tp, "raw_string_literal"))) {
+        return;
+    }
+    uint32_t nc = ts_node_child_count(node);
+    if (nc == 0 && !ts_node_is_missing(node)) {
+        uint32_t sb = ts_node_start_byte(node), eb = ts_node_end_byte(node);
+        if (eb == sb + 1 && eb <= len) {
+            char ch = src[sb];
+            if (ch == '(' || ch == '{' || ch == '[') {
+                if (*sp < cap) stack[(*sp)++] = ch;
+            } else if (ch == ')' || ch == '}' || ch == ']') {
+                char want = (ch == ')') ? '(' : (ch == '}') ? '{' : '[';
+                if (*sp > 0 && stack[*sp - 1] == want) (*sp)--;
+            }
+        }
+        return;
+    }
+    for (uint32_t i = 0; i < nc; i++) {
+        find_unclosed_delimiter_cst(ts_node_child(node, i), src, len, stack, sp, cap);
+    }
+}
+
+static int candidate_is_new_and_valid(const char *cand, size_t cand_len, const char *lang,
+                                      int max_allowed_errors, const lp_id *tried, size_t ntried){
+    if (!cand) return 0;
+    Ref cref = text_ref(CTX[0], (const uint8_t *)cand, cand_len);
+    for (size_t i = 0; i < ntried; i++) {
+        if (lp_id_eq(&cref.id, &tried[i])) return 0;
+    }
+    TSTree *tree = parse_cst(cand, cand_len, lang);
+    if (tree) {
+        int errs = count_cst_errors(ts_tree_root_node(tree));
+        ts_tree_delete(tree);
+        if (errs > max_allowed_errors) return 0;
+    }
+    return 1;
+}
+
+static void record_decl_ident(const char *src, size_t len, uint32_t sb, uint32_t eb, int is_fn,
+                              char decls[128][64], int decl_is_fn[128], int *ndecls){
+    if (*ndecls >= 128 || eb <= sb || eb > len) return;
+    size_t n = (size_t)(eb - sb);
+    if (n == 0 || n >= 64) return;
+    for (int i = 0; i < *ndecls; i++) {
+        if (strlen(decls[i]) == n && memcmp(decls[i], src + sb, n) == 0) {
+            if (is_fn) decl_is_fn[i] = 1;
+            return;
+        }
+    }
+    memcpy(decls[*ndecls], src + sb, n);
+    decls[*ndecls][n] = 0;
+    decl_is_fn[*ndecls] = is_fn ? 1 : 0;
+    (*ndecls)++;
+}
+
+static void collect_ast_declared_idents(TSNode node, const char *src, size_t len, int in_decl, int in_fn_decl,
+                                        char decls[128][64], int decl_is_fn[128], int *ndecls){
+    if (ts_node_is_null(node) || *ndecls >= 128) return;
+    const char *tp = ts_node_type(node);
+    if (!tp) return;
+    if ((!strcmp(tp, "identifier") || !strcmp(tp, "field_identifier")) && in_decl) {
+        record_decl_ident(src, len, ts_node_start_byte(node), ts_node_end_byte(node), in_fn_decl, decls, decl_is_fn, ndecls);
+        return;
+    }
+    if (!strcmp(tp, "compound_statement") || !strcmp(tp, "argument_list")) {
+        in_decl = 0;
+        in_fn_decl = 0;
+    }
+    if (!strcmp(tp, "init_declarator")) {
+        TSNode d = ts_node_child_by_field_name(node, "declarator", 10);
+        TSNode v = ts_node_child_by_field_name(node, "value", 5);
+        if (!ts_node_is_null(d)) collect_ast_declared_idents(d, src, len, 1, in_fn_decl, decls, decl_is_fn, ndecls);
+        if (!ts_node_is_null(v)) collect_ast_declared_idents(v, src, len, 0, 0, decls, decl_is_fn, ndecls);
+        return;
+    }
+    if (!strcmp(tp, "preproc_def")) {
+        TSNode nm = ts_node_child_by_field_name(node, "name", 4);
+        if (!ts_node_is_null(nm)) collect_ast_declared_idents(nm, src, len, 1, 0, decls, decl_is_fn, ndecls);
+        return;
+    }
+    int next_decl = in_decl;
+    int next_fn = in_fn_decl;
+    if (!strcmp(tp, "function_declarator")) {
+        TSNode fn = ts_node_child_by_field_name(node, "declarator", 10);
+        TSNode pl = ts_node_child_by_field_name(node, "parameters", 10);
+        if (!ts_node_is_null(fn)) collect_ast_declared_idents(fn, src, len, 1, 1, decls, decl_is_fn, ndecls);
+        if (!ts_node_is_null(pl)) collect_ast_declared_idents(pl, src, len, 0, 0, decls, decl_is_fn, ndecls);
+        return;
+    }
+    if (!strcmp(tp, "parameter_declaration") || !strcmp(tp, "field_declaration") ||
+        !strcmp(tp, "declaration") || !strcmp(tp, "variable_declarator")) {
+        next_decl = 1;
+        next_fn = 0;
+    }
+    uint32_t nc = ts_node_child_count(node);
+    for (uint32_t i = 0; i < nc && *ndecls < 128; i++) {
+        collect_ast_declared_idents(ts_node_child(node, i), src, len, next_decl, next_fn, decls, decl_is_fn, ndecls);
+    }
+}
+
+static void collect_span_idents(TSNode node, const char *src, size_t len, uint32_t sb, uint32_t eb, int is_callee,
+                                char names[32][64], uint32_t starts[32], uint32_t ends[32], int callee_flags[32], int *n){
+    if (ts_node_is_null(node) || *n >= 32) return;
+    uint32_t nsb = ts_node_start_byte(node), neb = ts_node_end_byte(node);
+    if (neb <= sb || nsb >= eb) return;
+    const char *tp = ts_node_type(node);
+    if (tp && !strcmp(tp, "identifier") && neb > nsb && neb <= len && (neb - nsb) < 64) {
+        size_t idlen = (size_t)(neb - nsb);
+        memcpy(names[*n], src + nsb, idlen);
+        names[*n][idlen] = 0;
+        starts[*n] = nsb;
+        ends[*n] = neb;
+        callee_flags[*n] = is_callee ? 1 : 0;
+        (*n)++;
+        return;
+    }
+    if (tp && !strcmp(tp, "call_expression")) {
+        TSNode fn = ts_node_child_by_field_name(node, "function", 8);
+        TSNode args = ts_node_child_by_field_name(node, "arguments", 9);
+        if (!ts_node_is_null(fn)) collect_span_idents(fn, src, len, sb, eb, 1, names, starts, ends, callee_flags, n);
+        if (!ts_node_is_null(args)) collect_span_idents(args, src, len, sb, eb, 0, names, starts, ends, callee_flags, n);
+        return;
+    }
+    uint32_t nc = ts_node_child_count(node);
+    for (uint32_t i = 0; i < nc && *n < 32; i++) {
+        collect_span_idents(ts_node_child(node, i), src, len, sb, eb, 0, names, starts, ends, callee_flags, n);
+    }
+}
+
+static int levenshtein_bounded(const char *a, const char *b){
+    size_t la = strlen(a), lb = strlen(b);
+    if (la >= 64 || lb >= 64) return 99;
+    int dp[64][64];
+    for (size_t i = 0; i <= la; i++) dp[i][0] = (int)i;
+    for (size_t j = 0; j <= lb; j++) dp[0][j] = (int)j;
+    for (size_t i = 1; i <= la; i++) {
+        for (size_t j = 1; j <= lb; j++) {
+            int sub = dp[i - 1][j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1);
+            int ins = dp[i][j - 1] + 1;
+            int del = dp[i - 1][j] + 1;
+            int m = sub < ins ? sub : ins;
+            dp[i][j] = m < del ? m : del;
+        }
+    }
+    return dp[la][lb];
+}
+
+/* Synthesize minimal targeted AST/scope/substrate patch Δ guided by loss_contrast culprit + CST + substrate. */
+static int synthesize_delta(PGconn *pg, Firmware *fw, const char *prompt, const char *lang,
+                            const char *src, size_t len, const char *log,
+                            uint32_t culprit_sb, uint32_t culprit_eb,
+                            const lp_id *tried, size_t ntried,
                             char **patched_out, size_t *patched_len_out){
     if (!log) log = "";
     int err_col = -1;
@@ -260,101 +455,122 @@ static int synthesize_delta(PGconn *pg, Firmware *fw, const char *prompt, const 
     if (err_line > 0) line_byte_range(src, len, err_line, &lsb, &leb);
     else if (culprit_eb > culprit_sb && culprit_eb <= len) { lsb = culprit_sb; leb = culprit_eb; }
 
-    /* 1. Missing semicolon on error column/line */
-    if (strstr(log, "expected ';'") || strstr(log, "expected \";\"")) {
-        uint32_t ins = leb;
-        if (err_col > 0 && lsb + (uint32_t)(err_col - 1) <= leb) {
-            ins = lsb + (uint32_t)(err_col - 1);
-            while (ins > lsb && (src[ins - 1] == ' ' || src[ins - 1] == '\t')) ins--;
-        } else {
-            while (ins > lsb && (src[ins - 1] == ' ' || src[ins - 1] == '\t' || src[ins - 1] == '}')) ins--;
-        }
-        return lp_ooda_splice(src, len, ins, ins, ";", 1, patched_out, patched_len_out);
-    }
+    TSTree *tree = parse_cst(src, len, lang);
+    int orig_errors = tree ? count_cst_errors(ts_tree_root_node(tree)) : 0;
 
-    /* 2. Missing closing paren or brace */
-    if (strstr(log, "expected ')'") || strstr(log, "expected \")\"")) {
-        uint32_t ins = leb;
-        while (ins > lsb && (src[ins - 1] == ' ' || src[ins - 1] == ';')) ins--;
-        return lp_ooda_splice(src, len, ins, ins, ")", 1, patched_out, patched_len_out);
-    }
-    if (strstr(log, "expected '}'")) {
-        return lp_ooda_splice(src, len, (uint32_t)len, (uint32_t)len, "\n}\n", 3, patched_out, patched_len_out);
-    }
-
-    /* 3. Typo with compiler hint: did you mean 'XYZ' */
-    const char *dym = strstr(log, "did you mean '");
-    if (dym) {
-        const char *s1 = dym + 14, *e1 = strchr(s1, '\'');
-        const char *und = strstr(log, "undeclared identifier '");
-        if (!und) und = strstr(log, "use of undeclared identifier '");
-        const char *s2 = und ? strchr(und, '\'') : NULL;
-        const char *e2 = s2 ? strchr(s2 + 1, '\'') : NULL;
-        if (e1 && s2 && e2) {
-            size_t bad_len = (size_t)(e2 - (s2 + 1));
-            size_t fix_len = (size_t)(e1 - s1);
-            char *bad = malloc(bad_len + 1);
-            memcpy(bad, s2 + 1, bad_len); bad[bad_len] = 0;
-            const char *hit = NULL;
-            if (leb > lsb && leb <= len) {
-                char *seg = malloc((size_t)(leb - lsb) + 1);
-                memcpy(seg, src + lsb, leb - lsb); seg[leb - lsb] = 0;
-                const char *f = strstr(seg, bad);
-                if (f) hit = src + lsb + (f - seg);
-                free(seg);
+    /* Stage A: Formal Grammar Repair (Tree-sitter MISSING token & CST delimiter balance) */
+    if (tree && orig_errors > 0) {
+        TSNode root = ts_tree_root_node(tree);
+        uint32_t ins_byte = 0; const char *tok = NULL;
+        if (find_first_missing_token(root, &ins_byte, &tok) && tok) {
+            char *cand = NULL; size_t cand_len = 0;
+            if (lp_ooda_splice(src, len, ins_byte, ins_byte, tok, strlen(tok), &cand, &cand_len) == 0) {
+                if (candidate_is_new_and_valid(cand, cand_len, lang, orig_errors - 1, tried, ntried)) {
+                    ts_tree_delete(tree);
+                    *patched_out = cand; *patched_len_out = cand_len;
+                    return 0;
+                }
+                free(cand);
             }
-            if (!hit) hit = strstr(src, bad);
-            free(bad);
-            if (hit) {
-                uint32_t sb = (uint32_t)(hit - src), eb = sb + (uint32_t)bad_len;
-                return lp_ooda_splice(src, len, sb, eb, s1, fix_len, patched_out, patched_len_out);
+        }
+        char stack[64]; int sp = 0;
+        find_unclosed_delimiter_cst(root, src, len, stack, &sp, 64);
+        if (sp > 0) {
+            char open_ch = stack[sp - 1];
+            const char *closer = (open_ch == '(') ? ")" : (open_ch == '[') ? "]" : "\n}\n";
+            uint32_t pos = (open_ch == '{') ? (uint32_t)len : leb;
+            if (open_ch != '{' && pos > lsb) {
+                while (pos > lsb && (src[pos - 1] == ' ' || src[pos - 1] == ';' || src[pos - 1] == '\t')) pos--;
+            }
+            char *cand = NULL; size_t cand_len = 0;
+            if (lp_ooda_splice(src, len, pos, pos, closer, strlen(closer), &cand, &cand_len) == 0) {
+                if (candidate_is_new_and_valid(cand, cand_len, lang, orig_errors - 1, tried, ntried)) {
+                    ts_tree_delete(tree);
+                    *patched_out = cand; *patched_len_out = cand_len;
+                    return 0;
+                }
+                free(cand);
             }
         }
     }
 
-    /* 4. Undeclared standard library call (e.g. printf/malloc/strlen) */
-    if ((strstr(log, "printf") || strstr(log, "fprintf")) && !strstr(src, "<stdio.h>")) {
-        return lp_ooda_splice(src, len, 0, 0, "#include <stdio.h>\n", 19, patched_out, patched_len_out);
-    }
-    if ((strstr(log, "malloc") || strstr(log, "free")) && !strstr(src, "<stdlib.h>")) {
-        return lp_ooda_splice(src, len, 0, 0, "#include <stdlib.h>\n", 20, patched_out, patched_len_out);
-    }
-    if (strstr(log, "strlen") && !strstr(src, "<string.h>")) {
-        return lp_ooda_splice(src, len, 0, 0, "#include <string.h>\n", 20, patched_out, patched_len_out);
-    }
+    /* Stage B: AST Scope Resolution (in-scope symbol table + bounded edit distance) */
+    if (tree) {
+        TSNode root = ts_tree_root_node(tree);
+        char decls[128][64]; int decl_is_fn[128]; int ndecls = 0;
+        collect_ast_declared_idents(root, src, len, 0, 0, decls, decl_is_fn, &ndecls);
 
-    /* 5. Incompatible pointer/string vs int conversion at culprit span or error line */
-    if (strstr(log, "incompatible") && (strstr(log, "int") || strstr(log, "pointer"))) {
-        if (culprit_eb > culprit_sb && culprit_eb <= len && src[culprit_sb] == '"') {
-            return lp_ooda_splice(src, len, culprit_sb, culprit_eb, "0", 1, patched_out, patched_len_out);
-        }
-        if (leb > lsb && leb <= len) {
-            for (uint32_t p = lsb; p < leb; p++) {
-                if (src[p] == '"') {
-                    uint32_t q = p + 1;
-                    while (q < leb && src[q] != '"') { if (src[q] == '\\' && q + 1 < leb) q += 2; else q++; }
-                    if (q < leb && src[q] == '"') return lp_ooda_splice(src, len, p, q + 1, "0", 1, patched_out, patched_len_out);
+        char span_names[32][64]; uint32_t s_sb[32], s_eb[32]; int callee_flags[32]; int nspan = 0;
+        collect_span_idents(root, src, len, lsb, leb, 0, span_names, s_sb, s_eb, callee_flags, &nspan);
+
+        for (int i = 0; i < nspan; i++) {
+            int declared = 0;
+            for (int d = 0; d < ndecls && !declared; d++) {
+                if (!strcmp(span_names[i], decls[d])) declared = 1;
+            }
+            if (declared) continue;
+
+            int ilen = (int)strlen(span_names[i]);
+            int best_d = 99, best_idx = -1, ties = 0;
+            for (int d = 0; d < ndecls; d++) {
+                if (callee_flags[i] && !decl_is_fn[d]) continue;
+                int dist = levenshtein_bounded(span_names[i], decls[d]);
+                if (dist >= 1 && dist <= 2 && dist * 2 <= ilen) {
+                    if (dist < best_d) { best_d = dist; best_idx = d; ties = 1; }
+                    else if (dist == best_d) ties++;
+                }
+            }
+            if (best_idx >= 0 && ties == 1) {
+                char *cand = NULL; size_t cand_len = 0;
+                if (lp_ooda_splice(src, len, s_sb[i], s_eb[i], decls[best_idx], strlen(decls[best_idx]), &cand, &cand_len) == 0) {
+                    if (candidate_is_new_and_valid(cand, cand_len, lang, orig_errors, tried, ntried)) {
+                        ts_tree_delete(tree);
+                        *patched_out = cand; *patched_len_out = cand_len;
+                        return 0;
+                    }
+                    free(cand);
                 }
             }
         }
+        ts_tree_delete(tree);
+        tree = NULL;
     }
+    if (tree) ts_tree_delete(tree);
 
-    /* 6. Substrate Forward proposal over failure diagnostic + prompt if DB connected */
+    /* Stage C: Substrate-Coupled Repair via lp_forward_execute */
     if (pg && fw) {
+        size_t cul_n = (culprit_eb > culprit_sb && culprit_eb <= len) ? (size_t)(culprit_eb - culprit_sb) : 0;
+        if (cul_n > 96) cul_n = 96;
         char diag_prompt[512];
-        snprintf(diag_prompt, sizeof diag_prompt, "%s %.240s", prompt ? prompt : "", log);
+        snprintf(diag_prompt, sizeof diag_prompt, "%s %.*s %.220s",
+                 prompt ? prompt : "",
+                 (int)cul_n, cul_n ? (src + culprit_sb) : "",
+                 log);
+        lp_envelope env = lp_envelope_preset(LP_ENVELOPE_STANDARD);
         LpForwardRequest freq = {
             .pg = pg, .fw = fw,
             .prompt_text = (const uint8_t *)diag_prompt,
             .prompt_len = strlen(diag_prompt),
-            .read_only = 1, .max_emit = 16, .temperature = -1.0
+            .read_only = 1, .max_emit = 16, .temperature = -1.0,
+            .envelope = &env
         };
         LpForwardResult fres = { 0 };
-        if (lp_forward_execute(&freq, &fres) == 0 && fres.text && fres.text_len > 0 &&
-            culprit_eb > culprit_sb && culprit_eb <= len) {
-            int rc = lp_ooda_splice(src, len, culprit_sb, culprit_eb, fres.text, fres.text_len, patched_out, patched_len_out);
-            lp_forward_result_free(&fres);
-            return rc;
+        if (lp_forward_execute(&freq, &fres) == 0 && fres.text && fres.text_len > 0) {
+            int prepend = (!strncmp(fres.text, "#include", 8) || !strncmp(fres.text, "import ", 7) ||
+                           !strncmp(fres.text, "using ", 6));
+            uint32_t sp_sb = prepend ? 0u : (culprit_eb > culprit_sb && culprit_eb <= len ? culprit_sb : 0u);
+            uint32_t sp_eb = prepend ? 0u : (culprit_eb > culprit_sb && culprit_eb <= len ? culprit_eb : 0u);
+            if (prepend || culprit_eb > culprit_sb) {
+                char *cand = NULL; size_t cand_len = 0;
+                if (lp_ooda_splice(src, len, sp_sb, sp_eb, fres.text, fres.text_len, &cand, &cand_len) == 0) {
+                    if (candidate_is_new_and_valid(cand, cand_len, lang, orig_errors, tried, ntried)) {
+                        lp_forward_result_free(&fres);
+                        *patched_out = cand; *patched_len_out = cand_len;
+                        return 0;
+                    }
+                    free(cand);
+                }
+            }
         }
         lp_forward_result_free(&fres);
     }
@@ -413,6 +629,9 @@ int lp_ooda_run(const LpOodaRequest *req, LpOodaResult *out){
     int owns_pg = 0;
     PGconn *pg = req->pg;
     if (!pg && req->conninfo && *req->conninfo) { pg = db_try(req->conninfo); owns_pg = (pg != NULL); }
+
+    lp_id tried_roots[64];
+    size_t ntried = 0;
 
     for (int round = 0; round < max_rounds; round++) {
         out->rounds_run = round + 1;
@@ -495,8 +714,10 @@ int lp_ooda_run(const LpOodaRequest *req, LpOodaResult *out){
         if (!req->read_only && req->conninfo && *req->conninfo)
             emit_monologue_witness(req->conninfo, &cur_root, out->verifier_log ? out->verifier_log : "repair hypothesis", (uint32_t)(round + 1));
 
+        if (ntried < 64) tried_roots[ntried++] = cur_root.id;
+
         char *next_src = NULL; size_t next_len = 0;
-        int patched = synthesize_delta(pg, req->fw, req->prompt, cur_src, cur_len, out->verifier_log, cul_sb, cul_eb, &next_src, &next_len);
+        int patched = synthesize_delta(pg, req->fw, req->prompt, lang, cur_src, cur_len, out->verifier_log, cul_sb, cul_eb, tried_roots, ntried, &next_src, &next_len);
         free(ast); free(as); free(ae);
 
         if (patched != 0 || !next_src || (next_len == cur_len && memcmp(next_src, cur_src, cur_len) == 0)) {
@@ -515,7 +736,7 @@ int lp_ooda_run(const LpOodaRequest *req, LpOodaResult *out){
     out->verified = 0;
     out->patched_code = cur_src;
     out->patched_len = cur_len;
-    snprintf(out->disposition, sizeof out->disposition, "failed: verifier exited %d after %d rounds", out->exit_code, out->rounds_run);
+    snprintf(out->disposition, sizeof out->disposition, "WHY_NOT: verifier exited %d after %d rounds (culprit %u..%u)", out->exit_code, out->rounds_run, out->culprit_start, out->culprit_end);
     return 1;
 }
 

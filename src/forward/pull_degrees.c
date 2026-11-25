@@ -1,5 +1,6 @@
 /* ---- degrees of separation and firmware chain traversal */
 #include "query.h"
+#include "laplace/highway.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -336,31 +337,46 @@ void take_top(Claim *cl, int n, int want, const Firmware *fw, unsigned *seed){
  * most the last one tried took and -1 in *alt; *last is the last strand taken. */
 int chain_follow(PGconn *pg, Reader *rd, Firmware *fw, const lp_id *word, const lp_id *reading, unsigned *seed, ChainFork fork, void *fork_ctx, lp_id *answer, ClaimStanding *last, int *alt){
     firmware_ids(fw); int steps = 0;
+    const lp_highway *hw = lp_highway_map(NULL);
+    const lp_list *lang_list = hw ? lp_highway_list(hw, "language") : NULL;
     for (*alt = 0; *alt < fw->nalt; (*alt)++) {
         lp_id cur = *word; steps = 0;
         for (int z = 0; z < fw->nchain[*alt]; z++) {
-            Ids candidates={0};lp_push(&candidates,cur);
-            if(z>0 && lp_tier0_codepoint(T0,&cur)<0){
-                size_t count=reader_parts(rd,&cur,NULL,0);Ids parts={0};lp_vec_reserve(&parts,count);
-                reader_parts(rd,&cur,parts.v,count);
-                for(size_t i=count;i-- >0;)if(lp_tier0_codepoint(T0,&parts.v[i])<0 && !lp_id_eq(&parts.v[i],word))lp_push(&candidates,parts.v[i]);
-                lp_vec_free(&parts);lp_push(&candidates,*word);
+            int n = 0, *source = NULL;
+            Claim *cl = claims_each(pg, &cur, 1, &fw->id.chain[*alt][z], CLAIM_FIRST, fw->fan, fw->k, &n, &source);
+            if (!n && z > 0 && lp_tier0_codepoint(T0, &cur) < 0) {
+                free(source); free(cl); cl = NULL; source = NULL;
+                Ids candidates = { 0 };
+                size_t count = reader_parts(rd, &cur, NULL, 0);
+                Ids parts = { 0 };
+                lp_vec_reserve(&parts, count);
+                reader_parts(rd, &cur, parts.v, count);
+                for (size_t i = count; i-- > 0; ) {
+                    if (lp_tier0_codepoint(T0, &parts.v[i]) >= 0 || lp_id_eq(&parts.v[i], word)) continue;
+                    if (hw && lp_highway_bank_of(hw, &parts.v[i], NULL)) continue;
+                    if (lang_list && lp_highway_slot(hw, lang_list, &parts.v[i]) >= 0) continue;
+                    lp_push(&candidates, parts.v[i]);
+                }
+                lp_vec_free(&parts);
+                lp_push(&candidates, *word);
+                if (candidates.n > INT_MAX) { fputs("chain candidates exceed the reader's addressable range\n", stderr); exit(1); }
+                cl = claims_each(pg, candidates.v, (int)candidates.n, &fw->id.chain[*alt][z], CLAIM_FIRST, fw->fan, fw->k, &n, &source);
+                lp_vec_free(&candidates);
             }
-            if(candidates.n>INT_MAX){fputs("chain candidates exceed the reader's addressable range\n",stderr);exit(1);}
-            int n=0,*source=NULL;
-            Claim *cl=claims_each(pg,candidates.v,(int)candidates.n,&fw->id.chain[*alt][z],CLAIM_FIRST,fw->fan,fw->k,&n,&source);
-            lp_vec_free(&candidates);
             /* The source order remains the firmware's priority. Read all
              * candidates together, then retain the first supported subject. */
-            if(n){int first=source[0],keep=0;while(keep<n && source[keep]==first)keep++;n=keep;}
+            if (n) { int first = source[0], keep = 0; while (keep < n && source[keep] == first) keep++; n = keep; }
             free(source);
-            if (!n){free(cl);break;}
-            positions_of(pg, cl, n); if (fw->order_witness) lp_sort(cl, (size_t)n, sizeof(Claim), claim_by_position);
+            if (!n) { free(cl); break; }
+            if (n > 1) {
+                positions_of(pg, cl, n);
+                if (fw->order_witness) lp_sort(cl, (size_t)n, sizeof(Claim), claim_by_position);
+            }
             int take = -1;
             if (z == 0 && reading) for (int k = 0; k < n; k++) if (lp_id_eq(&cl[k].part[cl[k].np - 1], reading)) { take = k; break; }
             if (take < 0 && fork && n > 1) take = fork(fork_ctx, cl, n);        /* what the context supports, when it tells the branches apart */
             if (take < 0) { take_top(cl, n, 1, fw, seed); take = 0; }
-            *last = (ClaimStanding){cl[take].r,cl[take].matches}; cur = cl[take].part[cl[take].np - 1]; steps++; free(cl);
+            *last = (ClaimStanding){ cl[take].r, cl[take].matches }; cur = cl[take].part[cl[take].np - 1]; steps++; free(cl);
         }
         if (steps == fw->nchain[*alt]) { *answer = cur; return steps; }
     }

@@ -68,6 +68,8 @@ typedef struct {
     double      rms_eps;
     double      rope_base;
     int         f16_weights;    /* 0: F32, 1: F16 weights */
+    int         format;         /* 0: GGUF, 1: SafeTensors */
+    int         tied_embeddings;/* 0: untied output/lm_head, 1: tied */
 } LpMoldSpec;
 
 int lp_mold_export(const LpMoldSpec *spec);

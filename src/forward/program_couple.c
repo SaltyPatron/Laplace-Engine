@@ -1,6 +1,7 @@
 /* Forward program: SALIENCE, COUPLE, LAYER, FOLLOWS, SHAPE, WALK, CONTEXT, and CHAIN planes. */
 #include "program_internal.h"
 #include "laplace/highway.h"
+#include <unicode/uchar.h>
 
 /* Rows in content order: a result comes in the order the server's scans met its rows, which another install of the
  * same content meets differently; what is folded from it (a sum, the first of a level set) is folded in this order. */
@@ -39,6 +40,16 @@ static void init_composed_words(State *st){
     }
 }
 
+typedef struct { lp_id target; size_t offset, length; int found; } FirstSegFind;
+static void first_seg_cb(void *sink, size_t offset, size_t length, const lp_ref *value){
+    FirstSegFind *f = sink;
+    if (!f->found && lp_id_eq(&value->id, &f->target)) {
+        f->offset = offset;
+        f->length = length;
+        f->found = 1;
+    }
+}
+
 void resolve_salience(State *st){
     free(st->salience_rows); st->salience_rows = NULL; st->nsalience = 0;
     st->max_salience = 0.0; st->nspans = 0;
@@ -49,7 +60,7 @@ void resolve_salience(State *st){
 
     init_composed_words(st);
 
-    lp_id q_occ[MAXOCC]; int nq = 0;
+    lp_id q_occ[MAXOCC + 1]; int nq = 0;
     for (int i = 0; i < st->nocc; i++) {
         if (!st->composed[i]) continue;
         int dup = 0;
@@ -57,6 +68,43 @@ void resolve_salience(State *st){
         if (!dup) q_occ[nq++] = st->occ[i];
     }
     if (nq == 0) return;
+
+    int has_lower_var = 0;
+    lp_id lower_id = { { 0 } };
+    if (st->composed[0] && st->prompt_text && st->prompt_len > 0) {
+        FirstSegFind fs = { .target = st->occ[0], .offset = 0, .length = 0, .found = 0 };
+        lp_text_segments(st->c, st->prompt_text, st->prompt_len, first_seg_cb, &fs);
+        if (fs.found && fs.length > 0 && fs.offset + fs.length <= st->prompt_len) {
+            const uint8_t *seg = st->prompt_text + fs.offset;
+            size_t pos = 0; uint32_t cp0 = 0;
+            if (lp_utf8_next(seg, fs.length, &pos, &cp0) && u_isupper((UChar32)cp0)) {
+                int has_lower_tail = 0;
+                for (size_t p2 = pos; p2 < fs.length; ) {
+                    uint32_t cpk = 0;
+                    if (!lp_utf8_next(seg, fs.length, &p2, &cpk)) break;
+                    if (u_islower((UChar32)cpk)) { has_lower_tail = 1; break; }
+                }
+                if (has_lower_tail) {
+                    uint8_t low_first[4];
+                    size_t lfl = lp_utf8_put((uint32_t)u_tolower((UChar32)cp0), low_first);
+                    size_t tail = fs.length - pos;
+                    uint8_t *lbuf = malloc(lfl + tail);
+                    if (lbuf) {
+                        memcpy(lbuf, low_first, lfl);
+                        if (tail) memcpy(lbuf + lfl, seg + pos, tail);
+                        lower_id = lp_text_decompose(st->c, lbuf, lfl + tail, NULL, NULL).id;
+                        free(lbuf);
+                        if (!lp_id_eq(&lower_id, &st->occ[0])) {
+                            has_lower_var = 1;
+                            int dup = 0;
+                            for (int k = 0; k < nq && !dup; k++) dup = lp_id_eq(&q_occ[k], &lower_id);
+                            if (!dup && nq <= MAXOCC) q_occ[nq++] = lower_id;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     int nsal = 0;
     st->work.db_probes++;
@@ -68,14 +116,18 @@ void resolve_salience(State *st){
     st->salience_rows = rows;
     st->nsalience = nsal;
 
+    int found_lower = 0; long lower_df = 0; double lower_sal = 0.0;
     for (int r = 0; r < nsal; r++) {
         long row_df = rows[r].df > LONG_MAX ? LONG_MAX : (rows[r].df < 0 ? 0L : (long)rows[r].df);
+        if (has_lower_var && lp_id_eq(&rows[r].id, &lower_id)) {
+            found_lower = 1;
+            lower_df = row_df;
+            lower_sal = rows[r].salience;
+        }
         for (int i = 0; i < st->nocc; i++) {
             if (!st->composed[i] || !lp_id_eq(&rows[r].id, &st->occ[i])) continue;
             st->salience[i] = rows[r].salience;
             st->df[i] = row_df;
-            if (row_df > st->df_max) st->df_max = row_df;
-            if (rows[r].salience > st->max_salience) st->max_salience = rows[r].salience;
             st->df_ready = 1;
         }
         if (st->fw->multi_tier && rows[r].tier >= 2 && rows[r].span_lift > 0.0 &&
@@ -89,6 +141,19 @@ void resolve_salience(State *st){
                 st->spans[st->nspans++] = rows[r].id;
             }
         }
+    }
+    if (has_lower_var && found_lower && lower_df > st->df[0]) {
+        st->occ0_lower = lower_id;
+        st->has_occ0_lower = 1;
+        if (lower_sal <= st->salience[0]) {
+            st->df[0] = lower_df;
+            st->salience[0] = lower_sal;
+        }
+    }
+    for (int i = 0; i < st->nocc; i++) {
+        if (!st->composed[i]) continue;
+        if (st->df[i] > st->df_max) st->df_max = st->df[i];
+        if (st->salience[i] > st->max_salience) st->max_salience = st->salience[i];
     }
     /* Synthesize high-salience composed multi-word spans locally when multi_tier is enabled. */
     if (st->fw->multi_tier && st->max_salience > 0.0) {
@@ -111,6 +176,26 @@ void resolve_salience(State *st){
                 }
             }
         }
+        for (int i = 0; i + 4 < st->nocc && st->nspans < MAXOCC; i++) {
+            if (st->composed[i] && !st->composed[i + 1] && st->composed[i + 2] &&
+                !st->composed[i + 3] && st->composed[i + 4] &&
+                st->salience[i] >= thresh && st->salience[i + 4] >= thresh) {
+                lp_id seg[5] = { st->occ[i], st->occ[i + 1], st->occ[i + 2], st->occ[i + 3], st->occ[i + 4] };
+                lp_id span_id;
+                lp_id_compose(seg, 5, &span_id);
+                if (!lp_id_eq(&span_id, &st->prompt)) {
+                    int dup = 0;
+                    for (int k = 0; k < st->nspans && !dup; k++) dup = lp_id_eq(&st->spans[k], &span_id);
+                    if (!dup) {
+                        memset(&st->span_bits[st->nspans], 0, sizeof(Bits));
+                        bit_set(&st->span_bits[st->nspans], i);
+                        bit_set(&st->span_bits[st->nspans], i + 2);
+                        bit_set(&st->span_bits[st->nspans], i + 4);
+                        st->spans[st->nspans++] = span_id;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -119,15 +204,31 @@ static void apply_salience_roles(State *st, const double *best_upos_score){
     const Firmware *fw = st->fw;
     if (st->nsalience <= 0 || st->max_salience <= 0.0) return;
     double max_s = st->max_salience;
+    int any_upos_anchor = 0;
+    for (int i = 0; i < st->nocc; i++) {
+        if (st->composed[i] && best_upos_score && best_upos_score[i] > 0.0 && st->role[i] >= 0.75) {
+            any_upos_anchor = 1;
+            break;
+        }
+    }
     for (int i = 0; i < st->nocc; i++) {
         if (!st->composed[i]) continue;
         double sn = st->salience[i] / max_s;
         if (sn < 0.0) sn = 0.0;
         if (sn > 1.0) sn = 1.0;
+        int has_upos = (best_upos_score && best_upos_score[i] > 0.0);
         if (sn >= 0.50) {
-            double lift = 0.75 + 0.25 * sn;
-            if (lift > st->role[i]) st->role[i] = lift;
-        } else if (st->role_votes[i] == 0 && (!best_upos_score || best_upos_score[i] < 0.0)) {
+            if (has_upos && st->role[i] < 0.75) {
+                /* Respect explicit firmware UPOS role below anchor threshold (e.g. VERB/ADV/PRON/DET/AUX). */
+            } else if (!has_upos && any_upos_anchor && st->df_ready && st->df[i] >= 50) {
+                double damped = 0.25 * sn;
+                if (st->polarity[i] < 0 && damped < 0.35) damped = 0.35;
+                if (damped < st->role[i]) st->role[i] = damped;
+            } else {
+                double lift = 0.75 + 0.25 * sn;
+                if (lift > st->role[i]) st->role[i] = lift;
+            }
+        } else if (st->role_votes[i] == 0 && !has_upos) {
             double damped = st->role[i] * (sn < 0.25 ? (0.10 + 0.50 * sn) : (0.20 + 0.80 * sn));
             if (st->polarity[i] < 0 && damped < 0.35) damped = 0.35;
             st->role[i] = damped;
@@ -138,6 +239,18 @@ static void apply_salience_roles(State *st, const double *best_upos_score){
         }
         if (st->role[i] > 0.0) bit_set(&st->open, i);
     }
+}
+
+static int is_active_negate_operator(const State *st, int i){
+    const Firmware *fw = st->fw;
+    int is_neg = 0;
+    for (int z = 0; z < fw->nnegate && !is_neg; z++) is_neg = lp_id_eq(&st->occ[i], &fw->id.negate[z]);
+    if (!is_neg || !st->composed[i]) return 0;
+    for (int k = i + 1; k < st->nocc; k++) {
+        for (int s = 0; s < fw->nscope_stop; s++) if (lp_id_eq(&st->occ[k], &fw->id.scope_stop[s])) return 0;
+        if (st->composed[k]) return 1;
+    }
+    return 0;
 }
 
 /* Fallback POS weighting directly from claims already fetched in COUPLE (no extra DB trip). */
@@ -185,6 +298,17 @@ static void roles_fallback_from_holds(State *st, const Hold *h, int nh, const lp
         }
     }
     apply_salience_roles(st, best_score);
+    double max_s = st->max_salience > 0.0 ? st->max_salience : 1.0;
+    for (int i = 0; i < st->nocc; i++) {
+        if (is_active_negate_operator(st, i)) {
+            if (st->role[i] > 0.15) st->role[i] = 0.15;
+        } else if (st->polarity[i] < 0 && st->composed[i] && st->role[i] < 0.85 &&
+                   !(best_score[i] > 0.0 && st->role[i] < 0.75) &&
+                   (best_score[i] > 0.0 || st->salience[i] >= 0.25 * max_s)) {
+            st->role[i] = 0.85;
+            bit_set(&st->open, i);
+        }
+    }
 }
 
 void resolve_roles(State *st){
@@ -211,13 +335,21 @@ void resolve_polarity(State *st){
             if (st->role[i] < 0.35) st->role[i] = 0.35;
             bit_set(&st->open, i);
         }
-        int scoped = 0;
+        int scoped = 0, best_k = -1;
+        double best_sc = -1.0;
         for (int k = i + 1; k < st->nocc && scoped < 3; k++) {
             int stop = 0;
             for (int s = 0; s < fw->nscope_stop && !stop; s++) stop = lp_id_eq(&st->occ[k], &fw->id.scope_stop[s]);
             if (stop) break;
-            if (st->composed[k]) { st->polarity[k] = -1; scoped++; }
+            if (st->composed[k]) {
+                st->polarity[k] = -1;
+                scoped++;
+                double sc = st->salience[k] > 0.0 ? st->salience[k] : st->role[k];
+                if (best_k < 0 || sc > best_sc) { best_k = k; best_sc = sc; }
+            }
         }
+        if (scoped > 0 && st->composed[i]) { st->role[i] = 0.15; bit_set(&st->open, i); }
+        if (best_k >= 0 && st->role[best_k] < 0.85) { st->role[best_k] = 0.85; bit_set(&st->open, best_k); }
     }
 }
 
@@ -330,7 +462,8 @@ int shape_measured(State *st, const lp_id *ids, int n, const int *occ_of, const 
     lp_idmap *seen = lp_idmap_new();
     int *pick = malloc(sizeof(int) * (size_t)(nh ? nh : 1)), np_ = 0;
     lp_idmap *verts = lp_idmap_new();
-    for (int i = 0; i < nh; i++) {
+    int max_cand = (st->envelope && fw->nearest > 0) ? fw->nearest : 256;
+    for (int i = 0; i < nh && np_ < max_cand; i++) {
         if (h[i].claim || lp_id_eq(&h[i].entity, &st->prompt) ||
             lp_is_internal_metadata_path(st->c, h[i].path, (size_t)h[i].path_len))
             continue;
@@ -401,8 +534,13 @@ static void head_note(State *st, Cell *x, const lp_id *rel, double conf, int occ
     if (occ >= 0) bit_set(&s->support, occ);
 }
 
+static Bits LAYER_ANCHORS;
+
 static int by_force_layer(const void *a, const void *b){
     const Cell *x = *(const Cell *const *)a, *y = *(const Cell *const *)b;
+    int ax = bit_count_and(&x->support, &LAYER_ANCHORS) + bit_count_and(&x->neg_support, &LAYER_ANCHORS);
+    int ay = bit_count_and(&y->support, &LAYER_ANCHORS) + bit_count_and(&y->neg_support, &LAYER_ANCHORS);
+    if (ax != ay) return ax > ay ? -1 : 1;
     if (x->force != y->force) return x->force > y->force ? -1 : 1;
     return memcmp(&x->id, &y->id, 16);
 }
@@ -410,11 +548,24 @@ static int by_force_layer(const void *a, const void *b){
 int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
     const Firmware *fw = st->fw;
     const lp_highway *hw = lp_highway_map(NULL);
+    memset(&LAYER_ANCHORS, 0, sizeof LAYER_ANCHORS);
+    for (int i = 0; i < st->nocc; i++) {
+        if (!st->composed[i] || !((st->open.w[i >> 6] >> (i & 63)) & 1)) continue;
+        if (st->role[i] >= 0.75) bit_set(&LAYER_ANCHORS, i);
+    }
+    if (!bit_count_and(&LAYER_ANCHORS, &LAYER_ANCHORS)) {
+        for (int i = 0; i < st->nocc; i++) {
+            if (st->composed[i] && ((st->open.w[i >> 6] >> (i & 63)) & 1))
+                bit_set(&LAYER_ANCHORS, i);
+        }
+    }
     Cell **c = malloc(sizeof(Cell *) * (size_t)(fd->n ? fd->n : 1));
     int m = 0;
     for (int z = 0; z < fd->n; z++) {
         Cell *x = &fd->c[z];
-        if (x->layer != round - 1 || x->hub || !(x->force > 0) || x->segment) continue;
+        if (x->layer != round - 1 || x->hub || !(x->force > 0) ||
+            (x->segment && !x->bridge && !x->routes[R_CLAIM] && !x->routes[R_LAYER] &&
+             (bit_count_and(&x->support, &LAYER_ANCHORS) + bit_count_and(&x->neg_support, &LAYER_ANCHORS)) < 2)) continue;
         int own = 0; for (int i = 0; i < st->nocc && !own; i++) own = lp_id_eq(&st->occ[i], &x->id);
         if (own || lp_tier0_codepoint(T0, &x->id) >= 0) continue;
         c[m++] = x;
@@ -422,10 +573,12 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
     if (!m) { free(c); return 0; }
     qsort(c, (size_t)m, sizeof(Cell *), by_force_layer);
     if (m > fw->breadth) m = fw->breadth;
+    if (st->envelope && st->envelope->preset <= LP_ENVELOPE_STANDARD && m > 32) m = 32;
     lp_id *keys = malloc(sizeof(lp_id) * (size_t)m);
+    lp_id *vias = malloc(sizeof(lp_id) * (size_t)m);
     Bits *sup = malloc(sizeof(Bits) * (size_t)m), *nsup = malloc(sizeof(Bits) * (size_t)m);
     double *fo = malloc(sizeof(double) * (size_t)m);
-    for (int i = 0; i < m; i++) { keys[i] = c[i]->id; sup[i] = c[i]->support; nsup[i] = c[i]->neg_support; fo[i] = c[i]->force; }
+    for (int i = 0; i < m; i++) { keys[i] = c[i]->id; vias[i] = c[i]->via; sup[i] = c[i]->support; nsup[i] = c[i]->neg_support; fo[i] = c[i]->force; }
     free(c);
 
     int *hub = malloc(sizeof(int) * 2 * (size_t)m), nh = 0;
@@ -445,13 +598,19 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
         if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->handle) ||
                           lp_id_eq(&rn.v[0], &st->prompt) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
         int other = lp_tuple_other(rn.v, rn.n, &keys[s]);
-        if (other < 0 || lp_id_eq(&rn.v[other], &keys[s]) || lp_id_eq(&rn.v[other], &st->prompt) || lp_id_eq(&rn.v[other], &st->handle)) continue;
+        if (other < 0 || lp_id_eq(&rn.v[other], &keys[s]) || lp_id_eq(&rn.v[other], &st->prompt) || lp_id_eq(&rn.v[other], &st->handle) || lp_id_eq(&rn.v[other], &vias[s])) continue;
         lp_id rel = rn.n >= 3 ? rn.v[1] : keys[s];
         int flip = 0;
         for (size_t p = 1; p + 1 < rn.n && !flip; p++) flip = is_neg_rel(st, &rn.v[p]);
         double conf = lp_confidence(&h[r].r, fw->k) * strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n) * fo[s] / (outdeg[s] ? outdeg[s] : 1);
         int before = fd->n; Cell *x = cell(fd, &rn.v[other]);
-        if (fd->n > before) { x->layer = round; fresh_n++; }
+        int is_new = (fd->n > before);
+        if (!is_new && x->segment && !x->bridge && !x->routes[R_CLAIM] && x->layer == 0) continue;
+        int is_sense_edge = (rn.n >= 3 && is_lexical_sense_rel(st, &rel));
+        if (is_sense_edge && (size_t)other == rn.n - 1) x->bridge = 1;
+        else if (is_sense_edge && other == 0) x->bridge = 0;
+        int prev_anc = is_new ? 0 : bit_count_and(&x->support, &LAYER_ANCHORS);
+        if (is_new) { x->layer = round; fresh_n++; }
         if (lp_tier0_codepoint(T0, &rn.v[other]) < 0 && !(hw && lp_highway_bank_of(hw, &rn.v[other], NULL)) && h[r].tier > x->tier)
             x->tier = h[r].tier;
         x->force += conf; x->routes[R_LAYER]++;
@@ -459,13 +618,17 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
             x->support.w[w] |= (flip ? nsup[s].w[w] : sup[s].w[w]);
             x->neg_support.w[w] |= (flip ? sup[s].w[w] : nsup[s].w[w]);
         }
+        if (!is_new && x->layer < round && bit_count_and(&x->support, &LAYER_ANCHORS) > prev_anc) {
+            x->layer = round;
+            fresh_n++;
+        }
         int have = 0; for (int k = 0; k < x->nheads && k < CELL_HEADS; k++) have |= lp_id_eq(&x->heads[k], &rel);
         if (!have) { if (x->nheads < CELL_HEADS) x->heads[x->nheads] = rel; x->nheads++; }
         if (heads_out) {
             bool f; HeadStat *hs = lp_idmap_at(heads_out, lp_idmap_put(heads_out, &rel, &f));
             if (f) memset(hs, 0, sizeof *hs);
             hs->strands++; hs->force += conf;
-            for (int w = 0; w < MAXOCC / 64; w++) hs->support.w[w] |= sup[s].w[w];
+            for (int w = 0; w < MAXOCC / 64; w++) hs->support.w[w] |= sup[s].w[w] | nsup[s].w[w];
         }
         if (!x->has_r) { x->r = h[r].r; x->has_r = 1; x->via = keys[s]; x->rel = rel; }
 
@@ -483,7 +646,7 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
             if (!xa->has_r) { xa->r = h[r].r; xa->has_r = 1; xa->via = keys[s]; xa->rel = rel; }
         }
     }
-    holds_free(h, nh); free(hub); free(outdeg); free(keys); free(sup); free(nsup); free(fo); lp_vec_free(&rn);
+    holds_free(h, nh); free(hub); free(outdeg); free(keys); free(vias); free(sup); free(nsup); free(fo); lp_vec_free(&rn);
     return fresh_n;
 }
 
@@ -559,6 +722,7 @@ void couple_ingest_holds(State *st, Field *fd, const Hold *h, int nh, const int 
         for (int s = 0; s < nk; s++) {
             int o = of[s], occ = occ_of[o];
             if (occ >= 0 && occ < st->nocc) key_to_occ[s] = occ;
+            else if (occ == -1000) key_to_occ[s] = 0;
         }
         roles_fallback_from_holds(st, h, nh, keys, key_to_occ, nk);
     }
@@ -567,6 +731,7 @@ void couple_ingest_holds(State *st, Field *fd, const Hold *h, int nh, const int 
         int s = h[i].src; if (s < 0 || s >= nk) continue;
         int o = of[s];
         int raw_occ = occ_of ? occ_of[o] : -1;
+        if (raw_occ == -1000) continue;
         int occ = raw_occ >= 0 ? raw_occ : -1;
         int eff_kind = (raw_occ == -2) ? R_DISCOURSE : kind;
         Bits span_sup = { 0 };
@@ -594,6 +759,9 @@ void couple_ingest_holds(State *st, Field *fd, const Hold *h, int nh, const int 
             for (size_t p = 1; p + 1 < rn.n && !flip_occ; p++) flip_occ = is_neg_rel(st, &rn.v[p]);
             double conf = lp_confidence(&h[i].r, fw->k) * strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n);
             Cell *x = cell(fd, &rn.v[other]);
+            int is_sense_edge = (rn.n >= 3 && is_lexical_sense_rel(st, &rel));
+            if (is_sense_edge && (size_t)other == rn.n - 1) x->bridge = 1;
+            else if (is_sense_edge && other == 0) x->bridge = 0;
             x->force += conf * pull;
             x->routes[eff_kind]++;
             if (lp_tier0_codepoint(T0, &rn.v[other]) < 0 && !(hw && lp_highway_bank_of(hw, &rn.v[other], NULL)) && h[i].tier > x->tier)
@@ -628,8 +796,10 @@ void couple_ingest_holds(State *st, Field *fd, const Hold *h, int nh, const int 
             Cell *x = cell(fd, &h[i].entity);
             x->segment = 1; x->tier = h[i].tier;
             x->force += pull; x->routes[R_CONTAIN]++;
-            if (occ >= 0) bit_set(&x->support, occ);
-            else if (bit_count_and(&span_sup, &span_sup) > 0) {
+            if (occ >= 0) {
+                if (occ < st->nocc && st->polarity[occ] < 0) bit_set(&x->neg_support, occ);
+                else bit_set(&x->support, occ);
+            } else if (bit_count_and(&span_sup, &span_sup) > 0) {
                 for (int w = 0; w < MAXOCC / 64; w++) x->support.w[w] |= span_sup.w[w];
             }
             if (fw->multi_tier && h[i].tier >= 2) {
@@ -639,7 +809,11 @@ void couple_ingest_holds(State *st, Field *fd, const Hold *h, int nh, const int 
                 for (int j = 0; j < st->nocc; j++) {
                     if (!st->composed[j]) continue;
                     for (size_t q = 0; q < nv; q++) {
-                        if (lp_id_eq(&rn.v[q], &st->occ[j])) { bit_set(&x->support, j); break; }
+                        if (lp_id_eq(&rn.v[q], &st->occ[j])) {
+                            if (st->polarity[j] < 0) bit_set(&x->neg_support, j);
+                            else bit_set(&x->support, j);
+                            break;
+                        }
                     }
                 }
             }
@@ -667,7 +841,11 @@ void couple_ingest_holds(State *st, Field *fd, const Hold *h, int nh, const int 
                 int other = lp_tuple_other(rn.v, rn.n, &hk[s]); if (other < 0) continue;
                 lp_rating rt = h2[i].r; lp_id rel = rn.n >= 3 ? rn.v[1] : hk[s];
                 double conf = lp_confidence(&rt, fw->k) * strand_weight(fw, fw->id.weigh, rn.v, (int)rn.n);
-                Cell *x = cell(fd, &rn.v[other]); x->force += conf * pull; x->routes[eff_kind]++;
+                Cell *x = cell(fd, &rn.v[other]);
+                int is_sense_edge = (rn.n >= 3 && is_lexical_sense_rel(st, &rel));
+                if (is_sense_edge && (size_t)other == rn.n - 1) x->bridge = 1;
+                else if (is_sense_edge && other == 0) x->bridge = 0;
+                x->force += conf * pull; x->routes[eff_kind]++;
                 if (occ >= 0) {
                     int neg = (occ < st->nocc && st->polarity[occ] < 0) ^ is_neg_rel(st, &rel);
                     if (neg) bit_set(&x->neg_support, occ); else bit_set(&x->support, occ);

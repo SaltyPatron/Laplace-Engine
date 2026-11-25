@@ -108,6 +108,39 @@ LpEngineHandle *lp_engine_init(const char *conninfo, char *err, size_t err_cap){
     return h;
 }
 
+typedef struct {
+    LpEngineTurnStep *items;
+    uint32_t          count;
+    uint32_t          cap;
+} TurnStepCollector;
+
+static void collect_turn_step(void *ctx, int step, const char *kind, const lp_id *id,
+                              const char *text, double grounds, int continuity, double confidence){
+    TurnStepCollector *c = (TurnStepCollector *)ctx;
+    if (!c) return;
+    if (c->count == c->cap) {
+        uint32_t ncap = c->cap ? c->cap * 2u : 16u;
+        LpEngineTurnStep *next = realloc(c->items, sizeof(LpEngineTurnStep) * (size_t)ncap);
+        if (!next) return;
+        c->items = next;
+        c->cap = ncap;
+    }
+    LpEngineTurnStep *s = &c->items[c->count++];
+    memset(s, 0, sizeof *s);
+    s->step = step;
+    s->continuity = continuity;
+    if (id) s->entity_id = *id;
+    s->grounds = grounds;
+    s->confidence = confidence;
+    if (kind && *kind) snprintf(s->kind, sizeof s->kind, "%s", kind);
+    if (text && *text) {
+        s->text_len = strlen(text);
+        s->text = malloc(s->text_len + 1);
+        if (s->text) memcpy(s->text, text, s->text_len + 1);
+        else s->text_len = 0;
+    }
+}
+
 int32_t lp_engine_turn(LpEngineHandle *h, const LpEngineTurnRequest *req, LpEngineTurnResponse *out){
     if (!h || !req || !out) return 2;
     memset(out, 0, sizeof *out);
@@ -220,6 +253,7 @@ int32_t lp_engine_turn(LpEngineHandle *h, const LpEngineTurnRequest *req, LpEngi
         return 1;
     }
 
+    TurnStepCollector steps_col = { 0 };
     LpForwardRequest freq = {
         .pg = pg,
         .conninfo = (!req->read_only && h->conninfo) ? h->conninfo : NULL,
@@ -240,7 +274,9 @@ int32_t lp_engine_turn(LpEngineHandle *h, const LpEngineTurnRequest *req, LpEngi
         .witness_scoped = req->authority ? req->authority->scoped : 0,
         .envelope = &env,
         .discourse = ndisc > 0 ? disc : NULL,
-        .ndiscourse = ndisc
+        .ndiscourse = ndisc,
+        .on_step = collect_turn_step,
+        .on_step_ctx = &steps_col
     };
     LpForwardResult fres = { 0 };
     int rc = lp_forward_execute(&freq, &fres);
@@ -285,6 +321,10 @@ int32_t lp_engine_turn(LpEngineHandle *h, const LpEngineTurnRequest *req, LpEngi
     out->text = fres.text;
     out->text_len = fres.text_len;
     fres.text = NULL;
+    out->ordinal = fres.ordinal > 0 ? fres.ordinal : 1;
+    out->turns_before = fres.turns_before;
+    out->steps = steps_col.items;
+    out->nsteps = steps_col.count;
     snprintf(out->disposition, sizeof out->disposition, "%s", fres.disposition);
     snprintf(out->error, sizeof out->error, "%s", fres.error);
     lp_forward_result_free(&fres);
@@ -296,6 +336,10 @@ void lp_engine_turn_response_free(LpEngineTurnResponse *out){
     free(out->text);
     free(out->patched_code);
     free(out->shares);
+    if (out->steps) {
+        for (uint32_t i = 0; i < out->nsteps; i++) free(out->steps[i].text);
+        free(out->steps);
+    }
     memset(out, 0, sizeof *out);
 }
 
@@ -352,11 +396,24 @@ int32_t lp_engine_mold_checkpoint(LpEngineHandle *h, const LpEngineMoldRequest *
                                           dummy_disp, sizeof dummy_disp, out->error, sizeof out->error);
     if (auth_rc) { out->status_code = auth_rc; return auth_rc; }
 
+    if (req->format != 0 && req->format != 1) {
+        out->status_code = 2;
+        snprintf(out->error, sizeof out->error, "unsupported mold export format %d (expected 0=GGUF or 1=SafeTensors)", req->format);
+        return 2;
+    }
+
     uint32_t max_vocab = req->max_vocab ? req->max_vocab : 1024u;
     if (max_vocab < 16u) max_vocab = 16u;
     uint32_t hidden_dim = req->hidden_dim >= 16u ? req->hidden_dim : 64u;
     uint32_t n_layers = req->n_layers ? req->n_layers : 4u;
     uint32_t n_heads = req->n_heads ? req->n_heads : 4u;
+    uint32_t n_kv_heads = req->n_kv_heads ? req->n_kv_heads : n_heads;
+    if ((n_heads % n_kv_heads) != 0) {
+        out->status_code = 2;
+        snprintf(out->error, sizeof out->error, "n_heads (%u) must be divisible by n_kv_heads (%u)", n_heads, n_kv_heads);
+        return 2;
+    }
+    uint32_t ffn_dim = req->ffn_dim ? req->ffn_dim : (hidden_dim * 4u);
 
     lp_idmap *vmap = lp_idmap_new();
     size_t seeded_count = (max_vocab >= 320u) ? 259u : 3u;
@@ -500,11 +557,13 @@ int32_t lp_engine_mold_checkpoint(LpEngineHandle *h, const LpEngineMoldRequest *
         .hidden_dim = hidden_dim,
         .n_layers = n_layers,
         .n_heads = n_heads,
-        .n_kv_heads = n_heads,
-        .ffn_dim = hidden_dim * 4u,
+        .n_kv_heads = n_kv_heads,
+        .ffn_dim = ffn_dim,
         .rms_eps = 1e-5,
         .rope_base = 10000.0,
-        .f16_weights = req->f16_weights
+        .f16_weights = req->f16_weights,
+        .format = req->format,
+        .tied_embeddings = req->tied_embeddings ? 1 : 0
     };
 
     int rc = lp_mold_export(&spec);

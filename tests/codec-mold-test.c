@@ -389,7 +389,7 @@ static void test_git_and_toolchain(void){
 static void test_mold_gguf_export(void){
     const size_t V = 16;
     static const char *WORDS[16] = {
-        "<s>", "</s>", "alpha", "beta", "gamma", "delta", "epsilon", "zeta",
+        "<s>", "</s>", "dog", "god", "gamma", "delta", "epsilon", "zeta",
         "eta", "theta", "iota", "kappa", "lambda", "mu", "nu", "xi"
     };
     static const int ROWS[12] = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
@@ -419,7 +419,9 @@ static void test_mold_gguf_export(void){
         .ffn_dim = 32,
         .rms_eps = 1e-5,
         .rope_base = 10000.0,
-        .f16_weights = 0
+        .f16_weights = 0,
+        .format = 0,
+        .tied_embeddings = 0
     };
     assert(lp_mold_export(&sp) == 0);
 
@@ -480,7 +482,49 @@ static void test_mold_gguf_export(void){
     float *ebuf = malloc(sizeof(float) * V * 16u);
     const uint8_t *ep = gb + lp_gguf_data_offset(g) + lp_gguf_tensor_offset(g, (size_t)ei);
     assert(lp_tensor_decode_f32(ep, V * 16u, LP_DTYPE_F32, ebuf) == 0);
+    double anag_diff2 = 0.0;
+    for (size_t d = 0; d < 16u; d++) {
+        double df = (double)ebuf[2u * 16u + d] - (double)ebuf[3u * 16u + d];
+        anag_diff2 += df * df;
+    }
+    assert(sqrt(anag_diff2) > 1e-4); /* "dog" vs "god" strictly separated */
     free(ebuf);
+
+    /* Verify per-layer distinct operators and non-diagonal attention weights */
+    int64_t q0i = lp_gguf_find_tensor(g, "blk.0.attn_q.weight");
+    int64_t q1i = lp_gguf_find_tensor(g, "blk.1.attn_q.weight");
+    int64_t g0i = lp_gguf_find_tensor(g, "blk.0.ffn_gate.weight");
+    int64_t g1i = lp_gguf_find_tensor(g, "blk.1.ffn_gate.weight");
+    assert(q0i >= 0 && q1i >= 0 && g0i >= 0 && g1i >= 0);
+
+    float *q0 = malloc(sizeof(float) * 16u * 16u);
+    float *q1 = malloc(sizeof(float) * 16u * 16u);
+    assert(lp_tensor_decode_f32(gb + lp_gguf_data_offset(g) + lp_gguf_tensor_offset(g, (size_t)q0i), 256u, LP_DTYPE_F32, q0) == 0);
+    assert(lp_tensor_decode_f32(gb + lp_gguf_data_offset(g) + lp_gguf_tensor_offset(g, (size_t)q1i), 256u, LP_DTYPE_F32, q1) == 0);
+    double off_diag = 0.0, q_layer_diff = 0.0;
+    for (size_t r = 0; r < 16u; r++) {
+        for (size_t c = 0; c < 16u; c++) {
+            size_t idx = r * 16u + c;
+            if (r != c) off_diag += (double)q0[idx] * (double)q0[idx];
+            double df = (double)q0[idx] - (double)q1[idx];
+            q_layer_diff += df * df;
+        }
+    }
+    assert(sqrt(off_diag) > 1e-4);
+    assert(sqrt(q_layer_diff) > 1e-4);
+    free(q0); free(q1);
+
+    float *g0 = malloc(sizeof(float) * 32u * 16u);
+    float *g1 = malloc(sizeof(float) * 32u * 16u);
+    assert(lp_tensor_decode_f32(gb + lp_gguf_data_offset(g) + lp_gguf_tensor_offset(g, (size_t)g0i), 512u, LP_DTYPE_F32, g0) == 0);
+    assert(lp_tensor_decode_f32(gb + lp_gguf_data_offset(g) + lp_gguf_tensor_offset(g, (size_t)g1i), 512u, LP_DTYPE_F32, g1) == 0);
+    double g_layer_diff = 0.0;
+    for (size_t i = 0; i < 512u; i++) {
+        double df = (double)g0[i] - (double)g1[i];
+        g_layer_diff += df * df;
+    }
+    assert(sqrt(g_layer_diff) > 1e-4);
+    free(g0); free(g1);
 
     lp_gguf_close(g);
     lp_unmap_file(gb, gsz);
@@ -488,8 +532,84 @@ static void test_mold_gguf_export(void){
     char *m_argv[] = { "model", (char *)gguf_path, "--cap", "8", "--z", "1.5", NULL };
     assert(cmd_model(6, m_argv) == 0);
     assert(remove(gguf_path) == 0);
-    printf("[PASS] Mold-a-Model GGUF export (laplace-blake3-v1, rank %llu > 4, Fisher %zu lineages SUM == 10000) + cmd_model assimilation\n",
+    printf("[PASS] Mold-a-Model GGUF export (laplace-blake3-v1, rank %llu > 4, dog!=god, per-layer/head ops, Fisher %zu lineages SUM == 10000) + cmd_model assimilation\n",
            (unsigned long long)rank, nsh);
+}
+
+static void check_safetensors_file(const char *path, int expect_tied){
+    FILE *f = fopen(path, "rb");
+    assert(f != NULL);
+    uint8_t hlen8[8];
+    assert(fread(hlen8, 1, 8, f) == 8);
+    uint64_t hlen = 0;
+    for (int k = 0; k < 8; k++) hlen |= ((uint64_t)hlen8[k]) << (k * 8);
+    assert(hlen > 64 && (hlen % 8u) == 0);
+
+    char *hdr = malloc((size_t)hlen + 1u);
+    assert(fread(hdr, 1, (size_t)hlen, f) == (size_t)hlen);
+    hdr[hlen] = 0;
+
+    assert(fseek(f, 0, SEEK_END) == 0);
+    long fsz = ftell(f);
+    fclose(f);
+
+    assert(strstr(hdr, "\"__metadata__\"") != NULL);
+    assert(strstr(hdr, "\"laplace-blake3-v1\"") != NULL);
+    assert(strstr(hdr, "\"laplace.mold.fisher_total_bp\":\"10000\"") != NULL);
+    assert(strstr(hdr, "\"laplace.mold.raw_weight_bytes_retained\":\"0\"") != NULL);
+    assert(strstr(hdr, "\"model.embed_tokens.weight\"") != NULL);
+    assert(strstr(hdr, "\"model.layers.0.self_attn.q_proj.weight\"") != NULL);
+    assert(strstr(hdr, "\"model.layers.1.mlp.gate_proj.weight\"") != NULL);
+    if (expect_tied) assert(strstr(hdr, "\"lm_head.weight\"") == NULL);
+    else assert(strstr(hdr, "\"lm_head.weight\"") != NULL);
+
+    /* Find highest data_offsets[1] end offset and confirm exact file size == 8 + hlen + max_end */
+    uint64_t max_end = 0;
+    const char *p = hdr;
+    while ((p = strstr(p, "\"data_offsets\":[")) != NULL) {
+        p += 16;
+        uint64_t s = 0, e = 0;
+        assert(sscanf(p, "%llu,%llu]", (unsigned long long *)&s, (unsigned long long *)&e) == 2);
+        assert(e > s);
+        if (e > max_end) max_end = e;
+    }
+    assert((uint64_t)fsz == 8u + hlen + max_end);
+    free(hdr);
+}
+
+static void test_mold_safetensors_export(void){
+    const size_t V = 16;
+    static const char *WORDS[16] = {
+        "<s>", "</s>", "dog", "god", "gamma", "delta", "epsilon", "zeta",
+        "eta", "theta", "iota", "kappa", "lambda", "mu", "nu", "xi"
+    };
+    static const int ROWS[12] = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
+    static const int COLS[12] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 2 };
+    static const double W[12] = { 1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3 };
+    static const char *EW[12] = { "W0","W0","W0","W1","W1","W1","W2","W2","W2","W1","W1","W0" };
+    static const char *EL[12] = { "L_A","L_A","L_A","L_B","L_B","L_B","L_B","L_B","L_B","L_A","L_A","L_A" };
+
+    const char *st_untied = "laplace_mold_untied.safetensors";
+    const char *st_tied = "laplace_mold_tied.safetensors";
+    LpMoldSpec sp = {
+        .name = "mold-st",
+        .out_path = st_untied,
+        .n_vocab = V, .tokens = WORDS, .bos_id = 0, .eos_id = 1,
+        .n_edges = 12, .rows = ROWS, .cols = COLS, .weights = W,
+        .edge_witnesses = EW, .edge_lineages = EL,
+        .hidden_dim = 16, .n_layers = 2, .n_heads = 4, .n_kv_heads = 2, .ffn_dim = 32,
+        .rms_eps = 1e-5, .rope_base = 10000.0, .f16_weights = 1, .format = 1, .tied_embeddings = 0
+    };
+    assert(lp_mold_export(&sp) == 0);
+    check_safetensors_file(st_untied, 0);
+    assert(remove(st_untied) == 0);
+
+    sp.out_path = st_tied;
+    sp.tied_embeddings = 1;
+    assert(lp_mold_export(&sp) == 0);
+    check_safetensors_file(st_tied, 1);
+    assert(remove(st_tied) == 0);
+    printf("[PASS] Mold-a-Model native SafeTensors export (untied + tied, exact byte offsets & metadata)\n");
 }
 
 int main(void){
@@ -501,5 +621,6 @@ int main(void){
     test_parquet_and_shapefile();
     test_git_and_toolchain();
     test_mold_gguf_export();
+    test_mold_safetensors_export();
     return 0;
 }

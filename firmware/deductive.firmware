@@ -41,7 +41,7 @@ for pull
   salience 0.10
   multitier on
   combine on
-  refuse predicate BNC PENN GF PT NER WSL Target Other Sent Verb Noun Adj Prep Adv UPOS XPOS DEPREL FEATS MISC LEMMA type n f itype "identifier vocabulary"
+  refuse predicate BNC PENN GF PT NER WSL Target Other Sent Verb Noun Adj Prep Adv UPOS XPOS DEPREL FEATS MISC LEMMA type n f itype "identifier vocabulary" "pronunciation of a form" "variety of language"
   negate not no never without neither nor
   negate_relation antonym excludes contradicts
   scope_stop . ; : ? ! ,

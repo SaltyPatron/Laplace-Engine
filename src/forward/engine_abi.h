@@ -77,6 +77,17 @@ typedef struct {
 } LpEngineWitnessShare;
 
 typedef struct {
+    int32_t  step;
+    int32_t  continuity;
+    lp_id    entity_id;
+    double   grounds;
+    double   confidence;
+    char     kind[16];
+    char    *text;
+    size_t   text_len;
+} LpEngineTurnStep;
+
+typedef struct {
     int32_t               status_code;
     int32_t               ooda_verified;
     int32_t               ooda_unverified;
@@ -100,7 +111,10 @@ typedef struct {
     char                  error[512];
     LpEngineWitnessShare *shares;
     uint32_t              nshares;
-    int32_t               reserved;
+    int32_t               ordinal;
+    int32_t               turns_before;
+    uint32_t              nsteps;
+    LpEngineTurnStep     *steps;
 } LpEngineTurnResponse;
 
 typedef struct {
@@ -142,6 +156,10 @@ typedef struct {
     uint32_t                      n_layers;
     uint32_t                      n_heads;
     int32_t                       f16_weights;
+    int32_t                       format;           /* 0 = GGUF, 1 = SafeTensors */
+    uint32_t                      n_kv_heads;       /* 0 = default n_heads */
+    uint32_t                      ffn_dim;          /* 0 = default 4 * hidden_dim */
+    int32_t                       tied_embeddings;  /* 0 = untied output/lm_head, 1 = tied */
     int32_t                       reserved;
 } LpEngineMoldRequest;
 

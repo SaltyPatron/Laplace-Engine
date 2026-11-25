@@ -20,7 +20,7 @@ static inline void bit_clear(Bits *a, const Bits *b){ for (int i = 0; i < MAXOCC
 
 enum { R_CLAIM, R_FOLLOWS, R_DISCOURSE, R_SCAN, R_CONTAIN, R_LAYER, R_KINDS };
 #define CELL_HEADS 8
-typedef struct { lp_id id; double force, cost; Bits support, neg_support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, tier; lp_id heads[CELL_HEADS]; int nheads, layer; } Cell;
+typedef struct { lp_id id; double force, cost; Bits support, neg_support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, bridge, tier; lp_id heads[CELL_HEADS]; int nheads, layer; } Cell;
 typedef struct { Cell *c; int n; size_t cap; lp_idmap *m; } Field;
 static inline Cell *cell(Field *f, const lp_id *id){
     if (!f->m) f->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(f->m, id, &fresh);
@@ -34,7 +34,9 @@ static inline void field_free(Field *f){ free(f->c); lp_idmap_free(f->m); memset
 typedef struct {
     const Firmware *fw; PGconn *pg; Reader *rd; lp_text *c;
     Lexicalization lexical;
-    lp_id prompt, handle, program_id; lp_id occ[MAXOCC]; int nocc; double role[MAXOCC]; int composed[MAXOCC];
+    lp_id prompt, handle, program_id;
+    const uint8_t *prompt_text; size_t prompt_len;
+    lp_id occ[MAXOCC]; int nocc; double role[MAXOCC]; int composed[MAXOCC];
     int8_t polarity[MAXOCC];
     lp_id role_read[MAXOCC]; int role_votes[MAXOCC], role_seen[MAXOCC];    /* the reading each word is read as where it stands, by how many of how many observations of its run */
     lp_id disc[MAXOCC]; int ndisc;
@@ -55,6 +57,7 @@ typedef struct {
     const lp_id *witness_scope; int nwitness_scope, witness_scoped;
     const lp_envelope *envelope; lp_work_counters work; double t_start_s;
     double salience[MAXOCC], max_salience; LpSalienceRow *salience_rows; int nsalience;
+    lp_id occ0_lower; int has_occ0_lower;
     lp_id spans[MAXOCC]; Bits span_bits[MAXOCC]; int nspans;
     FILE *trace_out;
 } State;
@@ -78,6 +81,11 @@ static inline int head_read(const Firmware *fw, const lp_id *v, size_t n){
     if (fw->nonly_predicate && !lp_tuple_middle_any(v, n, fw->id.only, (size_t)fw->nonly_predicate)) return 0;
     return 1;
 }
+static inline int is_lexical_sense_rel(const State *st, const lp_id *rel){
+    if (st->lexical.np > 0 && lp_id_eq(rel, &st->lexical.sense)) return 1;
+    for (int u = 0; u < st->fw->nup; u++) if (lp_id_eq(rel, &st->fw->id.up[u])) return 1;
+    return 0;
+}
 static inline int lp_is_internal_metadata_path(lp_text *c, const uint8_t *path, size_t path_len){
     static _Thread_local int init = 0;
     static _Thread_local lp_id tag = { { 0 } };
@@ -85,6 +93,7 @@ static inline int lp_is_internal_metadata_path(lp_text *c, const uint8_t *path, 
     lp_path p = lp_path_of(path, path_len);
     if (p.n == 0) return 0;
     if (lp_path_said(p, 0) == LP_SAID_METADATA) return 1;
+    if (p.n == 2 && lp_path_said(p, 0) == LP_SAID_TUPLE) return 1;
     if (!init) {
         tag = lp_text_decompose(c, (const uint8_t *)"compiled reference binding v1", 29, NULL, NULL).id;
         init = 1;
