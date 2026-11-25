@@ -23,6 +23,7 @@ for search
 for pull
   fan 4096
   lexicalization wn-lmf Sense language ili
+  gloss wn-lmf Definition
   up @wn-lmf/Sense
   usages wordnet-cntlist tag_cnt
   rounds 3

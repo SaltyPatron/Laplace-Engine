@@ -20,7 +20,7 @@ static inline void bit_clear(Bits *a, const Bits *b){ for (int i = 0; i < MAXOCC
 
 enum { R_CLAIM, R_FOLLOWS, R_DISCOURSE, R_SCAN, R_CONTAIN, R_LAYER, R_KINDS };
 #define CELL_HEADS 8
-typedef struct { lp_id id; double force, cost; Bits support, neg_support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, bridge, tier; lp_id heads[CELL_HEADS]; int nheads, layer; } Cell;
+typedef struct { lp_id id; double force, cost; Bits support, neg_support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, bridge, tier, lateral_hop; lp_id heads[CELL_HEADS]; int nheads, layer; } Cell;
 typedef struct { Cell *c; int n; size_t cap; lp_idmap *m; } Field;
 static inline Cell *cell(Field *f, const lp_id *id){
     if (!f->m) f->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(f->m, id, &fresh);
@@ -84,6 +84,48 @@ static inline int head_read(const Firmware *fw, const lp_id *v, size_t n){
 static inline int is_lexical_sense_rel(const State *st, const lp_id *rel){
     if (st->lexical.np > 0 && lp_id_eq(rel, &st->lexical.sense)) return 1;
     for (int u = 0; u < st->fw->nup; u++) if (lp_id_eq(rel, &st->fw->id.up[u])) return 1;
+    static _Thread_local int ref_init = 0;
+    static _Thread_local lp_id ref_id;
+    if (!ref_init && st->c) {
+        ref_id = lp_text_decompose(st->c, (const uint8_t *)"reference", 9, NULL, NULL).id;
+        ref_init = 1;
+    }
+    return ref_init && lp_id_eq(rel, &ref_id);
+}
+static inline int is_gloss_rel(const State *st, const lp_id *rel){
+    if (!st || !rel) return 0;
+    if (st->lexical.has_gloss && lp_id_eq(rel, &st->lexical.gloss)) return 1;
+    static _Thread_local int init = 0;
+    static _Thread_local lp_id g0, g1, g2;
+    if (!init && st->c) {
+        g0 = lp_text_decompose(st->c, (const uint8_t *)"definition of the synset", 24, NULL, NULL).id;
+        g1 = lp_text_decompose(st->c, (const uint8_t *)"English definition", 18, NULL, NULL).id;
+        g2 = lp_text_decompose(st->c, (const uint8_t *)"standard definition of the synset", 33, NULL, NULL).id;
+        init = 1;
+    }
+    return init && (lp_id_eq(rel, &g0) || lp_id_eq(rel, &g1) || lp_id_eq(rel, &g2));
+}
+static inline int is_lateral_hop_rel(const State *st, const lp_id *rel){
+    if (!st || !rel || !st->c) return 0;
+    for (int i = 0; i < st->nocc; i++) if (lp_id_eq(&st->occ[i], rel)) return 0;
+    static const char *const LAT[] = {
+        "hypernym", "instance_hypernym", "hyponym", "instance_hyponym",
+        "mero_part", "holo_part", "mero_member", "holo_member",
+        "mero_substance", "holo_substance", "derivation", "pertainym", "antonym", "similar",
+        "also", "attribute", "domain_topic", "has_domain_topic", "domain_region", "has_domain_region",
+        "exemplifies", "is_exemplified_by", "a description of the tag or subtag in the record",
+        "other", "example usage"
+    };
+    static _Thread_local int init = 0;
+    static _Thread_local lp_id lat_ids[sizeof(LAT) / sizeof(LAT[0])];
+    if (!init) {
+        for (size_t i = 0; i < sizeof(LAT) / sizeof(LAT[0]); i++)
+            lat_ids[i] = lp_text_decompose(st->c, (const uint8_t *)LAT[i], strlen(LAT[i]), NULL, NULL).id;
+        init = 1;
+    }
+    for (size_t i = 0; i < sizeof(LAT) / sizeof(LAT[0]); i++) {
+        if (lp_id_eq(rel, &lat_ids[i])) return 1;
+    }
     return 0;
 }
 static inline int lp_is_internal_metadata_path(lp_text *c, const uint8_t *path, size_t path_len){

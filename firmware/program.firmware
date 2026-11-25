@@ -116,6 +116,7 @@ for pull
   # election order over it; a tie is what nothing in the evidence tells apart, and this firmware takes the first by ID
   # A text's language comes from its recipe-declared lexicalization, as for translation.
   lexicalization wn-lmf Sense language ili
+  gloss wn-lmf Definition
   # a word more than the fan's strands hold is reached, not crossed: it is read by bubbling up, the word together with
   # each of these relations (a two-key probe, selective however many strands the word has), and the pass goes on
   # from what that reaches (its senses), which are not hubs

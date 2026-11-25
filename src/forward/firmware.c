@@ -234,7 +234,7 @@ static int firmware_parse(const char *path, int op, Firmware *out, char *err, si
             int k_ = 0; char *nm;
             while (k_ < 4 && (nm = strtok(NULL, " \t\r\n")) && nm[0] != '#') snprintf(fw.lexical[k_++], 96, "%s", nm);
             if (k_ != 4) rc = fw_fail(err, err_cap, 2, "%s:%d: lexicalization RECIPE THING LANGUAGE CONCEPT\n", fw.path, line);
-        } else if (!strcmp(tok, "gloss") && in == FW_TRANSLATE) {
+        } else if (!strcmp(tok, "gloss") && (in == FW_TRANSLATE || in == FW_PULL)) {
             char *a_ = strtok(NULL, " \t\r\n"), *b_ = strtok(NULL, " \t\r\n");
             if (!a_ || !b_ || a_[0] == '#' || b_[0] == '#') rc = fw_fail(err, err_cap, 2, "%s:%d: gloss RECIPE NAME\n", fw.path, line);
             else { snprintf(fw.gloss[0], 96, "%s", a_); snprintf(fw.gloss[1], 96, "%s", b_); }

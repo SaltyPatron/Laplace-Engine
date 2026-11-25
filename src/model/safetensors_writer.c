@@ -1,4 +1,6 @@
 #include "safetensors_writer.h"
+#include "laplace/laplace.h"
+#include "laplace/json.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,58 +31,6 @@ struct lp_st_writer {
     size_t cap_tensors;
     uint64_t data_cursor;
 };
-
-static int buf_grow(char **buf, size_t *cap, size_t need){
-    if (need <= *cap) return 0;
-    size_t nc = *cap ? *cap : 4096u;
-    while (nc < need) nc *= 2u;
-    char *nb = realloc(*buf, nc);
-    if (!nb) return -1;
-    *buf = nb;
-    *cap = nc;
-    return 0;
-}
-
-static int buf_puts(char **buf, size_t *len, size_t *cap, const char *s, size_t n){
-    if (buf_grow(buf, cap, *len + n + 1u) != 0) return -1;
-    memcpy(*buf + *len, s, n);
-    *len += n;
-    (*buf)[*len] = 0;
-    return 0;
-}
-
-static int buf_cstr(char **buf, size_t *len, size_t *cap, const char *s){
-    return buf_puts(buf, len, cap, s, strlen(s));
-}
-
-static int buf_json_str(char **buf, size_t *len, size_t *cap, const char *s){
-    if (buf_cstr(buf, len, cap, "\"") != 0) return -1;
-    for (const unsigned char *p = (const unsigned char *)(s ? s : ""); *p; p++) {
-        unsigned char c = *p;
-        if (c == '"' || c == '\\') {
-            char esc[2] = { '\\', (char)c };
-            if (buf_puts(buf, len, cap, esc, 2) != 0) return -1;
-        } else if (c == '\b') {
-            if (buf_cstr(buf, len, cap, "\\b") != 0) return -1;
-        } else if (c == '\f') {
-            if (buf_cstr(buf, len, cap, "\\f") != 0) return -1;
-        } else if (c == '\n') {
-            if (buf_cstr(buf, len, cap, "\\n") != 0) return -1;
-        } else if (c == '\r') {
-            if (buf_cstr(buf, len, cap, "\\r") != 0) return -1;
-        } else if (c == '\t') {
-            if (buf_cstr(buf, len, cap, "\\t") != 0) return -1;
-        } else if (c < 0x20u) {
-            char u[7];
-            snprintf(u, sizeof u, "\\u%04x", (unsigned)c);
-            if (buf_cstr(buf, len, cap, u) != 0) return -1;
-        } else {
-            char ch = (char)c;
-            if (buf_puts(buf, len, cap, &ch, 1) != 0) return -1;
-        }
-    }
-    return buf_cstr(buf, len, cap, "\"");
-}
 
 lp_st_writer *lp_st_writer_create(const char *output_path){
     if (!output_path || !*output_path) return NULL;
@@ -177,68 +127,62 @@ int lp_st_writer_add_tensor(lp_st_writer *w,
 
 int lp_st_writer_finalize(lp_st_writer *w){
     if (!w || !w->path) return -1;
-    char *hdr = NULL;
-    size_t hlen = 0, hcap = 0;
-    if (buf_cstr(&hdr, &hlen, &hcap, "{") != 0) { free(hdr); return -1; }
+    lp_buf hdr = { 0 };
+    lp_buf_cstr(&hdr, "{");
 
     int first = 1;
     if (w->nmeta > 0) {
         first = 0;
-        if (buf_cstr(&hdr, &hlen, &hcap, "\"__metadata__\":{") != 0) { free(hdr); return -1; }
+        lp_buf_cstr(&hdr, "\"__metadata__\":{");
         for (size_t i = 0; i < w->nmeta; i++) {
-            if (i > 0 && buf_cstr(&hdr, &hlen, &hcap, ",") != 0) { free(hdr); return -1; }
-            if (buf_json_str(&hdr, &hlen, &hcap, w->meta[i].key) != 0 ||
-                buf_cstr(&hdr, &hlen, &hcap, ":") != 0 ||
-                buf_json_str(&hdr, &hlen, &hcap, w->meta[i].val) != 0) {
-                free(hdr);
-                return -1;
-            }
+            if (i > 0) lp_buf_cstr(&hdr, ",");
+            const char *mk = w->meta[i].key ? w->meta[i].key : "";
+            const char *mv = w->meta[i].val ? w->meta[i].val : "";
+            lp_json_str(&hdr, mk, strlen(mk));
+            lp_buf_cstr(&hdr, ":");
+            lp_json_str(&hdr, mv, strlen(mv));
         }
-        if (buf_cstr(&hdr, &hlen, &hcap, "}") != 0) { free(hdr); return -1; }
+        lp_buf_cstr(&hdr, "}");
     }
 
     for (size_t i = 0; i < w->ntensors; i++) {
         const StTensor *t = &w->tensors[i];
         const char *dname = NULL;
         st_dtype_size(t->dtype, &dname);
-        if (!first && buf_cstr(&hdr, &hlen, &hcap, ",") != 0) { free(hdr); return -1; }
+        if (!first) lp_buf_cstr(&hdr, ",");
         first = 0;
 
-        char num[128];
-        if (buf_json_str(&hdr, &hlen, &hcap, t->name) != 0 ||
-            buf_cstr(&hdr, &hlen, &hcap, ":{\"dtype\":\"") != 0 ||
-            buf_cstr(&hdr, &hlen, &hcap, dname) != 0 ||
-            buf_cstr(&hdr, &hlen, &hcap, "\",\"shape\":[") != 0) {
-            free(hdr);
-            return -1;
-        }
+        const char *tn = t->name ? t->name : "";
+        lp_json_str(&hdr, tn, strlen(tn));
+        lp_buf_cstr(&hdr, ":{\"dtype\":\"");
+        lp_buf_cstr(&hdr, dname);
+        lp_buf_cstr(&hdr, "\",\"shape\":[");
         for (uint32_t d = 0; d < t->ndim; d++) {
-            snprintf(num, sizeof num, "%s%llu", d ? "," : "", (unsigned long long)t->dims[d]);
-            if (buf_cstr(&hdr, &hlen, &hcap, num) != 0) { free(hdr); return -1; }
+            if (d) lp_buf_cstr(&hdr, ",");
+            lp_buf_u64(&hdr, t->dims[d]);
         }
-        snprintf(num, sizeof num, "],\"data_offsets\":[%llu,%llu]}",
-                 (unsigned long long)t->offset_start,
-                 (unsigned long long)t->offset_end);
-        if (buf_cstr(&hdr, &hlen, &hcap, num) != 0) { free(hdr); return -1; }
+        lp_buf_cstr(&hdr, "],\"data_offsets\":[");
+        lp_buf_u64(&hdr, t->offset_start);
+        lp_buf_cstr(&hdr, ",");
+        lp_buf_u64(&hdr, t->offset_end);
+        lp_buf_cstr(&hdr, "]}");
     }
 
-    if (buf_cstr(&hdr, &hlen, &hcap, "}") != 0) { free(hdr); return -1; }
+    lp_buf_cstr(&hdr, "}");
 
-    /* Pad JSON header with spaces so (8 + hlen) aligns cleanly to 8 bytes */
-    while ((hlen % 8u) != 0) {
-        if (buf_puts(&hdr, &hlen, &hcap, " ", 1u) != 0) { free(hdr); return -1; }
-    }
+    /* Pad JSON header with spaces so (8 + hdr.n) aligns cleanly to 8 bytes */
+    while ((hdr.n % 8u) != 0) lp_buf_byte(&hdr, ' ');
 
     FILE *f = fopen(w->path, "wb");
-    if (!f) { free(hdr); return -1; }
+    if (!f) { lp_buf_free(&hdr); return -1; }
 
-    uint64_t le_len = (uint64_t)hlen;
+    uint64_t le_len = (uint64_t)hdr.n;
     uint8_t hdr8[8];
     for (int k = 0; k < 8; k++) hdr8[k] = (uint8_t)((le_len >> (k * 8)) & 0xFFu);
 
     int err = 0;
     if (fwrite(hdr8, 1u, 8u, f) != 8u) err = 1;
-    if (!err && fwrite(hdr, 1u, hlen, f) != hlen) err = 1;
+    if (!err && fwrite(hdr.b, 1u, hdr.n, f) != hdr.n) err = 1;
     for (size_t i = 0; i < w->ntensors && !err; i++) {
         if (w->tensors[i].nbytes > 0 &&
             fwrite(w->tensors[i].data, 1u, w->tensors[i].nbytes, f) != w->tensors[i].nbytes) {
@@ -246,6 +190,6 @@ int lp_st_writer_finalize(lp_st_writer *w){
         }
     }
     if (fclose(f) != 0) err = 1;
-    free(hdr);
+    lp_buf_free(&hdr);
     return err ? -1 : 0;
 }
