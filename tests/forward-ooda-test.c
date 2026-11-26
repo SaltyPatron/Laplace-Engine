@@ -32,6 +32,8 @@ static void test_firmware_suite(void){
         { "inductive.firmware",    1, FW_TIE_FIRST, FW_DTW },
         { "abductive.firmware",    2, FW_TIE_ASK,   FW_OUTLIERS },
         { "constructive.firmware", 1, FW_TIE_DRAW,  FW_FRECHET },
+        { "critical.firmware",     2, FW_TIE_ASK,   FW_FRECHET },
+        { "executive.firmware",    2, FW_TIE_FIRST, FW_FRECHET },
         { "adversarial.firmware",  2, FW_TIE_ASK,   FW_FRECHET },
     };
 
@@ -61,7 +63,34 @@ static void test_firmware_suite(void){
     assert(lp_chess_laws_load(chess_fw) >= 2);
     LpChessSearchPolicy pol = lp_chess_search_policy();
     assert(pol.max_depth > 0 && pol.max_nodes > 0 && pol.max_wall_us > 0);
-    printf("[PASS] Shipped 8-firmware suite & chess search policy validated offline\n");
+    printf("[PASS] Shipped 10-firmware suite & chess search policy validated offline\n");
+}
+
+typedef struct { lp_id id; double pt[4]; } StarNode;
+static int star_graph_search(const StarNode *nodes, const int (*edges)[4], const int *deg, int n_nodes,
+                             int start_idx, int goal_idx, double lam, int use_h,
+                             double *cost_out, lp_id *order_out, int *n_exp_out){
+    lp_frontier *fr = lp_frontier_new();
+    double h0 = use_h ? lam * (lp_angle4(nodes[start_idx].pt, nodes[goal_idx].pt) / 3.14159265358979323846) : 0.0;
+    lp_frontier_reach(fr, &nodes[start_idx].id, NULL, NULL, 0.0, h0, 0);
+    int nexp = 0; double gcost = -1.0;
+    const lp_reached *cur;
+    while ((cur = lp_frontier_next(fr)) != NULL) {
+        order_out[nexp++] = cur->id;
+        int u = -1;
+        for (int i = 0; i < n_nodes; i++) if (lp_id_eq(&nodes[i].id, &cur->id)) { u = i; break; }
+        if (u == goal_idx) { gcost = cur->cost; break; }
+        for (int ei = 0; u >= 0 && ei < deg[u]; ei++) {
+            int v = edges[u][ei];
+            double ang = use_h ? lp_angle4(nodes[v].pt, nodes[goal_idx].pt) : 0.0;
+            if (ang > 3.14159265358979323846) ang = 3.14159265358979323846;
+            double hv = use_h ? lam * (ang / 3.14159265358979323846) : 0.0;
+            lp_frontier_reach(fr, &nodes[v].id, &nodes[u].id, &nodes[u].id, cur->cost + lam, hv, cur->hops + 1);
+        }
+    }
+    lp_frontier_free(fr);
+    *cost_out = gcost; *n_exp_out = nexp;
+    return gcost >= 0.0;
 }
 
 static void test_astar_heuristic(void){
@@ -85,7 +114,40 @@ static void test_astar_heuristic(void){
     const lp_reached *first = lp_frontier_next(fr);
     assert(first && lp_id_eq(&first->id, &g));
     lp_frontier_free(fr);
-    printf("[PASS] 4D angle4 A* heuristic admissibility & ordering verified\n");
+
+    /* Multi-hop S^3 graph: start(0)->1->2->goal(3) vs 18 off-axis decoy branches at equal edge cost */
+    StarNode nodes[22]; int edges[22][4]; int deg[22];
+    memset(edges, 0, sizeof edges); memset(deg, 0, sizeof deg);
+    static const double goal_pts[4][4] = {
+        { 1.0, 0.0, 0.0, 0.0 },
+        { 0.8660254037844386, 0.5, 0.0, 0.0 },
+        { 0.5, 0.8660254037844386, 0.0, 0.0 },
+        { 0.0, 1.0, 0.0, 0.0 }
+    };
+    for (int i = 0; i < 4; i++) {
+        lp_id_codepoint((uint32_t)(0x40 + i), &nodes[i].id);
+        memcpy(nodes[i].pt, goal_pts[i], sizeof goal_pts[i]);
+    }
+    edges[0][deg[0]++] = 1; edges[1][deg[1]++] = 2; edges[2][deg[2]++] = 3;
+    for (int d = 0; d < 18; d++) {
+        int idx = 4 + d;
+        lp_id_codepoint((uint32_t)(0x50 + d), &nodes[idx].id);
+        double theta = 0.4 + 0.1 * d;
+        nodes[idx].pt[0] = cos(theta); nodes[idx].pt[1] = 0.0;
+        nodes[idx].pt[2] = sin(theta); nodes[idx].pt[3] = 0.0;
+        if (d < 3) edges[0][deg[0]++] = idx;
+        else { int p = 4 + (d - 3) % 12; if (deg[p] < 4) edges[p][deg[p]++] = idx; }
+    }
+    double cost_u = 0.0, cost_a1 = 0.0, cost_a2 = 0.0;
+    lp_id ord_u[22], ord_a1[22], ord_a2[22];
+    int n_u = 0, n_a1 = 0, n_a2 = 0;
+    assert(star_graph_search(nodes, edges, deg, 22, 0, 3, lam, 0, &cost_u, ord_u, &n_u));
+    assert(star_graph_search(nodes, edges, deg, 22, 0, 3, lam, 1, &cost_a1, ord_a1, &n_a1));
+    assert(star_graph_search(nodes, edges, deg, 22, 0, 3, lam, 1, &cost_a2, ord_a2, &n_a2));
+    assert(fabs(cost_a1 - cost_u) < 1e-9);
+    assert(n_a1 < n_u && n_a1 == n_a2);
+    for (int i = 0; i < n_a1; i++) assert(lp_id_eq(&ord_a1[i], &ord_a2[i]));
+    printf("[PASS] 4D angle4 A* admissibility, deterministic tie-breaking, & node-visit reduction (%d -> %d) verified\n", n_u, n_a1);
 }
 
 static void test_witness_attribution(void){
@@ -623,6 +685,31 @@ static void test_live_db(const AbiVtable *abi){
         assert(lp_chess_search(pg, start_fen, "Standard", NULL, 0, 1, &spol, &scoped_empty) == 0);
         assert(scoped_empty.best_uci[0] != 0 && scoped_empty.db_probes == 0);
         printf("[PASS] Live substrate chess search fail-closed on empty scope (db_probes=0)\n");
+    }
+
+    /* Live np >= 4 N-ary interior/endpoint traversal under red_scope ([lightning, transfers, charge, atmosphere]) */
+    {
+        lp_envelope std_env = lp_envelope_preset(LP_ENVELOPE_STANDARD);
+        LpEngineAuthorityScope red_scope = {
+            .witnesses = &f[0].trunk.id, .nwitnesses = 1, .scoped = 1,
+            .capabilities = LP_CAP_READ, .disposition = LP_DISPOSE_ALLOW
+        };
+        LpEngineTurnRequest ntr = {
+            .model_name = "program",
+            .prompt = "atmosphere",
+            .read_only = 1,
+            .authority = &red_scope,
+            .envelope = &std_env
+        };
+        LpEngineTurnResponse nresp = { 0 };
+        assert(abi->turn(h, &ntr, &nresp) == 0);
+        if (!nresp.text || (strstr(nresp.text, "lightning") == NULL && strstr(nresp.text, "charge") == NULL)) {
+            fprintf(stderr, "[DIAG] nary np>=4 disp=\"%s\" text=\"%s\"\n",
+                    nresp.disposition, nresp.text ? nresp.text : "");
+        }
+        assert(nresp.text && (strstr(nresp.text, "lightning") != NULL || strstr(nresp.text, "charge") != NULL));
+        printf("[PASS] Live np >= 4 N-ary peer traversal verified (text=\"%s\")\n", nresp.text);
+        abi->turn_free(&nresp);
     }
 
     cleanup_test_witnesses(pg, CLEAN_NAMES, 4);

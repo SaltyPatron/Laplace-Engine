@@ -18,7 +18,8 @@ static int decode_claim(const char *path, int len, lp_id part[3]){ return (int)l
 
 /* Close up to batch of the side's nearest open entities and reach across their claims. Returns how many it closed;
  * closed[] receives them. */
-static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, double per_hop, const lp_coord *goal_coord, lp_reached *closed, uint8_t *hub, Work *w, const Firmware *way, const lp_id *wids){
+static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, double per_hop, const lp_coord *goal_coord, const lp_id *goal_id, lp_reached *closed, uint8_t *hub, Work *w, const Firmware *way, const lp_id *wids){
+    const lp_highway *hw = lp_highway_map(NULL);
     int n = 0; const lp_reached *x;
     while (n < batch && (x = lp_frontier_next(sd->f))) { hub[n] = 0; closed[n++] = *x; }
     lp_id *ids = malloc(sizeof(lp_id) * (size_t)(n ? n : 1)); int *who = malloc(sizeof(int) * (size_t)(n ? n : 1)), m = 0;
@@ -47,6 +48,7 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
         if (other_idx < 0) continue;
         const lp_id *other = &part[other_idx];
         if (!memcmp(other, &at->id, 16)) continue;
+        if (hw && lp_highway_bank_of(hw, other, NULL) && (!goal_id || memcmp(other, goal_id, 16) != 0)) continue;
         lp_rating r = { col_f64(q, j, 3), col_f64(q, j, 4), col_f64(q, j, 5) };
         claim = *col_id(q, j, 1); w->claims++;
         double sw = strand_weight(way, wids, part, npart); if (sw <= 0) continue;           /* a kind weighed at nothing is not crossed */
@@ -66,6 +68,7 @@ static int expand(PGconn *pg, Side *sd, int batch, int fan, int hops, double k, 
             if (other_idx < 0) continue;
             const lp_id *other = &part[other_idx];
             if (!memcmp(other, &at->id, 16)) continue;
+            if (hw && lp_highway_bank_of(hw, other, NULL) && (!goal_id || memcmp(other, goal_id, 16) != 0)) continue;
             w->claims++; double sw = strand_weight(way, wids, part, cl[j].np); if (sw <= 0) continue;
             edges[nedges++] = (PendingEdge){ *other, at->id, cl[j].id, at->cost + lp_cost(&cl[j].r, k, per_hop) - log(sw), at->hops + 1 };
         }
@@ -161,7 +164,7 @@ int cmd_degrees(int argc, char **argv){
                 qsort(near, nn, sizeof *near, by_cost);
                 if (lp_frontier_least(fw.f) >= near[limit - 1].cost) break;
             }
-            int n = expand(pg, &fw, batch, fan, hops, k, per_hop, NULL, closed, hub, &w, &way, wids); if (!n) break;
+            int n = expand(pg, &fw, batch, fan, hops, k, per_hop, NULL, NULL, closed, hub, &w, &way, wids); if (!n) break;
             for (int i = 0; i < n; i++) if (memcmp(&closed[i].id, &from.id, 16)) {
                 if (nn == cn) { cn = cn ? cn * 2 : 256; near = xrealloc(near, cn * sizeof *near); } near[nn++] = closed[i]; }
         }
@@ -180,7 +183,7 @@ int cmd_degrees(int argc, char **argv){
             if (lf + lb >= best || (isinf(lf) && isinf(lb))) break;           /* no open strand can beat the chain found */
             Side *sd = lf <= lb ? &fw : &bw, *ot = sd == &fw ? &bw : &fw;
             const lp_coord *goal_c = sd == &fw ? &to.c : &from.c;
-            int n = expand(pg, sd, batch, fan, (hops + 1) / 2, k, per_hop, goal_c, closed, hub, &w, &way, wids); if (!n) break;
+            int n = expand(pg, sd, batch, fan, (hops + 1) / 2, k, per_hop, goal_c, sd == &fw ? &to.id : &from.id, closed, hub, &w, &way, wids); if (!n) break;
             for (int i = 0; i < n; i++) {                                     /* where the two sides meet; never at a hub */
                 if (hub[i]) continue;
                 const lp_reached *o = lp_frontier_find(ot->f, &closed[i].id);
