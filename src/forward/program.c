@@ -87,9 +87,10 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
                         lp_frontier_reach(fr, &rec->id, &at->id, &at->id, cost, h_est, at->hops + 1);
                         const Cell *ca = cell_find(fd, &at->id);
                         Bits sup = ca ? ca->support : (Bits){ 0 };
+                        Bits dsup = ca ? ca->direct_support : (Bits){ 0 };
                         int had_r = ca ? ca->has_r : 0; lp_rating cr = ca ? ca->r : lp_rating_stock();
                         Cell *cx = cell(fd, &rec->id); cx->routes[R_SCAN]++;
-                        for (int w = 0; w < MAXOCC / 64; w++) cx->support.w[w] |= sup.w[w];
+                        for (int w = 0; w < MAXOCC / 64; w++) { cx->support.w[w] |= sup.w[w]; cx->direct_support.w[w] |= dsup.w[w]; }
                         if (cost < cx->cost) { cx->cost = cost; if (!cx->has_r && had_r) { cx->r = cr; cx->has_r = 1; cx->via = at->id; cx->rel = at->id; } }
                     }
                 }
@@ -102,7 +103,7 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
             st->witness_scope, st->nwitness_scope, st->witness_scoped, hub, &nh);
         st->trips++; st->work.db_probes++; st->work.rows_scanned += (uint64_t)nh;
 
-        typedef struct { lp_id target, from, entity, via, rel; lp_rating r; double g; Bits sup, nsup; int flip, is_bridge, lat; uint32_t hops; } ScanPush;
+        typedef struct { lp_id target, from, entity, via, rel; lp_rating r; double g; Bits sup, nsup, dsup; int flip, is_bridge, lat, tier; uint32_t hops; } ScanPush;
         ScanPush *pushes = malloc(sizeof(ScanPush) * (size_t)(nh ? nh : 1));
         lp_id *tids = malloc(sizeof(lp_id) * (size_t)(nh ? nh : 1));
         int npush = 0;
@@ -115,7 +116,7 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
             int other = lp_tuple_other(rn.v, rn.n, &at->id); if (other < 0) continue;
             if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->handle) ||
                               lp_id_eq(&rn.v[0], &st->prompt) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
-            if (lp_id_eq(&rn.v[other], &st->prompt) || lp_id_eq(&rn.v[other], &st->handle)) continue;
+            if (lp_id_eq(&rn.v[other], &st->prompt) || lp_id_eq(&rn.v[other], &st->handle) || (hw && lp_highway_bank_of(hw, &rn.v[other], NULL))) continue;
             int own_occ = 0;
             for (int oi = 0; oi < st->nocc && !own_occ; oi++) own_occ = lp_id_eq(&rn.v[other], &st->occ[oi]);
             if (own_occ) continue;
@@ -134,7 +135,8 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
             tids[npush] = rn.v[other];
             pushes[npush++] = (ScanPush){
                 rn.v[other], at->id, hh[r].entity, at->id, rel, rt, cost,
-                ca ? ca->support : (Bits){ 0 }, ca ? ca->neg_support : (Bits){ 0 }, flip, is_bridge, lat, at->hops + 1
+                ca ? ca->support : (Bits){ 0 }, ca ? ca->neg_support : (Bits){ 0 }, ca ? ca->direct_support : (Bits){ 0 },
+                flip, is_bridge, lat, hh[r].tier, at->hops + 1
             };
         }
         double *pts = (has_goal && npush > 0) ? malloc(sizeof(double) * 4 * (size_t)npush) : NULL;
@@ -158,12 +160,15 @@ static void scan(State *st, Field *fd, const lp_id *centre, int nc){
             else if (!sp->lat) cx->lateral_hop = 0;
             if (sp->is_bridge > 0) cx->bridge = 1;
             else if (sp->is_bridge < 0) cx->bridge = 0;
+            if (lp_tier0_codepoint(T0, &sp->target) < 0 && !(hw && lp_highway_bank_of(hw, &sp->target, NULL)) && sp->tier > cx->tier)
+                cx->tier = sp->tier;
             for (int w = 0; w < MAXOCC / 64; w++) {
                 if (sp->flip) {
                     cx->support.w[w] |= sp->nsup.w[w];
                     cx->neg_support.w[w] |= sp->sup.w[w];
                 } else {
                     if (is_new_cx || !sp->lat || cx->lateral_hop) cx->support.w[w] |= sp->sup.w[w];
+                    if (!sp->lat) cx->direct_support.w[w] |= sp->dsup.w[w];
                     cx->neg_support.w[w] |= sp->nsup.w[w];
                 }
             }
@@ -259,16 +264,18 @@ static void weigh_prop(const State *st, const Field *fd, const lp_highway *hw, c
     int strand_anc_cov = content_mask ? bit_count_and(&p->by[CH_STRAND], content_mask) : 0;
     int lateral = (x && x->lateral_hop) || ((x && x->has_r) ? is_lateral_rel(st, &x->rel) : 0);
     int gloss = (x && x->has_r) ? is_gloss_rel(st, &x->rel) : 0;
+    Bits gloss_strand = x ? x->direct_support : p->by[CH_STRAND];
+    int gloss_anc_cov = content_mask ? bit_count_and(&gloss_strand, content_mask) : 0;
     if (gloss) {
-        int strand_g = owed(st, &p->by[CH_STRAND], &st->open);
-        if (strand_g > 0) p->grounds = strand_g > neg_g ? strand_g - neg_g : 0;
+        int direct_g = owed(st, &gloss_strand, &st->open);
+        p->grounds = direct_g > neg_g ? direct_g - neg_g : 0;
     }
     const Cell *via_c = (x && x->has_r) ? cell_find(fd, &x->via) : NULL;
     int direct_synset_lemma = is_synset_lemma_cell(hw, x) && !lateral && via_c && via_c->layer == 0 && via_c->routes[R_CLAIM] > 0;
     if (multi_anc_prompt && strand_anc_cov >= 2 && direct_synset_lemma) p->act_rank = 4;
     else if ((multi_anc_prompt && strand_anc_cov >= 2 && !lateral) ||
              (x && x->has_r && !lp_id_eq(&x->rel, &x->via) && content_has_id(st, content_mask, &x->rel))) p->act_rank = 3;
-    else if (gloss && (strand_anc_cov > 0 || !content_mask || !bit_count_and(content_mask, content_mask))) p->act_rank = 2;
+    else if (gloss && (gloss_anc_cov > 0 || !content_mask || !bit_count_and(content_mask, content_mask))) p->act_rank = 2;
     else if (lateral) p->act_rank = 0;
     else p->act_rank = 1;
 
@@ -877,6 +884,7 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
             if (fresh && nb < MAXOCC * 2) { bkeys[nb] = st->prompt; bocc[nb] = -1; nb++; }
         }
         for (int i = 0; i < st->ndisc && nb < MAXOCC * 2 + 1; i++) {
+            if (lp_tier0_codepoint(T0, &st->disc[i]) >= 0) continue;
             bool fresh; lp_idmap_put(uniq, &st->disc[i], &fresh);
             if (fresh) { bkeys[nb] = st->disc[i]; bocc[nb] = -2; nb++; }
         }

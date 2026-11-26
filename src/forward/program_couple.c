@@ -642,7 +642,7 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
             (x->segment && !x->bridge && !x->routes[R_CLAIM] && !x->routes[R_LAYER] &&
              (bit_count_and(&x->support, &LAYER_ANCHORS) + bit_count_and(&x->neg_support, &LAYER_ANCHORS)) < 2)) continue;
         int own = 0; for (int i = 0; i < st->nocc && !own; i++) own = lp_id_eq(&st->occ[i], &x->id);
-        if (own || lp_tier0_codepoint(T0, &x->id) >= 0) continue;
+        if (own || lp_tier0_codepoint(T0, &x->id) >= 0 || (hw && lp_highway_bank_of(hw, &x->id, NULL))) continue;
         c[m++] = x;
     }
     if (!m) { free(c); return 0; }
@@ -652,10 +652,10 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
     if (st->envelope && st->envelope->preset <= LP_ENVELOPE_STANDARD && m > 32) m = 32;
     lp_id *keys = malloc(sizeof(lp_id) * (size_t)m);
     lp_id *vias = malloc(sizeof(lp_id) * (size_t)m);
-    Bits *sup = malloc(sizeof(Bits) * (size_t)m), *nsup = malloc(sizeof(Bits) * (size_t)m);
+    Bits *sup = malloc(sizeof(Bits) * (size_t)m), *nsup = malloc(sizeof(Bits) * (size_t)m), *dsup = malloc(sizeof(Bits) * (size_t)m);
     double *fo = malloc(sizeof(double) * (size_t)m);
     uint8_t *lat = malloc((size_t)m);
-    for (int i = 0; i < m; i++) { keys[i] = c[i]->id; vias[i] = c[i]->via; sup[i] = c[i]->support; nsup[i] = c[i]->neg_support; fo[i] = c[i]->force; lat[i] = c[i]->lateral_hop ? 1 : 0; }
+    for (int i = 0; i < m; i++) { keys[i] = c[i]->id; vias[i] = c[i]->via; sup[i] = c[i]->support; nsup[i] = c[i]->neg_support; dsup[i] = c[i]->direct_support; fo[i] = c[i]->force; lat[i] = c[i]->lateral_hop ? 1 : 0; }
     free(c);
 
     int *hub = malloc(sizeof(int) * 2 * (size_t)m), nh = 0;
@@ -675,7 +675,7 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
         if (rn.n == 2 && (lp_id_eq(&rn.v[0], &st->handle) || lp_id_eq(&rn.v[1], &st->handle) ||
                           lp_id_eq(&rn.v[0], &st->prompt) || lp_id_eq(&rn.v[1], &st->prompt))) continue;
         int other = lp_tuple_other(rn.v, rn.n, &keys[s]);
-        if (other < 0 || lp_id_eq(&rn.v[other], &keys[s]) || lp_id_eq(&rn.v[other], &st->prompt) || lp_id_eq(&rn.v[other], &st->handle) || lp_id_eq(&rn.v[other], &vias[s])) continue;
+        if (other < 0 || lp_id_eq(&rn.v[other], &keys[s]) || lp_id_eq(&rn.v[other], &st->prompt) || lp_id_eq(&rn.v[other], &st->handle) || lp_id_eq(&rn.v[other], &vias[s]) || (hw && lp_highway_bank_of(hw, &rn.v[other], NULL))) continue;
         lp_id rel = rn.n >= 3 ? rn.v[1] : keys[s];
         int flip = 0;
         for (size_t p = 1; p + 1 < rn.n && !flip; p++) flip = is_neg_rel(st, &rn.v[p]);
@@ -693,12 +693,15 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
         if (lp_tier0_codepoint(T0, &rn.v[other]) < 0 && !(hw && lp_highway_bank_of(hw, &rn.v[other], NULL)) && h[r].tier > x->tier)
             x->tier = h[r].tier;
         x->force += conf; x->routes[R_LAYER]++;
-        Bits prop_sup = sup[s], prop_nsup = nsup[s];
+        Bits prop_sup = sup[s], prop_nsup = nsup[s], prop_dsup = dsup[s];
         if (bit_count_and(&prop_sup, &LAYER_ANCHORS) > 0) {
             for (int w = 0; w < MAXOCC / 64; w++) prop_sup.w[w] &= LAYER_ANCHORS.w[w];
         }
         if (bit_count_and(&prop_nsup, &LAYER_ANCHORS) > 0) {
             for (int w = 0; w < MAXOCC / 64; w++) prop_nsup.w[w] &= LAYER_ANCHORS.w[w];
+        }
+        if (bit_count_and(&prop_dsup, &LAYER_ANCHORS) > 0) {
+            for (int w = 0; w < MAXOCC / 64; w++) prop_dsup.w[w] &= LAYER_ANCHORS.w[w];
         }
         int edge_lat = lat[s] || is_lateral_hop_rel(st, &rel);
         if (is_new) x->lateral_hop = edge_lat;
@@ -709,6 +712,7 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
                 x->neg_support.w[w] |= prop_sup.w[w];
             } else {
                 if (is_new || !edge_lat || x->lateral_hop) x->support.w[w] |= prop_sup.w[w];
+                if (!edge_lat) x->direct_support.w[w] |= prop_dsup.w[w];
                 x->neg_support.w[w] |= prop_nsup.w[w];
             }
         }
@@ -744,13 +748,14 @@ int layer_round(State *st, Field *fd, int round, lp_idmap *heads_out){
                     xa->neg_support.w[w] |= prop_sup.w[w];
                 } else {
                     if (is_new_xa || !edge_lat || xa->lateral_hop) xa->support.w[w] |= prop_sup.w[w];
+                    if (!edge_lat) xa->direct_support.w[w] |= prop_dsup.w[w];
                     xa->neg_support.w[w] |= prop_nsup.w[w];
                 }
             }
             if (!xa->has_r) { xa->r = h[r].r; xa->has_r = 1; xa->via = keys[s]; xa->rel = rel; }
         }
     }
-    holds_free(h, nh); free(hub); free(outdeg); free(keys); free(vias); free(sup); free(nsup); free(fo); free(lat); lp_vec_free(&rn);
+    holds_free(h, nh); free(hub); free(outdeg); free(keys); free(vias); free(sup); free(nsup); free(dsup); free(fo); free(lat); lp_vec_free(&rn);
     return fresh_n;
 }
 
@@ -872,12 +877,17 @@ void couple_ingest_holds(State *st, Field *fd, const Hold *h, int nh, const int 
             x->routes[eff_kind]++;
             if (lp_tier0_codepoint(T0, &rn.v[other]) < 0 && !(hw && lp_highway_bank_of(hw, &rn.v[other], NULL)) && h[i].tier > x->tier)
                 x->tier = h[i].tier;
+            int edge_lat = is_lateral_hop_rel(st, &rel);
             if (occ >= 0) {
                 int neg = (occ < st->nocc && st->polarity[occ] < 0) ^ flip_occ;
-                if (neg) bit_set(&x->neg_support, occ); else bit_set(&x->support, occ);
+                if (neg) bit_set(&x->neg_support, occ);
+                else { bit_set(&x->support, occ); if (!edge_lat) bit_set(&x->direct_support, occ); }
             } else if (bit_count_and(&span_sup, &span_sup) > 0) {
                 Bits *dst = flip_occ ? &x->neg_support : &x->support;
                 for (int w = 0; w < MAXOCC / 64; w++) dst->w[w] |= span_sup.w[w];
+                if (!flip_occ && !edge_lat) {
+                    for (int w = 0; w < MAXOCC / 64; w++) x->direct_support.w[w] |= span_sup.w[w];
+                }
             }
             if (pull > 0.0) head_note(st, x, &rel, conf * pull, occ);
             if (!x->has_r || conf > lp_confidence(&x->r, fw->k)) { x->r = h[i].r; x->has_r = 1; x->via = keys[s]; x->rel = rel; }
@@ -891,10 +901,14 @@ void couple_ingest_holds(State *st, Field *fd, const Hold *h, int nh, const int 
                 if (lp_tier0_codepoint(T0, &rn.v[p]) < 0 && h[i].tier > xa->tier) xa->tier = h[i].tier;
                 if (occ >= 0) {
                     int neg = (occ < st->nocc && st->polarity[occ] < 0) ^ flip_occ;
-                    if (neg) bit_set(&xa->neg_support, occ); else bit_set(&xa->support, occ);
+                    if (neg) bit_set(&xa->neg_support, occ);
+                    else { bit_set(&xa->support, occ); if (!edge_lat) bit_set(&xa->direct_support, occ); }
                 } else if (bit_count_and(&span_sup, &span_sup) > 0) {
                     Bits *dst = flip_occ ? &xa->neg_support : &xa->support;
                     for (int w = 0; w < MAXOCC / 64; w++) dst->w[w] |= span_sup.w[w];
+                    if (!flip_occ && !edge_lat) {
+                        for (int w = 0; w < MAXOCC / 64; w++) xa->direct_support.w[w] |= span_sup.w[w];
+                    }
                 }
                 if (!xa->has_r || conf > lp_confidence(&xa->r, fw->k)) { xa->r = h[i].r; xa->has_r = 1; xa->via = keys[s]; xa->rel = rel; }
             }
@@ -952,9 +966,11 @@ void couple_ingest_holds(State *st, Field *fd, const Hold *h, int nh, const int 
                 if (is_sense_edge && (size_t)other == rn.n - 1) x->bridge = 1;
                 else if (is_sense_edge && other == 0) x->bridge = 0;
                 x->force += conf * pull; x->routes[eff_kind]++;
+                int edge_lat = is_lateral_hop_rel(st, &rel);
                 if (occ >= 0) {
                     int neg = (occ < st->nocc && st->polarity[occ] < 0) ^ is_neg_rel(st, &rel);
-                    if (neg) bit_set(&x->neg_support, occ); else bit_set(&x->support, occ);
+                    if (neg) bit_set(&x->neg_support, occ);
+                    else { bit_set(&x->support, occ); if (!edge_lat) bit_set(&x->direct_support, occ); }
                 }
                 if (pull > 0.0) head_note(st, x, &rel, conf * pull, occ);
                 if (!x->has_r) { x->r = rt; x->has_r = 1; x->via = hk[s]; x->rel = rel; }

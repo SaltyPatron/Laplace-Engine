@@ -625,6 +625,64 @@ static void test_live_db(const AbiVtable *abi){
         printf("[PASS] Live substrate chess search fail-closed on empty scope (db_probes=0)\n");
     }
 
+    cleanup_test_witnesses(pg, CLEAN_NAMES, 4);
+
+    /* Regression: OpenAI messages[] STANDARD budget + direct_support gloss ranking (#31 / converse parity) */
+    {
+        lp_envelope std_env = lp_envelope_preset(LP_ENVELOPE_STANDARD);
+        const LpEngineChatMessage hound_msgs[1] = { { .role = "user", .content = "what is a hound" } };
+        LpEngineTurnRequest htr = {
+            .model_name = "program",
+            .messages = hound_msgs,
+            .nmessages = 1,
+            .read_only = 1,
+            .envelope = &std_env
+        };
+        LpEngineTurnResponse hresp = { 0 };
+        int hrc = abi->turn(h, &htr, &hresp);
+        int hound_ok = (hrc == 0 && hresp.work.truncated == 0 && hresp.text && hresp.text_len > 0 &&
+                        (strstr(hresp.text, "dog") != NULL || strstr(hresp.text, "hunting") != NULL));
+        if (!hound_ok) {
+            fprintf(stderr, "[DIAG] hound STANDARD hrc=%d trunc=%u wall_us=%llu probes=%llu disp=\"%s\" text=\"%s\"\n",
+                    hrc, (unsigned)hresp.work.truncated, (unsigned long long)hresp.work.wall_us,
+                    (unsigned long long)hresp.work.db_probes, hresp.disposition, hresp.text ? hresp.text : "");
+            fflush(stderr);
+        }
+        assert(hound_ok);
+        printf("[PASS] Regression hound STANDARD non-truncated (wall=%.2f ms, text=\"%s\")\n",
+               (double)hresp.work.wall_us / 1000.0, hresp.text);
+        abi->turn_free(&hresp);
+
+        static const int32_t ENVS[3] = { LP_ENVELOPE_STANDARD, LP_ENVELOPE_DEEP, LP_ENVELOPE_UNLIMITED };
+        const LpEngineChatMessage light_msgs[1] = { { .role = "user", .content = "How does lightning work?" } };
+        for (size_t ei = 0; ei < 3; ei++) {
+            lp_envelope lenv = lp_envelope_preset(ENVS[ei]);
+            LpEngineTurnRequest ltr = {
+                .model_name = "program",
+                .messages = light_msgs,
+                .nmessages = 1,
+                .read_only = 1,
+                .envelope = &lenv
+            };
+            LpEngineTurnResponse lresp = { 0 };
+            int lrc = abi->turn(h, &ltr, &lresp);
+            int light_ok = (lrc == 0 && lresp.work.truncated == 0 && lresp.text && lresp.text_len > 0 &&
+                            (strstr(lresp.text, "electric discharge") != NULL || strstr(lresp.text, "discharge") != NULL || strstr(lresp.text, "light") != NULL) &&
+                            strstr(lresp.text, "(physics) a manifestation of energy") == NULL);
+            if (!light_ok) {
+                fprintf(stderr, "[DIAG] lightning env=%d lrc=%d trunc=%u wall_us=%llu disp=\"%s\" text=\"%s\"\n",
+                        (int)ENVS[ei], lrc, (unsigned)lresp.work.truncated,
+                        (unsigned long long)lresp.work.wall_us, lresp.disposition,
+                        lresp.text ? lresp.text : "");
+                fflush(stderr);
+            }
+            assert(light_ok);
+            printf("[PASS] Regression lightning env=%d (wall=%.2f ms, text=\"%s\")\n",
+                   (int)ENVS[ei], (double)lresp.work.wall_us / 1000.0, lresp.text);
+            abi->turn_free(&lresp);
+        }
+    }
+
     abi->free_fn(h);
     cleanup_test_witnesses(pg, CLEAN_NAMES, 4);
     PQfinish(pg);

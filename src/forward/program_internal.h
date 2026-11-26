@@ -20,7 +20,7 @@ static inline void bit_clear(Bits *a, const Bits *b){ for (int i = 0; i < MAXOCC
 
 enum { R_CLAIM, R_FOLLOWS, R_DISCOURSE, R_SCAN, R_CONTAIN, R_LAYER, R_KINDS };
 #define CELL_HEADS 8
-typedef struct { lp_id id; double force, cost; Bits support, neg_support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, bridge, tier, lateral_hop; lp_id heads[CELL_HEADS]; int nheads, layer; } Cell;
+typedef struct { lp_id id; double force, cost; Bits support, neg_support, direct_support; int routes[R_KINDS]; lp_id via, rel; lp_rating r; int has_r, hub, shared, segment, bridge, tier, lateral_hop; lp_id heads[CELL_HEADS]; int nheads, layer; } Cell;
 typedef struct { Cell *c; int n; size_t cap; lp_idmap *m; } Field;
 static inline Cell *cell(Field *f, const lp_id *id){
     if (!f->m) f->m = lp_idmap_new(); bool fresh; size_t i = lp_idmap_put(f->m, id, &fresh);

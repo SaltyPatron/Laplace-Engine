@@ -209,16 +209,22 @@ int32_t lp_engine_turn(LpEngineHandle *h, const LpEngineTurnRequest *req, LpEngi
     const char *sys_prefix = req->system_prompt;
     lp_id disc[MAXOCC]; int ndisc = 0;
     if (req->messages && req->nmessages > 0) {
+        int last_user_idx = -1;
         for (uint32_t i = 0; i < req->nmessages; i++) {
             const LpEngineChatMessage *m = &req->messages[i];
             if (!m->role || !m->content || !*m->content) continue;
             if (!strcmp(m->role, "system") && !sys_prefix) { sys_prefix = m->content; continue; }
-            if (!strcmp(m->role, "user")) raw_prompt = m->content;
-            if (ndisc < MAXOCC) {
-                size_t got = 0;
-                lp_id tmp[64];
-                text_occurrences(CTX[0], (const uint8_t *)m->content, strlen(m->content), tmp, 64, &got);
-                for (size_t k = 0; k < got && k < 64 && ndisc < MAXOCC; k++) disc[ndisc++] = tmp[k];
+            if (!strcmp(m->role, "user")) { raw_prompt = m->content; last_user_idx = (int)i; }
+        }
+        for (uint32_t i = 0; i < req->nmessages && ndisc < MAXOCC; i++) {
+            const LpEngineChatMessage *m = &req->messages[i];
+            if (!m->role || !m->content || !*m->content) continue;
+            if (!strcmp(m->role, "system") || (last_user_idx >= 0 && i == (uint32_t)last_user_idx)) continue;
+            size_t got = 0;
+            lp_id tmp[64];
+            text_occurrences(CTX[0], (const uint8_t *)m->content, strlen(m->content), tmp, 64, &got);
+            for (size_t k = 0; k < got && k < 64 && ndisc < MAXOCC; k++) {
+                if (lp_tier0_codepoint(T0, &tmp[k]) < 0) disc[ndisc++] = tmp[k];
             }
         }
     }
