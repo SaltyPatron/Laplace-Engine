@@ -345,7 +345,7 @@ static void after_recorded(const char *conninfo, const char *t0p, const Source *
 int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int nrec, const int *want){
     char self[4096]; if (os_self_exe(self, sizeof self) < 0) { perror("os_self_exe"); return 1; }
     const char *work = getenv("LAPLACE_WORK"); char dir[4096]; snprintf(dir, sizeof dir, "%s/logs/ingest", work && *work ? work : "."); 
-    { char cmd[4200]; snprintf(cmd, sizeof cmd, "%s", dir); for (char *c = cmd + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(cmd, 0775); *c = '/'; } mkdir(cmd, 0775); }
+    { char cmd[4200]; snprintf(cmd, sizeof cmd, "%s", dir); for (char *c = cmd; *c; c++) if (*c == '/' || *c == '\\') { if (c == cmd || (c == cmd + 2 && cmd[1] == ':')) continue; char saved = *c; *c = 0; mkdir(cmd, 0775); *c = saved; } mkdir(cmd, 0775); }
     setlocale(LC_NUMERIC, "en_US.UTF-8");
     const char *conninfo = laplace_db(), *t0p = NULL; int loads = 1, plans = 0;
     for (int a = 1; a < argc; a++) { if (!strcmp(argv[a], "-d") && a + 1 < argc) conninfo = argv[a + 1]; if (!strcmp(argv[a], "-t") && a + 1 < argc) t0p = argv[a + 1]; if (!strcmp(argv[a], "--no-load") || !strcmp(argv[a], "--plan") || !strcmp(argv[a], "--claims") || !strcmp(argv[a], "--claims-tsv")) loads = 0; if (!strcmp(argv[a], "--plan")) plans = 1; }
@@ -392,6 +392,14 @@ int ingest_every(int argc, char **argv, Source *src, int nsrc, Recipe *rec, int 
         { char **av = malloc(sizeof(char *) * (size_t)(argc + 3)); int n = 0; av[n++] = self; av[n++] = "ingest";
           for (int a = 1; a < argc; a++) av[n++] = argv[a];
           av[n++] = (char *)src[i].name; av[n] = NULL;
+          /* When orchestrating multiple sources sequentially, only the first inherits an explicit LAPLACE_INGEST_RUN_ID. */
+          if (went > 0 && getenv("LAPLACE_INGEST_RUN_ID")) {
+#ifdef _WIN32
+              _putenv_s("LAPLACE_INGEST_RUN_ID", "");
+#else
+              unsetenv("LAPLACE_INGEST_RUN_ID");
+#endif
+          }
           code = os_run_logged(self, av, log, "LAPLACE_INGEST_ONE", "1"); free(av);
           if (code < 0) { perror(self); return 1; } }
         char last[256] = ""; { FILE *f = fopen(log, "r"); char line[4096]; while (f && fgets(line, sizeof line, f)) { char *cr = strrchr(line, '\r'); const char *c = cr && cr[1] && cr[1] != '\n' ? cr + 1 : line; while (*c == ' ') c++;

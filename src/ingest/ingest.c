@@ -387,7 +387,7 @@ int cmd_ingest(int argc, char **argv){
     uint64_t *size = calloc((size_t)nfiles, 8);
     for (int i = 0; i < nfiles; i++) { struct stat sb; if (files[i].known || files[i].skipped || stat(files[i].path, &sb)) continue;
         size_t l = strlen(files[i].path); size[i] = (uint64_t)sb.st_size * (l > 3 && !strcmp(files[i].path + l - 3, ".gz") ? 8 : 1); }
-    if (progress_open(files, nfiles, &st)) return 1;
+    if (progress_open(files, nfiles, &st, size, do_load)) return 1;
     if(do_load){load_begin(conninfo,threads);chess_cache_database(conninfo);}   /* what of the chess perf-cache it holds: asked once, when chess first wants it */
     #define SHOW(F) do { if (show_claims) show_record_events(F); } while (0)
     /* What was read of a file is kept for its content; a file read to its end gets its trunk. */
@@ -400,7 +400,7 @@ int cmd_ingest(int argc, char **argv){
         int streaming = (do_load || preview_streaming) && !files[a0].known && !files[a0].skipped && recipe_record_streamable(files[a0].recipe);
         /* Non-streaming providers retain their existing batch path. Drain any
          * earlier stream before that path loads or resets the shared table. */
-        if (!streaming && do_load && stream_window_flush(&window)) return 1;
+        if (!streaming && do_load && stream_window_flush(&window)) { progress_end("failed", NULL, "stream window flush failed"); return 1; }
         if (streaming) {
             b0 = a0 + 1;
             sum = getenv("LAPLACE_RECORD_WINDOW_BYTES") ? strtoull(getenv("LAPLACE_RECORD_WINDOW_BYTES"), NULL, 10) : (UINT64_C(8) << 20);
@@ -466,7 +466,7 @@ int cmd_ingest(int argc, char **argv){
             if (!files[i].partial && getenv("LAPLACE_TRUNKS")) { char id[33]; id_text(&files[i].trunk.id, id); fprintf(stderr, "  trunk %s  %s\n", id, files[i].path); }
         }
         t_rec += now() - td;
-        if (mism) { fputs("ingest: source verification failed; no witness is published\n", stderr); return 1; }
+        if (mism) { fputs("ingest: source verification failed; no witness is published\n", stderr); progress_end("failed", NULL, "source verification failed: byte mismatch"); return 1; }
         for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
         /* Fail fast when any completed file already carries terminal semantic omissions or incomplete parts;
          * continuing through remaining files and streaming PostgreSQL flushes only wastes hours before rejection. */
@@ -480,29 +480,32 @@ int cmd_ingest(int argc, char **argv){
             if (fail_inc || fail_inv) {
                 uint64_t fail_om = say_obligations(stdout);
                 extern uint64_t records_differ(void), say_unplaced(void), say_refused(void);
-                fprintf(stderr, "ingest rejected: incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d; source and observation windows were not published (stopped early after %s)\n",
+                char errmsg[512];
+                snprintf(errmsg, sizeof errmsg, "ingest rejected: incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d (stopped after %s)",
                         (unsigned long long)fail_inc, (unsigned long long)fail_om,
                         (unsigned long long)records_differ(), (unsigned long long)say_unplaced(),
                         (unsigned long long)say_refused(), mism, files[a0].path);
+                fprintf(stderr, "%s; source and observation windows were not published\n", errmsg);
                 free(window.roots); free(window.events.e); free(window.complete); free(streams);
-                fold_free(fold); progress_end("failed", NULL); return 1;
+                fold_free(fold); progress_end("failed", NULL, errmsg); return 1;
             }
         }
         if (entities) show_entities(conninfo, asking);
         if (do_load) {
             if (streaming) {
-                if (stream_window_add(&window, &files[a0])) return 1;
+                if (stream_window_add(&window, &files[a0])) { progress_end("failed", NULL, "stream window persistence failed"); return 1; }
             } else {
                 st.known += (uint64_t)ingest_known(conninfo, files + a0, b0 - a0);   /* recorded trunks: pruned whole, said nothing again */
+                for (int i = a0; i < b0; i++) if (!files[i].skipped && files[i].known) progress_file_known(&files[i]);
                 fold_events(fold, files + a0, b0 - a0);
-                if (load(conninfo, threads, files + a0, b0 - a0, &st)) return 1;
+                if (load(conninfo, threads, files + a0, b0 - a0, &st)) { progress_end("failed", NULL, "database load failed"); return 1; }
             }
         }
         if (!do_load || !streaming) for (int i = a0; i < b0; i++) progress_file("file-composed", &files[i]);
         progress_file("progress", &files[a0]);
         for (int i = a0; i < b0; i++) if (files[i].partial) { free(files[i].ev.e); files[i].ev = (Events){0}; }
         td = now(); double database_before = completion.database_seconds;
-        if (say_source_poll(source_file_ready, &completion)) return 1;
+        if (say_source_poll(source_file_ready, &completion)) { progress_end("failed", NULL, "source dependency completion failed"); return 1; }
         t_dec += now() - td - (completion.database_seconds - database_before);
         {
             uint64_t fail_inc = 0; int fail_inv = 0; int bad_idx = a0;
@@ -517,12 +520,14 @@ int cmd_ingest(int argc, char **argv){
             if (fail_inc || fail_inv) {
                 uint64_t fail_om = say_obligations(stdout);
                 extern uint64_t records_differ(void), say_unplaced(void), say_refused(void);
-                fprintf(stderr, "ingest rejected: incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d; source and observation windows were not published (stopped early after %s)\n",
+                char errmsg[512];
+                snprintf(errmsg, sizeof errmsg, "ingest rejected: incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d (stopped after %s)",
                         (unsigned long long)fail_inc, (unsigned long long)fail_om,
                         (unsigned long long)records_differ(), (unsigned long long)say_unplaced(),
                         (unsigned long long)say_refused(), mism, files[bad_idx].path);
+                fprintf(stderr, "%s; source and observation windows were not published\n", errmsg);
                 free(window.roots); free(window.events.e); free(window.complete); free(streams);
-                fold_free(fold); progress_end("failed", NULL); return 1;
+                fold_free(fold); progress_end("failed", NULL, errmsg); return 1;
             }
         }
         batches++;
@@ -530,14 +535,14 @@ int cmd_ingest(int argc, char **argv){
             for (int i = a0; i < b0; i++) { free(files[i].ev.e); memset(&files[i].ev, 0, sizeof files[i].ev); }
             /* No-load realization has no persisted backing for native key
              * products. Keep its source DAG until all continuations finish. */
-            if (do_load && !streaming) { if (stream_window_flush(&window)) return 1; table_reset(); }
+            if (do_load && !streaming) { if (stream_window_flush(&window)) { progress_end("failed", NULL, "stream window flush failed"); return 1; } table_reset(); }
         }
         a0 = b0;
     }
     double source_finish = now(), database_before = completion.database_seconds;
-    if (say_source_end(source_file_ready, &completion)) return 1;
+    if (say_source_end(source_file_ready, &completion)) { progress_end("failed", NULL, "source finalization failed"); return 1; }
     t_dec += now() - source_finish - (completion.database_seconds - database_before);
-    if (do_load && stream_window_flush(&window)) return 1;
+    if (do_load && stream_window_flush(&window)) { progress_end("failed", NULL, "final stream window flush failed"); return 1; }
     if (do_load) printf("\n  streaming persistence: %'llu shared working windows, resident budget %'llu bytes\n",
         (unsigned long long)window.flushes, (unsigned long long)window.budget);
     fflush(stdout);
@@ -555,14 +560,16 @@ int cmd_ingest(int argc, char **argv){
     extern uint64_t records_differ(void), say_unplaced(void), say_refused(void);
     uint64_t conflicts=records_differ(), unplaced=say_unplaced(), refused=say_refused();
     if (incomplete || omissions || conflicts || unplaced || refused || mism) {
-        fprintf(stderr,"ingest rejected: incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d; source and observation windows were not published\n",
+        char errmsg[512];
+        snprintf(errmsg, sizeof errmsg, "ingest rejected: incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d",
             (unsigned long long)incomplete,(unsigned long long)omissions,(unsigned long long)conflicts,(unsigned long long)unplaced,(unsigned long long)refused,mism);
-        fold_free(fold); progress_end("failed",NULL); return 1;
+        fprintf(stderr,"%s; source and observation windows were not published\n", errmsg);
+        fold_free(fold); progress_end("failed",NULL,errmsg); return 1;
     }
     printf("\n== phases\n");
     printf("  %-44s %8.2f s   %8.1f MB/s\n", "decompose (all threads)", t_dec, bytes / 1e6 / (t_dec > 0 ? t_dec : 1));
     printf("  %-44s %8.2f s\n", "recompose and compare", t_rec);
-    if (!do_load) { fold_free(fold); return mism ? 1 : 0; }
+    if (!do_load) { fold_free(fold); progress_end(mism ? "failed" : "complete", NULL, mism ? "source verification failed" : NULL); return mism ? 1 : 0; }
     printf("  %-44s %8.2f s   %'llu IDs checked in %llu rounds, %'llu subtrees already recorded\n", "deduplication, trunk to leaf", st.t_dedup,
            (unsigned long long)st.checked, (unsigned long long)st.rounds, (unsigned long long)st.found);
     printf("  %-44s %8.2f s   %'llu entities, %'llu paths (%'.0f rows/s)\n", "structure persistence", st.t_copy,
@@ -595,7 +602,7 @@ int cmd_ingest(int argc, char **argv){
                   sf.has_lineage=1;
               }
               progress_phase("source-trunk", &trunk.id);
-              LoadStats ss = { 0 }; double ts = now(); if (load(conninfo, threads, &sf, 1, &ss)) return 1;
+              LoadStats ss = { 0 }; double ts = now(); if (load(conninfo, threads, &sf, 1, &ss)) { progress_end("failed", &trunk.id, "source trunk load failed"); return 1; }
               printf("  %-44s %8.2f s   %s%s\n", "the source's trunk", now() - ts, source_called(one), ss.ent_rows ? "" : ": already recorded");
               st.ent_rows += ss.ent_rows; st.phy_rows += ss.phy_rows;fflush(stdout); 
               { char hx[33]; id_text(&trunk.id, hx); printf("  %-44s %s\n", "its ID, the witness", hx); }
@@ -621,12 +628,12 @@ int cmd_ingest(int argc, char **argv){
         }
         double publication_started=now();
         progress_phase("source-publication", has_witness_trunk ? &witness_trunk : NULL);
-        if (load_register(conninfo, threads, roots, nr, files, nfiles) || merge(conninfo, threads, &st)) { free(roots); return 1; }
+        if (load_register(conninfo, threads, roots, nr, files, nfiles) || merge(conninfo, threads, &st)) { free(roots); progress_end("failed", has_witness_trunk ? &witness_trunk : NULL, "source publication merge failed"); return 1; }
         printf("  %-44s %8.2f s\n", "source publication", now()-publication_started);
         free(roots);
-        if (has_witness_trunk && witness_supersedes && forget_superseded(conninfo, threads, &witness_trunk)) return 1;
+        if (has_witness_trunk && witness_supersedes && forget_superseded(conninfo, threads, &witness_trunk)) { progress_end("failed", &witness_trunk, "supersede eviction failed"); return 1; }
     }
     printf("\n== total %.1f s\n", now() - T);
-    progress_end("complete",has_witness_trunk ? &witness_trunk : NULL);
+    progress_end("complete",has_witness_trunk ? &witness_trunk : NULL, NULL);
     return mism ? 1 : 0;
 }
