@@ -25,6 +25,7 @@ value upos pos
 value - domain
 # The list a Syn. gives, a synonym each.
 value - synonym
-# What "See X" names is an entry of the dictionary.
-value - See see
+# What "See X" names is a cross-reference to another entry of the dictionary; said as a relation so it stays distinct
+# from synonyms/domains and handles entries whose cross-reference text repeats the headword.
+relation "see also" See see
 attest entry pos domain synonym crossref
