@@ -18,7 +18,7 @@ struct Fold { lp_strmap *series; lp_vec(size_t) dirty; };
 typedef struct { lp_mask lexical; uint8_t tier,kind,metadata; } Published;
 typedef lp_vec(uint32_t) IndexPartitions;
 typedef struct {
-    PGconn **copy, *series; int ncopy, from_ingest, witness_changed, series_changed, window_index;
+    PGconn **copy, *series; int ncopy, from_ingest, witness_changed, series_changed, window_index, bucket_publish;
     char (*entity)[96], (*path)[96];
     char delta[96], pending[96], witnesses[96], affected[96];
     lp_idmap *known;

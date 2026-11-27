@@ -236,12 +236,17 @@ typedef struct SContextStore SContextStore;
 typedef struct SContextStream SContextStream;
 typedef struct SScopeState SScopeState;
 typedef struct SScopeStream SScopeStream;
+#define S_SCOPE_CHUNKS 16
 typedef struct {
     const Layout *layout;
     const uint8_t *source;
     uint32_t length, limit, skip_before;
     TSTree *tree;
     TSTreeCursor *cursor;
+    TSTree *chunks[S_SCOPE_CHUNKS];
+    uint32_t chunk_end[S_SCOPE_CHUNKS];
+    TSTree *bridges[S_SCOPE_CHUNKS];
+    uint8_t chunk_count, chunk_index, bridge_count;
     Layout *file_layout;
     SayScratch *header_arena;
     SayScratch context_arena;

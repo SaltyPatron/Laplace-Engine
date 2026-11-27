@@ -60,20 +60,26 @@ static void page_about(RecordPipeline *pipeline, const SRecords *records){
     if(!pipeline->has_about && pipeline->say->about_file){pipeline->about=pipeline->stem;pipeline->has_about=1;}
 }
 static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint64_t byte_at){
+    int prof = getenv("LAPLACE_PROFILE_INGEST") != NULL;
+    double tp_next = 0, tp_collect = 0, tp_bind = 0, tp_dbind = 0, tp_exec = 0, tp_merge = 0, tp_dfin = 0;
+    uint64_t n_recs = 0, n_wins = 0, n_bind_iters = 0;
     SRecord batch[RECORD_WINDOW];
     struct { SayScratch arena; PreparedRecord *record; uint32_t count; } prepared[MAX_RECORD_LANES] = {0};
     int bind_keys = pipeline->say->nkey != 0 || records->stream != NULL;
     while (!pipeline->failed) {
+        double t0 = prof ? now() : 0;
         uint32_t count = 0;
         while (count < RECORD_WINDOW && s_record_next(records, &batch[count])) {
             int boundary = batch[count].state != S_RECORD_VALUE; count++;
             if (boundary) break;
         }
+        if (prof) { tp_next += now() - t0; n_recs += count; n_wins++; }
         if (records->failed) { pipeline->failed = 1; break; }
         if (!count) break;
         uint32_t lanes = (count + RECORDS_PER_LANE - 1) / RECORDS_PER_LANE;
         if (lanes > pipeline->worker_count) lanes = pipeline->worker_count;
         const Layout *layout = records->layout;
+        double t1 = prof ? now() : 0;
         #pragma omp taskloop grainsize(1) shared(batch, prepared)
         for (uint32_t lane = 0; lane < lanes; lane++) {
             const File *previous_file = table_reading_file(pipeline->file);
@@ -107,6 +113,7 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
             record_selection_pair(prev_pair);
             table_reading_file(previous_file);
         }
+        if (prof) tp_collect += now() - t1;
         if (pipeline->failed) break;
         if (bind_keys) {
             /* Resolve declarations to a fixed point before producing claims.
@@ -116,6 +123,7 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
             uint64_t before;
             do {
                 before = keys_revision();
+                double tb = prof ? now() : 0;
                 #pragma omp taskloop grainsize(1) shared(prepared)
                 for (uint32_t lane = 0; lane < lanes; lane++) {
                     const File *previous_file = table_reading_file(pipeline->file);
@@ -128,11 +136,14 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
                     record_selection_pair(prev_pair);
                     table_reading_file(previous_file);
                 }
+                if (prof) { tp_bind += now() - tb; n_bind_iters++; tb = now(); }
                 deferred_bind(pipeline, 0);
+                if (prof) tp_dbind += now() - tb;
             } while (keys_revision() != before);
             /* All declarations in this bounded window are now published.
              * Evaluate the compiled operands after that dependency barrier;
              * the source bytes and each native AST were visited only once. */
+            double te = prof ? now() : 0;
             #pragma omp taskloop grainsize(1) shared(prepared)
             for (uint32_t lane = 0; lane < lanes; lane++) {
                 const File *previous_file = table_reading_file(pipeline->file);
@@ -157,9 +168,11 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
                 record_selection_pair(prev_pair);
                 table_reading_file(previous_file);
             }
+            if (prof) tp_exec += now() - te;
         }
         /* The taskgroup has joined: append complete lane results in source
          * order before reusing their arenas for the next bounded window. */
+        double tm = prof ? now() : 0;
         const PairBinding *window_pair = record_selection_pair(pipeline->pair.active ? &pipeline->pair : NULL);
         for (uint32_t lane = 0; lane < lanes; lane++) {
             RecordWorker *worker = &pipeline->workers[lane];
@@ -196,9 +209,14 @@ static void read_record_window(RecordPipeline *pipeline, SRecords *records, uint
             record_merge(pipeline->result, worker);
         }
         record_selection_pair(window_pair);
+        if (prof) { tp_merge += now() - tm; tm = now(); }
         if (bind_keys) deferred_finish(pipeline, 0);
-        for (uint32_t lane = 0; lane < lanes; lane++) prepared[lane].arena.used = prepared[lane].arena.stack_used = 0;
+        if (prof) tp_dfin += now() - tm;
+        for (uint32_t lane = 0; lane < MAX_RECORD_LANES; lane++) prepared[lane].arena.used = prepared[lane].arena.stack_used = 0;
     }
+    if (prof) fprintf(stderr, "[PROF] window recs=%llu wins=%llu biters=%llu next=%.3fs collect=%.3fs bind=%.3fs dbind=%.3fs exec=%.3fs merge=%.3fs dfin=%.3fs\n",
+                      (unsigned long long)n_recs, (unsigned long long)n_wins, (unsigned long long)n_bind_iters,
+                      tp_next, tp_collect, tp_bind, tp_dbind, tp_exec, tp_merge, tp_dfin);
     for (uint32_t lane = 0; lane < MAX_RECORD_LANES; lane++) arena_release(&prepared[lane].arena);
 }
 
@@ -256,6 +274,8 @@ static void read_records(RecordPipeline *pipeline){
     uint64_t ordinal = 0, source_row = 0, byte_at = 0;
     size_t header_mark = 0; int has_header = 0, first = 1;
     SayScratch headers = {0}; lp_buf buffer = {0};
+    int rprof = getenv("LAPLACE_PROFILE_INGEST") != NULL;
+    double rt_fill = 0, rt_parse = 0, rt_win = 0, rt_eof_dfin = 0;
     do {
         size_t target = independent ? quantum : UINT32_MAX;
         if (scopes && buffer.n >= target) {
@@ -263,12 +283,15 @@ static void read_records(RecordPipeline *pipeline){
             target = buffer.n + quantum;
         }
         if (first && target < 3) target = 3;
+        double tf0 = rprof ? now() : 0;
         if (!input_fill(input, &buffer, target, quantum, &ended)) { pipeline->failed = 1; break; }
+        if (rprof) rt_fill += now() - tf0;
         if (first && pipeline->input && buffer.n >= 3 && buffer.b[0] == 0xef && buffer.b[1] == 0xbb && buffer.b[2] == 0xbf) {
             memmove(buffer.b, buffer.b + 3, buffer.n - 3); buffer.n -= 3; byte_at = 3;
         }
         first = 0; size_t consumed = 0; SRecords records; int status;
         layout->source_row = source_row;
+        double tp0 = rprof ? now() : 0;
         for (;;) {
             status = scopes ? s_scope_stream_window(&records, scopes, layout, buffer.b, buffer.n, byte_at, ended) :
                 independent ? s_records_context_window(&records, layout, buffer.b, buffer.n, ended, &consumed, &headers, context) :
@@ -277,6 +300,7 @@ static void read_records(RecordPipeline *pipeline){
             if (buffer.n > UINT32_MAX - quantum) { status = -1; break; }
             if (!input_fill(input, &buffer, buffer.n + quantum, quantum, &ended)) { status = -1; break; }
         }
+        if (rprof) rt_parse += now() - tp0;
         if (status <= 0) {
             fprintf(stderr, "\n  %s: %s does not parse completely with its compiled packaging grammar at byte %llu\n",
                     pipeline->recipe->name, pipeline->file->path, (unsigned long long)byte_at);
@@ -285,6 +309,7 @@ static void read_records(RecordPipeline *pipeline){
         if (!independent) consumed = buffer.n;
         pipeline->source = buffer.b; pipeline->length = buffer.n;
         records.ordinal = ordinal; page_about(pipeline, &records);
+        double tw0 = rprof ? now() : 0;
         if (omp_in_parallel()) read_record_window(pipeline, &records, byte_at);
         else {
             #pragma omp parallel
@@ -293,6 +318,7 @@ static void read_records(RecordPipeline *pipeline){
                 read_record_window(pipeline, &records, byte_at);
             }
         }
+        if (rprof) rt_win += now() - tw0;
         ordinal = records.ordinal;
         /* Report framed records read, independently of the persistence window.
          * A large file can be making progress before its first rows commit. */
@@ -308,7 +334,9 @@ static void read_records(RecordPipeline *pipeline){
             fputs("cannot retain active packaging headers\n", stderr); pipeline->failed = 1;
         }
         s_records_close(&records);
+        double td0 = rprof ? now() : 0;
         if (!pipeline->failed && ended && consumed == buffer.n) deferred_finish(pipeline, !source_active || pipeline->result->hw != NULL);
+        if (rprof) rt_eof_dfin += now() - td0;
         if (pipeline->file->emit && !pipeline->failed) {
             RecordWorker *result = pipeline->result;
             if (pipeline->file->emit(pipeline->file->emit_context, result->things.c, result->things.n,
@@ -320,6 +348,8 @@ static void read_records(RecordPipeline *pipeline){
         memmove(buffer.b, buffer.b + consumed, buffer.n - consumed); buffer.n -= consumed;
         if (pipeline->failed || (ended && !buffer.n)) break;
     } while (1);
+    if (rprof) fprintf(stderr, "[PROF] read_records fill=%.3fs parse=%.3fs window=%.3fs eof_dfin=%.3fs\n",
+                       rt_fill, rt_parse, rt_win, rt_eof_dfin);
     if (has_header && !independent) scratch_restore(header_mark);
     if (!pipeline->failed && pipeline->deferred.first && (!source_active || pipeline->result->hw)) {
         fputs("deferred records reached file closure before they were finalized\n", stderr); exit(2);
@@ -455,8 +485,10 @@ static int pending_file_order(const void *a, const void *b){
 static int source_drain(source_file_ready_fn ready, void *context, int final){
     RecordPipeline *head = __atomic_exchange_n(&source_pending, NULL, __ATOMIC_ACQ_REL);
     size_t count = 0; for (RecordPipeline *p = head; p; p = p->next) count++;
+    uint32_t max_eval = 1;
+    for (RecordPipeline *p = head; p; p = p->next) if (p->worker_count > max_eval) max_eval = p->worker_count;
     RecordPipeline **files = count ? malloc(count * sizeof *files) : NULL;
-    RecordWorker *evaluation = count ? calloc(1, sizeof *evaluation) : NULL;
+    RecordWorker *evaluation = count ? calloc(max_eval, sizeof *evaluation) : NULL;
     if (count && (!files || !evaluation)) { perror("source continuations"); exit(2); }
     size_t at = 0; for (RecordPipeline *p = head; p; p = p->next) { files[at++] = p; p->evaluators = evaluation; }
     if (count) qsort(files, count, sizeof *files, pending_file_order);
@@ -490,7 +522,7 @@ static int source_drain(source_file_ready_fn ready, void *context, int final){
         deferred_close(&pipeline->deferred); finish_laid(pipeline);
         if (!failed && ready && ready(context, file)) failed = 1;
     }
-    if (evaluation) record_workers_free(evaluation, 1);
+    if (evaluation) record_workers_free(evaluation, max_eval);
     free(files); return failed;
 }
 int say_source_poll(source_file_ready_fn ready, void *context){ return source_drain(ready, context, 0); }

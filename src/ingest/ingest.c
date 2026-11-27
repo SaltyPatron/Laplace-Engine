@@ -428,6 +428,7 @@ int cmd_ingest(int argc, char **argv){
                 if (files[i].known || files[i].skipped) continue;
                 progress_file("file-start", &files[i]);
                 decompose_file(CTX[0], &files[i]); if (!do_load) progress_file("file-composed", &files[i]); bytes += files[i].bytes; done++;
+                if (!files[i].partial && (files[i].incomplete || files[i].invalid)) { b0 = i + 1; break; }
             }
             t_dec += now() - td;
         } else {
@@ -466,6 +467,26 @@ int cmd_ingest(int argc, char **argv){
         }
         t_rec += now() - td;
         if (mism) { fputs("ingest: source verification failed; no witness is published\n", stderr); return 1; }
+        /* Fail fast when any completed file already carries terminal semantic omissions or incomplete parts;
+         * continuing through remaining files and streaming PostgreSQL flushes only wastes hours before rejection. */
+        {
+            uint64_t fail_inc = 0; int fail_inv = 0;
+            for (int i = a0; i < b0; i++) {
+                if (files[i].known || files[i].skipped || files[i].partial) continue;
+                fail_inc += files[i].incomplete;
+                if (files[i].invalid) fail_inv = 1;
+            }
+            if (fail_inc || fail_inv) {
+                uint64_t fail_om = say_obligations(stdout);
+                extern uint64_t records_differ(void), say_unplaced(void), say_refused(void);
+                fprintf(stderr, "ingest rejected early (fail-fast after %s): incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d; source and observation windows were not published\n",
+                        files[a0].path, (unsigned long long)fail_inc, (unsigned long long)fail_om,
+                        (unsigned long long)records_differ(), (unsigned long long)say_unplaced(),
+                        (unsigned long long)say_refused(), mism);
+                free(window.roots); free(window.events.e); free(window.complete); free(streams);
+                fold_free(fold); progress_end("failed", NULL); return 1;
+            }
+        }
         for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
         if (entities) show_entities(conninfo, asking);
         if (do_load) {
@@ -483,6 +504,27 @@ int cmd_ingest(int argc, char **argv){
         td = now(); double database_before = completion.database_seconds;
         if (say_source_poll(source_file_ready, &completion)) return 1;
         t_dec += now() - td - (completion.database_seconds - database_before);
+        {
+            uint64_t fail_inc = 0; int fail_inv = 0; int bad_idx = a0;
+            for (int i = 0; i < b0; i++) {
+                if (files[i].known || files[i].skipped || files[i].partial) continue;
+                if (files[i].incomplete || files[i].invalid) {
+                    fail_inc += files[i].incomplete;
+                    if (files[i].invalid) fail_inv = 1;
+                    bad_idx = i;
+                }
+            }
+            if (fail_inc || fail_inv) {
+                uint64_t fail_om = say_obligations(stdout);
+                extern uint64_t records_differ(void), say_unplaced(void), say_refused(void);
+                fprintf(stderr, "ingest rejected early (fail-fast after %s): incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d; source and observation windows were not published\n",
+                        files[bad_idx].path, (unsigned long long)fail_inc, (unsigned long long)fail_om,
+                        (unsigned long long)records_differ(), (unsigned long long)say_unplaced(),
+                        (unsigned long long)say_refused(), mism);
+                free(window.roots); free(window.events.e); free(window.complete); free(streams);
+                fold_free(fold); progress_end("failed", NULL); return 1;
+            }
+        }
         batches++;
         if (b0 < nfiles) {
             for (int i = a0; i < b0; i++) { free(files[i].ev.e); memset(&files[i].ev, 0, sizeof files[i].ev); }

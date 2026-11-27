@@ -16,6 +16,7 @@ void start_loader(const char *conninfo, int requested){
         PQclear(q); PQfinish(control); exit(1);
     }
     writer.window_index = col_bool(q, 0, 2);
+    writer.bucket_publish = (PQnfields(q) > 3 && !PQgetisnull(q, 0, 3)) ? col_bool(q, 0, 3) : 0;
     int available = col_i32(q, 0, 0); PQclear(q);
     int cores = omp_get_max_threads();
     if (requested <= 0 || requested > cores) requested = cores;

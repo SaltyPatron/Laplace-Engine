@@ -120,20 +120,39 @@ void reset_record_worker(RecordPipeline *pipeline, RecordWorker *worker){
  * workers while one lane rereads its journals. Amortize that work against new
  * binding publications and the outstanding backlog. Source closure still runs
  * the full fixed point, including absent references and canonical duplicates. */
-static int deferred_retry(DeferredRecords *records, uint64_t *last, int final){
+static int deferred_retry(DeferredRecords *records, uint64_t *last, uint32_t backoff, int final){
     uint64_t revision = keys_revision();
-    uint64_t interval = records->waiting > RECORD_WINDOW ? records->waiting : RECORD_WINDOW;
+    uint64_t base = records->waiting > RECORD_WINDOW ? records->waiting : RECORD_WINDOW;
+    uint64_t mult = backoff > 1u ? (uint64_t)backoff : 1u;
+    uint64_t interval = base * mult;
     if (!final && revision - *last < interval) return 0;
     *last = revision; return 1;
 }
+static void deferred_bind_lane(RecordPipeline *pipeline, DeferredRecords *records, DeferredJob **batch,
+                               size_t nbatch, SayScratch *lane_reads, uint32_t lane, uint32_t lanes, int final){
+    const File *previous_file = table_reading_file(pipeline->file);
+    const PairBinding *prev_pair = record_selection_pair(pipeline->pair.active ? &pipeline->pair : NULL);
+    RecordWorker *worker = &pipeline->evaluators[lane];
+    size_t j0 = nbatch * lane / lanes, j1 = nbatch * (lane + 1) / lanes;
+    for (size_t j = j0; j < j1; j++) {
+        lane_reads[lane].used = lane_reads[lane].stack_used = 0;
+        SayScratch previous = scratch_enter(&lane_reads[lane]);
+        PreparedRecord *record = journal_restore(records, batch[j]);
+        reset_record_worker(pipeline, worker); record_bind_keys(worker, record, final);
+        scratch_leave(&lane_reads[lane], previous);
+    }
+    record_selection_pair(prev_pair);
+    table_reading_file(previous_file);
+}
 void deferred_bind(RecordPipeline *pipeline, int final){
     DeferredRecords *records = &pipeline->deferred;
-    if (!records->waiting || !deferred_retry(records, &records->bound_revision, final)) return;
+    if (!records->waiting || !deferred_retry(records, &records->bound_revision, records->bind_backoff, final)) return;
+    uint64_t rev_before = keys_revision();
     size_t nbatch = 0;
     for (DeferredJob *job = records->first; job; job = job->next)
         if (!job->ready && job->operands >= 0) nbatch++;
     if (!nbatch) return;
-    uint32_t avail = (pipeline->evaluators && pipeline->source != NULL && pipeline->worker_count > 1) ? pipeline->worker_count : 1;
+    uint32_t avail = (pipeline->evaluators && pipeline->worker_count > 1) ? pipeline->worker_count : 1;
     uint32_t lanes = (uint32_t)((nbatch + RECORDS_PER_LANE - 1) / RECORDS_PER_LANE);
     if (lanes > avail) lanes = avail;
     if (lanes <= 1 || nbatch <= 1) {
@@ -145,38 +164,67 @@ void deferred_bind(RecordPipeline *pipeline, int final){
             reset_record_worker(pipeline, worker); record_bind_keys(worker, record, final);
             scratch_leave(&records->read, previous);
         }
-        return;
-    }
-    DeferredJob **batch = malloc(sizeof(*batch) * nbatch);
-    if (!batch) { perror("deferred bind batch"); exit(2); }
-    size_t bi = 0;
-    for (DeferredJob *job = records->first; job; job = job->next)
-        if (!job->ready && job->operands >= 0) batch[bi++] = job;
-    SayScratch *lane_reads = calloc(lanes, sizeof(*lane_reads));
-    if (!lane_reads) { perror("deferred bind arenas"); free(batch); exit(2); }
-    #pragma omp parallel for if(!omp_in_parallel()) num_threads(lanes) schedule(static,1)
-    for (uint32_t lane = 0; lane < lanes; lane++) {
-        const File *previous_file = table_reading_file(pipeline->file);
-        const PairBinding *prev_pair = record_selection_pair(pipeline->pair.active ? &pipeline->pair : NULL);
-        RecordWorker *worker = &pipeline->evaluators[lane];
-        size_t j0 = nbatch * lane / lanes, j1 = nbatch * (lane + 1) / lanes;
-        for (size_t j = j0; j < j1; j++) {
-            lane_reads[lane].used = lane_reads[lane].stack_used = 0;
-            SayScratch previous = scratch_enter(&lane_reads[lane]);
-            PreparedRecord *record = journal_restore(records, batch[j]);
-            reset_record_worker(pipeline, worker); record_bind_keys(worker, record, final);
-            scratch_leave(&lane_reads[lane], previous);
+    } else {
+        DeferredJob **batch = malloc(sizeof(*batch) * nbatch);
+        if (!batch) { perror("deferred bind batch"); exit(2); }
+        size_t bi = 0;
+        for (DeferredJob *job = records->first; job; job = job->next)
+            if (!job->ready && job->operands >= 0) batch[bi++] = job;
+        SayScratch *lane_reads = calloc(lanes, sizeof(*lane_reads));
+        if (!lane_reads) { perror("deferred bind arenas"); free(batch); exit(2); }
+        if (omp_in_parallel()) {
+            #pragma omp taskloop grainsize(1) shared(pipeline, records, batch, lane_reads)
+            for (uint32_t lane = 0; lane < lanes; lane++)
+                deferred_bind_lane(pipeline, records, batch, nbatch, lane_reads, lane, lanes, final);
+        } else {
+            #pragma omp parallel for num_threads(lanes) schedule(static,1)
+            for (uint32_t lane = 0; lane < lanes; lane++)
+                deferred_bind_lane(pipeline, records, batch, nbatch, lane_reads, lane, lanes, final);
         }
-        record_selection_pair(prev_pair);
-        table_reading_file(previous_file);
+        for (uint32_t lane = 0; lane < lanes; lane++) arena_release(&lane_reads[lane]);
+        free(lane_reads); free(batch);
     }
-    for (uint32_t lane = 0; lane < lanes; lane++) arena_release(&lane_reads[lane]);
-    free(lane_reads); free(batch);
+    if (!final) {
+        if (keys_revision() == rev_before)
+            records->bind_backoff = records->bind_backoff ? (records->bind_backoff < 32u ? records->bind_backoff * 2u : 32u) : 2u;
+        else
+            records->bind_backoff = 1u;
+    } else {
+        records->bind_backoff = 1u;
+    }
 }
 typedef struct { size_t things_off, meta_off, things_n, meta_n; uint32_t lane; uint8_t done; } DeferredExecOut;
+static void deferred_finish_lane(RecordPipeline *pipeline, DeferredRecords *records, DeferredJob **batch,
+                                 DeferredExecOut *outs, RecordWorker *acc, SayScratch *lane_reads, lp_buf *lane_refs,
+                                 size_t nbatch, uint32_t lane, uint32_t lanes, uint64_t revision, int final){
+    const File *previous_file = table_reading_file(pipeline->file);
+    const PairBinding *prev_pair = record_selection_pair(pipeline->pair.active ? &pipeline->pair : NULL);
+    RecordWorker *worker = &pipeline->evaluators[lane];
+    size_t j0 = nbatch * lane / lanes, j1 = nbatch * (lane + 1) / lanes;
+    for (size_t j = j0; j < j1; j++) {
+        lane_reads[lane].used = lane_reads[lane].stack_used = 0;
+        SayScratch previous = scratch_enter(&lane_reads[lane]);
+        PreparedRecord *record = journal_restore(records, batch[j]);
+        reset_record_worker(pipeline, worker); worker->defer_missing = (uint8_t)!final;
+        worker->kr = record->rank; worker->bindings = record->bindings;
+        record_execute(worker, &record->record, 0, record->ordinal, 0); batch[j]->tried = revision;
+        if (!worker->blocked || final) {
+            outs[j].done = 1; outs[j].lane = lane;
+            outs[j].things_n = worker->things.n; outs[j].things_off = lane_refs[lane].n;
+            lp_buf_put(&lane_refs[lane], worker->things.c, worker->things.n * sizeof(Ref));
+            outs[j].meta_n = worker->meta.n; outs[j].meta_off = lane_refs[lane].n;
+            lp_buf_put(&lane_refs[lane], worker->meta.c, worker->meta.n * sizeof(Ref));
+            worker->things.n = worker->meta.n = 0;
+            record_merge(&acc[lane], worker);
+        }
+        scratch_leave(&lane_reads[lane], previous);
+    }
+    record_selection_pair(prev_pair);
+    table_reading_file(previous_file);
+}
 void deferred_finish(RecordPipeline *pipeline, int final){
     DeferredRecords *records = &pipeline->deferred;
-    if (!final && (!records->waiting || !deferred_retry(records, &records->evaluated_revision, 0))) {
+    if (!final && (!records->waiting || !deferred_retry(records, &records->evaluated_revision, records->eval_backoff, 0))) {
         deferred_drain(pipeline); return;
     }
     if (final) {
@@ -190,9 +238,10 @@ void deferred_finish(RecordPipeline *pipeline, int final){
             if (!job->ready && job->operands >= 0 && (final || job->tried != revision)) nbatch++;
     }
     if (!nbatch) { deferred_drain(pipeline); return; }
-    uint32_t avail = (pipeline->evaluators && pipeline->source != NULL && pipeline->worker_count > 1) ? pipeline->worker_count : 1;
+    uint32_t avail = (pipeline->evaluators && pipeline->worker_count > 1) ? pipeline->worker_count : 1;
     uint32_t lanes = (uint32_t)((nbatch + RECORDS_PER_LANE - 1) / RECORDS_PER_LANE);
     if (lanes > avail) lanes = avail;
+    size_t resolved = 0;
     if (lanes <= 1 || nbatch <= 1) {
         RecordWorker *worker = &pipeline->evaluators[0];
         for (DeferredJob *job = records->first; job; job = job->next) if (!pipeline->key_gaps && !job->ready && job->operands >= 0 && (final || job->tried != revision)) {
@@ -203,68 +252,59 @@ void deferred_finish(RecordPipeline *pipeline, int final){
             worker->kr = record->rank; worker->bindings = record->bindings;
             record_execute(worker, &record->record, 0, record->ordinal, 0); job->tried = revision;
             if (!worker->blocked || final) {
+                resolved++;
                 journal_products(records, job, worker->things.c, worker->things.n, worker->meta.c, worker->meta.n);
                 worker->things.n = worker->meta.n = 0; record_merge(pipeline->result, worker);
             }
             scratch_leave(&records->read, previous);
         }
-        deferred_drain(pipeline);
-        return;
-    }
-    DeferredJob **batch = malloc(sizeof(*batch) * nbatch);
-    DeferredExecOut *outs = calloc(nbatch, sizeof(*outs));
-    RecordWorker *acc = calloc(lanes, sizeof(*acc));
-    SayScratch *lane_reads = calloc(lanes, sizeof(*lane_reads));
-    lp_buf *lane_refs = calloc(lanes, sizeof(*lane_refs));
-    if (!batch || !outs || !acc || !lane_reads || !lane_refs) { perror("deferred finish lanes"); exit(2); }
-    for (uint32_t lane = 0; lane < lanes; lane++) {
-        acc[lane] = (RecordWorker){.r=pipeline->recipe, .s=pipeline->say, .er=1500.0f, .ed=0.0f,
-            .fw=pipeline->file->witness, .fname=pipeline->filename, .fstem=pipeline->stem, .file_scope=pipeline->file_scope,
-            .pair=pipeline->pair, .fabout=pipeline->about, .has_fabout=pipeline->has_about, .hw=pipeline->result->hw};
-        record_worker_outputs(&acc[lane]);
-    }
-    size_t bi = 0;
-    for (DeferredJob *job = records->first; job; job = job->next)
-        if (!job->ready && job->operands >= 0 && (final || job->tried != revision)) batch[bi++] = job;
-    #pragma omp parallel for if(!omp_in_parallel()) num_threads(lanes) schedule(static,1)
-    for (uint32_t lane = 0; lane < lanes; lane++) {
-        const File *previous_file = table_reading_file(pipeline->file);
-        const PairBinding *prev_pair = record_selection_pair(pipeline->pair.active ? &pipeline->pair : NULL);
-        RecordWorker *worker = &pipeline->evaluators[lane];
-        size_t j0 = nbatch * lane / lanes, j1 = nbatch * (lane + 1) / lanes;
-        for (size_t j = j0; j < j1; j++) {
-            lane_reads[lane].used = lane_reads[lane].stack_used = 0;
-            SayScratch previous = scratch_enter(&lane_reads[lane]);
-            PreparedRecord *record = journal_restore(records, batch[j]);
-            reset_record_worker(pipeline, worker); worker->defer_missing = (uint8_t)!final;
-            worker->kr = record->rank; worker->bindings = record->bindings;
-            record_execute(worker, &record->record, 0, record->ordinal, 0); batch[j]->tried = revision;
-            if (!worker->blocked || final) {
-                outs[j].done = 1; outs[j].lane = lane;
-                outs[j].things_n = worker->things.n; outs[j].things_off = lane_refs[lane].n;
-                lp_buf_put(&lane_refs[lane], worker->things.c, worker->things.n * sizeof(Ref));
-                outs[j].meta_n = worker->meta.n; outs[j].meta_off = lane_refs[lane].n;
-                lp_buf_put(&lane_refs[lane], worker->meta.c, worker->meta.n * sizeof(Ref));
-                worker->things.n = worker->meta.n = 0;
-                record_merge(&acc[lane], worker);
-            }
-            scratch_leave(&lane_reads[lane], previous);
+    } else {
+        DeferredJob **batch = malloc(sizeof(*batch) * nbatch);
+        DeferredExecOut *outs = calloc(nbatch, sizeof(*outs));
+        RecordWorker *acc = calloc(lanes, sizeof(*acc));
+        SayScratch *lane_reads = calloc(lanes, sizeof(*lane_reads));
+        lp_buf *lane_refs = calloc(lanes, sizeof(*lane_refs));
+        if (!batch || !outs || !acc || !lane_reads || !lane_refs) { perror("deferred finish lanes"); exit(2); }
+        for (uint32_t lane = 0; lane < lanes; lane++) {
+            acc[lane] = (RecordWorker){.r=pipeline->recipe, .s=pipeline->say, .er=1500.0f, .ed=0.0f,
+                .fw=pipeline->file->witness, .fname=pipeline->filename, .fstem=pipeline->stem, .file_scope=pipeline->file_scope,
+                .pair=pipeline->pair, .fabout=pipeline->about, .has_fabout=pipeline->has_about, .hw=pipeline->result->hw};
+            record_worker_outputs(&acc[lane]);
         }
-        record_selection_pair(prev_pair);
-        table_reading_file(previous_file);
+        size_t bi = 0;
+        for (DeferredJob *job = records->first; job; job = job->next)
+            if (!job->ready && job->operands >= 0 && (final || job->tried != revision)) batch[bi++] = job;
+        if (omp_in_parallel()) {
+            #pragma omp taskloop grainsize(1) shared(pipeline, records, batch, outs, acc, lane_reads, lane_refs)
+            for (uint32_t lane = 0; lane < lanes; lane++)
+                deferred_finish_lane(pipeline, records, batch, outs, acc, lane_reads, lane_refs, nbatch, lane, lanes, revision, final);
+        } else {
+            #pragma omp parallel for num_threads(lanes) schedule(static,1)
+            for (uint32_t lane = 0; lane < lanes; lane++)
+                deferred_finish_lane(pipeline, records, batch, outs, acc, lane_reads, lane_refs, nbatch, lane, lanes, revision, final);
+        }
+        for (size_t j = 0; j < nbatch; j++) if (outs[j].done) {
+            resolved++;
+            const Ref *th = outs[j].things_n ? (const Ref *)(lane_refs[outs[j].lane].b + outs[j].things_off) : NULL;
+            const Ref *mt = outs[j].meta_n ? (const Ref *)(lane_refs[outs[j].lane].b + outs[j].meta_off) : NULL;
+            journal_products(records, batch[j], th, outs[j].things_n, mt, outs[j].meta_n);
+        }
+        for (uint32_t lane = 0; lane < lanes; lane++) {
+            record_merge(pipeline->result, &acc[lane]);
+            arena_release(&lane_reads[lane]);
+            lp_buf_free(&lane_refs[lane]);
+        }
+        record_workers_free(acc, lanes);
+        free(lane_reads); free(lane_refs); free(outs); free(batch);
     }
-    for (size_t j = 0; j < nbatch; j++) if (outs[j].done) {
-        const Ref *th = outs[j].things_n ? (const Ref *)(lane_refs[outs[j].lane].b + outs[j].things_off) : NULL;
-        const Ref *mt = outs[j].meta_n ? (const Ref *)(lane_refs[outs[j].lane].b + outs[j].meta_off) : NULL;
-        journal_products(records, batch[j], th, outs[j].things_n, mt, outs[j].meta_n);
+    if (!final) {
+        if (resolved == 0)
+            records->eval_backoff = records->eval_backoff ? (records->eval_backoff < 32u ? records->eval_backoff * 2u : 32u) : 2u;
+        else
+            records->eval_backoff = 1u;
+    } else {
+        records->eval_backoff = 1u;
     }
-    for (uint32_t lane = 0; lane < lanes; lane++) {
-        record_merge(pipeline->result, &acc[lane]);
-        arena_release(&lane_reads[lane]);
-        lp_buf_free(&lane_refs[lane]);
-    }
-    record_workers_free(acc, lanes);
-    free(lane_reads); free(lane_refs); free(outs); free(batch);
     deferred_drain(pipeline);
 }
 void deferred_close(DeferredRecords *records){

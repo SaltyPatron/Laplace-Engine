@@ -18,6 +18,7 @@ typedef struct {
     lp_buf operands_buf, products_buf;
     DeferredJob *first, *last, *free;
     uint64_t waiting, bound_revision, evaluated_revision;
+    uint32_t bind_backoff, eval_backoff;
     SayScratch jobs, read;
 } DeferredRecords;
 

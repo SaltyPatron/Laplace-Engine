@@ -511,18 +511,51 @@ int merge(const char *conninfo,int npg,LoadStats *stats){
     if(PQtransactionStatus(writer.series)==PQTRANS_IDLE)db_tx(writer.series,LP_SQL_TX_BEGIN_RC);
     uint64_t admitted=0;
     if(lp_idmap_count(writer.registered) && (writer.series_changed || writer.witness_changed || writer.counts_unknown)){
-        Args pa={0};arg_text(&pa,writer.pending);
-        if(writer.series_changed || writer.witness_changed)arg_text(&pa,writer.affected);else arg_null(&pa);
-        if(lp_idmap_count(writer.new_witnesses))
-            arg_ids(&pa,lp_idmap_keys(writer.new_witnesses),lp_idmap_count(writer.new_witnesses));
-        else arg_null(&pa);
-        PGresult *pub=db_call(writer.series,LP_SQL_STAGE_PUBLISH_ATTESTATIONS,&pa);
-        args_free(&pa);
-        if(PQntuples(pub)!=1 || PQgetisnull(pub,0,0)){
-            fputs("attestation publication: invalid Native result\n",stderr);PQclear(pub);return 1;
+        int use_affected = (writer.series_changed || writer.witness_changed);
+        size_t nnew = lp_idmap_count(writer.new_witnesses);
+        const lp_id *new_ids = nnew ? lp_idmap_keys(writer.new_witnesses) : NULL;
+        int lanes = (writer.bucket_publish && writer.ncopy > 1) ? (writer.ncopy < 16 ? writer.ncopy : 16) : 1;
+        if(lanes > 1){
+            /* Commit pending/affected visibility on writer.series so all parallel
+             * backend lanes see the finalized stage tables and fold disjoint
+             * claim.b[0]>>4 range partitions (attestation + consensus) concurrently. */
+            if(PQtransactionStatus(writer.series)!=PQTRANS_IDLE)db_tx(writer.series,LP_SQL_TX_COMMIT);
+            int lane_failed=0;
+            #pragma omp parallel for num_threads(lanes) schedule(static,1) reduction(+:admitted) reduction(|:lane_failed)
+            for(int lane=0;lane<lanes;lane++){
+                int b_lo = (16 * lane) / lanes, b_hi = (16 * (lane + 1)) / lanes;
+                int32_t mask = 0;
+                for(int b=b_lo;b<b_hi;b++) mask |= (1 << b);
+                if(!mask) continue;
+                Args pa={0}; arg_text(&pa,writer.pending);
+                if(use_affected) arg_text(&pa,writer.affected); else arg_null(&pa);
+                if(nnew) arg_ids(&pa,new_ids,nnew); else arg_null(&pa);
+                arg_i32(&pa,mask);
+                PGresult *pub=db_call(writer.copy[lane],LP_SQL_STAGE_PUBLISH_ATTESTATIONS_BUCKETS,&pa);
+                args_free(&pa);
+                if(!pub || PQntuples(pub)!=1 || PQgetisnull(pub,0,0)){
+                    fputs("attestation publication: invalid Native bucket result\n",stderr);
+                    if(pub)PQclear(pub);
+                    lane_failed=1;
+                }else{
+                    admitted+=(uint64_t)col_i64(pub,0,0);
+                    PQclear(pub);
+                }
+            }
+            if(lane_failed) return 1;
+            db_tx(writer.series,LP_SQL_TX_BEGIN_RC);
+        }else{
+            Args pa={0};arg_text(&pa,writer.pending);
+            if(use_affected)arg_text(&pa,writer.affected);else arg_null(&pa);
+            if(nnew) arg_ids(&pa,new_ids,nnew); else arg_null(&pa);
+            PGresult *pub=db_call(writer.series,LP_SQL_STAGE_PUBLISH_ATTESTATIONS,&pa);
+            args_free(&pa);
+            if(PQntuples(pub)!=1 || PQgetisnull(pub,0,0)){
+                fputs("attestation publication: invalid Native result\n",stderr);PQclear(pub);return 1;
+            }
+            admitted=(uint64_t)col_i64(pub,0,0);
+            PQclear(pub);
         }
-        admitted=(uint64_t)col_i64(pub,0,0);
-        PQclear(pub);
     }
     size_t ndrop=(size_t)writer.ncopy*2u+4u;
     const char **drops=malloc(ndrop*sizeof *drops);

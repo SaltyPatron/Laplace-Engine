@@ -115,7 +115,8 @@ LP_SQL(POOL_SLOTS, 0,
     " AND pg_catalog.to_regprocedure('@extschema@.laplace_present_stage(regclass,regclass,name,name)') IS NOT NULL,"
     " pg_catalog.to_regprocedure('@extschema@.laplace_merge_stage(regclass,regclass,boolean)') IS NOT NULL"
     " AND pg_catalog.to_regprocedure('@extschema@.laplace_stage_partitions(regclass)') IS NOT NULL"
-    " AND pg_catalog.to_regprocedure('@extschema@.laplace_clean_partitions(oid[])') IS NOT NULL")
+    " AND pg_catalog.to_regprocedure('@extschema@.laplace_clean_partitions(oid[])') IS NOT NULL,"
+    " pg_catalog.to_regprocedure('@extschema@.laplace_stage_publish_attestations(regclass,regclass,@extschema@.blake3[],integer)') IS NOT NULL")
 LP_SQL(ENSURE_STAGE, 0,
     "SELECT @extschema@.laplace_ensure_stage()")
 LP_SQL(STAGE_RETIRE, 0,
@@ -133,6 +134,9 @@ LP_SQL(STAGE_RESTORE_PRUNED, 4,
 LP_SQL(STAGE_PUBLISH_ATTESTATIONS, 3,
     "SELECT admitted, consensus_rows"
     " FROM @extschema@.laplace_stage_publish_attestations($1::text::regclass, $2::text::regclass, $3::@extschema@.blake3[])")
+LP_SQL(STAGE_PUBLISH_ATTESTATIONS_BUCKETS, 4,
+    "SELECT admitted, consensus_rows"
+    " FROM @extschema@.laplace_stage_publish_attestations($1::text::regclass, $2::text::regclass, $3::@extschema@.blake3[], $4::integer)")
 LP_SQL(MERGE_STAGE, 3,
     "SELECT * FROM @extschema@.laplace_merge_stage($1::text::regclass, $2::text::regclass, $3::boolean)")
 LP_SQL(MERGE_STAGE_DEFAULT, 2,

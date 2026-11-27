@@ -1,6 +1,7 @@
 /* Single-pass grammar-bounded record streaming, context snapshots, and event scope streams. */
 #define _GNU_SOURCE
 #include "structure_internal.h"
+#include <omp.h>
 static const SContext *record_context_snapshot(SRecords *records, TSNode node);
 static int records_open(SRecords *records, const Layout *layout, const uint8_t *source, size_t length, int tail, int scopes){
     *records = (SRecords){0};
@@ -21,9 +22,11 @@ static int records_open(SRecords *records, const Layout *layout, const uint8_t *
         if (tree && !ts_node_has_error(ts_tree_root_node(tree))) break;
         if (framing) {
             /* A partial packaging event can end anywhere in a byte window.
-             * Use recovery only to locate the leading complete grammar nodes,
-             * then strictly reparse that prefix before admitting any record.
-             * Halving arbitrary byte offsets can miss every legal boundary. */
+             * Use recovery only to locate the leading complete grammar nodes.
+             * For flat lexical scope streams (scope_count > 0), every leading
+             * child before the first error/missing node is already error-free
+             * and complete, so reuse the parsed tree directly up to `complete`
+             * instead of reparsing the entire multi-MB window a second time. */
             uint32_t complete = 0;
             if (tree) {
                 TSNode root = ts_tree_root_node(tree);
@@ -32,6 +35,10 @@ static int records_open(SRecords *records, const Layout *layout, const uint8_t *
                     TSNode child = ts_node_named_child(root, i);
                     if (ts_node_has_error(child) || ts_node_is_missing(child)) break;
                     complete = ts_node_end_byte(child);
+                }
+                if (complete && complete < prefix && layout->g.scope_count && !scopes) {
+                    prefix = complete;
+                    break;
                 }
                 ts_tree_delete(tree);
             }
@@ -253,7 +260,10 @@ int s_record_next(SRecords *records, SRecord *record){
 }
 void s_records_close(SRecords *records){
     if (records->cursor) lp_tls_cursor_release(records->cursor);
-    if (records->tree) ts_tree_delete(records->tree);
+    if (records->chunk_count) {
+        for (uint8_t i = 0; i < records->chunk_count; i++) if (records->chunks[i]) ts_tree_delete(records->chunks[i]);
+        for (uint8_t i = 0; i < records->bridge_count; i++) if (records->bridges[i]) ts_tree_delete(records->bridges[i]);
+    } else if (records->tree) ts_tree_delete(records->tree);
     if (records->file_layout) {
         free(records->file_layout);
         if (records->header_arena) records->header_arena->used = records->header_mark;
@@ -431,16 +441,168 @@ static void scope_stream_recycle(SScopeStream *stream, ScopeStreamFrame *frame){
     stream->headers.used = frame->mark;
     frame->next = stream->free; stream->free = frame;
 }
+static TSPoint advance_point(const uint8_t *src, uint32_t from, uint32_t to, TSPoint pt){
+    const uint8_t *p = src + from, *end = src + to;
+    while (p < end) {
+        const uint8_t *nl = memchr(p, '\n', (size_t)(end - p));
+        if (!nl) { pt.column += (uint32_t)(end - p); break; }
+        pt.row++; pt.column = 0; p = nl + 1;
+    }
+    return pt;
+}
+static int is_ascii_alpha(uint8_t c){ return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
+static int scope_parallel_open(SRecords *records, const Layout *layout, const uint8_t *source, size_t length, int final, uint32_t *out_prefix){
+    int max_t = omp_get_max_threads();
+    if (max_t <= 1 || length < (256u << 10) || length > UINT32_MAX || !layout->g.compiled || layout->g.unresolved || !layout->g.scope_count) return 0;
+    uint32_t K = (uint32_t)max_t;
+    if (K > S_SCOPE_CHUNKS) K = S_SCOPE_CHUNKS;
+    uint32_t max_k = (uint32_t)(length / (128u << 10));
+    if (K > max_k) K = max_k;
+    if (K < 2) return 0;
+    uint32_t cuts[S_SCOPE_CHUNKS + 1]; uint32_t nc = 0;
+    cuts[nc++] = 0;
+    for (uint32_t c = 1; c < K; c++) {
+        uint32_t target = (uint32_t)((uint64_t)length * c / K);
+        uint32_t hi = target + 65536u; if (hi > (uint32_t)length) hi = (uint32_t)length;
+        uint32_t found = 0, fallback = 0;
+        for (uint32_t p = target; p + 2 < hi; p++) {
+            if (source[p] == '\n') {
+                uint32_t q = p + 1;
+                while (q + 2 < hi && (source[q] == ' ' || source[q] == '\t') && q - (p + 1) < 8) q++;
+                if (q + 1 < hi && source[q] == '<' && is_ascii_alpha(source[q + 1]) && q > cuts[nc - 1]) { found = q; break; }
+            } else if (!fallback && source[p] == '<' && is_ascii_alpha(source[p + 1]) && p > cuts[nc - 1]) {
+                fallback = p;
+            }
+        }
+        uint32_t cut = found ? found : fallback;
+        if (cut && cut > cuts[nc - 1] && cut < (uint32_t)length) cuts[nc++] = cut;
+    }
+    cuts[nc++] = (uint32_t)length;
+    uint32_t nchunks = nc - 1;
+    if (nchunks < 2) return 0;
+    TSPoint pts[S_SCOPE_CHUNKS + 1];
+    pts[0] = (TSPoint){0, 0};
+    for (uint32_t c = 0; c < nchunks; c++) pts[c + 1] = advance_point(source, cuts[c], cuts[c + 1], pts[c]);
+    TSTree *trees[S_SCOPE_CHUNKS] = {0};
+    uint32_t last_end[S_SCOPE_CHUNKS] = {0}, prev_end[S_SCOPE_CHUNKS] = {0};
+    int ok[S_SCOPE_CHUNKS] = {0};
+    if (omp_in_parallel()) {
+        #pragma omp taskloop grainsize(1) shared(trees, ok, last_end, prev_end, cuts, pts)
+        for (uint32_t c = 0; c < nchunks; c++) {
+            TSParser *parser = lp_tls_parser(layout->g.grammar_id);
+            if (!parser) continue;
+            TSRange r = {.start_point=pts[c], .end_point=pts[c + 1], .start_byte=cuts[c], .end_byte=cuts[c + 1]};
+            if (!ts_parser_set_included_ranges(parser, &r, 1)) continue;
+            ts_parser_reset(parser);
+            GInput input = {.src=source, .length=(uint32_t)length, .range=r};
+            TSInput stream = {&input, read_input, TSInputEncodingUTF8, NULL};
+            int framing = (!final && c == nchunks - 1);
+            TSTree *tree = ts_parser_parse_with_options(parser, NULL, stream,
+                (TSParseOptions){.progress_callback=framing ? NULL : reject_recovery});
+            ts_parser_set_included_ranges(parser, NULL, 0);
+            if (!tree) continue;
+            TSNode root = ts_tree_root_node(tree);
+            if (!ts_node_has_error(root)) {
+                trees[c] = tree; ok[c] = 1; last_end[c] = cuts[c + 1];
+                if (c == nchunks - 1 && !final) {
+                    uint32_t n = ts_node_named_child_count(root), l = 0, p = 0;
+                    for (uint32_t i = n > 2 ? n - 2 : 0; i < n; i++) {
+                        p = l; l = ts_node_end_byte(ts_node_named_child(root, i));
+                    }
+                    last_end[c] = l; prev_end[c] = p;
+                }
+            } else if (framing) {
+                uint32_t n = ts_node_named_child_count(root), l = 0, p = 0;
+                for (uint32_t i = 0; i < n; i++) {
+                    TSNode ch = ts_node_named_child(root, i);
+                    if (ts_node_has_error(ch) || ts_node_is_missing(ch)) break;
+                    p = l; l = ts_node_end_byte(ch);
+                }
+                if (l > cuts[c]) { trees[c] = tree; ok[c] = 1; last_end[c] = l; prev_end[c] = p; }
+                else ts_tree_delete(tree);
+            } else {
+                ts_tree_delete(tree);
+            }
+        }
+    } else {
+        #pragma omp parallel for num_threads(nchunks) schedule(static,1)
+        for (uint32_t c = 0; c < nchunks; c++) {
+            TSParser *parser = lp_tls_parser(layout->g.grammar_id);
+            if (!parser) continue;
+            TSRange r = {.start_point=pts[c], .end_point=pts[c + 1], .start_byte=cuts[c], .end_byte=cuts[c + 1]};
+            if (!ts_parser_set_included_ranges(parser, &r, 1)) continue;
+            ts_parser_reset(parser);
+            GInput input = {.src=source, .length=(uint32_t)length, .range=r};
+            TSInput stream = {&input, read_input, TSInputEncodingUTF8, NULL};
+            int framing = (!final && c == nchunks - 1);
+            TSTree *tree = ts_parser_parse_with_options(parser, NULL, stream,
+                (TSParseOptions){.progress_callback=framing ? NULL : reject_recovery});
+            ts_parser_set_included_ranges(parser, NULL, 0);
+            if (!tree) continue;
+            TSNode root = ts_tree_root_node(tree);
+            if (!ts_node_has_error(root)) {
+                trees[c] = tree; ok[c] = 1; last_end[c] = cuts[c + 1];
+                if (c == nchunks - 1 && !final) {
+                    uint32_t n = ts_node_named_child_count(root), l = 0, p = 0;
+                    for (uint32_t i = n > 2 ? n - 2 : 0; i < n; i++) {
+                        p = l; l = ts_node_end_byte(ts_node_named_child(root, i));
+                    }
+                    last_end[c] = l; prev_end[c] = p;
+                }
+            } else if (framing) {
+                uint32_t n = ts_node_named_child_count(root), l = 0, p = 0;
+                for (uint32_t i = 0; i < n; i++) {
+                    TSNode ch = ts_node_named_child(root, i);
+                    if (ts_node_has_error(ch) || ts_node_is_missing(ch)) break;
+                    p = l; l = ts_node_end_byte(ch);
+                }
+                if (l > cuts[c]) { trees[c] = tree; ok[c] = 1; last_end[c] = l; prev_end[c] = p; }
+                else ts_tree_delete(tree);
+            } else {
+                ts_tree_delete(tree);
+            }
+        }
+    }
+    int all_ok = 1;
+    for (uint32_t c = 0; c < nchunks; c++) if (!ok[c] || !trees[c]) { all_ok = 0; break; }
+    uint32_t l = last_end[nchunks - 1], p = prev_end[nchunks - 1];
+    uint32_t prefix = final ? (uint32_t)length : (l && l < (uint32_t)length ? l : p);
+    if (!all_ok || !prefix || prefix <= cuts[nchunks - 1]) {
+        for (uint32_t c = 0; c < nchunks; c++) if (trees[c]) ts_tree_delete(trees[c]);
+        return 0;
+    }
+    TSTreeCursor *cursor = lp_tls_cursor(ts_tree_root_node(trees[0]));
+    if (!cursor) {
+        for (uint32_t c = 0; c < nchunks; c++) ts_tree_delete(trees[c]);
+        return 0;
+    }
+    *records = (SRecords){0};
+    records->layout = layout; records->source = source; records->length = prefix; records->limit = prefix;
+    records->tree = trees[0]; records->cursor = cursor;
+    records->chunk_count = (uint8_t)nchunks; records->chunk_index = 0;
+    for (uint32_t c = 0; c < nchunks; c++) { records->chunks[c] = trees[c]; records->chunk_end[c] = cuts[c + 1]; }
+    records->chunk_end[nchunks - 1] = prefix;
+    *out_prefix = prefix;
+    return 1;
+}
 int s_scope_stream_window(SRecords *records, SScopeStream *stream, const Layout *layout,
     const uint8_t *source, size_t length, uint64_t offset, int final){
+    uint32_t prefix = 0;
+    if (scope_parallel_open(records, layout, source, length, final, &prefix)) {
+        records->limit = prefix; records->stream = stream; records->ordinal = stream->ordinal;
+        if (!stream->begun) { stream->first_offset = offset; stream->begun = 1; }
+        stream->offset = offset; stream->final = (uint8_t)final; stream->consumed = 0;
+        return 1;
+    }
     if (!records_open(records, layout, source, length, !final, 0)) return final ? -1 : 0;
     TSNode root = ts_tree_root_node(records->tree);
     uint32_t last = 0, previous = 0;
     if (ts_tree_cursor_goto_first_child(records->cursor)) do {
         TSNode node = ts_tree_cursor_current_node(records->cursor);
+        if (ts_node_start_byte(node) >= records->limit) break;
         if (ts_node_is_named(node)) { previous = last; last = ts_node_end_byte(node); }
     } while (ts_tree_cursor_goto_next_sibling(records->cursor));
-    uint32_t prefix = final ? (uint32_t)length : previous;
+    prefix = final ? (uint32_t)length : (last && last <= records->limit && last < (uint32_t)length ? last : previous);
     if (!prefix && length) { s_records_close(records); return final ? -1 : 0; }
     records->limit = prefix; records->stream = stream; records->ordinal = stream->ordinal;
     if (!stream->begun) { stream->first_offset = offset; stream->begun = 1; }
@@ -452,14 +614,74 @@ static int scope_stream_error(SRecords *records, TSNode node){
     fprintf(stderr, "invalid packaging scope at source byte %llu\n", (unsigned long long)(records->stream->offset + ts_node_start_byte(node)));
     records->failed = records->done = 1; return 0;
 }
+static int scope_stream_step(SRecords *records){
+    int advanced = records->started ? ts_tree_cursor_goto_next_sibling(records->cursor) : ts_tree_cursor_goto_first_child(records->cursor);
+    records->started = 1;
+    while (!advanced && records->chunk_count && records->chunk_index + 1 < records->chunk_count) {
+        records->chunk_index++;
+        records->tree = records->chunks[records->chunk_index];
+        ts_tree_cursor_reset(records->cursor, ts_tree_root_node(records->tree));
+        advanced = ts_tree_cursor_goto_first_child(records->cursor);
+    }
+    return advanced;
+}
+static int scope_stream_bridge(SRecords *records, TSNode start_node, TSNode *out_node, TSRange *out_range){
+    const Layout *layout = records->layout; const GMap *grammar = &layout->g;
+    if (records->bridge_count >= S_SCOPE_CHUNKS) return 0;
+    TSParser *parser = lp_tls_parser(layout->g.grammar_id);
+    if (!parser) return 0;
+    uint32_t start_byte = ts_node_start_byte(start_node);
+    TSPoint start_pt = ts_node_start_point(start_node);
+    uint32_t span = 65536u;
+    for (;;) {
+        uint32_t end_byte = (records->limit - start_byte > span) ? start_byte + span : records->limit;
+        TSPoint end_pt = advance_point(records->source, start_byte, end_byte, start_pt);
+        TSRange r = {.start_point=start_pt, .end_point=end_pt, .start_byte=start_byte, .end_byte=end_byte};
+        if (!ts_parser_set_included_ranges(parser, &r, 1)) return 0;
+        ts_parser_reset(parser);
+        GInput input = {.src=records->source, .length=records->limit, .range=r};
+        TSInput stream_in = {&input, read_input, TSInputEncodingUTF8, NULL};
+        int allow_partial = (end_byte < records->limit);
+        TSTree *bridge = ts_parser_parse_with_options(parser, NULL, stream_in,
+            (TSParseOptions){.progress_callback=allow_partial ? NULL : reject_recovery});
+        ts_parser_set_included_ranges(parser, NULL, 0);
+        if (bridge) {
+            TSNode broot = ts_tree_root_node(bridge);
+            if (ts_node_named_child_count(broot) > 0) {
+                TSNode first = ts_node_named_child(broot, 0);
+                TSRange found;
+                if (!ts_node_has_error(first) && ts_node_start_byte(first) == start_byte &&
+                    scope_extent(grammar, first, &found) && found.end_byte <= records->limit) {
+                    records->bridges[records->bridge_count++] = bridge;
+                    *out_node = first; *out_range = found;
+                    return 1;
+                }
+            }
+            ts_tree_delete(bridge);
+        }
+        if (end_byte >= records->limit) return 0;
+        if (span > (UINT32_MAX / 2)) span = records->limit - start_byte; else span *= 2;
+    }
+}
+static int scope_stream_seek_after(SRecords *records, uint32_t end_byte){
+    while (records->chunk_index + 1 < records->chunk_count && end_byte >= records->chunk_end[records->chunk_index])
+        records->chunk_index++;
+    records->tree = records->chunks[records->chunk_index];
+    TSNode root = ts_tree_root_node(records->tree);
+    ts_tree_cursor_reset(records->cursor, root);
+    uint32_t chunk_start = records->chunk_index ? records->chunk_end[records->chunk_index - 1] : 0;
+    if (end_byte <= chunk_start) { records->started = 0; return 1; }
+    if (ts_tree_cursor_goto_first_child_for_byte(records->cursor, end_byte - 1) < 0) return 0;
+    records->started = 1;
+    return 1;
+}
 static int scope_stream_next(SRecords *records, SRecord *record){
     SScopeStream *stream = records->stream; const Layout *layout = records->layout; const GMap *grammar = &layout->g;
     if (records->done) return 0;
     /* A completion is a batch boundary: its readers finish before this frame
      * returns to the active-depth pool. No per-record allocation is needed. */
     if (stream->retired) { scope_stream_recycle(stream, stream->retired); stream->retired = NULL; }
-    int advanced = records->started ? ts_tree_cursor_goto_next_sibling(records->cursor) : ts_tree_cursor_goto_first_child(records->cursor);
-    records->started = 1;
+    int advanced = scope_stream_step(records);
     GInput input = {.src=records->source, .length=records->length}; input.range.end_byte = records->length; input.source_row = layout->source_row;
     GW worker = {.l=layout, .src=input.src, .input=&input};
     while (advanced) {
@@ -476,14 +698,21 @@ static int scope_stream_next(SRecords *records, SRecord *record){
             const GRule *rule = rule_at(&worker, node, 0, ts_node_symbol(ts_node_parent(node)));
             int header = !selected && rule && rule->what == G_GROUP && rule->ncontext;
             if (selected || role >= 17) {
-                TSRange range;
+                TSRange range; int bridged = 0;
                 if (!scope_extent(grammar, node, &range) || range.end_byte > records->limit) {
-                    if (stream->final) return scope_stream_error(records, node);
-                    stream->consumed = ts_node_start_byte(node); records->done = 1; return 0;
+                    if (role <= 8 && records->chunk_count && records->chunk_index + 1 < records->chunk_count &&
+                        scope_stream_bridge(records, node, &node, &range)) {
+                        bridged = 1;
+                    } else {
+                        if (stream->final) return scope_stream_error(records, node);
+                        stream->consumed = ts_node_start_byte(node); records->done = 1; return 0;
+                    }
                 }
                 if (!stream->top) stream->roots++;
                 const SContext *context = scope_stream_context(stream);
-                if (role <= 8) {
+                if (bridged) {
+                    if (!scope_stream_seek_after(records, range.end_byte)) return scope_stream_error(records, node);
+                } else if (role <= 8) {
                     TSNode parent = ts_node_parent(node); ts_tree_cursor_reset(records->cursor, parent);
                     if (ts_tree_cursor_goto_first_child_for_byte(records->cursor, range.end_byte - 1) < 0) return scope_stream_error(records, node);
                 }
@@ -556,7 +785,7 @@ static int scope_stream_next(SRecords *records, SRecord *record){
                 int space = 1;
                 for (uint32_t i = 0; i < length; i++) if (text[i] != ' ' && text[i] != '\t' && text[i] != '\n' && text[i] != '\r') { space = 0; break; }
                 scratch_restore(mark);
-                if (space) { advanced = ts_tree_cursor_goto_next_sibling(records->cursor); continue; }
+                if (space) { advanced = scope_stream_step(records); continue; }
             }
             ScopeStreamFrame *frame = stream->top; ContextCapture capture = {&frame->header, frame->arena};
             size_t mark = scratch_mark();
@@ -565,7 +794,7 @@ static int scope_stream_next(SRecords *records, SRecord *record){
             }
             scratch_restore(mark);
         }
-        advanced = ts_tree_cursor_goto_next_sibling(records->cursor);
+        advanced = scope_stream_step(records);
     }
     stream->consumed = records->limit; records->done = 1;
     if (stream->final && (stream->top || stream->roots != 1)) return scope_stream_error(records, ts_tree_root_node(records->tree));
