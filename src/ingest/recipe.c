@@ -135,6 +135,7 @@ static int path_expand(const char *in, char *out, size_t cap, char *unset, size_
         if (*c != '$') { out[k++] = *c++; continue; }
         char name[64]; size_t l = 0; c++; while ((*c == '_' || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9')) && l + 1 < sizeof name) name[l++] = *c++; name[l] = 0;
         const char *v = getenv(name);
+        if ((!v || !*v) && !strcmp(name, "HOME")) v = getenv("USERPROFILE");
         if (!v || !*v) { if (ok && unset) snprintf(unset, ucap, "%s", name); ok = 0; continue; }
         k += (size_t)snprintf(out + k, cap - k, "%s", v);
     }
