@@ -279,7 +279,11 @@ def main():
         if read.returncode or not re.search(r'zqgame\(1\.00\).*zqis~\(0\.00\)', read.stdout + read.stderr):
             fail('typed UPOS salience was not read', read.stdout + read.stderr)
         print('query roles: Native UD value claims drive NOUN/AUX salience without changing standings')
-        result = fixture.run('pull', '--firmware', firmware, '--seed', '0', 'dog', check=False)
+        chain_fw = fixture.scratch / 'chain.firmware'
+        chain_fw.write_text(
+            firmware.read_text(encoding='utf-8').rstrip() + '\n  take chain 1 @wn-lmf/Sense @wn-lmf/synset @wn-lmf/Definition\n',
+            encoding='utf-8', newline='\n')
+        result = fixture.run('pull', '--firmware', chain_fw, '--seed', '0', 'dog', check=False)
         answers = [l for l in result.stdout.splitlines() if l.startswith('answer ')]
         if result.returncode or not any(DOG in a for a in answers):
             fail('pull: the shared recipe chain did not read the stored definition', result.stdout + result.stderr)
