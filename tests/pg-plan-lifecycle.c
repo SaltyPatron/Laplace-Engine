@@ -95,7 +95,7 @@ static void stored_reads(PGconn *pg){
         args_free(&ea);
     }
     {
-        Args xa={0};arg_id(&xa,&known);arg_i16(&xa,tier);arg_i64(&xa,hilbert);
+        Args xa={0};arg_id(&xa,&known);arg_i16(&xa,tier);
         arg_raw(&xa,PQgetvalue(probe,0,9),(size_t)PQgetlength(probe,0,9));
         db_exec_contract(pg,LP_SQL_TEST_INSERT_PROBE_PATH,&xa);
         args_free(&xa);

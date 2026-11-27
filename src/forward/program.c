@@ -814,27 +814,6 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
     memcpy(st->traj, st->occ, sizeof(lp_id) * (size_t)st->nocc);
     st->ntraj = st->nocc;
 
-    if (st->trace_out) {
-        double t_tr = now();
-        char idt[33]; lp_id_hex(&pr.id, idt);
-        fprintf(st->trace_out, "RESOLVE    prompt %s, tier %d, %d occurrences; session \"%s\" of %s, turn %d (%d before it, %d discourse entities)\n",
-                idt, pr.tier, st->nocc, session, user, ordinal, nturn, st->ndisc);
-        receipt_resolve(req->receipt_out, &fw.id.image_id, &st->program_id, &pr.id, NULL, user, session, ordinal, nturn);
-        lp_id pref[MAXOCC]; size_t npref = 0;
-        for (int i = 0; i < st->nocc; i++) if (st->composed[i]) pref[npref++] = st->occ[i];
-        if (npref) reader_prefetch(st->rd, pref, npref, 32);
-        fprintf(st->trace_out, "           obligations:");
-        for (int i = 0; i < st->nocc; i++) {
-            if (st->composed[i]) {
-                char *tx = reader_text(st->rd, &st->occ[i], 32);
-                fprintf(st->trace_out, " %s%s(%.2f)", tx, (st->open.w[i >> 6] >> (i & 63)) & 1 ? "" : "~", st->role[i]);
-                free(tx);
-            }
-        }
-        fprintf(st->trace_out, "\n");
-        st->t_start_s += now() - t_tr;
-    }
-
     lp_id emitted[512]; int nemit = 0;
     lp_id skipped[64]; int nskipped = 0;
     char *out_buf = calloc(1, 1); size_t outn = 0;
@@ -909,11 +888,30 @@ int lp_forward_execute(const LpForwardRequest *req, LpForwardResult *out){
         contextual_salience_lift(st, &fd);
 
         if (st->trace_out) {
+            double couple_ms = (now() - tc) * 1000.0;
+            double t_tr = now();
+            char idt[33]; lp_id_hex(&pr.id, idt);
+            fprintf(st->trace_out, "RESOLVE    prompt %s, tier %d, %d occurrences; session \"%s\" of %s, turn %d (%d before it, %d discourse entities)\n",
+                    idt, pr.tier, st->nocc, session, user, ordinal, nturn, st->ndisc);
+            receipt_resolve(req->receipt_out, &fw.id.image_id, &st->program_id, &pr.id, NULL, user, session, ordinal, nturn);
+            lp_id pref[MAXOCC]; size_t npref = 0;
+            for (int i = 0; i < st->nocc; i++) if (st->composed[i]) pref[npref++] = st->occ[i];
+            if (npref) reader_prefetch(st->rd, pref, npref, 32);
+            fprintf(st->trace_out, "           obligations:");
+            for (int i = 0; i < st->nocc; i++) {
+                if (st->composed[i]) {
+                    char *tx = reader_text(st->rd, &st->occ[i], 32);
+                    fprintf(st->trace_out, " %s%s(%.2f)", tx, (st->open.w[i >> 6] >> (i & 63)) & 1 ? "" : "~", st->role[i]);
+                    free(tx);
+                }
+            }
+            fprintf(st->trace_out, "\n");
+            st->t_start_s += now() - t_tr;
             int routes[R_KINDS] = { 0 };
             for (int z = 0; z < fd.n; z++) for (int k = 0; k < R_KINDS; k++) routes[k] += fd.c[z].routes[k];
             fprintf(st->trace_out, "COUPLE     %d entities respond:", fd.n);
             for (int k = 0; k < R_KINDS; k++) if (routes[k]) fprintf(st->trace_out, " %d by %s", routes[k], RK[k]);
-            fprintf(st->trace_out, "   (%.1f ms)\n", (now() - tc) * 1000);
+            fprintf(st->trace_out, "   (%.1f ms)\n", couple_ms);
         }
         const lp_highway *hw_chk = lp_highway_map(NULL);
         int tight_env = (st->envelope && (st->envelope->preset == LP_ENVELOPE_FAST || (st->envelope->max_wall_us > 0 && st->envelope->max_wall_us <= 100000)));

@@ -212,7 +212,7 @@ LP_SQL(EXT_STORAGE_COMPAT, 1,
     "         WHERE c.relnamespace = ext.nsoid AND c.relname = 'physicality') = 'r:9'"
     "    AND (SELECT pg_catalog.string_agg(a.attname, ',' ORDER BY a.attnum)"
     "         FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid = a.attrelid"
-    "         WHERE c.relnamespace = ext.nsoid AND c.relname = 'physicality' AND a.attnum > 0 AND NOT a.attisdropped) = 'entity,tier,hilbert,path,mask'"
+    "         WHERE c.relnamespace = ext.nsoid AND c.relname = 'physicality' AND a.attnum > 0 AND NOT a.attisdropped) = 'entity,tier,path,mask'"
     "    AND (SELECT p.partstrat::text || ':' || (SELECT count(*) FROM pg_catalog.pg_inherits i WHERE i.inhparent = c.oid)"
     "         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_partitioned_table p ON p.partrelid = c.oid"
     "         WHERE c.relnamespace = ext.nsoid AND c.relname = 'attestation') = 'r:16'"
@@ -398,9 +398,9 @@ LP_SQL(TEST_FORBIDDEN_DELETE, 0,
 LP_SQL(TEST_INSERT_PROBE_ENTITY, 7,
     "INSERT INTO @extschema@.entity(id, tier, coord, hilbert)"
     " VALUES ($1::@extschema@.blake3, $2::smallint, @postgis@.ST_MakePoint($3::float8, $4::float8, $5::float8, $6::float8), $7::bigint)")
-LP_SQL(TEST_INSERT_PROBE_PATH, 4,
-    "INSERT INTO @extschema@.physicality(entity, tier, hilbert, path)"
-    " VALUES ($1::@extschema@.blake3, $2::smallint, $3::bigint, @postgis@.ST_GeomFromEWKB($4::bytea))")
+LP_SQL(TEST_INSERT_PROBE_PATH, 3,
+    "INSERT INTO @extschema@.physicality(entity, tier, path)"
+    " VALUES ($1::@extschema@.blake3, $2::smallint, @postgis@.ST_GeomFromEWKB($3::bytea))")
 LP_SQL(TEST_MARK_PROBE_CLAIM, 1,
     "UPDATE @extschema@.physicality SET mask = @extschema@.laplace_mask_slot('kind', 'claim')"
     " WHERE entity OPERATOR(@extschema@.=) $1::@extschema@.blake3")
@@ -418,8 +418,8 @@ LP_SQL(TEST_INSERT_READER_NODES, 8,
     " WHERE NOT EXISTS (SELECT 1 FROM @extschema@.entity e WHERE e.id OPERATOR(@extschema@.=) n.id)"
     " RETURNING id"
     "), paths AS ("
-    " INSERT INTO @extschema@.physicality(entity, tier, hilbert, path)"
-    " SELECT n.id, n.tier, n.hilbert, n.path FROM node n"
+    " INSERT INTO @extschema@.physicality(entity, tier, path)"
+    " SELECT n.id, n.tier, n.path FROM node n"
     " WHERE n.id OPERATOR(@extschema@.=) ANY(SELECT id FROM added)"
     " RETURNING entity"
     ") SELECT entity FROM paths")

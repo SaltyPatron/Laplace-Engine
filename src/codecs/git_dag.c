@@ -286,25 +286,75 @@ static int read_object(GitRepo *repo, const uint8_t sha1[20], int *type_out, uin
 }
 
 static int valid_utf8_text(const uint8_t *p, size_t n){
-    if (!n || n > 262144u || memchr(p, 0, n)) return 0;
+    if (!n || n > (64u << 20) || memchr(p, 0, n)) return 0;
     lp_id id;
     return lp_text_id(CTX[0], (const char *)p, n, &id) ? 1 : 0;
 }
 
-static Ref git_compose_object(GitRepo *repo, File *f, const uint8_t sha1[20], int depth){
+static Ref git_block_tree(Ref *items, size_t n){
+    if (!n) return (Ref){ 0 };
+    if (n == 1) return items[0];
+    if (n <= 4096u) return compose(items, (uint32_t)n, ref_above(items, n));
+    size_t nup = (n + 4095u) / 4096u;
+    Ref *up = malloc(sizeof *up * nup);
+    for (size_t i = 0; i < nup; i++) {
+        size_t a = i * 4096u;
+        size_t k = n - a < 4096u ? n - a : 4096u;
+        up[i] = k == 1 ? items[a] : compose(items + a, (uint32_t)k, ref_above(items + a, k));
+    }
+    Ref res = git_block_tree(up, nup);
+    free(up);
+    return res;
+}
+
+static Ref git_bytes_ref(const uint8_t *raw, size_t len){
+    lp_scalars *sc = codecs_scalars();
+    size_t nblk = (len + 4095u) / 4096u;
+    Ref *blks = malloc(sizeof *blks * nblk);
+    Ref *brefs = malloc(sizeof *brefs * (len < 4096u ? len : 4096u));
+    for (size_t b = 0; b < nblk; b++) {
+        size_t off = b * 4096u;
+        size_t cnt = len - off < 4096u ? len - off : 4096u;
+        for (size_t k = 0; k < cnt; k++) brefs[k] = lp_scalar_u8(sc, raw[off + k]);
+        blks[b] = cnt == 1 ? brefs[0] : compose(brefs, (uint32_t)cnt, ref_above(brefs, cnt));
+    }
+    free(brefs);
+    Ref res = git_block_tree(blks, nblk);
+    free(blks);
+    return res;
+}
+
+static Ref git_marker_ref(const char *kind, const char *state){
+    Ref p[3] = {
+        text_ref(CTX[0], (const uint8_t *)"git", 3),
+        text_ref(CTX[0], (const uint8_t *)kind, strlen(kind)),
+        text_ref(CTX[0], (const uint8_t *)state, strlen(state))
+    };
+    return compose(p, 3, ref_above(p, 3));
+}
+
+/* Pre-populate commit ancestry iteratively (bottom-up from oldest reachable parent to tip)
+ * so deep histories with thousands of commits never hit a 64-commit cap or overflow the C stack. */
+static void git_prewarm_commit_history(GitRepo *repo, File *f, const uint8_t tip_sha[20]);
+
+static int git_compose_object(GitRepo *repo, File *f, const uint8_t sha1[20], int depth, Ref *out){
     char hex[41]; sha1_to_hex(sha1, hex);
     int64_t at = lp_strmap_find(repo->cache, hex, 40);
-    if (at >= 0) return repo->refs[*(size_t *)lp_strmap_at(repo->cache, (size_t)at)];
-    if (depth > 64) return text_ref(CTX[0], (const uint8_t *)hex, 40);
+    if (at >= 0) {
+        *out = repo->refs[*(size_t *)lp_strmap_at(repo->cache, (size_t)at)];
+        return 1;
+    }
+    if (depth > 512) return 0;
 
     int typ = 0; uint8_t *raw = NULL; size_t len = 0;
-    Ref res = text_ref(CTX[0], (const uint8_t *)hex, 40);
-    if (!read_object(repo, sha1, &typ, &raw, &len, 0)) return res;
+    if (!read_object(repo, sha1, &typ, &raw, &len, 0)) return 0;
 
+    Ref res = { 0 };
+    int ok = 1;
     if (typ == GIT_BLOB) {
-        res = len && valid_utf8_text(raw, len)
-            ? text_ref(CTX[0], raw, len)
-            : text_ref(CTX[0], (const uint8_t *)hex, 40);
+        if (!len) res = git_marker_ref("blob", "empty");
+        else if (valid_utf8_text(raw, len)) res = text_ref(CTX[0], raw, len);
+        else res = git_bytes_ref(raw, len);
     } else if (typ == GIT_TREE) {
         lp_vec(Ref) entries = { 0 };
         size_t pos = 0;
@@ -316,17 +366,25 @@ static Ref git_compose_object(GitRepo *repo, File *f, const uint8_t sha1[20], in
             size_t ml = (size_t)(sp - (raw + pos));
             size_t nl = (size_t)(nul - (sp + 1));
             const uint8_t *csha = nul + 1;
-            Ref target = git_compose_object(repo, f, csha, depth + 1);
-            Ref item[3] = {
-                text_ref(CTX[0], raw + pos, ml),
-                text_ref(CTX[0], sp + 1, nl),
-                target
-            };
-            lp_push(&entries, compose(item, 3, ref_above(item, 3)));
+            Ref target = { 0 };
+            if (git_compose_object(repo, f, csha, depth + 1, &target)) {
+                Ref item[3] = {
+                    text_ref(CTX[0], raw + pos, ml),
+                    text_ref(CTX[0], sp + 1, nl),
+                    target
+                };
+                lp_push(&entries, compose(item, 3, ref_above(item, 3)));
+            } else {
+                Ref item[2] = {
+                    text_ref(CTX[0], raw + pos, ml),
+                    text_ref(CTX[0], sp + 1, nl)
+                };
+                lp_push(&entries, compose(item, 2, ref_above(item, 2)));
+            }
             pos = (size_t)(csha + 20u - raw);
         }
         res = entries.n ? compose(entries.v, (uint32_t)entries.n, ref_above(entries.v, entries.n))
-                        : text_ref(CTX[0], (const uint8_t *)hex, 40);
+                        : git_marker_ref("tree", "empty");
         lp_vec_free(&entries);
     } else if (typ == GIT_COMMIT) {
         Ref tree_ref = { 0 }; int has_tree = 0;
@@ -344,21 +402,26 @@ static Ref git_compose_object(GitRepo *repo, File *f, const uint8_t sha1[20], in
             const char *line = (const char *)(raw + pos);
             if (ll >= 45 && !strncmp(line, "tree ", 5)) {
                 uint8_t ts[20];
-                if (hex_to_sha1(line + 5, ts)) { tree_ref = git_compose_object(repo, f, ts, depth + 1); has_tree = 1; }
+                if (hex_to_sha1(line + 5, ts) && git_compose_object(repo, f, ts, depth + 1, &tree_ref)) has_tree = 1;
             } else if (ll >= 47 && !strncmp(line, "parent ", 7)) {
-                uint8_t ps[20];
-                if (hex_to_sha1(line + 7, ps)) lp_push(&parents, git_compose_object(repo, f, ps, depth + 1));
+                uint8_t ps[20]; Ref pref = { 0 };
+                if (hex_to_sha1(line + 7, ps) && git_compose_object(repo, f, ps, depth + 1, &pref)) lp_push(&parents, pref);
             } else if (ll > 7 && !strncmp(line, "author ", 7)) {
                 author = line + 7; author_len = ll - 7;
             }
             pos = nl ? (size_t)(nl + 1 - raw) : len;
         }
         lp_vec(Ref) parts = { 0 };
-        lp_push(&parts, text_ref(CTX[0], (const uint8_t *)hex, 40));
         if (has_tree) lp_push(&parts, tree_ref);
-        if (author && author_len) lp_push(&parts, text_ref(CTX[0], (const uint8_t *)author, author_len));
-        if (msg && msg_len) lp_push(&parts, text_ref(CTX[0], (const uint8_t *)msg, msg_len));
-        res = compose(parts.v, (uint32_t)parts.n, ref_above(parts.v, parts.n));
+        if (author && valid_utf8_text((const uint8_t *)author, author_len))
+            lp_push(&parts, text_ref(CTX[0], (const uint8_t *)author, author_len));
+        if (msg && valid_utf8_text((const uint8_t *)msg, msg_len))
+            lp_push(&parts, text_ref(CTX[0], (const uint8_t *)msg, msg_len));
+        if (!parts.n && parents.n) {
+            for (size_t pi = 0; pi < parents.n; pi++) lp_push(&parts, parents.v[pi]);
+        }
+        res = parts.n ? compose(parts.v, (uint32_t)parts.n, ref_above(parts.v, parts.n))
+                      : git_marker_ref("commit", "empty");
 
         lp_vec(Ref) gclaims = { 0 };
         if (has_tree) {
@@ -374,8 +437,14 @@ static Ref git_compose_object(GitRepo *repo, File *f, const uint8_t sha1[20], in
         f->records++;
         lp_vec_free(&parts);
         lp_vec_free(&parents);
+    } else if (typ == GIT_TAG) {
+        if (len && valid_utf8_text(raw, len)) res = text_ref(CTX[0], raw, len);
+        else ok = 0;
+    } else {
+        ok = 0;
     }
     free(raw);
+    if (!ok) return 0;
 
     bool fresh = false;
     size_t *slot = lp_strmap_get(repo->cache, hex, 40, &fresh);
@@ -387,7 +456,52 @@ static Ref git_compose_object(GitRepo *repo, File *f, const uint8_t sha1[20], in
         *slot = repo->nrefs;
         repo->refs[repo->nrefs++] = res;
     }
-    return res;
+    *out = res;
+    return 1;
+}
+
+typedef struct { uint8_t sha[20]; } GitSha;
+
+static void git_prewarm_commit_history(GitRepo *repo, File *f, const uint8_t tip_sha[20]){
+    lp_vec(GitSha) stack = { 0 };
+    lp_vec(GitSha) order = { 0 };
+    lp_strmap *seen = lp_strmap_sized(sizeof(uint8_t));
+    GitSha root; memcpy(root.sha, tip_sha, 20);
+    lp_push(&stack, root);
+
+    while (stack.n > 0) {
+        GitSha cur = stack.v[--stack.n];
+        char hex[41]; sha1_to_hex(cur.sha, hex);
+        bool fresh = false;
+        lp_strmap_get(seen, hex, 40, &fresh);
+        if (!fresh) continue;
+        int typ = 0; uint8_t *raw = NULL; size_t len = 0;
+        if (!read_object(repo, cur.sha, &typ, &raw, &len, 0)) continue;
+        if (typ == GIT_COMMIT) {
+            lp_push(&order, cur);
+            size_t pos = 0;
+            while (pos < len) {
+                const uint8_t *nl = memchr(raw + pos, '\n', len - pos);
+                size_t ll = nl ? (size_t)(nl - (raw + pos)) : (len - pos);
+                if (ll == 0) break;
+                const char *line = (const char *)(raw + pos);
+                if (ll >= 47 && !strncmp(line, "parent ", 7)) {
+                    GitSha ps;
+                    if (hex_to_sha1(line + 7, ps.sha)) lp_push(&stack, ps);
+                }
+                pos = nl ? (size_t)(nl + 1 - raw) : len;
+            }
+        }
+        free(raw);
+    }
+    /* Compose bottom-up from oldest ancestor toward tip so parent lookups hit repo->cache in O(1). */
+    for (size_t i = order.n; i-- > 0;) {
+        Ref prewarmed = { 0 };
+        git_compose_object(repo, f, order.v[i].sha, 0, &prewarmed);
+    }
+    lp_strmap_free(seen);
+    lp_vec_free(&order);
+    lp_vec_free(&stack);
 }
 
 static void git_open_packs(GitRepo *repo){
@@ -506,9 +620,14 @@ static void git_read(const Recipe *r, File *f, const uint8_t *src, size_t n){
         return;
     }
 
-    Ref head_commit = git_compose_object(&repo, f, head_sha, 0);
-    f->trunk = head_commit;
-    f->laid = 0;
+    git_prewarm_commit_history(&repo, f, head_sha);
+    Ref head_commit = { 0 };
+    if (git_compose_object(&repo, f, head_sha, 0, &head_commit)) {
+        f->trunk = head_commit;
+        f->laid = 0;
+    } else {
+        f->invalid = 1;
+    }
     git_repo_free(&repo);
 }
 

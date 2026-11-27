@@ -6,6 +6,7 @@ witness Wiktextract
 lineage Wiktionary
 class UserCuratedResource
 root $LAPLACE_DATA/Wiktionary
+files $LAPLACE_DATA/Wiktionary/kaikki.org-dictionary-*.jsonl
 # Measured, not loaded: 85,893,026 compositions from 2,912 MB, at 750 bytes each with their indexes and standings.
 room 22
 after unicode iso-639 universal-dependencies-documentation

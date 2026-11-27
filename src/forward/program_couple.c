@@ -363,6 +363,10 @@ static void roles_fallback_from_holds(State *st, const Hold *h, int nh, const lp
             bit_set(&st->open, i);
         }
     }
+    memset(&st->open, 0, sizeof st->open);
+    for (int i = 0; i < st->nocc; i++) {
+        if (st->composed[i] && st->role[i] > 0.0) bit_set(&st->open, i);
+    }
 }
 
 void resolve_roles(State *st){
@@ -418,6 +422,7 @@ void contextual_salience_lift(State *st, const Field *fd){
     double max_s = st->max_salience > 0.0 ? st->max_salience : 1.0;
     for (int i = 0; i < st->nocc; i++) {
         if (!st->composed[i] || st->role[i] <= 0.0 || st->role[i] >= 0.75) continue;
+        if (st->role[i] <= 0.15 && !lp_id_eq(&st->role_read[i], &(lp_id){{0}})) continue;
         if (is_closed_question_word(st->c, &st->occ[i])) continue;
         if (st->nsalience > 0 && st->max_salience > 0.0 && (st->salience[i] / max_s) < 0.20) continue;
         int multi = 0;

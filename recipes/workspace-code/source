@@ -17,6 +17,7 @@ files $LAPLACE_SRC/Laplace-Operations
 files $LAPLACE_SRC/Laplace-Wiki
 files $LAPLACE_SRC/Laplace-Conventional
 ignore .gitignore
+except */seeds/operational/* */third_party/* */upstream/* */tests/fixtures/* */test-data/*
 # a working tree: each whole reading is what the workspace says now, and supersedes the readings before it, so a file
 # changed or removed since leaves nothing of its former content that only those readings held
 supersede

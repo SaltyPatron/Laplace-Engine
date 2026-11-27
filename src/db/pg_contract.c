@@ -600,7 +600,7 @@ int db_stage_create_pair(PGconn *pg, const char *entity_tbl, const char *path_tb
         "CREATE UNLOGGED TABLE %s (LIKE stage.entity INCLUDING DEFAULTS, present boolean NOT NULL) WITH (autovacuum_enabled = false);"
         "ALTER TABLE %s ALTER coord DROP NOT NULL, ALTER hilbert DROP NOT NULL;"
         "CREATE UNLOGGED TABLE %s (LIKE stage.physicality INCLUDING DEFAULTS, present boolean NOT NULL) WITH (autovacuum_enabled = false);"
-        "ALTER TABLE %s ALTER path DROP NOT NULL, ALTER hilbert DROP NOT NULL",
+        "ALTER TABLE %s ALTER path DROP NOT NULL",
         qe, qe, qp, qp);
     if (n <= 0 || (size_t)n >= sizeof sql) return -1;
     return exec_direct(pg, sql);
@@ -743,7 +743,7 @@ void db_copy_open_stage_pair(lp_copy *c, PGconn *pg, const char *entity_tbl, con
     }
     snprintf(sql, sizeof sql,
         "BEGIN;COPY %s (id,tier,coord,hilbert,mask,present) FROM STDIN (FORMAT binary);"
-        "COPY %s (entity,tier,hilbert,path,mask,present) FROM STDIN (FORMAT binary);COMMIT",
+        "COPY %s (entity,tier,path,mask,present) FROM STDIN (FORMAT binary);COMMIT",
         qe, qp);
     copy_open(c, pg, sql);
 }

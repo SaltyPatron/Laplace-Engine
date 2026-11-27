@@ -127,10 +127,6 @@ static lp_mask tuple_mask(const Node *node){
     }
     return mask;
 }
-static void carrier_bytes(lp_mask value,uint8_t out[12]){
-    memset(out,0,12);out[3]=64;
-    for(unsigned bit=0;bit<64;bit++) if(value&(UINT64_C(1)<<bit)) out[4+(bit>>3)]|=(uint8_t)(0x80u>>(bit&7));
-}
 static int hilbert_order(const void *a,const void *b){
     const Row *x=a,*y=b;
     if(x->wave!=y->wave)return x->wave<y->wave?-1:1;
@@ -228,7 +224,7 @@ static size_t encode_node_path(const Node *x,PathEncoding *path){
     return size;
 }
 static void copy_rows(PGconn *pg,int lane,const Row *rows,size_t lo,size_t hi){
-    lp_copy copy={0}; uint8_t geometry[128],mask[12];
+    lp_copy copy={0}; uint8_t geometry[128];
     db_copy_open_stage_pair(&copy,pg,writer.entity[lane],writer.path[lane]);
     for(size_t i=lo;i<hi;i++){
         const Node *x=rows[i].node;uint8_t present=x->keep==2;
@@ -240,19 +236,16 @@ static void copy_rows(PGconn *pg,int lane,const Row *rows,size_t lo,size_t hi){
             lp_copy_field(&copy,geometry,(uint32_t)size);
             lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));
         }
-        carrier_bytes(rows[i].lexical,mask);
-        lp_copy_field(&copy,mask,sizeof mask);lp_copy_field(&copy,&present,1);
+        lp_copy_i64(&copy,(int64_t)rows[i].lexical);lp_copy_field(&copy,&present,1);
     }
     copy_next(&copy);
     PathEncoding path={0};
     for(size_t i=lo;i<hi;i++){
         const Node *x=rows[i].node;uint8_t present=x->keep==2;
-        carrier_bytes(x->kind,mask);
-        lp_copy_row(&copy,6);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
-        if(present)lp_copy_null(&copy);else lp_copy_i64(&copy,(int64_t)(rows[i].hilbert^UINT64_C(0x8000000000000000)));
+        lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
         if(present && !rows[i].annotations)lp_copy_null(&copy);
         else{size_t size=encode_node_path(x,&path);lp_copy_field(&copy,path.bytes,(uint32_t)size);}
-        lp_copy_field(&copy,mask,sizeof mask);lp_copy_field(&copy,&present,1);
+        lp_copy_i64(&copy,(int64_t)x->kind);lp_copy_field(&copy,&present,1);
     }
     copy_close(&copy);lp_buf_free(&copy.buf);
     free(path.ids);free(path.runs);free(path.spare);free(path.bytes);

@@ -94,7 +94,7 @@ static inline int64_t col_i64(const PGresult *r, int row, int col) {
     return (int64_t)u;
 }
 static inline bool col_is_claim(const PGresult *r, int row, int col) {
-    return PQgetlength(r, row, col) >= 5 && (((const uint8_t *)PQgetvalue(r, row, col))[4] & 0x80u) != 0;
+    return ((uint64_t)col_i64(r, row, col) & UINT64_C(1)) != 0;
 }
 static inline const char *col_str(const PGresult *r, int row, int col) {
     return PQgetisnull(r, row, col) ? "" : PQgetvalue(r, row, col);

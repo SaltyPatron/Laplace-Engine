@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct { lp_id id; uint32_t first, n; uint8_t mask0, got; } DNode;            /* got: 1 fetched, 2 not recorded */
+typedef struct { lp_id id; uint32_t first, n; uint64_t mask; uint8_t got; } DNode;            /* got: 1 fetched, 2 not recorded */
 typedef struct { DNode *v; size_t n, cap; lp_idmap *m; lp_id *kid; uint8_t *ksaid; size_t nk, ck; } Db;
 
 static int64_t db_find(Db *d, const lp_id *id){ return d->m ? lp_idmap_find(d->m, id) : -1; }
@@ -39,7 +39,7 @@ static void db_fetch(PGconn *pg, Db *d, const lp_id *roots, size_t nr){
                     d->ck = next_ck;
                 }
                 d->v[at].first = (uint32_t)d->nk; d->v[at].n = (uint32_t)tot; d->v[at].got = 1;
-                const uint8_t *mk = (const uint8_t *)PQgetvalue(q, r, 2); d->v[at].mask0 = PQgetlength(q, r, 2) > 4 ? mk[4] : 0;
+                d->v[at].mask = (uint64_t)col_i64(q, r, 2);
                 for (size_t v = 0; v < nv; v++) for (uint32_t z = 0; z < vx[v].run; z++) {
                     d->ksaid[d->nk] = (uint8_t)vx[v].said;
                     d->kid[d->nk++] = vx[v].id;
@@ -274,7 +274,7 @@ static void record_pgn(Db *d, const lp_id *rec, Str *o, Stat *st, Seen *sn){
         int envelope = 1;
         for (size_t i = 1; i < n && envelope; i++) {
             const DNode *claim = dn(d, &k[i]);
-            if (!claim || !(claim->mask0 & (0x80u >> LP_KIND_CLAIM))) envelope = 0;
+            if (!claim || !(claim->mask & (UINT64_C(1) << LP_KIND_CLAIM))) envelope = 0;
         }
         if (envelope) { record_pgn(d, &k[0], o, st, sn); return; }
     }
@@ -420,7 +420,7 @@ static void record_pgn(Db *d, const lp_id *rec, Str *o, Stat *st, Seen *sn){
 typedef lp_vec(lp_id) IdVec;
 static void records_in(Db *d, const lp_id *id, IdVec *out, int depth){
     const DNode *x = dn(d, id); if (!x || depth > 40) return;
-    if (x->mask0 & (0x80u >> LP_KIND_RECORD)) { lp_push(out, *id); return; }
+    if (x->mask & (UINT64_C(1) << LP_KIND_RECORD)) { lp_push(out, *id); return; }
     const lp_id *k; size_t n = kids(d, id, &k);
     for (size_t i = 0; i < n; i++) records_in(d, &k[i], out, depth + 1);
 }
