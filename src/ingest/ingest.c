@@ -467,6 +467,7 @@ int cmd_ingest(int argc, char **argv){
         }
         t_rec += now() - td;
         if (mism) { fputs("ingest: source verification failed; no witness is published\n", stderr); return 1; }
+        for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
         /* Fail fast when any completed file already carries terminal semantic omissions or incomplete parts;
          * continuing through remaining files and streaming PostgreSQL flushes only wastes hours before rejection. */
         {
@@ -479,15 +480,14 @@ int cmd_ingest(int argc, char **argv){
             if (fail_inc || fail_inv) {
                 uint64_t fail_om = say_obligations(stdout);
                 extern uint64_t records_differ(void), say_unplaced(void), say_refused(void);
-                fprintf(stderr, "ingest rejected early (fail-fast after %s): incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d; source and observation windows were not published\n",
-                        files[a0].path, (unsigned long long)fail_inc, (unsigned long long)fail_om,
+                fprintf(stderr, "ingest rejected: incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d; source and observation windows were not published (stopped early after %s)\n",
+                        (unsigned long long)fail_inc, (unsigned long long)fail_om,
                         (unsigned long long)records_differ(), (unsigned long long)say_unplaced(),
-                        (unsigned long long)say_refused(), mism);
+                        (unsigned long long)say_refused(), mism, files[a0].path);
                 free(window.roots); free(window.events.e); free(window.complete); free(streams);
                 fold_free(fold); progress_end("failed", NULL); return 1;
             }
         }
-        for (int i = a0; i < b0; i++) { if (!files[i].known && !files[i].skipped) WHOLE(&files[i]); nev += files[i].ev.n; SHOW(&files[i]); }
         if (entities) show_entities(conninfo, asking);
         if (do_load) {
             if (streaming) {
@@ -517,10 +517,10 @@ int cmd_ingest(int argc, char **argv){
             if (fail_inc || fail_inv) {
                 uint64_t fail_om = say_obligations(stdout);
                 extern uint64_t records_differ(void), say_unplaced(void), say_refused(void);
-                fprintf(stderr, "ingest rejected early (fail-fast after %s): incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d; source and observation windows were not published\n",
-                        files[bad_idx].path, (unsigned long long)fail_inc, (unsigned long long)fail_om,
+                fprintf(stderr, "ingest rejected: incomplete_parts=%llu semantic_omissions=%llu metadata_conflicts=%llu unplaced_claims=%llu refused_parts=%llu byte_mismatches=%d; source and observation windows were not published (stopped early after %s)\n",
+                        (unsigned long long)fail_inc, (unsigned long long)fail_om,
                         (unsigned long long)records_differ(), (unsigned long long)say_unplaced(),
-                        (unsigned long long)say_refused(), mism);
+                        (unsigned long long)say_refused(), mism, files[bad_idx].path);
                 free(window.roots); free(window.events.e); free(window.complete); free(streams);
                 fold_free(fold); progress_end("failed", NULL); return 1;
             }
