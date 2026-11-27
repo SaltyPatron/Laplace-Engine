@@ -69,8 +69,7 @@ def series(trunks):
 
 
 def lineage_text(trunk):
-    return sql(f"SELECT laplace_text(lineage) FROM (SELECT lineage FROM attestation WHERE witness='{trunk}'::blake3"
-               ' ORDER BY lineage NULLS FIRST LIMIT 1) a')
+    return sql(f"SELECT laplace_text(lineage) FROM laplace_witness_trust(ARRAY['{trunk}'::blake3])")
 
 
 def events(path):
@@ -233,7 +232,7 @@ def main():
         chess_trunks = single(chess)
         # Lineage is carried on attestation rows; games are records under the trunk, so a chess source that attests
         # nothing has no row to carry it. Where it attests, every row carries its declared lineage.
-        attested = sql(f"SELECT count(*) FROM attestation WHERE witness='{chess_trunks[0]}'::blake3")
+        attested = sql(f"SELECT count(*) FROM attestation WHERE witness='{chess_trunks[0]}'::blake3 AND claim<>witness")
         if attested != '0' and lineage_text(chess_trunks[0]) != chess_lineage:
             fail(f'the validated chess subset does not declare its lineage: {lineage_text(chess_trunks[0])!r}')
         before = series(chess_trunks)

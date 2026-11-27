@@ -300,7 +300,7 @@ static void rv(RV *a, Ref x){
 static Ref comp(const Ref *k, size_t n){ Ref x = n == 1 ? k[0] : compose(k, (uint32_t)n, ref_above(k, n)); x.said = 0; return x; }
 static Ref comp_tuple(const Ref *k, size_t n){ Ref x = compose(k, (uint32_t)n, ref_above(k, n)); x.said = LP_SAID_TUPLE; return x; }
 
-typedef struct { RefCache *rc; RV nags, transitions, fide_claims; long errs; char err[160]; uint64_t plies, castles; } Rd;
+typedef struct { RefCache *rc; RV nags, fide_claims; long errs; char err[160]; uint64_t plies, castles; } Rd;
 
 static int replay(Rd *r, const Line *L, const Bd *b0, int want_clocks,
                   Ref *line, Ref *clocks, int *has_clocks, Ref *notes, int *has_notes, Ref *end){
@@ -343,8 +343,6 @@ static int replay(Rd *r, const Line *L, const Bd *b0, int want_clocks,
         r->plies++;
         r->castles += all[k].castle;
         if (chess_capture) chess_capture(&before, &all[k], &b, &Pb, &M, &P);
-        rv(&r->transitions, Pb);
-        rv(&r->transitions, P);
 
         if (!p->nann) continue;
         RV items = { 0 };
@@ -444,7 +442,7 @@ static Ref make_seat(Rd *rd, const Tag *name_tag, unsigned fide_id, unsigned elo
 
 static int game_content(Rd *rd, const Game *g, Start *st, Ref *rec){
     memset(st, 0, sizeof *st);
-    rd->nags.n = rd->transitions.n = rd->fide_claims.n = 0;
+    rd->nags.n = rd->fide_claims.n = 0;
 
     const Tag *t_white = NULL, *t_black = NULL, *t_date = NULL, *t_event = NULL,
               *t_site = NULL, *t_round = NULL, *t_eco = NULL, *t_tc = NULL;
@@ -559,12 +557,6 @@ static int game_content(Rd *rd, const Game *g, Start *st, Ref *rec){
     return 1;
 }
 
-static int has_study_marks(const Line *L){
-    for (int i = 0; i < L->n; i++) for (int j = 0; j < L->p[i].nann; j++) if (L->p[i].ann[j].kind != 1) return 1;
-    for (int j = 0; j < L->nlead; j++) if (L->lead[j].kind != 1) return 1;
-    return 0;
-}
-
 /* ---- the recipe: grammar pgn ---- */
 static int chess_says(Recipe *r, const char *path, char *tok){
     if (!r->native_recipe) r->native_recipe = calloc(1, sizeof(ChessRecipe));
@@ -628,11 +620,12 @@ static void chess_records(const Recipe *rcp, File *f, const uint8_t *src, SRecor
         pgn_game(cr, record.node, (const char *)src, &g);
         games++; ordinal++;
         Start st; Ref rec; int held_any = game_content(&rd, &g, &st, &rec);
-        const char *result = st.result; size_t rl = st.rl; int ok = st.ok; const Bd b0 = st.b0; Ref line = st.line;
+        const char *result = st.result; size_t rl = st.rl; int ok = st.ok; Ref line = st.line;
         int result_mismatch = g.has_result && result && (rl != strlen(g.result) || memcmp(result, g.result, rl));
         if (!g.has_result) nomarker++; else if (result_mismatch) mismatch++;
         if (!result && g.has_result) { result = g.result; rl = strlen(g.result); }
-        int kind = cr->records == K_PLAYED && has_study_marks(&g.main) ? K_STUDY : cr->records;
+        /* Annotated played games retain their played status and outcome; NAGs/notes/variations are also preserved. */
+        int kind = cr->records;
         if (st.variant && st.rules && st.rules->c960) c960++;
         if (!ok) { unread++; if (unread <= 5) fprintf(stderr, "\n  %s: game %u is kept as its text and not replayed: %s", f->path, ordinal, rd.err); }
         if (!held_any) continue;
@@ -646,17 +639,17 @@ static void chess_records(const Recipe *rcp, File *f, const uint8_t *src, SRecor
         if (!outcome) unfinished++;
         for (size_t i = 0; i + 2 < rd.fide_claims.n; i += 3) member(f, rec, &rd.fide_claims.c[i], 3, &pos);
         if (ok && kind == K_PLAYED) played++;
-        if (ok && kind == K_PLAYED && outcome) {
-            for (size_t i = 0; i + 1 < rd.transitions.n; i += 2) {
-                int side = (b0.side + (int)(i / 2)) & 1;
-                float score = rl == 7 ? 0.5f : ((result[0] == '1') == (side == 0) ? 1.0f : 0.0f);
-                member(f, rec, &rd.transitions.c[i], 2, &pos);
-                f->ev.e[f->ev.n - 1].score = score;
-            }
+        /* Game-altitude outcome: attest the pure board-state trajectory [P0..Pn] once with the game's result
+         * (1-0 -> 1.0, 1/2-1/2 -> 0.5, 0-1 -> 0.0), never synthetic per-move [P_k, P_{k+1}] win/loss claims. */
+        if (ok && kind == K_PLAYED && outcome && g.main.n > 0) {
+            float score = rl == 7 ? 0.5f : (result[0] == '1' ? 1.0f : 0.0f);
+            Ref p1[1] = { line };
+            member(f, rec, p1, 1, &pos);
+            f->ev.e[f->ev.n - 1].score = score;
         }
         if (ok && kind == K_PUZZLE) { Ref p1[1] = { line }; member(f, rec, p1, 1, &pos); puzzle++; }
         if (ok && kind == K_STUDY) study++;
-        if (ok && kind != K_PLAYED) for (size_t i = 0; i + 2 < rd.nags.n; i += 3) member(f, rec, &rd.nags.c[i], 3, &pos);
+        if (ok) for (size_t i = 0; i + 2 < rd.nags.n; i += 3) member(f, rec, &rd.nags.c[i], 3, &pos);
 
         RV provenance = { 0 };
         uint64_t nclaims = f->ev.n - (event_begin + 1);

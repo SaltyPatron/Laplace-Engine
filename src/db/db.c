@@ -504,6 +504,9 @@ int merge(const char *conninfo,int npg,LoadStats *stats){
     if(PQtransactionStatus(writer.series)==PQTRANS_IDLE)db_tx(writer.series,LP_SQL_TX_BEGIN_RC);
     uint64_t admitted=0;
     if(lp_idmap_count(writer.registered) && (writer.series_changed || writer.witness_changed || writer.counts_unknown)){
+        Args ra={0};arg_text(&ra,writer.witnesses);
+        db_exec_contract(writer.series,LP_SQL_REGISTER_WITNESSES,&ra);
+        args_free(&ra);
         int use_affected = (writer.series_changed || writer.witness_changed);
         size_t nnew = lp_idmap_count(writer.new_witnesses);
         const lp_id *new_ids = nnew ? lp_idmap_keys(writer.new_witnesses) : NULL;
@@ -670,6 +673,9 @@ int lp_stage_publish_fast(PGconn *pg,Fold *f,const LoadWitness *roots,size_t nro
         }
         copy_close(&wcopy);lp_buf_free(&wcopy.buf);
         if(writer.series_changed || writer.witness_changed){
+            Args ra={0};arg_text(&ra,writer.witnesses);
+            db_exec_contract(pg,LP_SQL_REGISTER_WITNESSES,&ra);
+            args_free(&ra);
             Args pa={0};arg_text(&pa,writer.pending);
             arg_text(&pa,writer.affected);
             if(lp_idmap_count(writer.new_witnesses))

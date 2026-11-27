@@ -48,7 +48,7 @@ def main():
 
         def standings(trunk):
             return int(sql('SELECT count(*) FROM consensus c WHERE c.claim IN'
-                           ' (SELECT a.claim FROM attestation a WHERE a.witness=:\'t\'::blake3)', variables={'t': trunk}))
+                           ' (SELECT a.claim FROM attestation a WHERE a.witness=:\'t\'::blake3 AND a.claim<>a.witness)', variables={'t': trunk}))
 
         (tree / 'a.py').write_text(f'def {alpha}():\n    return 1\n', encoding='utf-8', newline='\n')
         (tree / 'b.py').write_text(f'def {kept}():\n    return 0\n', encoding='utf-8', newline='\n')

@@ -83,7 +83,7 @@ def main():
         fx.run('ingest', '-j', '2', name, env=scoped)
         trunks = fx.trunks(name)
         assert len(trunks) == 1, f'the scoped ingest did not record one trunk of its source: {trunks}'
-        attested = sql('SELECT count(*) FROM attestation WHERE witness=:\'t\'::blake3', variables={'t': trunks[0]})
+        attested = sql('SELECT count(*) FROM attestation WHERE witness=:\'t\'::blake3 AND claim<>witness', variables={'t': trunks[0]})
         assert int(attested) > 0, 'the scoped ingest recorded no attestation under its trunk'
         recorded = fingerprint(trunks)
 

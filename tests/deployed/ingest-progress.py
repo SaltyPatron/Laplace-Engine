@@ -81,11 +81,11 @@ def main():
         assert named, 'no composed file frame names its file'
         stored = sql(f'SELECT count(DISTINCT id) FROM entity WHERE id=ANY({ids([trunk, *named])})')
         assert int(stored) == len(named) + 1, f'a file or source a frame names is not recorded: {stored} of {len(named) + 1}'
-        assert sql('SELECT count(*) FROM attestation WHERE witness=:\'t\'::blake3', variables={'t': trunk}) != '0', \
+        assert sql('SELECT count(*) FROM attestation WHERE witness=:\'t\'::blake3 AND claim<>witness', variables={'t': trunk}) != '0', \
             'the source the frame names attests nothing'
         assert last['attestations_measured'] is True and last['attestations'] == 2, \
             f'two distinct assertions became sources, repeated games, or unmeasured counters: {last}'
-        assert sql('SELECT count(DISTINCT claim) FROM attestation WHERE witness=:\'t\'::blake3', variables={'t': trunk}) == '2', \
+        assert sql('SELECT count(DISTINCT claim) FROM attestation WHERE witness=:\'t\'::blake3 AND claim<>witness', variables={'t': trunk}) == '2', \
             'the source does not attest two distinct claims'
         series = sql('SELECT count(*) FROM laplace_contained_series(ARRAY[:\'t\'::blake3])'
                      ' WHERE claim=laplace_compose(ARRAY[laplace_cp_id(57344),laplace_id(\'Link_Email\')])'
@@ -105,9 +105,9 @@ def main():
         difference = sql("""
 SELECT count(*) FROM (
  (SELECT claim::text, games::bigint FROM laplace_contained_series(ARRAY[:'t'::blake3]) WHERE games>0
-  EXCEPT SELECT claim::text, games FROM attestation WHERE witness=:'t'::blake3)
+  EXCEPT SELECT claim::text, games FROM attestation WHERE witness=:'t'::blake3 AND claim<>witness)
  UNION ALL
- (SELECT claim::text, games FROM attestation WHERE witness=:'t'::blake3
+ (SELECT claim::text, games FROM attestation WHERE witness=:'t'::blake3 AND claim<>witness
   EXCEPT SELECT claim::text, games::bigint FROM laplace_contained_series(ARRAY[:'t'::blake3]) WHERE games>0)) d""",
                          variables={'t': trunk})
         assert difference == '0', f'stored attestations differ from the testimony that measures them: {difference} rows'

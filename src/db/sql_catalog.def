@@ -131,6 +131,8 @@ LP_SQL(STAGE_REWRITE_WITNESS, 2,
     "SELECT @extschema@.laplace_stage_rewrite_witness($1::text::regclass, $2::@extschema@.blake3)")
 LP_SQL(STAGE_RESTORE_PRUNED, 4,
     "SELECT @extschema@.laplace_stage_restore_pruned($1::@extschema@.blake3[], $2::text::regclass, $3::text::regclass, $4::@extschema@.blake3)")
+LP_SQL(REGISTER_WITNESSES, 1,
+    "SELECT @extschema@.laplace_register_witnesses($1::text::regclass)")
 LP_SQL(STAGE_PUBLISH_ATTESTATIONS, 3,
     "SELECT admitted, consensus_rows"
     " FROM @extschema@.laplace_stage_publish_attestations($1::text::regclass, $2::text::regclass, $3::@extschema@.blake3[])")
@@ -321,23 +323,30 @@ LP_SQL(MOLD_CLAIMS, 1,
     " ORDER BY @extschema@.laplace_confidence(c.rating, c.deviation, 2::double precision) DESC, c.matches DESC, c.claim"
     " LIMIT $1::integer")
 LP_SQL(MOLD_CLAIMS_SCOPED, 2,
-    "WITH scoped AS MATERIALIZED ("
-    " SELECT a.claim, max(@extschema@.blake3_send(a.witness)) AS wit_raw"
-    " FROM @extschema@.attestation a"
-    " JOIN unnest($2::@extschema@.blake3[]) AS w(wid) ON a.witness OPERATOR(@extschema@.=) w.wid"
-    " GROUP BY a.claim"
+    "WITH cand AS MATERIALIZED ("
+    " SELECT c.claim"
+    " FROM @extschema@.consensus c"
+    " WHERE c.matches > 0"
+    "   AND EXISTS ("
+    "     SELECT 1 FROM @extschema@.attestation a"
+    "     WHERE a.claim OPERATOR(@extschema@.=) c.claim"
+    "       AND a.witness OPERATOR(@extschema@.=) ANY($2::@extschema@.blake3[])"
+    "   )"
+    " ORDER BY @extschema@.laplace_confidence(c.rating, c.deviation, 2::double precision) DESC, c.matches DESC, c.claim"
     " LIMIT greatest(1, $1::integer) * 4"
     "),"
     " solved AS MATERIALIZED ("
     " SELECT s.claim, s.rating, s.deviation, s.matches"
-    " FROM @extschema@.laplace_source_standings(ARRAY(SELECT claim FROM scoped), $2::@extschema@.blake3[]) s"
+    " FROM @extschema@.laplace_source_standings(ARRAY(SELECT claim FROM cand), $2::@extschema@.blake3[]) s"
     " ORDER BY @extschema@.laplace_confidence(s.rating, s.deviation, 2::double precision) DESC, s.matches DESC, s.claim"
     " LIMIT $1::integer"
     ")"
     " SELECT s.claim, p.path, s.rating, s.deviation,"
-    "        @extschema@.blake3_from_bytea(sc.wit_raw)"
+    "        COALESCE((SELECT a.witness FROM @extschema@.attestation a"
+    "                  WHERE a.claim OPERATOR(@extschema@.=) s.claim"
+    "                    AND a.witness OPERATOR(@extschema@.=) ANY($2::@extschema@.blake3[])"
+    "                  ORDER BY a.games DESC, a.witness LIMIT 1), s.claim)"
     " FROM solved s"
-    " JOIN scoped sc ON sc.claim OPERATOR(@extschema@.=) s.claim"
     " JOIN @extschema@.physicality p ON p.entity OPERATOR(@extschema@.=) s.claim")
 LP_SQL(FORWARD_MCP, 1,
     "SELECT i, j, paths, runs, next, times FROM @extschema@.laplace_forward($1::@extschema@.blake3[], 64) LIMIT 128")

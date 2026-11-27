@@ -63,14 +63,15 @@ def main():
             'the response is not recorded as the content it is'
         assert len(trunks(carol)) == 1 and len(trunks(responder)) == 1, \
             f'the user and the responder are not two witnesses: {trunks(carol)} {trunks(responder)}'
-        assert rows('SELECT count(*) FROM attestation WHERE witness=ANY(TRUNKS)', carol, responder) == '2', \
+        assert rows('SELECT count(*) FROM attestation WHERE witness=ANY(TRUNKS) AND claim<>witness', carol, responder) == '2', \
             'a turn is two attestations, the user\'s and the responder\'s'
-        places = rows("SELECT string_agg(trust::text||':'||coalesce(\"position\"::text,'-'), ' ' ORDER BY trust DESC)"
-                      ' FROM attestation WHERE witness=ANY(TRUNKS)', carol, responder)
+        places = rows("SELECT string_agg(coalesce(a.trust, w.trust)::text||':'||coalesce(a.\"position\"::text,'-'), ' ' ORDER BY coalesce(a.trust, w.trust) DESC)"
+                      ' FROM attestation a JOIN laplace_witness_trust(ARRAY(SELECT DISTINCT witness FROM attestation WHERE witness=ANY(TRUNKS) AND claim<>witness)) w'
+                      ' ON w.witness=a.witness WHERE a.witness=ANY(TRUNKS) AND a.claim<>a.witness', carol, responder)
         assert places == '0.3:1 0.2:-', \
             f'the user\'s claim is not at UserPromptContent and place 1, the responder\'s at ResponseContent: {places}'
         assert rows('SELECT count(*) FROM consensus c WHERE c.rating>1500 AND c.claim IN'
-                    ' (SELECT claim FROM attestation WHERE witness=ANY(TRUNKS))', carol, responder) == '2', \
+                    ' (SELECT claim FROM attestation WHERE witness=ANY(TRUNKS) AND claim<>witness)', carol, responder) == '2', \
             'the turn\'s claims have no standing folded in the database'
         before = state()
         out = said('--session', 'geography', question, answer).stdout
@@ -79,7 +80,7 @@ def main():
         out = fx.run('said', '--as', carol, '--by', model, '--session', 'geography',
                      f'{MARK}: and of Germany?', f'{MARK}: Berlin is the capital of Germany').stdout
         assert 'at 2 in the session' in out, f'the second turn is not at 2: {out}'
-        assert rows('SELECT count(*) FROM attestation WHERE witness=ANY(TRUNKS)', carol, responder, model) == '4', \
+        assert rows('SELECT count(*) FROM attestation WHERE witness=ANY(TRUNKS) AND claim<>witness', carol, responder, model) == '4', \
             'two turns are four attestations'
         assert len(trunks(carol, responder, model)) == 4, 'each turn\'s two trunks are not witnesses of their own'
         out = said('--session', 'history', question, answer).stdout
@@ -100,20 +101,21 @@ def main():
         alice_trunk = alice_trunk[1]
         assert trunks(alice) == [alice_trunk], f'alice\'s trunk is not the one recorded: {alice_trunk} {trunks(alice)}'
         mine = f"'{alice_trunk}'::blake3"
-        shape = sql(f'SELECT count(*)||\' \'||count(DISTINCT lineage)||\' \'||min(trust)||\' \'||max(trust)'
-                    f' FROM attestation WHERE witness={mine}')
+        shape = sql(f'SELECT count(*)||\' \'||count(DISTINCT coalesce(a.lineage, w.lineage))||\' \'||min(coalesce(a.trust, w.trust))||\' \'||max(coalesce(a.trust, w.trust))'
+                    f' FROM attestation a JOIN laplace_witness_trust(ARRAY[{mine}]) w ON w.witness=a.witness'
+                    f' WHERE a.witness={mine} AND a.claim<>a.witness')
         assert shape == '3 1 0.3 0.3', f'alice\'s three claims are not three attestations of her trunk, one lineage, at her class: {shape}'
-        scores = sql(f"SELECT string_agg(score::text, ' ' ORDER BY score) FROM attestation WHERE witness={mine}")
+        scores = sql(f"SELECT string_agg(score::text, ' ' ORDER BY score) FROM attestation WHERE witness={mine} AND claim<>witness")
         assert scores == '0 0.5 1', f'the outcomes are not the statement\'s scores: {scores}'
         assert sql(f"SELECT count(*) FROM entity WHERE id='{answer_id}'::blake3") == '1', \
             'the statement\'s subject did not converge on the recorded response'
-        assert sql(f"SELECT count(*) FROM physicality p WHERE p.entity IN (SELECT claim FROM attestation WHERE witness={mine})"
+        assert sql(f"SELECT count(*) FROM physicality p WHERE p.entity IN (SELECT claim FROM attestation WHERE witness={mine} AND claim<>witness)"
                    f" AND '{answer_id}'::blake3 IN (SELECT v FROM unnest(laplace_vertex_ids(p.path)) v)") == '1', \
             'no claim of alice\'s holds the recorded response as its subject'
 
         def standing(witness_id, score):
             return float(sql(f'SELECT c.rating FROM consensus c JOIN attestation a ON a.claim=c.claim'
-                             f" WHERE a.witness='{witness_id}'::blake3 AND a.score={score}"))
+                             f" WHERE a.witness='{witness_id}'::blake3 AND a.claim<>a.witness AND a.score={score}"))
         confirmed, refuted = standing(alice_trunk, 1), standing(alice_trunk, 0)
         assert confirmed > 1500 > refuted, f'a confirmation did not raise and a refutation lower the standing: {confirmed} {refuted}'
         before = state()
@@ -127,16 +129,20 @@ def main():
         bob_trunk = TRUNK.search(out)
         assert bob_trunk and bob_trunk[1] != alice_trunk, f'bob is not a witness of his own: {out}'
         bob_trunk = bob_trunk[1]
-        assert sql(f"SELECT count(*)||' '||min(trust) FROM attestation WHERE witness='{bob_trunk}'::blake3") == '3 0.6', \
+        assert sql(f"SELECT count(*)||' '||min(coalesce(a.trust, w.trust)) FROM attestation a"
+                   f" JOIN laplace_witness_trust(ARRAY['{bob_trunk}'::blake3]) w ON w.witness=a.witness"
+                   f" WHERE a.witness='{bob_trunk}'::blake3 AND a.claim<>a.witness") == '3 0.6', \
             'bob\'s attestations are not his own rows at his class'
-        assert sql(f'SELECT count(DISTINCT a.lineage) FROM attestation a WHERE a.claim IN'
-                   f' (SELECT claim FROM attestation WHERE witness={mine})') == '2', \
+        assert sql(f'SELECT count(DISTINCT coalesce(a.lineage, w.lineage)) FROM attestation a'
+                   f' JOIN laplace_witness_trust(ARRAY[{mine},\'{bob_trunk}\'::blake3]) w ON w.witness=a.witness'
+                   f' WHERE a.claim<>a.witness AND a.claim IN'
+                   f' (SELECT claim FROM attestation WHERE witness={mine} AND claim<>witness)') == '2', \
             'alice and bob are not two lineages of the same claims'
-        assert sql(f'SELECT count(*) FROM consensus c WHERE c.claim IN (SELECT claim FROM attestation WHERE witness={mine})') == '3', \
+        assert sql(f'SELECT count(*) FROM consensus c WHERE c.claim IN (SELECT claim FROM attestation WHERE witness={mine} AND claim<>witness)') == '3', \
             'two witnesses of a claim are not one standing'
         assert standing(alice_trunk, 1) > confirmed and standing(alice_trunk, 0) < refuted, \
             f'a second witness did not move the standings: {standing(alice_trunk, 1)} {standing(alice_trunk, 0)}'
-        assert rows('SELECT count(*) FROM attestation WHERE witness=ANY(TRUNKS)', alice, bob) == '6', \
+        assert rows('SELECT count(*) FROM attestation WHERE witness=ANY(TRUNKS) AND claim<>witness', alice, bob) == '6', \
             'two witnesses of three claims are not six attestations'
 
         # what the same witness states later is another trunk of the same lineage
@@ -145,7 +151,7 @@ def main():
         out = witness(alice, 'UserPromptContent', later_statement).stdout
         later = TRUNK.search(out)
         assert later and later[1] != alice_trunk, f'a later statement is not a trunk of its own: {out}'
-        assert sql(f"SELECT count(DISTINCT lineage) FROM attestation WHERE witness IN ({mine},'{later[1]}'::blake3)") == '1', \
+        assert sql(f"SELECT count(DISTINCT lineage) FROM laplace_witness_trust(ARRAY[{mine},'{later[1]}'::blake3])") == '1', \
             'what one witness states at two times is not one lineage'
 
         # ---- a malformed statement is refused whole

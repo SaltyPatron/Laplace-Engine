@@ -65,8 +65,8 @@ def main():
         assert witness, report
         trunk = witness[1]
         assert fx.trunks(name) == [trunk], f'the source trunk said is not the one recorded: {trunk} {fx.trunks(name)}'
-        counts = sql('SELECT count(*) FROM attestation WHERE witness=:\'t\'::blake3;'
-                     ' SELECT count(*) FROM consensus WHERE claim IN (SELECT claim FROM attestation WHERE witness=:\'t\'::blake3);'
+        counts = sql('SELECT count(*) FROM attestation WHERE witness=:\'t\'::blake3 AND claim<>witness;'
+                     ' SELECT count(*) FROM consensus WHERE claim IN (SELECT claim FROM attestation WHERE witness=:\'t\'::blake3 AND claim<>witness);'
                      ' SELECT count(*) FROM physicality WHERE entity=:\'t\'::blake3', variables={'t': trunk})
         assert all(int(v) > 0 for v in counts.splitlines()), f'attestations, standings, trunk paths: {counts}'
         recorded = fingerprint([trunk])
