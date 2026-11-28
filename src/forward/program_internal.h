@@ -104,14 +104,16 @@ static inline int is_gloss_rel(const State *st, const lp_id *rel){
     if (!st || !rel) return 0;
     if (st->lexical.has_gloss && lp_id_eq(rel, &st->lexical.gloss)) return 1;
     static _Thread_local int init = 0;
-    static _Thread_local lp_id g0, g1, g2;
+    static _Thread_local lp_id g0, g1, g2, g3, g4;
     if (!init && st->c) {
         g0 = lp_text_decompose(st->c, (const uint8_t *)"definition of the synset", 24, NULL, NULL).id;
         g1 = lp_text_decompose(st->c, (const uint8_t *)"English definition", 18, NULL, NULL).id;
         g2 = lp_text_decompose(st->c, (const uint8_t *)"standard definition of the synset", 33, NULL, NULL).id;
+        g3 = lp_text_decompose(st->c, (const uint8_t *)"synset gloss", 12, NULL, NULL).id;
+        g4 = lp_text_decompose(st->c, (const uint8_t *)"skos:definition", 15, NULL, NULL).id;
         init = 1;
     }
-    return init && (lp_id_eq(rel, &g0) || lp_id_eq(rel, &g1) || lp_id_eq(rel, &g2));
+    return init && (lp_id_eq(rel, &g0) || lp_id_eq(rel, &g1) || lp_id_eq(rel, &g2) || lp_id_eq(rel, &g3) || lp_id_eq(rel, &g4));
 }
 static inline int is_lateral_hop_rel(const State *st, const lp_id *rel){
     if (!st || !rel || !st->fw) return 0;

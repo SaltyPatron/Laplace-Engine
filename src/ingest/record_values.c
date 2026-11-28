@@ -271,10 +271,13 @@ static int type_value(RecordWorker *k, const SemanticRecord *t, int32_t c, const
                 }
                 const lp_list *L = HW ? lp_highway_list(HW, target->name) : NULL; if (L && lp_highway_slot(HW, L, &v.id) >= 0) { *out = v; return 1; }
             } }
-        int open=d->k.node;
-        if (!d->k.vocabulary) for (uint8_t i=0; i<d->ntargets; i++)
-            if (HW && lp_highway_list(HW,d->targets[i].name) && !lp_highway_bank(HW,d->targets[i].name)) open=1;
-        if (open) { if (record_value_once(k, t, c)) record_obligation_note(k, 'm', d->road_label, x->name, x->nlen, NULL, 0); *out = record_text(open_key, open_length); return 1; }
+        /* Only explicit `node` declarations fall back to raw text when absent
+         * from highway.bin. Pointer-backed types (WordNet offsets, % sense
+         * keys) must never leak raw pointers into content (Conflicts.md S1, I5, I7).
+         * External legacy pointers marked `optional` are counted and skipped
+         * without leaking raw pointer strings or rejecting the corpus. */
+        if (d->k.node) { if (record_value_once(k, t, c)) record_obligation_note(k, 'm', d->road_label, x->name, x->nlen, NULL, 0); *out = record_text(open_key, open_length); return 1; }
+        if (d->k.optional) { if (record_value_once(k, t, c)) record_obligation_note(k, 'm', d->road_label, x->name, x->nlen, NULL, 0); return 0; }
         record_unknown_key(k, t, c, x);     /* a key no list of the highway holds: said, never taken for text */
         return 0;
 }

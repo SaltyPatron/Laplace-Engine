@@ -281,13 +281,13 @@ def main():
         print('query roles: Native UD value claims drive NOUN/AUX salience without changing standings')
         chain_fw = fixture.scratch / 'chain.firmware'
         chain_fw.write_text(
-            firmware.read_text(encoding='utf-8').rstrip() + '\n  take chain 1 @wn-lmf/Sense @wn-lmf/synset @wn-lmf/Definition\n',
+            firmware.read_text(encoding='utf-8').rstrip() + '\n  take chain 1 @wn-lmf/Sense @wn-lmf/Definition\n',
             encoding='utf-8', newline='\n')
         result = fixture.run('pull', '--firmware', chain_fw, '--seed', '0', 'dog', check=False)
         answers = [l for l in result.stdout.splitlines() if l.startswith('answer ')]
         if result.returncode or not any(DOG in a for a in answers):
             fail('pull: the shared recipe chain did not read the stored definition', result.stdout + result.stderr)
-        print('query navigation: pull follows the producer-declared sense, synset reference and definition')
+        print('query navigation: pull follows the producer-declared sense and canonical concept definition')
     return 0
 
 

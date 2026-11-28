@@ -25,7 +25,6 @@ int record_names_identity(RecordWorker *k, const SemanticRecord *t, int32_t g, c
 int record_entity(RecordWorker *k, const SemanticRecord *t, int32_t c, Ref *out);
 void record_publish_keys(RecordWorker *k, const SemanticRecord *t, int32_t root, int reserve);
 void record_highway_values(RecordWorker *k, const SemanticRecord *t, int32_t root);
-void record_vocabulary_evidence(RecordWorker *, const SemanticRecord *);
 int record_admit_references(RecordWorker *, const SemanticRecord *, int32_t root, int count);
 
 #endif

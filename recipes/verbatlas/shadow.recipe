@@ -12,7 +12,7 @@ tier field by \t
 part filler* by |
 
 thing row synset literal "shadow argument"
-type synset ili
+type synset ili optional
 # BabelNet's noun/adjective fillers have no entry in the verb-only bn2wn map.
 # Retain their original identifiers instead of manufacturing an ILI mapping.
 content role* filler* overflow

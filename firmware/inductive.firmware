@@ -21,7 +21,7 @@ for search
 
 for pull
   fan 4096
-  lexicalization wn-lmf Sense language ili
+  lexicalization wn-lmf Sense language synset
   gloss wn-lmf Definition
   up @wn-lmf/Sense
   usages wordnet-cntlist tag_cnt
@@ -52,4 +52,4 @@ for pull
   take segment
   take attestations 5
   take constituents 2
-  take chain 1 @wn-lmf/Sense @wn-lmf/synset @wn-lmf/Definition | @conllu/LEMMA @wn-lmf/Sense @wn-lmf/synset @wn-lmf/Definition
+  take chain 1 @wn-lmf/Sense @wn-lmf/Definition | @conllu/LEMMA @wn-lmf/Sense @wn-lmf/Definition

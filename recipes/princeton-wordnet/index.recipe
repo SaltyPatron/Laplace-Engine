@@ -32,16 +32,9 @@ type synset_offset ili as \0-{pos} as \0-s
 relation "synset containing lemma" synset_offset
 attest line synset_offset
 # "ptr_symbol: A space separated list of p_cnt different types of pointers that lemma has in all synsets containing
-# it": each as WordNet writes it (@, ~, !, ...), which is the file's markup. The relation is what wninput.5WN says the
-# symbol is (hypernym, hyponym, member meronym, ...), said of the lemma the line is, in its own group (counted p_cnt).
-# An adverb's backslash is "Derived from adjective", an adjective's "Pertainym".
-when ^line/pos is r
-type ptr_symbol wnpointer vocabulary wordnet-pointer-adverb node
-always
-when ^line/pos is-not r
-type ptr_symbol wnpointer vocabulary wordnet-pointer node
-always
-pair pointer ptr_symbol
+# it": a redundant index summary of pointer symbols whose full [synset, relation, synset] triples are already attested
+# in data.<pos>; omit so objectless [word, hypernym] pairs are never emitted.
+omit ptr_symbol
 # synset_cnt and p_cnt count what follows; sense_cnt: "Same as sync_cnt above. This is redundant, but the field was
 # preserved for compatibility reasons": the file's layout, read by nothing. tagsense_cnt, "Number of senses of lemma that
 # are ranked according to their frequency of occurrence in semantic concordance texts", is a count the semantic

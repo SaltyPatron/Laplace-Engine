@@ -464,6 +464,8 @@ int cmd_translate(int argc, char **argv){
     int nh = 0; Hold *h = nc ? holds_any(pg,cs, nc, &nh) : NULL; steps += nc > 0;
     lp_idmap *cm = lp_idmap_new(); for (int z = 0; z < nc; z++) { bool fresh; lp_idmap_put(cm, &cs[z], &fresh); }
     Found lex = { 0 }, val = { 0 }; Ids parts={0};
+    /* Canonical concepts (i* / unmapped oewn-*) carry their definitions directly. */
+    for (int z = 0; z < nc; z++) if (lx.has_gloss) found_put(&val, &cs[z], z);
     for (int j = 0; j < nh; j++) { size_t np=path_into(&parts,lp_path_of(h[j].path,(size_t)h[j].path_len));lp_id *p=parts.v;
         if ((int)np == lx.np) { int64_t z = lp_idmap_find(cm, &p[lx.concept]); if (z < 0) continue;
             for (int g = 0; g < nto; g++) if (codes_has(&toc[g], &p[lx.lang])) { found_put(&lex, &h[j].entity, (int)z * 64 + g); break; } }

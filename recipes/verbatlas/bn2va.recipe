@@ -10,8 +10,8 @@ names bn va
 tier field by \t
 
 thing row bn
-type bn ili
-type va vaframe
+type bn ili optional
+type va vaframe node
 pair row va
 
 maps row bn ili to va vaframe

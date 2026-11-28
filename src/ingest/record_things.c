@@ -306,96 +306,22 @@ void record_publish_keys(RecordWorker *k, const SemanticRecord *t, int32_t root,
             } } }
 }
 
-static Ref resource_key(const char *list, const char *key){
-    Ref parts[2]={string_ref((const uint8_t *)list,strlen(list)),record_text((const uint8_t *)key,strlen(key))};
-    return said_tuple(compose(parts,2,ref_above(parts,2)));
-}
-static void resource_entry(RecordWorker *k, const HwLine *h, int line, const Ref *thing, const char *a, const char *b){
-    if (k->hw) { record_highway_entry(k,h->what,line,thing,a,a?strlen(a):0,b,b?strlen(b):0); return; }
-    Ref parts[3];
-    if (h->what==1) {
-        parts[0]=*thing; parts[1]=string_ref((const uint8_t *)"identifier vocabulary",21);
-        parts[2]=string_ref((const uint8_t *)h->a.list,strlen(h->a.list));
-    } else if (h->what==2) {
-        parts[0]=resource_key(h->a.list,a); parts[1]=string_ref((const uint8_t *)"identifies",10); parts[2]=*thing;
-    } else if (h->what==3) {
-        parts[0]=resource_key(h->a.list,a); parts[1]=string_ref((const uint8_t *)"identifier alias",16); parts[2]=resource_key(h->b.list,b);
-    } else {
-        /* A crosswalk is an attested mapping, not a claim of unrestricted
-         * equivalence. Its predicate retains both identifier vocabularies. */
-        Ref relation[3]={string_ref((const uint8_t *)h->a.list,strlen(h->a.list)),
-            string_ref((const uint8_t *)"cross-resource mapping",22),string_ref((const uint8_t *)h->b.list,strlen(h->b.list))};
-        parts[0]=record_text((const uint8_t *)a,strlen(a));
-        parts[1]=said_tuple(compose(relation,3,ref_above(relation,3)));
-        parts[2]=record_text((const uint8_t *)b,strlen(b));
-    }
-    record_emit_claim_once(k,parts,3);
-}
+/* Highway perf-cache extraction (k->hw != NULL). Highway declarations (types,
+ * keyed, alias, maps) populate highway.bin and never fabricate synthetic
+ * meta-claims ("identifier vocabulary", "identifies", "denotes", or
+ * Cartesian-exploded "cross-resource mapping") during corpus ingestion. */
 void record_highway_values(RecordWorker *k, const SemanticRecord *t, int32_t root){
-    const Say *s = k->s; if (!record_conditions_match(s, t, root, s->whole)) return;
+    const Say *s = k->s; if (!k->hw || !record_conditions_match(s, t, root, s->whole)) return;
     for (uint32_t g = 0; g < t->count; g++) { const SemanticValue *x = &t->n[g]; if (x->context || x->kind == S_NOTE || !x->nlen) continue;
         if (x->kind==S_TEXT) { size_t i=0; while (i<x->vlen && (x->val[i]==' ' || x->val[i]=='\t' || x->val[i]=='\r' || x->val[i]=='\n')) i++; if (i==x->vlen) continue; }
         { const Dis *dg = record_field_disposition(s, x); if (dg && dg->what == D_OMIT) { g = (uint32_t)record_scope_end(t, (int32_t)g); continue; } }
         for (int i = 0; i < s->nhw; i++) { const HwLine *h = &s->hw[i]; if (!record_field_matches(x, h->tier) || !record_conditions_match(s, t, (int32_t)g, h->when)) continue;
             Ref X; Keys A, B;
             if (h->what <= 2) { if (x->kind == S_VALUE || !(x->kind == S_GROUP ? record_thing(k, t, (int32_t)g, &X, 0) : record_value(k, t, (int32_t)g, &X, 0))) continue;     /* a thing; or a text of a list, a type by itself */
-                if (h->what == 1) { resource_entry(k,h,i,&X,NULL,NULL); continue; }
-                keys_at(s, t, (int32_t)g, &h->a, &A); for (int a = 0; a < A.n; a++) resource_entry(k,h,i,&X,A.k[a],NULL); continue; }
+                if (h->what == 1) { record_highway_entry(k, 1, i, &X, NULL, 0, NULL, 0); continue; }
+                keys_at(s, t, (int32_t)g, &h->a, &A); for (int a = 0; a < A.n; a++) record_highway_entry(k, 2, i, &X, A.k[a], strlen(A.k[a]), NULL, 0); continue; }
             keys_at(s, t, (int32_t)g, &h->a, &A); if (!A.n) continue; keys_at(s, t, (int32_t)g, &h->b, &B);
-            for (int a = 0; a < A.n; a++) for (int b = 0; b < B.n; b++) resource_entry(k,h,i,NULL,A.k[a],B.k[b]); } }
-}
-
-void record_vocabulary_evidence(RecordWorker *k, const SemanticRecord *t){
-    for (uint32_t i=0; i<t->count; i++) {
-        const SemanticValue *x=&t->n[i];
-        if (x->context || !x->nlen) continue;
-        const Dis *d=record_field_disposition(k->s,x);
-        if (!d) continue;
-        if (d->what==D_OMIT || d->what==D_METADATA) { i=(uint32_t)record_scope_end(t,(int32_t)i); continue; }
-        if (!x->vlen) continue;
-        if (d->what==D_REFER && d->ntargets==1 && d->targets[0].constructor_value &&
-            d->targets[0].constructor_value->what==D_TYPE && d->targets[0].constructor_value->ntargets==1) {
-            const TargetCode *family=&d->targets[0].constructor_value->targets[0]; Ref identifier;
-            if (record_value(k,t,(int32_t)i,&identifier,0)) {
-                Ref parts[3]={identifier,string_ref((const uint8_t *)"identifier vocabulary",21),
-                    string_ref((const uint8_t *)family->name,family->length)};
-                record_emit_claim_once(k,parts,3);
-            }
-        }
-        if (d->what==D_REFER && (d->k.has_re || d->k.nas) && d->under[0]) {
-            Ref scope, target;
-            int32_t at=record_select_first(t,(int32_t)i,d->under);
-            if (at<0 || !record_value(k,t,at,&scope,0) || !record_value(k,t,(int32_t)i,&target,0)) continue;
-            Ref notation[2]={scope,record_text(x->val,x->vlen)};
-            Ref parts[3]={said_tuple(compose(notation,2,ref_above(notation,2))),string_ref((const uint8_t *)"refers to",9),target};
-            record_emit_claim_once(k,parts,3); continue;
-        }
-        if (d->what==D_TYPE && d->k.crosswalk[0]) {
-            /* The source's notation and the type the highway's crosswalk reaches from it; a category of the tagset's
-             * own (no edge) denotes nothing, and is said as written. */
-            Ref canonical; if (!record_value(k,t,(int32_t)i,&canonical,0)) continue;
-            Ref written=record_text(x->val,x->vlen); if (lp_id_eq(&canonical.id,&written.id)) continue;
-            Ref notation[2]={string_ref((const uint8_t *)d->k.crosswalk,strlen(d->k.crosswalk)),written};
-            Ref parts[3]={said_tuple(compose(notation,2,ref_above(notation,2))),string_ref((const uint8_t *)"denotes",7),canonical};
-            record_emit_claim_once(k,parts,3); continue;
-        }
-        if (d->what==D_TYPE && !d->k.vocabulary && d->ntargets==1 &&
-            (d->k.node || (HW && lp_highway_list(HW,d->targets[0].name) && !lp_highway_bank(HW,d->targets[0].name)))) {
-            Ref identifier; if (!record_value(k,t,(int32_t)i,&identifier,0)) continue;
-            /* Retain the reference's resource family in the source DAG even
-             * when there is no frozen slot for this identifier. A text can be
-             * used in several families; these are separate witnessed claims. */
-            Ref parts[3]={identifier,string_ref((const uint8_t *)"identifier vocabulary",21),
-                string_ref((const uint8_t *)d->targets[0].name,d->targets[0].length)};
-            record_emit_claim_once(k,parts,3); continue;
-        }
-        if (d->what!=D_TYPE || !d->k.vocabulary) continue;
-        Ref canonical; if (!record_value(k,t,(int32_t)i,&canonical,0)) continue;
-        Ref notation[2]={string_ref((const uint8_t *)d->k.vocabulary_name,strlen(d->k.vocabulary_name)),record_text(x->val,x->vlen)};
-        Ref parts[3]={said_tuple(compose(notation,2,ref_above(notation,2))),
-            string_ref((const uint8_t *)"denotes",7),canonical};
-        record_emit_claim_once(k,parts,3);
-    }
+            for (int a = 0; a < A.n; a++) for (int b = 0; b < B.n; b++) record_highway_entry(k, h->what, i, NULL, A.k[a], strlen(A.k[a]), B.k[b], strlen(B.k[b])); } }
 }
 
 int record_held_thing(RecordWorker *k, const SemanticRecord *t, int32_t g, Ref *out){

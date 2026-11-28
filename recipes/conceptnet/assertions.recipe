@@ -18,7 +18,7 @@ part json grammar json
 where rel/2 is-not ExternalURL
 omit uri dataset license process activity surfaceStart surfaceEnd external
 content lemma pos qualifier weight surfaceText contributor
-type lexicalization.language language
+type lexicalization.language language node
 
 # Universal POS is attached beside the source's own category, so adjective
 # satellites keep their 's' identity while sharing the ADJ highway class (the wordnet-pos tagset's edge).

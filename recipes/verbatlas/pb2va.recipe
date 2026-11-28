@@ -16,7 +16,7 @@ part pbva by >
 part r* by \t is >
 
 thing row pbva/1
-type pbva pbroleset vaframe
+type pbva pbroleset vaframe node
 content r*
 pair row pbva/2
 # README: "Each line maps a PropBank predicate sense and its corresponding argument structure to a VerbAtlas frame and

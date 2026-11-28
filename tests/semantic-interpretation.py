@@ -43,7 +43,7 @@ def main():
                 'tier row by \\n\nnames word pos pointer from to\ntier field by \\t\n'
                 'thing row word\ncontent word from to\n'
                 'type pos upos' + (f' {how} {vocabulary}' if vocabulary else '') + '\n'
-                'type pointer pbroleset\nvalue upos pos\nvalue pbroleset pointer\n'
+                'type pointer pbroleset node\nvalue upos pos\nvalue pbroleset pointer\n'
                 'attest row pos pointer\nmaps row from pbroleset to to vnclass\n', encoding='utf-8')
             (data / f'{spelling}.tsv').write_text(
                 f'duck\t{pos}\tlaplace-unlisted.987654321\tduck.03\tnovel-987654321.2\n', encoding='utf-8')
@@ -84,8 +84,7 @@ def main():
             assert sorted(claims)==sorted([
                 ('Wordnet 2.0','requires wordnet','[omw-en, 2.0]'),
                 ('Wordnet 3.0','requires wordnet','[omw-en, 3.0]'),
-                *[('example','NOUN'),('[wordnet-pos, n]','denotes','NOUN'),
-                  ('language:eng','identifier vocabulary','language')]*2]),(workers,claims,text)
+                *[('example','NOUN')]*2]),(workers,claims,text)
         print('PASS WN-LMF dependencies retain both the required resource and its version')
 
         tatoeba = root / 'data/tatoeba'
@@ -204,8 +203,8 @@ def main():
         assert sentence.as_posix() in rejected and 'at byte' in rejected and 'declared text differs' in rejected, rejected
         for annotation in ('__', 'GTtags=', '_|literal-marker'):
             sentence.write_text(conllu.format(text='see a.').replace('CxnElt=1:Agent', annotation), encoding='utf-8')
-            rejected = run('ingest', '--no-load', '-s', 'universal-dependencies', sentence, expected=1)
-            assert 'semantic_omissions=' in rejected and 'does not parse completely' not in rejected, rejected
+            accepted = run('ingest', '--no-load', '-s', 'universal-dependencies', sentence)
+            assert 'unresolved obligations: 0 ' in accepted and 'mismatched 0' in accepted and 'does not parse completely' not in accepted, accepted
         sentence.write_text(conllu.format(text='see a.').replace('VERB\t_\t_', 'VERB\t_\tBareFlag'), encoding='utf-8')
         rejected = run('ingest', '--no-load', '-s', 'universal-dependencies', sentence, expected=2)
         assert 'injected field FEATS' in rejected, rejected
@@ -286,22 +285,20 @@ def main():
         layers=''.join(f'<layer name="{name}" rank="1"><label start="{5 if name=="Target" else 0}" '
                        f'end="{7 if name=="Target" else 3}" name="{name if name=="Target" else "Marker"}"/></layer>'
                        for name in meanings)
-        frame.write_text('<lexUnit frame="Practice" frameID="962" name="run-through.n" ID="99999999" POS="N">'
-            '<lexeme name="run-through" POS="N"/><valences><FEGroupRealization>'
+        frame.write_text('<lexUnit frame="Abandonment" frameID="2031" name="abandon.v" ID="14839" POS="V">'
+            '<lexeme name="abandon" POS="V"/><valences><FEGroupRealization>'
             '<pattern><valenceUnit FE="Agent" PT="NP" GF="Ext"/><valenceUnit FE="Action" PT="DNI" GF=""/></pattern>'
             '<pattern><valenceUnit FE="Agent" PT="NP" GF="Obj"/><valenceUnit FE="Action" PT="DNI" GF=""/></pattern>'
             '</FEGroupRealization></valences><subCorpus><sentence><text>They ran.</text>'
-            '<annotationSet luID="99999999">'+layers+'</annotationSet></sentence></subCorpus></lexUnit>', encoding='utf-8')
-        lu='[Practice, run-through.n]'
+            '<annotationSet luID="14839">'+layers+'</annotationSet></sentence></subCorpus></lexUnit>', encoding='utf-8')
+        lu='[Abandonment, abandon.v]'
         expected_frame=[
-            (lu,'run-through','N','_','_'),(lu,'N'),(lu,'consist of','run-through'),
+            (lu,'abandon','V','_','_'),(lu,'V'),(lu,'consist of','abandon'),
             ('['+lu+', valence pattern]','AgentAction','NPDNI','Ext_'),
             ('['+lu+', valence pattern]','AgentAction','NPDNI','Obj_'),
-            (lu,'example sentence','They ran.'),(lu,'identifier vocabulary','fnlu'),
-            ('[fnlu, 99999999]','identifies',lu),('99999999','[fnlu, cross-resource mapping, fnframe]','962'),
-            ('Practice','identifier vocabulary','fnframe'),('99999999','identifier vocabulary','fnlu')]
+            (lu,'example sentence','They ran.')]
         expected_frame += [('They ran.',meaning,
-            '[[99999999, 5, 7], ['+name+', 1, ['+('5, 7, Target' if name=='Target' else '0, 3, Marker')+']]]')
+            '[[Abandonmentabandon.v, 5, 7], ['+name+', 1, ['+('5, 7, Target' if name=='Target' else '0, 3, Marker')+']]]')
             for name,meaning in meanings.items()]
         for workers in (1,4):
             text=run('ingest','--claims-tsv','-j',workers,'-s','framenet',frame)
@@ -317,13 +314,13 @@ def main():
         for workers in (1,4):
             text=run('ingest','--claims-tsv','-j',workers,'-s','brown',brown)
             claims=[tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
-            # The tags reach UD's parts of speech through the highway's brown tagset and its crosswalk edges; the
-            # tag as the corpus writes it is the notation that denotes each.
-            assert len(claims)==18,(claims,text)                  # a claim a token and a denotes a tag: no sentence-wide layer claim
+            # The tags reach UD's parts of speech through the highway's brown tagset crosswalk edges
+            # without fabricating per-token synthetic denotes claims.
+            assert len(claims)==12,(claims,text)
             assert ('/','ADP') in claims and ('and/or','CCONJ') in claims,claims
             assert ('!','PUNCT') in claims and ('Fulton','NOUN') in claims,claims
             assert all((word,'NOUN') in claims for word in ('/l/', 'AAb/', '/r/', '//')),claims
-            assert ('[brown, np-tl]','denotes','NOUN') in claims and ('[brown, cc]','denotes','CCONJ') in claims,claims
+            assert not any(len(c)==3 and c[1]=='denotes' for c in claims),claims
             assert 'mismatched 0' in text,text
             readings.append(sorted(claims))
         assert readings[0]==readings[1],readings
@@ -386,16 +383,11 @@ def main():
             ('va:1001f', 'name of a VerbAtlas frame', 'AUXILIARY'),
             ('va:1001f', 'frame definition', 'Supporting frame'),
             ('va:1001f', 'small definition of the frame', 'Auxiliary.'),
-            ('va:1001f', 'identifier vocabulary', 'vaframe'),
-            ('[vaframe, va:1001f]', 'identifies', 'va:1001f'),
             ('va:0001f', 'name of a VerbAtlas frame', 'TOLERATE'),
             ('va:0001f', 'frame definition', 'An agent tolerates a theme'),
             ('va:0001f', 'the synset that roughly represents the frame', 'i46360'),
             ('va:0001f', 'small definition of the frame', 'Tolerate.'),
             ('i46360', 'Put up with something'),
-            ('va:0001f', 'identifier vocabulary', 'vaframe'),
-            ('[vaframe, va:0001f]', 'identifies', 'va:0001f'),
-            *[('i46360', 'identifier vocabulary', 'ili')] * 3,
         ]
         for workers in (1, 4):
             text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'verbatlas',
@@ -429,14 +421,15 @@ def main():
         for workers in (1, 4):
             text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'propbank', multiword)
             claims = [tuple(line.split('\t')[3:]) for line in text.splitlines() if line.startswith('claim\t')]
-            for claim in [('consider.01', 'm'), ('m', 'identifier vocabulary', 'propbank-pos'),
+            for claim in [('consider.01', 'm'),
                           ('[consider.01, 0]', 'argument alias', 'considerer'),
                           ('[consider.01, 0]', 'NOUN'), (slot, 'part of speech', 'VB'),
                           (slot, 'argument number', '0'), (slot, 'lexical content', 'take'),
                           ('[consider.01, take_into_account]', 'source representation', 'Source expression.'),
                           ('[consider.01, take_into_account]', 'target representation', 'Target expression.')]:
                 assert claim in claims, (workers, claim, claims)
-            assert len(claims) == 24 and 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
+            assert not any(len(c) == 3 and c[1] in ('identifier vocabulary', 'identifies', 'denotes') for c in claims), claims
+            assert 'unresolved obligations: 0 ' in text and 'mismatched 0' in text, text
             multiword_readings[workers] = sorted(claims)
         assert multiword_readings[1] == multiword_readings[4], 'Worker count changed multiword slot identities'
         print('PASS PropBank source categories, scoped argument aliases, multiword slots and representations')
@@ -583,21 +576,19 @@ def main():
         readings = {}
         for workers in (1, 4):
             text = run('ingest', '--claims', '-j', workers, 'semantic-alignment')
-            for claim in ('[duck, NOUN]', '[duck, VERB]', '[duck, laplace-unlisted.987654321]',
-                          '[duck.03, [pbroleset, cross-resource mapping, vnclass], novel-987654321.2]',
-                          '[[wordnet-pos, n], denotes, NOUN]', '[[english-pos, noun], denotes, NOUN]'):
+            for claim in ('[duck, NOUN]', '[duck, VERB]', '[duck, laplace-unlisted.987654321]'):
                 assert claim in text, (claim, text)
+            for forbidden in ('cross-resource mapping', 'identifier vocabulary', ', denotes, ', ', identifies, '):
+                assert forbidden not in text, (forbidden, text)
             readings[workers] = sorted(line for line in text.splitlines() if line.startswith('['))
         assert readings[1] == readings[4], 'Worker count changed semantic evidence'
         text = run('ingest', '--claims', 'propbank')
         for sense, description in [('duck.01', 'avoider'), ('duck.02', 'bird')]:
             assert f'[[{sense}, 0], mneumonic, {description}]' in text, text
             assert f'[PersonX ducks., [{sense}, 0], PersonX]' in text, text
-            assert f'[[{sense}, ARG0], refers to, [{sense}, 0]]' in text, text
-        assert '[duck.01, [pbroleset, cross-resource mapping, fnframe], leave-51.2]' in text, text
-        assert '[duck.01, [pbroleset, cross-resource mapping, vnclass], leave-51.2]' not in text, text
         assert '[PersonX ducks., [duck.02, 1], PersonY]' in text, text
         assert '[[duck.02, 1], mneumonic,' not in text, 'A reference invented a role definition'
+        assert 'cross-resource mapping' not in text and 'identifier vocabulary' not in text, text
         # WN-LMF's proposed-ILI marker is absent only in that field: the
         # ordinary English word "in" remains a lexical entry and a sense.
         wordnet = root / 'english-wordnet-proposed.xml'
@@ -678,21 +669,17 @@ def main():
         fields = ['ref_' + name for name in reference_lists]
         (all_open / 'references.recipe').write_text('name open-references\nmatch references.tsv\n'
             'tier row by \\n\nnames word ' + ' '.join(fields) + '\ntier field by \\t\nthing row word\ncontent word\n' +
-            ''.join(f'type {field} {name}' + (' node' if name == 'source-defined-vocabulary' else '') +
-                    f'\nvalue {name} {field}\nattest row {field}\n'
+            ''.join(f'type {field} {name} node\nvalue {name} {field}\nattest row {field}\n'
                     for name, field in zip(reference_lists, fields)), encoding='utf-8')
         references = root / 'data/open-identifiers'
         references.mkdir()
         (references / 'references.tsv').write_text('references\t' + '\t'.join('unlisted-' + name + '.987654321'
                                                                              for name in reference_lists) + '\n', encoding='utf-8')
-        (all_open / 'redundant.recipe').write_text('name redundant-declarations\nmatch redundant.tsv\n'
-            'tier row by \\n\nnames identifier\ntier field by \\t\nthing row identifier\n'
-            'type identifier pbroleset node\ntypes pbroleset "PropBank roleset" row\n', encoding='utf-8')
-        (references / 'redundant.tsv').write_text('single-unlisted.01\n', encoding='utf-8')
         text = run('ingest', '--claims', 'open-identifiers')
         for name in reference_lists:
-            assert f'[unlisted-{name}.987654321, identifier vocabulary, {name}]' in text, (name, text)
-        print(f'PASS all {len(open_lists)} declared open identifier vocabularies and a source-defined vocabulary retain uncached references and their families')
+            assert f'[references, unlisted-{name}.987654321]' in text, (name, text)
+        assert 'identifier vocabulary' not in text, text
+        print(f'PASS all {len(open_lists)} declared open node vocabularies retain uncached references without synthetic identifier vocabulary claims')
         print('PASS shared categories, original notation, open IDs, crosswalks, scoped argument definitions and usages')
 
         # An unfamiliar closed category is an omission; a source pointer which

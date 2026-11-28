@@ -671,15 +671,36 @@ int lp_engine_mold_execute(PGconn *pg, const LpEngineMoldRequest *req, LpEngineM
             }
             holds_free(hs1, ns1);
             if (n_senses > 0) {
+                /* Direct canonical path: Sense = [lemma, language, synset/ILI],
+                 * so its last constituent IS the synset (i* or unmapped oewn-*).
+                 * Keep legacy [sense, reference, synset] fallback if present. */
+                int nps0 = 0;
+                Hold *sp0 = paths_of(pg, sense_ids, (int)n_senses, &nps0);
                 int ns2 = 0;
                 Hold *hs2 = holds_both_scoped(pg, sense_ids, (int)n_senses, &synset_rel_id, wscope, nwscope, scoped, &ns2);
                 if (ns2 == 0) {
                     holds_free(hs2, ns2);
                     hs2 = holds_both_scoped(pg, sense_ids, (int)n_senses, &synset_rel_id2, wscope, nwscope, scoped, &ns2);
                 }
-                syn_keys = malloc(sizeof(lp_id) * (size_t)(ns2 ? ns2 : 1));
-                syn_src_vidx = malloc(sizeof(int) * (size_t)(ns2 ? ns2 : 1));
+                size_t cap_syn = (size_t)(nps0 + ns2);
+                syn_keys = malloc(sizeof(lp_id) * (cap_syn ? cap_syn : 1));
+                syn_src_vidx = malloc(sizeof(int) * (cap_syn ? cap_syn : 1));
                 lp_idmap *syn_seen = lp_idmap_new();
+                for (int r = 0; r < nps0 && n_syn < 512u; r++) {
+                    int s = sp0[r].src;
+                    if (s < 0 || (size_t)s >= n_senses) continue;
+                    path_into(&pts_s, lp_path_of(sp0[r].path, (size_t)sp0[r].path_len));
+                    if (pts_s.n < 3) continue;
+                    const lp_id *cid = &pts_s.v[pts_s.n - 1];
+                    bool fresh = false;
+                    lp_idmap_put(syn_seen, cid, &fresh);
+                    if (fresh) {
+                        syn_keys[n_syn] = *cid;
+                        syn_src_vidx[n_syn] = sense_vidx[s];
+                        n_syn++;
+                    }
+                }
+                holds_free(sp0, nps0);
                 for (int r = 0; r < ns2 && n_syn < 512u; r++) {
                     if (!hs2[r].claim || !hs2[r].stood) continue;
                     int s = hs2[r].src;
@@ -862,7 +883,26 @@ int lp_engine_mold_execute(PGconn *pg, const LpEngineMoldRequest *req, LpEngineM
                         holds_free(sh, nsh);
 
                         if (n_tsyn > 0) {
-                            /* Resolve target synsets back down to canonical lexical sense tuples [lemma, lang, ili] -> lemma! */
+                            /* Resolve target synsets directly to lexicalization tuples [lemma, lang, synset] -> lemma
+                             * (with fallback to legacy [sense, reference, synset] bridges). */
+                            int nhb = 0;
+                            Hold *hb = holds_any(pg, tgt_syns, (int)n_tsyn, &nhb);
+                            for (int r = 0; r < nhb; r++) {
+                                int ts = hb[r].src;
+                                if (ts < 0 || (size_t)ts >= n_tsyn) continue;
+                                path_into(&pts, lp_path_of(hb[r].path, (size_t)hb[r].path_len));
+                                if (pts.n != 3 || !lp_id_eq(&pts.v[2], &tgt_syns[ts])) continue;
+                                const lp_id *lemma = &pts.v[0];
+                                if (!is_valid_vocab_entity(t0, hw, lemma)) continue;
+                                int i0 = tgt_src[ts];
+                                int64_t i1 = lp_idmap_find(vmap, lemma);
+                                if (i1 < 0 && lp_idmap_count(vmap) < max_vocab) i1 = (int64_t)lp_idmap_put(vmap, lemma, NULL);
+                                if (i1 >= 0 && i0 != (int)i1) {
+                                    eb_push(&ebufs[p], i0, (int)i1, tgt_w[ts], &tgt_cl[ts], NULL);
+                                    lp_idmap_put(touched_claims, &tgt_cl[ts], NULL);
+                                }
+                            }
+                            holds_free(hb, nhb);
                             int nbk = 0;
                             Hold *bk = holds_both_scoped(pg, tgt_syns, (int)n_tsyn, &synset_rel_id, wscope, nwscope, scoped, &nbk);
                             if (nbk == 0) {

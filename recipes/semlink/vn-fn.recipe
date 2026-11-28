@@ -9,8 +9,8 @@ format json
 levels class
 
 thing class key
-type class.key vnclass matching ^(.*)-[^0-9-][^-]*$
-type value fnframe
+type class.key vnclass matching ^(.*)-[^0-9-][^-]*$ node
+type value fnframe node
 
 pair class value
 

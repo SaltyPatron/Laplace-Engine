@@ -113,7 +113,7 @@ def main():
                 'tier row by \\n\nnames word pos pointer from to\ntier field by \\t\n'
                 'thing row word\ncontent word from to\n'
                 'type pos upos' + (f' {how} {vocabulary}' if vocabulary else '') + '\n'
-                'type pointer pbroleset\nvalue upos pos\nvalue pbroleset pointer\n'
+                'type pointer pbroleset node\nvalue upos pos\nvalue pbroleset pointer\n'
                 'attest row pos pointer\nmaps row from pbroleset to to vnclass\n')
         alignment, alignment_root = fixture.source('alignment', 'class AcademicCurated', recipes=alignment_recipes)
         for spelling, pos in [('letters', 'n'), ('names', 'noun'), ('canonical', 'NOUN')]:
@@ -140,7 +140,7 @@ def main():
         (dictionary_root / 'kaikki.org-dictionary-fixture.jsonl').write_text(
             ''.join(json.dumps(entry) + '\n' for entry in DICTIONARY), encoding='utf-8', newline='\n')
 
-        # Two declarations of one reference in one source record.
+        # Highway-only type declarations do not fabricate synthetic identifier vocabulary claims.
         identifiers, identifiers_root = fixture.source('identifiers', 'class AcademicCurated', recipes={
             'redundant.recipe': f'name {fixture.name("identifiers")[0]}-redundant\nmatch redundant.tsv\n'
                                 'tier row by \\n\nnames identifier\ntier field by \\t\nthing row identifier\n'
@@ -202,8 +202,8 @@ def main():
             fail('hop does not read the treebank translation back', usage)
 
         ingest(identifiers)
-        if games(single(identifiers), compose('single-unlisted.01', 'identifier vocabulary', 'pbroleset')) != '1':
-            fail('duplicate declarations manufactured observations')
+        if games(single(identifiers), compose('single-unlisted.01', 'identifier vocabulary', 'pbroleset'), 'coalesce(sum(games), 0)') != '0':
+            fail('highway type declaration leaked a synthetic identifier vocabulary claim')
 
         progress = fixture.scratch / 'chemistry-progress.jsonl'
         ingest(chemistry, extra={'LAPLACE_INGEST_PROGRESS_PATH': str(progress)})
@@ -246,12 +246,9 @@ def main():
         for parts in [('duck', 'NOUN'), ('duck', 'VERB'), ('duck', 'laplace-unlisted.987654321')]:
             if not held_by(alignment_trunks, *parts):
                 fail(f'held does not find [{", ".join(parts)}] under the check\'s alignment trunk')
-        mapping = hop('duck.03')
-        if 'cross-resource mapping' not in mapping or 'novel-987654321.2' not in mapping:
-            fail('hop does not read the roleset mapping back', mapping)
         reference = hop('laplace-unlisted.987654321')
-        if 'identifier vocabulary' not in reference or 'pbroleset' not in reference:
-            fail('hop does not read the open identifier back', reference)
+        if 'duck' not in reference or 'identifier vocabulary' in reference:
+            fail('hop did not read back the open identifier cleanly without synthetic plumbing', reference)
         usage = hop('PersonX ducks.')
         if not all(x in usage for x in ('duck.01', 'duck.02', 'PersonX', 'PersonY')):
             fail('hop does not read the scoped argument usages back', usage)

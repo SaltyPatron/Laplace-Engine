@@ -15,12 +15,12 @@ thing MEMBER name
 thing FRAME .
 part grouping by space
 part wn by space
-type grouping pbroleset
-type wn ili matching ^[?]*(.*)$
+type grouping pbroleset node
+type wn ili matching ^[?]*(.*)$ optional
 when fn_mapping is None
 omit fn_mapping
 always
-type fn_mapping fnframe
+type fn_mapping fnframe node
 content ID type name Value value primary secondary features bool logic EXAMPLE
 # bookkeeping, read by nothing
 omit verbnet_key xtag descriptionNumber xmlns:xsi xsi:noNamespaceSchemaLocation

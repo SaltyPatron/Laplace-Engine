@@ -435,6 +435,7 @@ int say_says(Recipe *r, const char *path, char *tok){
                 if (!strcmp(more, "matching")) { if (!name_next(&at, more, sizeof more) || regcomp(&ks.re, more, REG_EXTENDED)) { fprintf(stderr, "%s: type NAME LIST... matching PATTERN (it must compile)\n", path); return -1; } ks.has_re = 1; continue; }
                 if (!strcmp(more, "as")) { if (ks.nas == 4 || !name_next(&at, ks.as[ks.nas], sizeof ks.as[0])) { fprintf(stderr, "%s: type NAME LIST... as TEMPLATE... (at most 4)\n", path); return -1; } ks.nas++; continue; }
                 if (!strcmp(more, "node")) { ks.node = 1; continue; }
+                if (!strcmp(more, "optional")) { ks.optional = 1; continue; }
                 if (!strcmp(more,"vocabulary")) {
                     char vocabulary[64];
                     if (ks.vocabulary || strchr(a2,' ') || !name_next(&at,vocabulary,sizeof vocabulary) || !vocabulary_read(r,&ks,vocabulary,a2)) {

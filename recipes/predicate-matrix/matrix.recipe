@@ -20,14 +20,14 @@ type 7_VN_SUBCLASS vnclass matching ^vn:(.*)$ node
 part 11_WN_SENSE grammar wn_sense_key
 thing 11_WN_SENSE of sense
 thing sense lemma space _ literal eng reference
-type sense.reference ili
+type sense.reference ili optional
 type sense.lex_filenum lexfile
 value lexfile sense.lex_filenum
 relation "WordNet synset type" sense.ss_type
 relation "WordNet lexical identifier" sense.lex_id
 attest sense ss_type lex_filenum lex_id
-type 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$
-type 23_MCR_BLC ili matching ^mcr:ili-30-([0-9]+-[a-z])$
+type 12_MCR_iliOffset ili matching ^mcr:ili-30-([0-9]+-[a-z])$ optional
+type 23_MCR_BLC ili matching ^mcr:ili-30-([0-9]+-[a-z])$ optional
 type 13_FN_FRAME fnframe matching ^fn:(.*)$ node
 type 16_PB_ROLESET pbroleset matching ^pb:(.*)$ node
 

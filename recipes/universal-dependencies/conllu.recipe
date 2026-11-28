@@ -49,6 +49,10 @@ thing edge relation head
 thing edge relation
 thing DEPS of edge
 # CopyOf is a reference to the original word, including for an empty position.
+# CopyOf=-1 marks an elided token with no antecedent row in this sentence.
+when CopyOf is -1
+omit MISC.CopyOf
+always
 refer MISC.CopyOf row
 pair row MISC.CopyOf
 # Construction elements bind the component word to a role at a sentence-local
@@ -90,10 +94,14 @@ omit "newdoc id" "newpar id" sent_id
 omit note:X_ID note:X_IDs note:parallel_id note:original_sent_id note:s_24_sent_id note:orig_file_sentence note:sound_url note:converted_from_file note:corpus_name note:gold_annotation note:auto note:conversation_id
 omit MISC.SpaceAfter MISC.UI MISC.Ref MISC.ref MISC.LId MISC.LemmaId MISC.OccId MISC.ChunkId MISC.XmlId MISC.LvtbNodeId MISC.AlignBegin MISC.AlignEnd MISC.Entity MISC.KID MISC.Bridge
 # What the file writes about its own parts, not as their content: the file's metadata tree.
-metadata note:newdoc* note:newpar* note:doc_* note:doc* note:meta::* note:meta_* note:global.* note:title note:author note:url note:date* note:file note:archive note:channel note:udpipe_model note:lang note:rtl note:document_authorship note:reference
-# every other note is what the treebank says of the sentence under the note's name: a translation (text_en), a
-# transliteration, who spoke it and when, its genre (the format: "# key = value")
-content note:*
+# Specific documented UD comments and MISC keys come FIRST so first-match
+# disposition keeps them as content/claims; any other treebank-specific sentence
+# comment (# genre = ..., # text_rus = ..., # child_age = ...) or treebank-private
+# MISC key falls through to metadata (while staying in the lossless MISC layer).
+content note:translit note:text_en note:text_ortho note:text_orth note:text_transcription note:text_orig
+content MISC.Translit MISC.LTranslit MISC.Gloss MISC.LGloss MISC.MGloss MISC.MSeg MISC.Morf MISC.Analysis MISC.Lang MISC.OrigLang MISC.LDeriv MISC.LNumValue MISC.CorrectForm MISC.ModernForm MISC.MWE MISC.MWEPOS MISC.NamedEntity MISC.Proper MISC.Root MISC.Vform MISC.Tam MISC.Vib MISC.Stype MISC.Reduplication MISC.LUWPOS MISC.LUWBILabel MISC.BunsetuPositionType MISC.Subject MISC.TraditionalMood MISC.TraditionalTense MISC.Cxn MISC.CxnElt MISC.Functor MISC.Supersense MISC.Supersense[scene] MISC.Supersense[coding] MISC.PRel[config] MISC.MWECat MISC.MWELemma MISC.MWELen MISC.MWEString MISC.MWECat[weak] MISC.MWELemma[weak] MISC.MWELen[weak] MISC.MWEString[weak] MISC.Citation MISC.Depictive MISC.Resultative MISC.Exclamative MISC.Footnote MISC.FlatType MISC.Mentioned MISC.MissingWordAfter MISC.MissingWordsAfter MISC.Promoted MISC.Signature MISC.SpecialEncoding MISC.Superlocation MISC.TemporalNPAdjunct
+metadata note:*
+metadata MISC.*
 # What each column a claim is made of means (Laplace-Engine#32; the format page, universaldependencies.org/format.html),
 # never the column's name: UPOS a value of the UPOS road class ("Universal part-of-speech tag"): [forces, NOUN];
 # XPOS and LEMMA (below) the relations the format page words them as; FEATS each Name=Value of the feature inventory, the pair itself:
@@ -253,16 +261,12 @@ relation "the transliteration of the entire sentence" note:translit
 #   "the fluent translation of the sentence to English or another language. Use # text_en = ... for English (and a
 #   similar comment with the corresponding language code for other languages)"
 relation "the fluent translation of the sentence to English" note:text_en
-#   text_fr, text_de ... name their language only in the note's own name: unresolved obligations until the language
-#   code in a note's name is read as the language (Laplace-Engine#27). Every other note (genre, source, speaker_*, ...)
-#   is the treebank's own, documented, if at all, in its README: unresolved obligations (Laplace-Engine#27; the
-#   speaker's, #29).
+relation "orthographic form" note:text_ortho note:text_orth
+relation "phonetic or morphological transcription" note:text_transcription
+relation "original text" note:text_orig
 
 attest row LEMMA UPOS XPOS FEATS
 attest row MISC
-attest record note:*
-# what the treebank writes of the speaker is said of the speaker; no meaning is given its notes here: unresolved
-# obligations (people as content, Laplace-Engine#29)
-attest record note:speaker note:speaker_role note:speaker_sex note:speaker_age note:speaker_education note:speaker_residence note:speaker_primary_other_language note:speaker_naija_competency note:speaker_birthplace note:speaker_fullname note:speaker_family_social_role note:speaker_gender of note:speaker_id
+attest record note:translit note:text_en note:text_ortho note:text_orth note:text_transcription note:text_orig
 # a HEAD that numbers no row (0, the root) names nothing: the word's relation alone
 relate row DEPREL to HEAD alone

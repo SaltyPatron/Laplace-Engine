@@ -12,8 +12,8 @@ levels roleset class argument
 
 thing roleset key
 thing class ^roleset/key key
-type roleset.key pbroleset
-type class.key vnclass
+type roleset.key pbroleset node
+type class.key vnclass node
 content argument.key value
 
 itself class

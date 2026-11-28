@@ -23,10 +23,10 @@ always
 content arg.type
 thing example text
 when resource is VerbNet
-type class vnclass
+type class vnclass node
 always
 when resource is FrameNet
-type class fnframe
+type class fnframe node
 always
 content class
 # The DTD also permits l/x/m/d/f, but explicitly leaves their POS meanings

@@ -9,5 +9,5 @@ names frame
 tier field by \t
 
 thing row .
-type frame vaframe
+type frame vaframe node
 itself row

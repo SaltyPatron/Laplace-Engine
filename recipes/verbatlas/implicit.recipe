@@ -10,7 +10,7 @@ tier field by \t
 part filler* by |
 
 thing row synset literal "implicit argument"
-type synset ili
+type synset ili optional
 # See shadow.recipe: fillers retain their original BabelNet identifiers.
 content role* filler* overflow
 itself row

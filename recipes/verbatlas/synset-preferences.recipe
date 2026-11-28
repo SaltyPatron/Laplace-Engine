@@ -9,6 +9,6 @@ names synset class
 tier field by \t
 
 thing row synset
-type synset ili
+type synset ili optional
 content class
 pair row class

@@ -15,7 +15,7 @@ name wordnet-cntlist-rev
 #     row eng: Ref_Name English, Part1 en), the code every WN-LMF wordnet of this lineage writes (the Open English
 #     WordNet's Lexicon language="en"), so the count lands on the very strand that wordnet's sense of it is;
 #   ILI: the concept the sense key names, resolved through the highway (index.sense's sense key to its WordNet 3.0
-#     synset offset, CILI's offset to its ILI: type sense_key ili).
+#     synset offset, CILI's offset to its ILI: type sense_key ili optional).
 match cntlist.rev
 
 tier row by \n
@@ -24,7 +24,7 @@ tier field by space
 
 # Canonical ISO 639-3 English hub, shared with WN-LMF lexicalizations.
 thing row sense_key matching ^([^%]+)% space _ literal eng sense_key
-type sense_key ili
+type sense_key ili optional
 omit sense_number
 content tag_cnt
 # cntlist.5: "tag_cnt is the decimal number of times the sense is tagged in the corresponding semantic concordance": the

@@ -22,7 +22,7 @@ when "definition of the prototypical synset" is _
 omit "definition of the prototypical synset"
 always
 thing row ID
-type "prototypical synset" ili
+type "prototypical synset" ili optional
 content ID name definition "definition of the prototypical synset" "small definition"
 # What each column means (Laplace-Engine#32), in the README's words: "Each line contains the ID and the name of a
 # VerbAtlas frame ... From VerbAtlas 1.1.0, we also provide a definition, a prototypical synset (i.e., the synset that

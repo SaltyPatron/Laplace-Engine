@@ -104,6 +104,16 @@ static void tls_back(const Tls *previous){
     record_values_leave(&previous->values);
 }
 
+static int children_metadata_wildcard(const Say *s, const SemanticValue *y){
+    if (!y || !y->nlen) return 0;
+    for (int i = 0; i < s->ndis; i++) {
+        const Dis *d = &s->dis[i];
+        if ((d->what == D_METADATA || d->what == D_OMIT) && d->el_l == y->nlen &&
+            d->part.wild && !d->part.len && !memcmp(d->name, y->name, y->nlen)) return 1;
+    }
+    return 0;
+}
+
 /* Execute statement instructions in the record's source order. */
 static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, uint32_t g1, int speaks, Pend *pend, int *npp){
     const Say *s = k->s; int np_ = *npp;
@@ -113,7 +123,7 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
          * of parts a worker happens to read, whose bounds are the number of threads (runs_of): the same claims on any machine */
         while (np_ && pend[np_ - 1].end < (int32_t)g) { np_--; record_group_claims(k, pend[np_].e0, pend[np_].has ? &pend[np_].about : NULL); }
         if (x->kind == S_NOTE || x->kind == S_VALUE) { const Dis *d = record_field_disposition(s, x);
-            if (d && d->what == D_METADATA && !record_value_empty(s, x)) { Ref p[2] = { string_ref(x->name, x->nlen), record_text(x->val, x->vlen) }; Ref m = said_tuple(compose(p, 2, ref_above(p, 2))); record_refs_push(&k->meta, &m); }
+            if (d && d->what == D_METADATA && x->nlen && x->vlen && !record_value_empty(s, x)) { Ref p[2] = { string_ref(x->name, x->nlen), record_text(x->val, x->vlen) }; Ref m = said_tuple(compose(p, 2, ref_above(p, 2))); record_refs_push(&k->meta, &m); }
             continue; }
         if (x->kind != S_GROUP || !speaks) continue;
         k->dependence_class=NULL; memset(&k->dependence,0,sizeof k->dependence);
@@ -198,12 +208,12 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
                             Ref pv = said_tuple(compose(kv, 2, ref_above(kv, 2))); record_note_road_value(k, my, &pv); record_statement_count(k, my); Ref p[2] = { S, pv }; record_emit_claim(k, p, 2); continue; }
                         if (!record_value(k, t, q, &v, 0)) continue;
                         const Dis *meaning=record_value_meaning(s,w); if (!meaning) meaning=my;
-                        if (!meaning) { if (!wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_ATTEST], w); continue; }
+                        if (!meaning) { if (!children_metadata_wildcard(s, y) && !wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_ATTEST], w); continue; }
                         said_as(k, meaning, S, v); } }
                 else { const Dis *m = record_value_meaning(s, y);
                     if ((!m || !m->parent_slot) && recipe_property_cached(s, (const char *)y->name, y->nlen)) continue;
                     Ref v; if (!record_value(k, t, c, &v, 0)) continue;
-                    if (!m) { if (!wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_ATTEST], y); continue; }
+                    if (!m) { if (!children_metadata_wildcard(s, y) && !wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_ATTEST], y); continue; }
                     said_as(k, m, S, v); } }
             }
             if (s->att[a].of[0]) { S = S0; has = had; }
@@ -318,11 +328,6 @@ void record_execute(RecordWorker *sink, const SemanticRecord *t, int32_t root, u
     if (s->nstrict && strict_tier(s, &t->n[root])) {
         if (score_off) strict_refuse(ordinal, "writes a score that is no number on its scale");
         else if (k->ev.n == ev0) strict_refuse(ordinal, "attests nothing");
-    }
-    if (speaks) {
-        k->qualified=0; k->dependence_class=NULL; memset(&k->dependence,0,sizeof k->dependence); k->score=1.0f;
-        record_highway_values(k,t,root);
-        record_vocabulary_evidence(k,t);
     }
     if (speaks) for (uint32_t i = 0; i < t->count; i++) { const SemanticValue *x = &t->n[i];          /* what no line of the recipe reads is said to be left open */
         if (x->context || x->kind != S_VALUE || !x->nlen || record_field_disposition(s, x) || !record_field_unmentioned(s, x)) continue;

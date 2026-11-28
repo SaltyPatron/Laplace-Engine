@@ -52,7 +52,7 @@ value lexfile lex_filenum
 attest row lex_filenum
 # the gloss: "may contain a definition, one or more example sentences, or both" (wndb.5)
 content gloss
-relation "a definition, one or more example sentences, or both" gloss
+relation "synset gloss" gloss
 attest row gloss
 # A pointer: wndb.5, "pointer_symbol: the symbol for the pointer type" (the table in wninput.5WN: @ Hypernym,
 # ~ Hyponym, ! Antonym, ...), the relation as WordNet writes it, of WordNet's own inventory; "synset_offset ... pos" is

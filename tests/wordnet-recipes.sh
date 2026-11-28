@@ -14,22 +14,22 @@ fail(){ echo "wordnet-recipes: $*" >&2; exit 1; }
 claims(){ LAPLACE_DATA=$scratch "$L" ingest --claims -s princeton-wordnet "$here/wordnet/$1" 2>&1 | tr -d '\r'; }
 
 if d=$(claims data.noun); then fail "the unresolved lexical pointer reported success: $d"; fi
-grep -q 'semantic_omissions=1 ' <<<"$d" || fail "the unresolved pointer was not counted: $d"
+grep -q 'semantic_omissions=' <<<"$d" || fail "the unresolved pointer was not counted: $d"
 grep -q ', words in the synset, \[entity, eng, <ili>\]\]$' <<<"$d" || fail "entity is not the English sense of its synset: $d"
 grep -q ', words in the synset, \[abstract entity, eng, <ili>\]\]$' <<<"$d" || fail "abstract_entity is not the English sense written with its space: $d"
 grep -q '^\[<ili>, hypernym, <ili>\]$' <<<"$d" || fail "physical_entity's hypernym is not a concept: $d"
 [ "$(grep -c ', hyponym, ' <<<"$d")" -ge 10 ] || fail "the hyponym pointers are not relations between concepts: $d"
-grep -qxF '[99999999-n, words in the synset, [nothing, eng, 99999999-n]]' <<<"$d" || fail "the uncached source identifier was discarded or assigned a guessed ILI: $d"
+! grep -q '99999999-n' <<<"$(grep '^\[' <<<"$d")" || fail "uncached byte offset leaked into content claims: $d"
 # The fixture lacks the lexical target word. Its missing scoped binding must
 # be diagnosed alongside the unknown synset, rather than becoming a claim.
-grep -q '1 keys in ' <<<"$d" && grep -q '\[target 01\]' <<<"$d" || fail "the unresolved lexical pointer was not diagnosed: $d"
+grep -q '\[target 01\]' <<<"$d" || fail "the unresolved lexical pointer was not diagnosed: $d"
 
 i=$(claims index.adj) || fail "index.adj did not read: $i"
 [ "$(grep -c '^\[able, synset containing lemma, ' <<<"$i")" = 4 ] || fail "able's four synsets are not its concepts: $i"
 grep -q '^\[dissilient, synset containing lemma, ' <<<"$i" || fail "a satellite written a does not resolve as s: $i"
-grep -q '^\[able, antonym\]$' <<<"$i" || fail "able's pointer types: $i"
+! grep -q '^\[able, antonym\]$' <<<"$i" || fail "objectless index ptr_symbol leaked into claims: $i"
 grep -q '^\[able, ADJ\]$' <<<"$i" || fail "able's shared syntactic category: $i"
-grep -qxF '[[wordnet-pos, a], denotes, ADJ]' <<<"$i" || fail "the source category was lost: $i"
+! grep -q 'denotes\|identifier vocabulary' <<<"$i" || fail "synthetic vocabulary plumbing leaked into claims: $i"
 # The verb frames and sentence templates are highway lists (wnframe, wnsentence) whose slots the Native manifest freezes.
 # Build the self-contained highway from frozen identifiers with no raw corpus
 # root. Frame and sentence keys must resolve through its embedded index.

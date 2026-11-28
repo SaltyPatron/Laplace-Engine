@@ -21,7 +21,7 @@ for search
 
 for pull
   fan 4096
-  lexicalization wn-lmf Sense language ili
+  lexicalization wn-lmf Sense language synset
   up @wn-lmf/Sense
   usages wordnet-cntlist tag_cnt
   rounds 3

@@ -14,7 +14,7 @@ where triple/subject matches ^i[0-9]+$
 thing triple subject
 thing rdf_literal value lang_tag
 thing rdf_literal value
-type lang_tag language
+type lang_tag language node
 content *
 
 # A Turtle predicate is an RDF property, of the source's own relation inventory (RDF 1.1 Turtle, 2.4: "The token 'a'

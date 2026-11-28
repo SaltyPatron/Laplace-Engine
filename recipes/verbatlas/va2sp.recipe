@@ -14,7 +14,7 @@ tier field by \t
 part sp* by |
 
 thing row frame
-type frame vaframe
+type frame vaframe node
 refer sp* verbatlas-preference-info
 content type role*
 

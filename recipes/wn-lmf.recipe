@@ -21,19 +21,19 @@ key SyntacticBehaviour id
 thing Lexicon label
 thing Requires ref version
 thing LexicalEntry Lemma/writtenForm
-# a sense is the lexicalization [lemma, language, ILI] (recipes/BRIEF.md: "A word in a language is the lexicalization
+# a sense is the lexicalization [lemma, language, concept] (recipes/BRIEF.md: "A word in a language is the lexicalization
 # [lemma, language, ILI], the language (an ISO 639 highway node) a part of it, never a context column or a mask bit;
-# another language is the same ILI with another language part"): the lemma of the entry it is inside, the language its
-# lexicon states (Lexicon language, the format page: "language: Please follow BCP-47"; as written, en, which is ISO
-# 639-3's Part1 of English, so the node ISO 639 attests), and the ILI of the synset it refers to (type ili ili, below:
-# the node the highway's interlingual index holds). Another wordnet's sense of the same concept in another language is
-# the same ILI with another language part (Laplace-Engine#20, #32).
-thing Sense ^LexicalEntry/Lemma/writtenForm ^Lexicon/language >synset/ili
-# a sense whose synset names no concept the highway holds (ili="in", a concept CILI has not numbered yet) is given no
-# stand-in identity: it is the word with its synset, and its synset links by collision when CILI states its ILI
+# another language is the same ILI with another language part"): because Synset resolves directly to its CILI i* node
+# (falling back to its source synset id only when ili="in"), referencing `synset` yields [lemma, language, ILI] for every
+# mapped concept and [lemma, language, oewn-*] for unmapped concepts without projected-field deadlocks.
 thing Sense ^LexicalEntry/Lemma/writtenForm ^Lexicon/language synset
+# A synset with a CILI i* identifier resolves directly to that canonical ILI
+# node so CILI, Princeton WordNet, OEWN and all 32 OMW lexicons collide on the
+# same concept (Conflicts.md S1). Only synsets with ili="in" (omitted below)
+# retain their stable source synset id as fallback.
+thing Synset ili
 thing Synset id
-type Synset.id Synset node
+content Synset.id
 thing SyntacticBehaviour subcategorizationFrame
 part members by space
 part senses by space
@@ -50,9 +50,9 @@ refer subcat SyntacticBehaviour
 when ili is in
 omit ili
 always
-type ili ili
+type ili ili node
 type lexfile lexfile
-type language language
+type language language node
 type partOfSpeech upos crosswalk wordnet-pos
 content label writtenForm relType subcategorizationFrame Definition ILIDefinition Example Pronunciation variety script Tag category Count ref lexicalized
 # a file's bookkeeping, read by nothing: who made it, under what licence, at what version, how confident
@@ -97,13 +97,10 @@ value - Tag
 thing Form writtenForm
 relation "other form" Form
 # a Sense: OntoLex, "The sense property relates a lexical entry to one of its lexical senses" (the format page: "Senses
-# are ontolex:LexicalSense"). The sense is the entry with its synset: the lexicalization.
+# are ontolex:LexicalSense"). The sense is [lemma, language, ILI] (or [lemma, language, synset-id] when ili="in"), so it
+# already carries its canonical concept/synset directly as its third constituent without redundant [sense, reference, id]
+# claims.
 relation "lexical sense" Sense
-# a sense's synset: the format page, "Senses are ontolex:LexicalSense, they must have a ontolex:reference"; OntoLex,
-# "The reference property relates a lexical sense to an ontological predicate that represents the denotation of the
-# corresponding lexical entry". A sense that is the lexicalization holds its synset's ILI, and refers to its synset:
-# [sense, reference, synset]. A sense named by its synset holds it as a part, so no claim is made of it again.
-relation "reference" synset
 # a sense's subcat: the format page, "Syntactic behaviour can also be given as part of the lexicon and referred to with
 # the subcat property"; OntoLex, "The syntactic behavior property relates a lexical entry to one of its syntactic
 # behaviors as captured by a syntactic frame"
@@ -146,12 +143,11 @@ relation "variety of language" Pronunciation.variety
 attest Pronunciation variety .
 relation "grammatical property category" Tag.category
 attest Tag category .
-attest Sense synset subcat lexicalized adjposition
+attest Sense subcat lexicalized adjposition
 attest Count .
 relate SenseRelation relType to target
 # an ili written "in" is WN-LMF's mark for a concept proposed to CILI and not yet in it: it names no concept, and is said so
-attest Synset ili partOfSpeech lexfile lexicalized Definition ILIDefinition
-pair Synset members
+attest Synset partOfSpeech lexfile lexicalized Definition ILIDefinition
 attest Example .
 relate SynsetRelation relType to target
 attest SyntacticBehaviour senses
