@@ -490,7 +490,7 @@ def main():
                 text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'chess-com', chess,
                            extra={'LAPLACE_RECORD_WINDOW_BYTES': str(window)})
                 claims = sorted(line for line in text.splitlines() if line.startswith('claim\t'))
-                assert len(claims) == 37, (workers, window, text)      # the moves alone: a record is never the subject of a claim
+                assert len(claims) == 7, (workers, window, text)       # 3 NAGs + 4 game-altitude trajectories: a record is never the subject of a claim
                 chess_readings.append(claims)
         assert all(reading == chess_readings[0] for reading in chess_readings), 'PGN read windows changed claims'
         incomplete = root / 'missing-result.pgn'
@@ -533,7 +533,7 @@ def main():
         for workers in (1, 4):
             text = run('ingest', '--claims-tsv', '-j', workers, '-s', 'twic-validated', twic_subset)
             claims = [line for line in text.splitlines() if line.startswith('claim\t')]
-            assert len(claims) == 37 and all('Missing move fixture' not in claim for claim in claims), text
+            assert len(claims) == 7 and all('Missing move fixture' not in claim for claim in claims), text
             assert 'mismatched 0' in text and '1 kept as text' not in text, text
         print('PASS validated TWIC source preserves quarantined bytes without inventing legal transitions')
 
