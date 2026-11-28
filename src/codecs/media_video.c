@@ -61,6 +61,8 @@ static int video_done(Recipe *r, const char *path){
 typedef struct {
     uint64_t pts;
     uint32_t bytes;
+    size_t   payload_off;
+    uint32_t payload_len;
     lp_id    digest;
 } FrameDesc;
 
@@ -150,7 +152,7 @@ static int parse_video_container(const uint8_t *src, size_t n, VideoMeta *meta, 
             uint64_t pts = (uint64_t)rd_le32(src + pos + 4) | ((uint64_t)rd_le32(src + pos + 8) << 32);
             pos += 12;
             if (fsz > n - pos) break;
-            FrameDesc fd = { .pts = pts, .bytes = fsz };
+            FrameDesc fd = { .pts = pts, .bytes = fsz, .payload_off = pos, .payload_len = fsz };
             blake3_hasher bh; blake3_hasher_init(&bh);
             blake3_hasher_update(&bh, src + pos, fsz);
             blake3_hasher_finalize(&bh, fd.digest.b, 16);
@@ -231,17 +233,44 @@ static void video_read(const Recipe *r, File *f, const uint8_t *src, size_t n){
 
     Ref content = track;
     if (frames.n > 0) {
-        size_t nf = frames.n < 4096 ? frames.n : 4096;
+        lp_scalars *sc = lp_scalars_of(T0, video_compose_sink, NULL);
+        size_t nf = frames.n;
         Ref *frefs = malloc(sizeof *frefs * nf);
         for (size_t i = 0; i < nf; i++) {
-            Ref fp[2] = {
-                lp_ref_u64(T0, frames.v[i].pts, video_compose_sink, NULL),
-                lp_ref_u64(T0, frames.v[i].bytes, video_compose_sink, NULL)
-            };
-            frefs[i] = compose(fp, 2, ref_above(fp, 2));
+            const FrameDesc *fd = &frames.v[i];
+            if (fd->payload_len > 0 && fd->payload_off + fd->payload_len <= n) {
+                /* Compose frame payload via universal decimal scalars (lp_scalar_u8, zero private ByteAtoms) in 4096-byte blocks. */
+                size_t plen = fd->payload_len;
+                const uint8_t *p = src + fd->payload_off;
+                size_t nblk = (plen + 4095u) / 4096u;
+                Ref *blks = malloc(sizeof *blks * nblk);
+                Ref *brefs = malloc(sizeof *brefs * (plen < 4096u ? plen : 4096u));
+                for (size_t b = 0; b < nblk; b++) {
+                    size_t off = b * 4096u;
+                    size_t cnt = plen - off < 4096u ? plen - off : 4096u;
+                    for (size_t k = 0; k < cnt; k++) brefs[k] = lp_scalar_u8(sc, p[off + k]);
+                    blks[b] = compose(brefs, (uint32_t)cnt, ref_above(brefs, cnt));
+                }
+                free(brefs);
+                Ref pay_ref = nblk == 1 ? blks[0] : compose(blks, (uint32_t)nblk, ref_above(blks, nblk));
+                free(blks);
+                Ref fp[3] = {
+                    lp_ref_u64(T0, fd->pts, video_compose_sink, NULL),
+                    lp_ref_u64(T0, fd->bytes, video_compose_sink, NULL),
+                    pay_ref
+                };
+                frefs[i] = compose(fp, 3, ref_above(fp, 3));
+            } else {
+                Ref fp[2] = {
+                    lp_ref_u64(T0, fd->pts, video_compose_sink, NULL),
+                    lp_ref_u64(T0, fd->bytes, video_compose_sink, NULL)
+                };
+                frefs[i] = compose(fp, 2, ref_above(fp, 2));
+            }
         }
         Ref frame_seq = compose(frefs, (uint32_t)nf, ref_above(frefs, nf));
         free(frefs);
+        lp_scalars_free(sc);
         Ref tr[2] = { track, frame_seq };
         content = compose(tr, 2, ref_above(tr, 2));
     }

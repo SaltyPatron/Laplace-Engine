@@ -235,18 +235,28 @@ static void emit_monologue_witness(const char *conninfo, const Ref *subject, con
     Ref rel = text_ref(CTX[0], (const uint8_t *)"InternalMonologue", 17);
     Ref subj = *subject; subj.said = subj.outcome = subj.position = subj.spare = 0;
     Ref cp[3] = { subj, rel, nref };
-    Ref obs = said_metadata(compose(cp, 3, ref_above(cp, 3)));
+    Ref obs = said_claim(compose(cp, 3, ref_above(cp, 3)));
     obs.position = pos_idx ? pos_idx : 1u;
     Ref tr[2] = { said_metadata(wref), obs };
     Ref trunk = compose(tr, 2, ref_above(tr, 2));
     File f; memset(&f, 0, sizeof f);
     f.path = "ooda-monologue"; f.witness = wref; f.lineage = wref; f.has_lineage = 1;
     f.trust = trust; f.trunk = trunk; f.file = trunk; f.has_file = 1;
+    Event mev = {
+        .claim = obs.id, .witnessed = obs.id,
+        .score = 0.5f, .enter_rating = 1500.0f,
+        .position = obs.position, .kind = EV_CLAIM, .run = 1
+    };
+    ev_push(&f.ev, &mev);
+    Fold *fold = fold_new();
+    fold_events(fold, &f, 1);
     LoadWitness lw = { .id = trunk.id, .lineage = wref.id, .trust = trust, .has_lineage = 1 };
     LoadStats ls = { 0 };
     if (load(conninfo, 1, &f, 1, &ls) == 0) {
         if (load_register(conninfo, 1, &lw, 1, &f, 1) == 0) merge(conninfo, 1, &ls);
     }
+    fold_free(fold);
+    free(f.ev.e);
 }
 
 static TSTree *parse_cst(const char *src, size_t len, const char *lang){
@@ -401,7 +411,7 @@ static void collect_span_idents(TSNode node, const char *src, size_t len, uint32
     uint32_t nsb = ts_node_start_byte(node), neb = ts_node_end_byte(node);
     if (neb <= sb || nsb >= eb) return;
     const char *tp = ts_node_type(node);
-    if (tp && !strcmp(tp, "identifier") && neb > nsb && neb <= len && (neb - nsb) < 64) {
+    if (tp && (!strcmp(tp, "identifier") || !strcmp(tp, "type_identifier")) && neb > nsb && neb <= len && (neb - nsb) < 64) {
         size_t idlen = (size_t)(neb - nsb);
         memcpy(names[*n], src + nsb, idlen);
         names[*n][idlen] = 0;
@@ -440,6 +450,102 @@ static int levenshtein_bounded(const char *a, const char *b){
         }
     }
     return dp[la][lb];
+}
+
+static char *ooda_file_basename(Reader *rd, const lp_id *file){
+    lp_id at = *file, kid[64];
+    for (int depth = 0; depth < 6; depth++) {
+        size_t n = reader_parts(rd, &at, kid, 64);
+        if (!n) break;
+        for (size_t i = 0; i < n && i < 64; i++) {
+            lp_id two[4];
+            if (reader_parts(rd, &kid[i], two, 4) != 2) continue;
+            char *k = reader_text(rd, &two[0], 32);
+            int is_fn = k && !strcmp(k, "filename");
+            free(k);
+            if (is_fn) return reader_text(rd, &two[1], 256);
+        }
+        at = kid[0];
+    }
+    return NULL;
+}
+
+/* Stage C1: Substrate Workspace AST resolution — resolve undeclared symbols directly from ingested
+ * `declared identifier` / `declaration signature` AST claims in PostgreSQL (zero hardcoded stdlib tables). */
+static int substrate_ast_resolve_symbol(PGconn *pg, const char *lang, const char *src, size_t len,
+                                        const char *sym, int orig_errors,
+                                        const lp_id *tried, size_t ntried,
+                                        char **patched_out, size_t *patched_len_out){
+    if (!pg || !sym || !*sym || (strcmp(lang, "c") != 0 && strcmp(lang, "cpp") != 0)) return 1;
+    Ref sym_ref = text_ref(CTX[0], (const uint8_t *)sym, strlen(sym));
+    Ref rel_decl = text_ref(CTX[0], (const uint8_t *)"declared identifier", 19);
+    int nh = 0;
+    Hold *h = holds_both(pg, &sym_ref.id, 1, &rel_decl.id, &nh);
+
+    Reader *rd = reader_new(pg);
+    int resolved = 0;
+    for (int i = 0; h && i < nh && i < 8 && !resolved; i++) {
+        if (!h[i].claim) continue;
+        lp_id parts[4];
+        size_t np = lp_path_ids(h[i].path, (size_t)h[i].path_len, parts, 4);
+        if (np != 3 || !lp_id_eq(&parts[1], &rel_decl.id) || !lp_id_eq(&parts[2], &sym_ref.id)) continue;
+
+        /* Walk containment index up from the declaration claim to its declaring header file (*.h / *.hpp). */
+        HeldUp up;
+        held_up(pg, &h[i].entity, 1, HELD_CONTENT, 256, 2048, &up);
+        for (size_t k = 0; k < up.n && !resolved; k++) {
+            if (!up.node[k].file) continue;
+            char *fname = ooda_file_basename(rd, &up.node[k].id);
+            if (!fname) continue;
+            size_t fl = strlen(fname);
+            int is_hdr = (fl > 2 && !strcmp(fname + fl - 2, ".h")) || (fl > 4 && !strcmp(fname + fl - 4, ".hpp"));
+            if (is_hdr && strstr(src, fname) == NULL) {
+                char inc[320];
+                snprintf(inc, sizeof inc, "#include \"%s\"\n", fname);
+                char *cand = NULL; size_t cand_len = 0;
+                if (lp_ooda_splice(src, len, 0u, 0u, inc, strlen(inc), &cand, &cand_len) == 0) {
+                    if (candidate_is_new_and_valid(cand, cand_len, lang, orig_errors, tried, ntried)) {
+                        *patched_out = cand; *patched_len_out = cand_len;
+                        resolved = 1;
+                    } else {
+                        free(cand);
+                    }
+                }
+            }
+            free(fname);
+        }
+        held_up_free(&up);
+    }
+    if (!resolved) {
+        /* Header prototypes (e.g. extern/API functions) live in containment even without a function_definition body. */
+        HeldUp up;
+        held_up(pg, &sym_ref.id, 1, HELD_CONTENT, 256, 4096, &up);
+        for (size_t k = 0; k < up.n && !resolved; k++) {
+            if (!up.node[k].file) continue;
+            char *fname = ooda_file_basename(rd, &up.node[k].id);
+            if (!fname) continue;
+            size_t fl = strlen(fname);
+            int is_hdr = (fl > 2 && !strcmp(fname + fl - 2, ".h")) || (fl > 4 && !strcmp(fname + fl - 4, ".hpp"));
+            if (is_hdr && strstr(src, fname) == NULL) {
+                char inc[320];
+                snprintf(inc, sizeof inc, "#include \"%s\"\n", fname);
+                char *cand = NULL; size_t cand_len = 0;
+                if (lp_ooda_splice(src, len, 0u, 0u, inc, strlen(inc), &cand, &cand_len) == 0) {
+                    if (candidate_is_new_and_valid(cand, cand_len, lang, orig_errors, tried, ntried)) {
+                        *patched_out = cand; *patched_len_out = cand_len;
+                        resolved = 1;
+                    } else {
+                        free(cand);
+                    }
+                }
+            }
+            free(fname);
+        }
+        held_up_free(&up);
+    }
+    reader_free(rd);
+    holds_free(h, nh);
+    return resolved ? 0 : 1;
 }
 
 /* Synthesize minimal targeted AST/scope/substrate patch Δ guided by loss_contrast culprit + CST + substrate. */
@@ -530,6 +636,11 @@ static int synthesize_delta(PGconn *pg, Firmware *fw, const char *prompt, const 
                     }
                     free(cand);
                 }
+            }
+            if (pg && substrate_ast_resolve_symbol(pg, lang, src, len, span_names[i], orig_errors,
+                                                   tried, ntried, patched_out, patched_len_out) == 0) {
+                ts_tree_delete(tree);
+                return 0;
             }
         }
         ts_tree_delete(tree);
@@ -681,8 +792,9 @@ int lp_ooda_run(const LpOodaRequest *req, LpOodaResult *out){
             return 0;
         }
 
-        /* Causal localization via microsecond salience_of(loss_contrast) + error line alignment */
+        /* Causal localization via microsecond salience_of(loss_contrast), aligned with verifier error line. */
         uint32_t cul_sb = 0, cul_eb = 0; double best_lc = -1.0; lp_id cul_id = { 0 };
+        double *node_lc = nast > 0 ? calloc(nast, sizeof(double)) : NULL;
         if (pg && nast > 0) {
             lp_id *aids = malloc(sizeof(lp_id) * nast);
             for (size_t k = 0; k < nast; k++) aids[k] = ast[k].id;
@@ -690,10 +802,13 @@ int lp_ooda_run(const LpOodaRequest *req, LpOodaResult *out){
             LpSalienceRow *sal = salience_of(pg, aids, (int)nast, NULL, 0, &nsal);
             for (int r = 0; r < nsal; r++) {
                 double score = sal[r].loss_contrast;
-                if (sal[r].ord >= 1 && (size_t)sal[r].ord <= nast && score > best_lc) {
+                if (sal[r].ord >= 1 && (size_t)sal[r].ord <= nast) {
                     size_t idx = (size_t)sal[r].ord - 1;
-                    best_lc = score; cul_id = sal[r].id;
-                    cul_sb = as[idx]; cul_eb = ae[idx];
+                    node_lc[idx] = score;
+                    if (score > best_lc) {
+                        best_lc = score; cul_id = sal[r].id;
+                        cul_sb = as[idx]; cul_eb = ae[idx];
+                    }
                 }
             }
             free(sal); free(aids);
@@ -702,10 +817,20 @@ int lp_ooda_run(const LpOodaRequest *req, LpOodaResult *out){
         if (err_line > 0 && nast > 0) {
             uint32_t lsb = 0, leb = 0;
             line_byte_range(cur_src, cur_len, err_line, &lsb, &leb);
+            double line_best_lc = -2.0;
+            int line_pick = -1;
             for (size_t k = 0; k < nast; k++) {
-                if (as[k] >= lsb && ae[k] <= leb) { cul_id = ast[k].id; cul_sb = as[k]; cul_eb = ae[k]; break; }
+                if (as[k] >= lsb && ae[k] <= leb) {
+                    double lc = node_lc ? node_lc[k] : 0.0;
+                    if (line_pick < 0 || lc > line_best_lc) { line_best_lc = lc; line_pick = (int)k; }
+                }
+            }
+            if (line_pick >= 0 && (best_lc <= 0.0 || line_best_lc >= best_lc * 0.5)) {
+                cul_id = ast[line_pick].id; cul_sb = as[line_pick]; cul_eb = ae[line_pick];
+                if (line_best_lc > best_lc) best_lc = line_best_lc;
             }
         }
+        free(node_lc);
         out->culprit_id = cul_id;
         out->culprit_contrast = best_lc > 0.0 ? best_lc : 0.0;
         out->culprit_start = cul_sb;

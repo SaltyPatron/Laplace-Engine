@@ -41,7 +41,8 @@ for pull
   salience 0.10
   multitier on
   combine on
-  refuse predicate BNC PENN GF PT NER WSL Target Other Sent Verb Noun Adj Prep Adv UPOS XPOS DEPREL FEATS MISC LEMMA type n f itype "identifier vocabulary" "pronunciation of a form" "variety of language"
+  refuse predicate BNC PENN GF PT NER WSL Target Other Sent Verb Noun Adj Prep Adv UPOS XPOS DEPREL FEATS MISC LEMMA type n f itype "identifier vocabulary" "pronunciation of a form" "variety of language" "referenced identifier" "declared identifier" "implemented by" "parameter signature" "declaration signature" "declared members"
+  lateral hypernym instance_hypernym hyponym instance_hyponym mero_part holo_part mero_member holo_member mero_substance holo_substance derivation pertainym antonym similar also attribute domain_topic has_domain_topic domain_region has_domain_region exemplifies is_exemplified_by "a description of the tag or subtag in the record" other "example usage"
   negate not no never without neither nor
   negate_relation antonym excludes contradicts
   scope_stop . ; : ? ! ,

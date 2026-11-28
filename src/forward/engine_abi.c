@@ -235,14 +235,16 @@ int32_t lp_engine_turn(LpEngineHandle *h, const LpEngineTurnRequest *req, LpEngi
         return 2;
     }
 
-    char *combined_prompt = NULL;
-    const char *eff_prompt = raw_prompt;
-    if (sys_prefix && *sys_prefix && strlen(raw_prompt) < 128) {
-        size_t sl = strlen(sys_prefix), pl = strlen(raw_prompt);
-        combined_prompt = malloc(sl + pl + 4);
-        snprintf(combined_prompt, sl + pl + 4, "%s %s", sys_prefix, raw_prompt);
-        eff_prompt = combined_prompt;
+    if (sys_prefix && *sys_prefix && ndisc < MAXOCC) {
+        size_t got = 0;
+        lp_id tmp[64];
+        text_occurrences(CTX[0], (const uint8_t *)sys_prefix, strlen(sys_prefix), tmp, 64, &got);
+        for (size_t k = 0; k < got && k < 64 && ndisc < MAXOCC; k++) {
+            if (lp_tier0_codepoint(T0, &tmp[k]) < 0) disc[ndisc++] = tmp[k];
+        }
     }
+    const char *eff_prompt = raw_prompt;
+    char *combined_prompt = NULL;
 
     lp_envelope env = req->envelope ? *req->envelope : lp_envelope_preset(LP_ENVELOPE_STANDARD);
     if (req->max_tokens > 0 && (env.max_tokens_out == 0 || (uint32_t)req->max_tokens < env.max_tokens_out))
@@ -282,7 +284,8 @@ int32_t lp_engine_turn(LpEngineHandle *h, const LpEngineTurnRequest *req, LpEngi
         .discourse = ndisc > 0 ? disc : NULL,
         .ndiscourse = ndisc,
         .on_step = collect_turn_step,
-        .on_step_ctx = &steps_col
+        .on_step_ctx = &steps_col,
+        .trace_out = getenv("LAPLACE_ABI_TRACE") ? stderr : NULL
     };
     LpForwardResult fres = { 0 };
     int rc = lp_forward_execute(&freq, &fres);
@@ -393,6 +396,8 @@ int32_t lp_engine_chess_play(LpEngineHandle *h, const LpEngineChessRequest *req,
     return rc;
 }
 
+int lp_engine_mold_execute(PGconn *pg, const LpEngineMoldRequest *req, LpEngineMoldResponse *out);
+
 int32_t lp_engine_mold_checkpoint(LpEngineHandle *h, const LpEngineMoldRequest *req, LpEngineMoldResponse *out){
     if (!req || !out || !req->out_path || !*req->out_path) return 2;
     memset(out, 0, sizeof *out);
@@ -408,182 +413,16 @@ int32_t lp_engine_mold_checkpoint(LpEngineHandle *h, const LpEngineMoldRequest *
         return 2;
     }
 
-    uint32_t max_vocab = req->max_vocab ? req->max_vocab : 1024u;
-    if (max_vocab < 16u) max_vocab = 16u;
-    uint32_t hidden_dim = req->hidden_dim >= 16u ? req->hidden_dim : 64u;
-    uint32_t n_layers = req->n_layers ? req->n_layers : 4u;
-    uint32_t n_heads = req->n_heads ? req->n_heads : 4u;
-    uint32_t n_kv_heads = req->n_kv_heads ? req->n_kv_heads : n_heads;
-    if ((n_heads % n_kv_heads) != 0) {
-        out->status_code = 2;
-        snprintf(out->error, sizeof out->error, "n_heads (%u) must be divisible by n_kv_heads (%u)", n_heads, n_kv_heads);
-        return 2;
-    }
-    uint32_t ffn_dim = req->ffn_dim ? req->ffn_dim : (hidden_dim * 4u);
-
-    lp_idmap *vmap = lp_idmap_new();
-    size_t seeded_count = (max_vocab >= 320u) ? 259u : 3u;
-    char **seeded_strs = calloc(seeded_count, sizeof(char *));
-    const lp_tier0_record *t0_seed = T0 ? T0 : lp_tier0_map(NULL);
-    lp_text *tx_seed = t0_seed ? lp_text_new(t0_seed) : NULL;
-    for (size_t si = 0; si < seeded_count; si++) {
-        char buf[16];
-        if (si == 0) snprintf(buf, sizeof buf, "<unk>");
-        else if (si == 1) snprintf(buf, sizeof buf, "<s>");
-        else if (si == 2) snprintf(buf, sizeof buf, "</s>");
-        else snprintf(buf, sizeof buf, "<0x%02X>", (unsigned)(si - 3u));
-        seeded_strs[si] = strdup(buf);
-        lp_id sid;
-        if (tx_seed) {
-            lp_ref sr = lp_text_decompose(tx_seed, (const uint8_t *)buf, strlen(buf), NULL, NULL);
-            sid = sr.id;
-        } else {
-            memset(&sid, 0, sizeof sid);
-            sid.b[0] = (uint8_t)(si & 0xFFu);
-            sid.b[1] = (uint8_t)(((si >> 8) & 0x7Fu) | 0x80u);
-        }
-        lp_idmap_put(vmap, &sid, NULL);
-    }
-    if (tx_seed) lp_text_free(tx_seed);
-
-    size_t cap_e = (size_t)max_vocab * 4u, n_edges = 0;
-    if (cap_e < 512u) cap_e = 512u;
-    int *rows = malloc(sizeof(int) * cap_e);
-    int *cols = malloc(sizeof(int) * cap_e);
-    double *weights = malloc(sizeof(double) * cap_e);
-    char **wlabels = malloc(sizeof(char *) * cap_e);
-
+    int rc = 1;
     if (h) {
         pthread_mutex_lock(&h->mu);
         PGconn *pg = ensure_pg_locked(h);
-        if (pg) {
-            Args a = { 0 };
-            int32_t row_limit = (int32_t)(max_vocab < 2048u ? max_vocab : 2048u);
-            arg_i32(&a, row_limit);
-            int scoped = (req->authority && req->authority->scoped && req->authority->witnesses && req->authority->nwitnesses > 0);
-            if (scoped) arg_ids(&a, req->authority->witnesses, (size_t)req->authority->nwitnesses);
-            PGresult *q = db_call_try(pg, scoped ? LP_SQL_MOLD_CLAIMS_SCOPED : LP_SQL_MOLD_CLAIMS, &a, out->error, sizeof out->error);
-            args_free(&a);
-            if (q) {
-                int nr = PQntuples(q);
-                for (int r = 0; r < nr && n_edges < cap_e; r++) {
-                    lp_path path = lp_path_of((const uint8_t *)PQgetvalue(q, r, 1), (size_t)PQgetlength(q, r, 1));
-                    lp_rating lr = lp_rating_stock();
-                    lr.rating = col_f64(q, r, 2);
-                    lr.deviation = col_f64(q, r, 3);
-                    double score = lp_confidence(&lr, 2.0);
-                    if (!(score > 0.0)) score = 0.5;
-                    const lp_id *wid = col_id(q, r, 4);
-                    if (path.n < 2) continue;
-                    Ids pts = { 0 };
-                    path_into(&pts, path);
-                    if (pts.n >= 2) {
-                        for (size_t k = 0; k + 1 < pts.n && n_edges < cap_e; k++) {
-                            if (lp_id_eq(&pts.v[k], &pts.v[k + 1])) continue;
-                            if (lp_idmap_find(vmap, &pts.v[k]) < 0 && lp_idmap_count(vmap) >= max_vocab) continue;
-                            size_t i0 = lp_idmap_put(vmap, &pts.v[k], NULL);
-                            if (lp_idmap_find(vmap, &pts.v[k + 1]) < 0 && lp_idmap_count(vmap) >= max_vocab) continue;
-                            size_t i1 = lp_idmap_put(vmap, &pts.v[k + 1], NULL);
-                            rows[n_edges] = (int)i0;
-                            cols[n_edges] = (int)i1;
-                            weights[n_edges] = score;
-                            wlabels[n_edges] = malloc(33);
-                            lp_id_hex(wid, wlabels[n_edges]);
-                            n_edges++;
-                        }
-                    }
-                    lp_vec_free(&pts);
-                    if (lp_idmap_count(vmap) >= max_vocab) break;
-                }
-                PQclear(q);
-            }
-        }
+        rc = lp_engine_mold_execute(pg, req, out);
         pthread_mutex_unlock(&h->mu);
-    }
-
-    /* Realize DB vocabulary tokens or seed deterministic Tier-0 vocabulary when empty */
-    size_t nv = lp_idmap_count(vmap);
-    char **tokens = NULL;
-    lp_id *token_ids = NULL;
-    if (nv > seeded_count && n_edges > 0) {
-        token_ids = malloc(sizeof(lp_id) * nv);
-        tokens = malloc(sizeof(char *) * nv);
-        memcpy(token_ids, lp_idmap_keys(vmap), sizeof(lp_id) * nv);
-        for (size_t i = 0; i < seeded_count && i < nv; i++)
-            tokens[i] = strdup(seeded_strs[i]);
-        if (h) {
-            pthread_mutex_lock(&h->mu);
-            PGconn *pg = ensure_pg_locked(h);
-            Reader *rd = pg ? reader_new(pg) : NULL;
-            if (rd) {
-                for (size_t i = seeded_count; i < nv; i++) reader_want(rd, &token_ids[i]);
-                for (size_t i = seeded_count; i < nv; i++) tokens[i] = reader_text(rd, &token_ids[i], 64);
-                reader_free(rd);
-            } else {
-                for (size_t i = seeded_count; i < nv; i++) { tokens[i] = malloc(33); lp_id_hex(&token_ids[i], tokens[i]); }
-            }
-            pthread_mutex_unlock(&h->mu);
-        } else {
-            for (size_t i = seeded_count; i < nv; i++) { tokens[i] = malloc(33); lp_id_hex(&token_ids[i], tokens[i]); }
-        }
     } else {
-        static const char *FALLBACK[17] = {
-            "<unk>", "<s>", "</s>", "laplace", "salience", "geometry", "manifold", "curve", "witness",
-            "consensus", "token", "merkle", "blake3", "ooda", "verify", "proof", "synthesis"
-        };
-        for (size_t i = 0; i < n_edges; i++) free(wlabels[i]);
-        nv = 17; n_edges = 0;
-        tokens = malloc(sizeof(char *) * nv);
-        for (size_t i = 0; i < nv; i++) tokens[i] = strdup(FALLBACK[i]);
-        for (size_t i = 3; i + 1 < nv && n_edges < cap_e; i++) {
-            rows[n_edges] = (int)i;
-            cols[n_edges] = (int)(i + 1);
-            weights[n_edges] = 1.0;
-            wlabels[n_edges] = strdup("laplace-seed");
-            n_edges++;
-        }
+        out->status_code = 1;
+        snprintf(out->error, sizeof out->error, "mold export requires initialized engine handle with PostgreSQL substrate");
     }
-    for (size_t si = 0; si < seeded_count; si++) free(seeded_strs[si]);
-    free(seeded_strs);
-    lp_idmap_free(vmap);
-
-    LpMoldSpec spec = {
-        .name = (req->model_name && *req->model_name) ? req->model_name : "laplace-molded",
-        .out_path = req->out_path,
-        .n_vocab = nv,
-        .tokens = (const char **)tokens,
-        .token_ids = token_ids,
-        .bos_id = 1,
-        .eos_id = nv > 2 ? 2 : 0,
-        .n_edges = n_edges,
-        .rows = rows,
-        .cols = cols,
-        .weights = weights,
-        .edge_witnesses = (const char **)wlabels,
-        .hidden_dim = hidden_dim,
-        .n_layers = n_layers,
-        .n_heads = n_heads,
-        .n_kv_heads = n_kv_heads,
-        .ffn_dim = ffn_dim,
-        .rms_eps = 1e-5,
-        .rope_base = 10000.0,
-        .f16_weights = req->f16_weights,
-        .format = req->format,
-        .tied_embeddings = req->tied_embeddings ? 1 : 0
-    };
-
-    int rc = lp_mold_export(&spec);
-    for (size_t i = 0; i < nv; i++) free(tokens[i]);
-    for (size_t i = 0; i < n_edges; i++) free(wlabels[i]);
-    free(tokens); free(token_ids); free(rows); free(cols); free(weights); free(wlabels);
-
-    out->status_code = rc;
-    out->n_vocab = (uint32_t)nv;
-    out->n_edges = (uint32_t)n_edges;
-    out->hidden_dim = hidden_dim;
-    out->raw_weight_bytes_retained = 0;
-    snprintf(out->out_path, sizeof out->out_path, "%s", req->out_path);
-    if (rc) snprintf(out->error, sizeof out->error, "lp_mold_export failed (rc=%d)", rc);
     return rc;
 }
 

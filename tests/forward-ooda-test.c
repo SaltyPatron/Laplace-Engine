@@ -1,4 +1,5 @@
 #include "forward/query.h"
+#include "forward/program_internal.h"
 #include "forward/ooda.h"
 #include "forward/engine_abi.h"
 #include "chess/chess_rules.h"
@@ -292,17 +293,13 @@ static void test_abi_dll_offline(const AbiVtable *abi){
     snprintf(gguf_path, sizeof gguf_path, "laplace_abi_mold_tmp.gguf");
     LpEngineMoldRequest mreq = { .out_path = gguf_path, .model_name = "abi-test", .hidden_dim = 32, .n_layers = 2, .n_heads = 4 };
     LpEngineMoldResponse mres = { 0 };
-    assert(abi->mold_checkpoint(h, &mreq, &mres) == 0);
-    assert(mres.raw_weight_bytes_retained == 0 && mres.n_vocab >= 16);
-    FILE *gf = fopen(gguf_path, "rb");
-    assert(gf != NULL);
-    char magic[4] = { 0 };
-    assert(fread(magic, 1, 4, gf) == 4 && !memcmp(magic, "GGUF", 4));
-    fclose(gf);
+    /* Offline mold_checkpoint with zero substrate claims must fail loud instead of fabricating fake vocabularies. */
+    assert(abi->mold_checkpoint(h, &mreq, &mres) != 0);
+    assert(mres.status_code != 0 && mres.error[0] != '\0');
     remove(gguf_path);
 
     abi->free_fn(h);
-    printf("[PASS] Shared ABI DLL dynamic load + authority preflight + chess + mold GGUF verified offline\n");
+    printf("[PASS] Shared ABI DLL dynamic load + authority preflight + chess + fail-loud offline mold verified\n");
 }
 
 static void build_test_witness_file(File *f, const char *witness_name, const Ref (*triples)[4], const int *np, int nclaims,
@@ -354,6 +351,10 @@ static void cleanup_test_witnesses(PGconn *pg, const char *const *names, size_t 
         arg_null(&fa);
         PGresult *q = db_call(pg, LP_SQL_FORGET_WITNESSES, &fa);
         args_free(&fa); PQclear(q);
+        Args sa = { 0 };
+        arg_null(&sa);
+        PGresult *sq = db_call(pg, LP_SQL_SWEEP_ORPHANS, &sa);
+        args_free(&sa); PQclear(sq);
         db_tx(pg, LP_SQL_TX_COMMIT);
     }
     free(ids); free(records);
@@ -388,8 +389,8 @@ static void test_live_db(const AbiVtable *abi){
     }
     printf("[INFO] Connected to live DB (%s)\n", conninfo);
 
-    static const char *CLEAN_NAMES[4] = { "test-2c-red", "test-2c-blue", "test-2c-icx", "ooda-monologue" };
-    cleanup_test_witnesses(pg, CLEAN_NAMES, 4);
+    static const char *CLEAN_NAMES[5] = { "test-2c-red", "test-2c-blue", "test-2c-icx", "ooda-monologue", "test-2c-chess" };
+    cleanup_test_witnesses(pg, CLEAN_NAMES, 5);
 
     Ref r_light = text_ref(CTX[0], (const uint8_t *)"lightning", 9);
     Ref r_is    = text_ref(CTX[0], (const uint8_t *)"is", 2);
@@ -567,14 +568,16 @@ static void test_live_db(const AbiVtable *abi){
         printf("[PASS] Non-muted polysemous turn produced non-empty response under deductive firmware\n");
     }
 
-    /* Refused metadata labels (Synset/vaframe) must not win under deductive firmware on real query */
+    /* Refused metadata labels (Synset/vaframe) and ungrounded winners must not win under deductive firmware on real query */
     {
         LpEngineTurnRequest tr = { .model_name = "deductive", .prompt = "How does lightning work?", .read_only = 1, .envelope = &fast_env };
         LpEngineTurnResponse resp = { 0 };
         assert(abi->turn(h, &tr, &resp) == 0);
         assert(resp.text && resp.text_len > 0);
         assert(strstr(resp.text, "Synset") == NULL && strstr(resp.text, "vaframe") == NULL);
-        printf("[PASS] Live deductive turn filtered metadata labels (probes=%llu, wall=%.2f ms, text=\"%s\")\n",
+        assert(strstr(resp.text, "Honi") == NULL);
+        assert(strstr(resp.text, "discharge") != NULL || strstr(resp.text, "light") != NULL);
+        printf("[PASS] Live deductive turn grounded & filtered metadata labels (probes=%llu, wall=%.2f ms, text=\"%s\")\n",
                (unsigned long long)resp.work.db_probes, (double)resp.work.wall_us / 1000.0, resp.text);
         abi->turn_free(&resp);
     }
@@ -663,13 +666,71 @@ static void test_live_db(const AbiVtable *abi){
             lp_ooda_result_free(&bres);
             remove(bad_c);
             printf("[PASS] Closed-loop OODA explicit WHY_NOT residual verified\n");
+
+            /* Live substrate AST workspace-code header discovery (#include "engine_abi.h") */
+            {
+                const char *sub_c = "laplace_ooda_sub_ast_tmp.c";
+                FILE *asf = fopen(sub_c, "wb");
+                assert(asf != NULL);
+                const char *need_hdr = "void *probe_fn(void) { LpEngineHandle *h = lp_engine_init(0, 0, 0); return h; }\n";
+                fwrite(need_hdr, 1, strlen(need_hdr), asf);
+                fclose(asf);
+
+                char inc_fwd[4300], inc_nat[4300], icx_sub_cmd[8800];
+                snprintf(inc_fwd, sizeof inc_fwd, "%s/../src/forward", laplace_recipes());
+                snprintf(inc_nat, sizeof inc_nat, "%s/../../Laplace-Native/include", laplace_recipes());
+                os_slashes(inc_fwd); os_slashes(inc_nat);
+                snprintf(icx_sub_cmd, sizeof icx_sub_cmd, "\"%s\" -fsyntax-only \"-I%s\" \"-I%s\" %s",
+                         has_icx ? icx_exe : "icx", inc_fwd, inc_nat, sub_c);
+
+                LpOodaRequest areq = {
+                    .conninfo = conninfo, .pg = pg, .fw = &cfw,
+                    .code_path = sub_c, .lang = "c",
+                    .verify_cmd = icx_sub_cmd,
+                    .witness_name = "test-2c-icx",
+                    .max_rounds = 3, .write_file = 0, .read_only = 1
+                };
+                LpOodaResult ares = { 0 };
+                int arc = lp_ooda_run(&areq, &ares);
+                if (arc == 0 && ares.verified == 1 && ares.patched_code && strstr(ares.patched_code, "engine_abi.h") != NULL) {
+                    printf("[PASS] Closed-loop OODA live workspace-code AST header discovery (#include \"engine_abi.h\") verified\n");
+                } else {
+                    /* Fail loud if workspace-code was ingested (LpEngineHandle exists in substrate) */
+                    lp_id sym = text_ref(CTX[0], (const uint8_t *)"LpEngineHandle", 14).id;
+                    int nh = 0;
+                    Hold *hh = holds_capped_scoped(pg, &sym, 1, 8, 1, 3, NULL, 0, 0, NULL, &nh);
+                    holds_free(hh, nh);
+                    if (nh > 0) {
+                        fprintf(stderr, "[FAIL] workspace-code present (nh=%d) but OODA AST header repair failed: arc=%d verified=%d disp=%s\n",
+                                nh, arc, ares.verified, ares.disposition);
+                        assert(arc == 0 && ares.verified == 1);
+                    } else {
+                        printf("[SKIP] OODA workspace-code AST header discovery skipped (workspace-code not ingested)\n");
+                    }
+                }
+                lp_ooda_result_free(&ares);
+                remove(sub_c);
+            }
         }
         free(pout);
         remove(tmp_c);
     }
 
-    /* Live substrate chess trajectory + standings COUPLE probe & fail-closed empty scope check */
+    /* Live substrate chess trajectory + game-altitude standings COUPLE probe, pure substrate mode (eval_scale=0), & fail-closed empty scope check */
     {
+        /* Seed one Wave 2B game-altitude chess trajectory [P0..P4] via real cmd_witness so this test is 100% self-contained even on an empty DB. */
+        extern int cmd_witness(int argc, char **argv);
+        char pgn_path[512];
+        const char *tmp = getenv("TEMP"); if (!tmp || !*tmp) tmp = getenv("TMPDIR"); if (!tmp || !*tmp) tmp = "/tmp";
+        snprintf(pgn_path, sizeof pgn_path, "%s/laplace_test_2c_chess.pgn", tmp);
+        FILE *pf = fopen(pgn_path, "wb");
+        assert(pf != NULL);
+        fputs("[Event \"Test2C\"]\n[Site \"Local\"]\n[Date \"2026.11.27\"]\n[Round \"1\"]\n[White \"A\"]\n[Black \"B\"]\n[Result \"1-0\"]\n\n1. e4 e5 2. Nf3 Nc6 1-0\n", pf);
+        fclose(pf);
+        char *wav[10] = { "witness", "-d", (char *)conninfo, "--as", "test-2c-chess", "--class", "StructuredCorpus", pgn_path, NULL };
+        assert(cmd_witness(8, wav) == 0);
+        remove(pgn_path);
+
         const char *start_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
         LpChessSearchPolicy spol = {
             .max_depth = 3, .quiesce_depth = 2, .max_nodes = 20000,
@@ -680,6 +741,14 @@ static void test_live_db(const AbiVtable *abi){
         assert(sres.best_uci[0] != 0 && sres.db_probes >= 2);
         printf("[PASS] Live substrate chess search (probes=%llu, best=%s, src=%s, nodes=%llu)\n",
                (unsigned long long)sres.db_probes, sres.best_uci, sres.source, (unsigned long long)sres.nodes_searched);
+
+        LpChessSearchPolicy spol_pure = spol;
+        spol_pure.eval_scale = 0.0;
+        LpChessSearchResult sres_pure = { 0 };
+        assert(lp_chess_search(pg, start_fen, "Standard", NULL, 0, 0, &spol_pure, &sres_pure) == 0);
+        assert(sres_pure.best_uci[0] != 0 && sres_pure.db_probes >= 2 && sres_pure.from_book == 1 && sres_pure.score_cp != 0);
+        printf("[PASS] Live PURE substrate chess search (eval_scale=0.0, zero MAT[7]: probes=%llu, best=%s, cp=%d, src=%s)\n",
+               (unsigned long long)sres_pure.db_probes, sres_pure.best_uci, sres_pure.score_cp, sres_pure.source);
 
         LpChessSearchResult scoped_empty = { 0 };
         assert(lp_chess_search(pg, start_fen, "Standard", NULL, 0, 1, &spol, &scoped_empty) == 0);
@@ -712,10 +781,17 @@ static void test_live_db(const AbiVtable *abi){
         abi->turn_free(&nresp);
     }
 
-    cleanup_test_witnesses(pg, CLEAN_NAMES, 4);
+    cleanup_test_witnesses(pg, CLEAN_NAMES, 5);
 
     /* Regression: OpenAI messages[] STANDARD budget + direct_support gloss ranking (#31 / converse parity) */
     {
+        lp_id w_hound = text_ref(CTX[0], (const uint8_t *)"hound", 5).id;
+        int nhound = 0;
+        Hold *hhound = holds_capped_scoped(pg, &w_hound, 1, 4, 1, 1, NULL, 0, 0, NULL, &nhound);
+        holds_free(hhound, nhound);
+        if (nhound == 0) {
+            printf("[SKIP] Populated-corpus hound/wolf/mold regressions skipped (lexical corpus not yet seeded)\n");
+        } else {
         lp_envelope std_env = lp_envelope_preset(LP_ENVELOPE_STANDARD);
         const LpEngineChatMessage hound_msgs[1] = { { .role = "user", .content = "what is a hound" } };
         LpEngineTurnRequest htr = {
@@ -768,11 +844,140 @@ static void test_live_db(const AbiVtable *abi){
                    (int)ENVS[ei], (double)lresp.work.wall_us / 1000.0, lresp.text);
             abi->turn_free(&lresp);
         }
+
+        /* Multi-clause compositional synthesis across 2 anchors with stateful RECOUPLE */
+        {
+            const LpEngineChatMessage cmp_msgs[1] = { { .role = "user", .content = "Compare a hound and a wolf" } };
+            LpEngineTurnRequest ctr = {
+                .model_name = "program",
+                .messages = cmp_msgs,
+                .nmessages = 1,
+                .read_only = 1,
+                .envelope = &std_env
+            };
+            LpEngineTurnResponse cresp = { 0 };
+            int crc = abi->turn(h, &ctr, &cresp);
+            int has_wolf = cresp.text && (strstr(cresp.text, "wolf") != NULL || strstr(cresp.text, "canine") != NULL || strstr(cresp.text, "packs") != NULL);
+            int has_hound = cresp.text && (strstr(cresp.text, "hound") != NULL || strstr(cresp.text, "dog") != NULL || strstr(cresp.text, "hunting") != NULL);
+            if (crc != 0 || !has_wolf || !has_hound) {
+                fprintf(stderr, "[DIAG] compare hound/wolf crc=%d disp=\"%s\" text=\"%s\"\n",
+                        crc, cresp.disposition, cresp.text ? cresp.text : "");
+            }
+            assert(crc == 0 && has_wolf && has_hound);
+            printf("[PASS] Live multi-clause compositional synthesis (hound+wolf, wall=%.2f ms, text=\"%s\")\n",
+                   (double)cresp.work.wall_us / 1000.0, cresp.text);
+            abi->turn_free(&cresp);
+        }
+
+        /* Live Mold-a-Model GGUF + SafeTensors synthesis against populated PostgreSQL 18 */
+        {
+            const char *keep_gguf = getenv("LAPLACE_KEEP_MOLD_GGUF");
+            const char *keep_st = getenv("LAPLACE_KEEP_MOLD_SAFETENSORS");
+            const char *gguf_out = (keep_gguf && *keep_gguf) ? keep_gguf : "laplace_live_mold_tmp.gguf";
+            const char *st_out = (keep_st && *keep_st) ? keep_st : "laplace_live_mold_tmp.safetensors";
+            const char *recipe_json =
+                "{\"name\":\"laplace-live-mold\","
+                "\"hidden_size\":64,\"num_layers\":2,\"intermediate_size\":128,\"tie_embeddings\":false,"
+                "\"vocab\":{\"size\":384,\"hops\":2,\"fanout\":32,\"seeds\":[\"lightning\",\"hound\",\"wolf\"]},"
+                "\"layers\":["
+                "  {\"heads\":[{\"op\":\"trajectory\"},{\"op\":\"relation\",\"type\":\"hypernym\"},{\"op\":\"metric\",\"metric\":\"angular\"},{\"op\":\"unary\"}],\"ffn\":{\"op\":\"unary\"}},"
+                "  {\"heads\":[{\"op\":\"trajectory\"},{\"op\":\"relation\",\"type\":\"*\"},{\"op\":\"metric\",\"metric\":\"frechet\"},{\"op\":\"unary\"}],\"ffn\":{\"op\":\"trajectory\"}}"
+                "],"
+                "\"lm_head\":{\"op\":\"trajectory\",\"scoring\":\"weighted\"}}";
+
+            LpEngineMoldRequest g_req = {
+                .out_path = gguf_out, .model_name = "laplace-live-mold",
+                .max_vocab = 384, .hidden_dim = 64, .n_layers = 2, .n_heads = 4, .n_kv_heads = 4, .ffn_dim = 128,
+                .f16_weights = 0, .format = 0, .tied_embeddings = 0, .recipe_json = recipe_json
+            };
+            LpEngineMoldResponse g_res = { 0 };
+            int grc = abi->mold_checkpoint(h, &g_req, &g_res);
+            if (grc != 0) fprintf(stderr, "[DIAG] live GGUF mold failed: rc=%d status=%d err=%s\n", grc, g_res.status_code, g_res.error);
+            assert(grc == 0 && g_res.status_code == 0 && g_res.raw_weight_bytes_retained == 0 && g_res.n_vocab > 8 && g_res.n_edges > 0);
+            assert(os_exists(gguf_out));
+            printf("[PASS] Live Mold-a-Model GGUF verified (vocab=%u, edges=%u, dim=%u, raw_retained=%llu, out=%s)\n",
+                   g_res.n_vocab, g_res.n_edges, g_res.hidden_dim, (unsigned long long)g_res.raw_weight_bytes_retained, gguf_out);
+
+            LpEngineMoldRequest s_req = g_req;
+            s_req.out_path = st_out;
+            s_req.format = 1;
+            LpEngineMoldResponse s_res = { 0 };
+            int src = abi->mold_checkpoint(h, &s_req, &s_res);
+            if (src != 0) fprintf(stderr, "[DIAG] live SafeTensors mold failed: rc=%d status=%d err=%s\n", src, s_res.status_code, s_res.error);
+            assert(src == 0 && s_res.status_code == 0 && s_res.raw_weight_bytes_retained == 0 && s_res.n_vocab > 8 && s_res.n_edges > 0);
+            assert(os_exists(st_out));
+            printf("[PASS] Live Mold-a-Model SafeTensors verified (vocab=%u, edges=%u, dim=%u, raw_retained=%llu, out=%s)\n",
+                   s_res.n_vocab, s_res.n_edges, s_res.hidden_dim, (unsigned long long)s_res.raw_weight_bytes_retained, st_out);
+
+            if (!keep_gguf || !*keep_gguf) remove(gguf_out);
+            if (!keep_st || !*keep_st) remove(st_out);
+        }
+        }
     }
 
     abi->free_fn(h);
-    cleanup_test_witnesses(pg, CLEAN_NAMES, 4);
+    cleanup_test_witnesses(pg, CLEAN_NAMES, 5);
     PQfinish(pg);
+}
+
+static void test_forward_unicode_and_multiclause(void){
+    /* 1. Language-agnostic clause joining: CJK/Japanese must never get bogus Latin spaces or ASCII dots */
+    char *out = calloc(1, 1); size_t outn = 0;
+    lp_program_append_out(&out, &outn, "\xE6\x9D\xB1\xE4\xBA\xAC", 0, 1); /* 東京 */
+    lp_program_append_out(&out, &outn, "\xE4\xBA\xBA\xE5\x8F\xA3", 0, 1); /* 人口 */
+    assert(strcmp(out, "\xE6\x9D\xB1\xE4\xBA\xAC\xE4\xBA\xBA\xE5\x8F\xA3") == 0);
+    free(out);
+
+    /* 2. Unicode terminal punctuation (。) and non-ASCII uppercase (Ü, Р) */
+    out = calloc(1, 1); outn = 0;
+    lp_program_append_out(&out, &outn, "\xE6\x9D\xB1\xE4\xBA\xAC\xE3\x80\x82", 0, 1); /* 東京。 */
+    lp_program_append_out(&out, &outn, "\xE6\x97\xA5\xE6\x9C\xAC", 0, 1);             /* 日本 */
+    assert(strcmp(out, "\xE6\x9D\xB1\xE4\xBA\xAC\xE3\x80\x82\xE6\x97\xA5\xE6\x9C\xAC") == 0);
+    free(out);
+
+    out = calloc(1, 1); outn = 0;
+    lp_program_append_out(&out, &outn, "Paris", 0, 1);
+    lp_program_append_out(&out, &outn, "\xC3\x9C""ber", 0, 1); /* Über */
+    assert(strcmp(out, "Paris. \xC3\x9C""ber") == 0);
+    free(out);
+
+    out = calloc(1, 1); outn = 0;
+    lp_program_append_out(&out, &outn, "\xD0\x9C\xD0\xBE\xD1\x81\xD0\xBA\xD0\xB2\xD0\xB0", 0, 1); /* Москва */
+    lp_program_append_out(&out, &outn, "\xD0\xA0\xD0\xBE\xD1\x81\xD1\x81\xD0\xB8\xD1\x8F", 0, 1); /* Россия */
+    assert(strcmp(out, "\xD0\x9C\xD0\xBE\xD1\x81\xD0\xBA\xD0\xB2\xD0\xB0. \xD0\xA0\xD0\xBE\xD1\x81\xD1\x81\xD0\xB8\xD1\x8F") == 0);
+    free(out);
+
+    /* 3. Full Unicode case-folded & punctuation-trimmed echo detection (accented Latin, Cyrillic, CJK) */
+    const char *p_de = "\xC3\x9C""ber?"; /* Über? */
+    assert(lp_program_is_prompt_echo((const uint8_t *)p_de, strlen(p_de), "\xC3\xBC""ber", 5, 0) == 1);
+    const char *p_ru = "\xD0\x9C\xD0\xBE\xD1\x81\xD0\xBA\xD0\xB2\xD0\xB0!"; /* Москва! */
+    const char *t_ru = "\xD0\xBC\xD0\xBE\xD1\x81\xD0\xBA\xD0\xB2\xD0\xB0";  /* москва */
+    assert(lp_program_is_prompt_echo((const uint8_t *)p_ru, strlen(p_ru), t_ru, strlen(t_ru), 0) == 1);
+    const char *p_ja = "\xE6\x9D\xB1\xE4\xBA\xAC\xEF\xBC\x9F"; /* 東京？ */
+    const char *t_ja = "\xE6\x9D\xB1\xE4\xBA\xAC";             /* 東京 */
+    assert(lp_program_is_prompt_echo((const uint8_t *)p_ja, strlen(p_ja), t_ja, strlen(t_ja), 0) == 1);
+    assert(lp_program_is_prompt_echo((const uint8_t *)"scatter", 7, "cat", 3, 0) == 0);
+
+    /* 4. Multi-anchor combine_clauses must NOT prematurely stop at enough=0.5 while a salient anchor remains open */
+    assert(lp_program_should_stop_enough(0, 1, 1000, 2000, 0.5, 1) == 0);
+    assert(lp_program_should_stop_enough(0, 1, 1000, 2000, 0.5, 0) == 1);
+    assert(lp_program_should_stop_enough(0, 0, 1000, 2000, 0.5, 1) == 1);
+    assert(lp_program_should_stop_enough(1, 1, 0, 2000, 0.5, 0) == 0);
+
+    /* 5. Multi-clause structured claim realization preserves [via, rel, target] without wrapping full sentences */
+    char cbuf[256] = "";
+    assert(lp_program_format_claim_clause("France", "capital", "Paris", cbuf, sizeof cbuf) == 1);
+    assert(strcmp(cbuf, "France (capital): Paris") == 0);
+    assert(lp_program_format_claim_clause("France", "definition", "A country in Europe.", cbuf, sizeof cbuf) == 0);
+    assert(lp_program_format_claim_clause("France", "capital", "Paris is in France", cbuf, sizeof cbuf) == 0);
+
+    /* 6. Firmware lateral directive parsed from program.firmware (no C hardcoding override) */
+    {
+        Firmware pfw = { 0 }; char perr[512] = "";
+        assert(firmware_load_checked("program", FW_PULL, &pfw, perr, sizeof perr) == 0 && perr[0] == 0);
+        assert(pfw.nlateral_relation >= 10);
+    }
+    printf("[PASS] Language-agnostic Unicode realization/echo, firmware lateral, & multi-clause RECOUPLE verified\n");
 }
 
 int main(void){
@@ -783,6 +988,7 @@ int main(void){
     ctx_open(1);
 
     test_firmware_suite();
+    test_forward_unicode_and_multiclause();
     test_astar_heuristic();
     test_witness_attribution();
     test_chess_search_offline();

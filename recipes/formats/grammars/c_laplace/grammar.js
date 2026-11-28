@@ -28,7 +28,7 @@ module.exports = grammar(upstream, {
     va_arg_expression: $ => seq(choice('va_arg', '__builtin_va_arg'), '(',
       field('list', $.expression), ',', field('type', $.type_descriptor), ')'),
     type_qualifier: ($, original) => choice(...original.members,
-      'LP_API', 'LAPLACE_CHESS_API', 'TS_PUBLIC', 'LAPLACE_TIER_TLS', 'PROPERTY_TLS',
+      'LP_API', 'LP_ENGINE_API', 'LAPLACE_CHESS_API', 'TS_PUBLIC', 'LAPLACE_TIER_TLS', 'PROPERTY_TLS',
       'LAPLACE_XML_ERROR_CONST', 'pg_noreturn',
       'DRFLAC_API', 'DRFLAC_DEPRECATED', 'DRFLAC_INLINE', 'DRFLAC_NO_THREAD_SANITIZE',
       'DRMP3_API', 'DRMP3_INLINE', 'DRWAV_API', 'DRWAV_INLINE', 'DRWAV_PRIVATE',

@@ -237,7 +237,12 @@ static void token_id(const char *s, size_t sl, int do_ingest, lp_id *out, Ref *r
 
 static char *decode_vocab_piece(const char *s, size_t L){
     char *o = malloc(L + 1u), *q = o;
-    for (size_t k = 0; k < L; ) {
+    size_t k = 0;
+    /* Strip leading SentencePiece ▁ (U+2581) or GPT-2 BPE Ġ (U+0120) word-boundary markers when followed by content
+     * so assimilated vocab tokens collide on the exact canonical BLAKE3 entity ID of WordNet/Wikipedia/other models. */
+    if (L > 3 && (unsigned char)s[0] == 0xE2 && (unsigned char)s[1] == 0x96 && (unsigned char)s[2] == 0x81) k = 3;
+    else if (L > 2 && (unsigned char)s[0] == 0xC4 && (unsigned char)s[1] == 0xA0) k = 2;
+    for (; k < L; ) {
         if (k + 2 < L && (unsigned char)s[k] == 0xE2 && (unsigned char)s[k + 1] == 0x96 && (unsigned char)s[k + 2] == 0x81) { *q++ = ' '; k += 3; }
         else if (k + 1 < L && (unsigned char)s[k] == 0xC4 && (unsigned char)s[k + 1] == 0xA0) { *q++ = ' '; k += 2; }
         else if (k + 1 < L && (unsigned char)s[k] == 0xC4 && (unsigned char)s[k + 1] == 0x8A) { *q++ = '\n'; k += 2; }
@@ -369,11 +374,24 @@ static void push_export_edge(ExportEdges *ee, int r, int c, double w){
     ee->n++;
 }
 
+static const char *canonical_circuit_relation(const char *cname){
+    if (!cname) return "cooccurs";
+    if (strstr(cname, ".qk") || strstr(cname, "qk")) return "attends";
+    if (strstr(cname, ".ov") || strstr(cname, "ov")) return "projects";
+    if (strstr(cname, ".ffn") || strstr(cname, "ffn")) return "transforms";
+    if (!strcmp(cname, "U") || !strcmp(cname, "lm_head") || strstr(cname, "head")) return "predicts";
+    return "cooccurs";
+}
+
 static Ref record_circuit_polarity(File *mf, const char *cname,
                                    const lp_rowsig_hit *pos, size_t npos,
                                    const lp_rowsig_hit *neg, size_t nneg,
                                    float zmin, ExportEdges *ee){
-    Ref rel = text_ref(CTX[0], (const uint8_t *)cname, strlen(cname));
+    /* Architecture-agnostic semantic relation inside the claim triple so heterogeneous models converge in Round Table
+     * Glicko-2 consensus; layer/head coordinates live strictly as metadata on the enclosing provenance record. */
+    const char *sem_rel = canonical_circuit_relation(cname);
+    Ref rel = text_ref(CTX[0], (const uint8_t *)sem_rel, strlen(sem_rel));
+    Ref prov = text_ref(CTX[0], (const uint8_t *)cname, strlen(cname));
     size_t total = npos + nneg;
     Ref *claims = malloc(sizeof(Ref) * (total ? total : 1u)); size_t nc = 0;
     for (int side = 0; side < 2; side++) {
@@ -402,7 +420,12 @@ static Ref record_circuit_polarity(File *mf, const char *cname,
             claims[nc++] = cl;
         }
     }
-    Ref out = (mf && nc) ? said_record(blocks_of(claims, nc)) : rel;
+    Ref out = prov;
+    if (mf && nc) {
+        Ref blk = blocks_of(claims, nc);
+        Ref rec[2] = { said_metadata(prov), blk };
+        out = said_record(compose(rec, 2, ref_above(rec, 2)));
+    }
     free(claims);
     return out;
 }
@@ -548,7 +571,8 @@ int cmd_model(int argc, char **argv){
     ExportEdges *eep = export_path ? &ee : NULL;
     File *mfp = do_ingest ? &mf : NULL;
 
-    float *X = malloc(sizeof(float) * NT * D), *Ug = malloc(sizeof(float) * NT * D);
+    float *X = malloc(sizeof(float) * NT * D), *H = malloc(sizeof(float) * NT * D), *Ug = malloc(sizeof(float) * NT * D);
+    memcpy(H, E, sizeof(float) * NT * D);
     #pragma omp parallel for
     for (size_t i = 0; i < NT; i++) for (size_t k = 0; k < D; k++) Ug[i * D + k] = U[i * D + k] * gf[k];
 
@@ -571,12 +595,11 @@ int cmd_model(int argc, char **argv){
 
     float *Q = malloc(sizeof(float) * NT * D), *K = malloc(sizeof(float) * NT * NKV * HD), *Vv = malloc(sizeof(float) * NT * NKV * HD);
     float *Ah = malloc(sizeof(float) * NT * HD), *Bh = malloc(sizeof(float) * NT * HD), *Mh = malloc(sizeof(float) * NT * HD);
-    float *Wo_h = malloc(sizeof(float) * D * HD), *WdT = malloc(sizeof(float) * FF * D);
-    lp_rowsig_hit *fh = malloc(sizeof(lp_rowsig_hit) * FF * cap);
+    float *Wo_h = malloc(sizeof(float) * D * HD), *Vfull = malloc(sizeof(float) * NT * D);
     for (int L = 0; L < layers; L++) {
         char nm[256], cname[64]; double tl = now();
         snprintf(nm, sizeof nm, "model.layers.%d.input_layernorm.weight", L); Tensor tg = ckpt_get(&ckpt, nm); float *g = decode_f32(&tg);
-        rmsnorm_rows(E, X, NT, D, g, eps); free(g);
+        rmsnorm_rows(H, X, NT, D, g, eps); free(g);
         snprintf(nm, sizeof nm, "model.layers.%d.self_attn.q_proj.weight", L); Tensor tq = ckpt_get(&ckpt, nm); float *Wq = decode_f32(&tq);
         snprintf(nm, sizeof nm, "model.layers.%d.self_attn.k_proj.weight", L); Tensor tk = ckpt_get(&ckpt, nm); float *Wk = decode_f32(&tk);
         snprintf(nm, sizeof nm, "model.layers.%d.self_attn.v_proj.weight", L); Tensor tv = ckpt_get(&ckpt, nm); float *Wv = decode_f32(&tv);
@@ -604,7 +627,13 @@ int cmd_model(int argc, char **argv){
                 Ref r = record_circuit_polarity(mfp, cname, hits, nh, nhits, nneg, zmin, eep);
                 if (do_ingest) crecs[ncrecs++] = r;
             }
+            /* Expand GQA value heads for residual stream propagation H += (V * W_o^T). */
+            #pragma omp parallel for
+            for (size_t i = 0; i < NT; i++) memcpy(Vfull + i * D + h * HD, Ah + i * HD, HD * sizeof(float));
         }
+        mm_abt(Vfull, Wo, Q, NT, D, D);
+        #pragma omp parallel for
+        for (size_t i = 0; i < NT * D; i++) H[i] += Q[i];
         FLOPS_TOTAL += fq + fo; SECS_TOTAL += sq + so;
         free(Wq); free(Wk); free(Wv); free(Wo);
 
@@ -614,28 +643,29 @@ int cmd_model(int argc, char **argv){
         snprintf(ng_nm, sizeof ng_nm, "model.layers.%d.mlp.gate_proj.weight", L);
         snprintf(nu_nm, sizeof nu_nm, "model.layers.%d.mlp.up_proj.weight", L);
         Tensor tpn, twg, twu;
+        double sf = 0.0;
+        memset(&st, 0, sizeof st);
         if (ckpt_find_tensor(&ckpt, nm, &tpn) && ckpt_find_tensor(&ckpt, ng_nm, &twg) && ckpt_find_tensor(&ckpt, nu_nm, &twu)) {
             float *g_post = decode_f32(&tpn), *Wg = decode_f32(&twg), *Wu = decode_f32(&twu);
-            rmsnorm_rows(E, X, NT, D, g_post, eps); free(g_post);
+            rmsnorm_rows(H, X, NT, D, g_post, eps); free(g_post);
             ffn_connected(X, Wg, Wu, Wd, Q, NT, D, FF);
             free(Wg); free(Wu);
+            #pragma omp parallel for
+            for (size_t i = 0; i < NT * D; i++) H[i] += Q[i];
             t = now(); nh = rowsig_two_sided(Q, NT, Ug, NT, D, 1.0f, zmin, cap, hits, hcap, &st, nhits, &nneg);
-            FLOPS_TOTAL += st.flops; SECS_TOTAL += now() - t;
+            sf = now() - t;
+            FLOPS_TOTAL += st.flops; SECS_TOTAL += sf;
             snprintf(cname, sizeof cname, "L%d.ffn", L);
-            if (L == 0) { report(cname, &st, now() - t, hits, nh, 1); FLOPS_TOTAL -= st.flops; SECS_TOTAL -= now() - t; }
+            if (L == 0) { report(cname, &st, sf, hits, nh, 1); FLOPS_TOTAL -= st.flops; SECS_TOTAL -= sf; }
             if ((do_ingest || export_path) && (nh || nneg)) {
                 Ref r = record_circuit_polarity(mfp, cname, hits, nh, nhits, nneg, zmin, eep);
                 if (do_ingest) crecs[ncrecs++] = r;
             }
         }
-        #pragma omp parallel for
-        for (size_t n = 0; n < FF; n++) for (size_t k = 0; k < D; k++) WdT[n * D + k] = Wd[k * FF + n];
         free(Wd);
-        t = now(); size_t nf = lp_rowsig(WdT, FF, Ug, NT, D, 1.0f, zmin, cap, fh, FF * cap, &st); double sf = now() - t;
-        FLOPS_TOTAL += st.flops; SECS_TOTAL += sf;
-        printf("  layer %-2d  projections %5.2f s | %zu heads qk %6.2f s, ov %6.2f s: per row above z4 %.2f (qk) %.2f (ov) | ffn %zu neurons %5.2f s, above z4 %.2f, none %4.1f%% | %.1f s\n",
-               L, tproj, NH, sq, so, (double)a4q / rq, (double)a4o / rq, FF, sf, (double)st.above[1] / st.rows, 100.0 * st.rows_without / st.rows, now() - tl);
-        (void)nf; fflush(stdout);
+        printf("  layer %-2d  projections %5.2f s | %zu heads qk %6.2f s, ov %6.2f s: per row above z4 %.2f (qk) %.2f (ov) | ffn %zu %5.2f s, above z4 %.2f | %.1f s\n",
+               L, tproj, NH, sq, so, rq ? (double)a4q / rq : 0.0, rq ? (double)a4o / rq : 0.0, FF, sf, st.rows ? (double)st.above[1] / st.rows : 0.0, now() - tl);
+        fflush(stdout);
     }
     printf("\n== total: %.1f s wall, kernel %.1f s at %.1f GFLOP/s (%.1f TFLOP)\n", now() - T, SECS_TOTAL, SECS_TOTAL > 0 ? FLOPS_TOTAL / SECS_TOTAL / 1e9 : 0.0, FLOPS_TOTAL / 1e12);
 
@@ -687,11 +717,11 @@ int cmd_model(int argc, char **argv){
             .weights = ee.weights,
             .edge_witnesses = ew,
             .edge_lineages = ew,
-            .hidden_dim = D > 64 ? 64 : D,
+            .hidden_dim = D,
             .n_layers = layers > 0 ? (size_t)layers : 1u,
             .n_heads = NH,
             .n_kv_heads = NKV,
-            .ffn_dim = FF > 256 ? 256 : FF,
+            .ffn_dim = FF,
             .rms_eps = eps,
             .rope_base = 10000.0,
             .f16_weights = 0
@@ -707,7 +737,7 @@ int cmd_model(int argc, char **argv){
     free(V); V = NULL; NV = 0; nsample = 0;
     lp_text_free(TX); TX = NULL;
     free(ee.rows); free(ee.cols); free(ee.weights);
-    free(Q); free(K); free(Vv); free(Ah); free(Bh); free(Mh); free(Wo_h); free(WdT); free(fh);
-    free(hits); free(nhits); free(X); free(Ug); free(E); free(U); free(gf);
+    free(Q); free(K); free(Vv); free(Ah); free(Bh); free(Mh); free(Wo_h); free(Vfull);
+    free(hits); free(nhits); free(X); free(H); free(Ug); free(E); free(U); free(gf);
     return export_rc;
 }

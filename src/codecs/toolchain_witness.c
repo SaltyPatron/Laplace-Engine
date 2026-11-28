@@ -14,11 +14,10 @@ int lp_toolchain_witness(const LpToolchainReport *rep, lp_id *claim_out, LoadSta
     double trust = tc ? tc->prior : 0.90;
     double score = rep->passed ? 1.0 : 0.0;
     const char *label = (rep->target_label && *rep->target_label) ? rep->target_label : "verify";
-    const char *verdict = rep->passed ? "PASS" : "FAIL";
 
     Ref wref = text_ref(CTX[0], (const uint8_t *)rep->witness_name, strlen(rep->witness_name));
     Ref lref = text_ref(CTX[0], (const uint8_t *)label, strlen(label));
-    Ref vref = text_ref(CTX[0], (const uint8_t *)verdict, strlen(verdict));
+    Ref vref = text_ref(CTX[0], (const uint8_t *)"verified", 8);
 
     Ref subj = *rep->subject;
     subj.said = subj.outcome = subj.position = subj.spare = 0;
@@ -49,7 +48,8 @@ int lp_toolchain_witness(const LpToolchainReport *rep, lp_id *claim_out, LoadSta
         for (size_t i = 0; i < rep->nconstituents; i++) {
             Ref c = rep->constituents[i];
             c.said = c.outcome = c.position = c.spare = 0;
-            Ref p3[3] = { subj, crel, c };
+            /* Key constituent claim on stable target label + AST node so WIN/LOSS accumulates across R0 -> R1 edits. */
+            Ref p3[3] = { lref, crel, c };
             Ref cc = said_claim(compose(p3, 3, ref_above(p3, 3)));
             cc.outcome = (uint8_t)lp_outcome_of(score, &cc.spare);
             cc.position = (uint32_t)(i + 2u);

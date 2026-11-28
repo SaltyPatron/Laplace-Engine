@@ -382,7 +382,8 @@ static void test_git_and_toolchain(void){
     r_pass.passed = 1;
     assert(lp_toolchain_witness(&r_fail, &fail_id, NULL) == 0);
     assert(lp_toolchain_witness(&r_pass, &pass_id, NULL) == 0);
-    assert(!lp_id_eq(&fail_id, &pass_id));
+    /* PASS and FAIL must share one canonical claim ID so WIN/LOSS outcomes compete directly in Glicko-2. */
+    assert(lp_id_eq(&fail_id, &pass_id));
     printf("[PASS] git_grammar + lp_toolchain_witness (ToolchainVerification = 0.90)\n");
 }
 

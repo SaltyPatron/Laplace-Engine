@@ -739,8 +739,17 @@ static int decode_column_chunk(FILE *fp, int64_t file_size, const PqLeaf *leaf,
             }
             for (size_t i = 0; i < non_null; i++) vals.cells[i] = dup_fmt(bv[i] ? "true" : "false", bv[i] ? 4 : 5);
             free(bv);
-        } else {
+        } else if (ph.encoding == PQ_ENC_PLAIN) {
             decode_plain_values(vp, vlen, leaf->phys_type, leaf->type_len, non_null, &vals, 0, 0);
+        } else {
+            fprintf(stderr, "parquet: unsupported page encoding %d on column '%s'\n",
+                    ph.encoding, leaf->name ? leaf->name : "?");
+            col_data_free(&vals);
+            free(def_lvls);
+            free(rep_lvls);
+            free(uncomp);
+            ok = 0;
+            break;
         }
 
         size_t vi = 0;

@@ -57,7 +57,9 @@ typedef struct {
     const lp_id *witness_scope; int nwitness_scope, witness_scoped;
     const lp_envelope *envelope; lp_work_counters work; double t_start_s;
     double salience[MAXOCC], max_salience; LpSalienceRow *salience_rows; int nsalience;
-    lp_id occ0_lower; int has_occ0_lower;
+    size_t occ_off[MAXOCC], occ_len[MAXOCC];
+    long df_exact[MAXOCC];
+    lp_id occ_lower[MAXOCC]; int has_occ_lower[MAXOCC];
     lp_id spans[MAXOCC]; Bits span_bits[MAXOCC]; int nspans;
     FILE *trace_out;
 } State;
@@ -69,6 +71,12 @@ static inline double draw(const State *st, uint32_t a, uint32_t b, uint32_t c){
 static inline int envelope_hit(State *st){
     st->work.wall_us = (uint64_t)((now() - st->t_start_s) * 1e6);
     return st->envelope && lp_work_exceeded(st->envelope, &st->work) != LP_LIMIT_NONE;
+}
+static inline int can_spend_probes(State *st, uint64_t need){
+    if (envelope_hit(st)) return 0;
+    if (st->envelope && st->envelope->max_db_probes > 0 &&
+        st->work.db_probes + need > st->envelope->max_db_probes) return 0;
+    return 1;
 }
 static inline PGresult *call_st(State *st, LpSqlId id, Args *a){
     st->trips++; st->work.db_probes++;
@@ -106,25 +114,13 @@ static inline int is_gloss_rel(const State *st, const lp_id *rel){
     return init && (lp_id_eq(rel, &g0) || lp_id_eq(rel, &g1) || lp_id_eq(rel, &g2));
 }
 static inline int is_lateral_hop_rel(const State *st, const lp_id *rel){
-    if (!st || !rel || !st->c) return 0;
+    if (!st || !rel || !st->fw) return 0;
     for (int i = 0; i < st->nocc; i++) if (lp_id_eq(&st->occ[i], rel)) return 0;
-    static const char *const LAT[] = {
-        "hypernym", "instance_hypernym", "hyponym", "instance_hyponym",
-        "mero_part", "holo_part", "mero_member", "holo_member",
-        "mero_substance", "holo_substance", "derivation", "pertainym", "antonym", "similar",
-        "also", "attribute", "domain_topic", "has_domain_topic", "domain_region", "has_domain_region",
-        "exemplifies", "is_exemplified_by", "a description of the tag or subtag in the record",
-        "other", "example usage"
-    };
-    static _Thread_local int init = 0;
-    static _Thread_local lp_id lat_ids[sizeof(LAT) / sizeof(LAT[0])];
-    if (!init) {
-        for (size_t i = 0; i < sizeof(LAT) / sizeof(LAT[0]); i++)
-            lat_ids[i] = lp_text_decompose(st->c, (const uint8_t *)LAT[i], strlen(LAT[i]), NULL, NULL).id;
-        init = 1;
-    }
-    for (size_t i = 0; i < sizeof(LAT) / sizeof(LAT[0]); i++) {
-        if (lp_id_eq(rel, &lat_ids[i])) return 1;
+    if (st->fw->nlateral_relation > 0) {
+        for (int i = 0; i < st->fw->nlateral_relation; i++) {
+            if (lp_id_eq(rel, &st->fw->id.lateral[i])) return 1;
+        }
+        return 0;
     }
     return 0;
 }
@@ -171,6 +167,7 @@ typedef struct { lp_id id; long times; int len; } Next;
 #define context lp_program_context
 #define beside_grounds lp_program_beside_grounds
 #define langs_of lp_program_langs_of
+#define resolve_prompt_langs lp_program_resolve_prompt_langs
 #define chain_from lp_program_chain_from
 #define state_free lp_program_state_free
 
@@ -190,7 +187,13 @@ void walk_seed_holds(State *st, const lp_id *keys, int nk, const Hold *hh, int n
 void context(State *st, int from, int to);
 int beside_grounds(const State *st, int i, const lp_id *id);
 int langs_of(State *st, const lp_id *w, int n, lp_id (*out)[LANGS], int *nout);
+void resolve_prompt_langs(State *st, const Field *fd);
 int chain_from(State *st, const lp_id *word, const lp_id *reading, lp_id *answer, lp_rating *rating);
 void state_free(State *st);
+
+void lp_program_append_out(char **out, size_t *outn, const char *tx, int is_follow, int combine_clauses);
+int lp_program_is_prompt_echo(const uint8_t *prompt_text, size_t prompt_len, const char *tx, size_t tl, int is_follow);
+int lp_program_should_stop_enough(int sel_is_follow, int combine_clauses, int rem, int owed0, double enough, int open_anchors);
+int lp_program_format_claim_clause(const char *via_tx, const char *rel_tx, const char *val_tx, char *buf, size_t cap);
 
 #endif

@@ -178,6 +178,7 @@ static int evaluate(const Bd *b, double scale){
     }
     if (w && w->unroyal && w->forced) score = -score;
     int pov = b->side ? -score : score;
+    if (scale <= 0.0) return 0;
     return (int)((double)pov * scale);
 }
 
@@ -194,13 +195,234 @@ typedef struct {
 } RootMove;
 
 typedef struct {
+    lp_id  pos_id;
+    int    valid;
+    int    eval_bonus;
+    lp_id  best_child;
+    int    has_best;
+} SubPosCache;
+
+enum { SUB_CACHE_SIZE = 256 };
+
+typedef struct {
     LpChessSearchPolicy pol;
     LpTablebase        *tb;
+    PGconn             *pg;
+    const lp_id        *witnesses;
+    int                 nwitnesses;
+    int                 scoped;
+    uint64_t           *db_probes;
+    uint64_t            max_db_probes;
+    double              root_coord[4];
+    int                 has_root_coord;
+    SubPosCache        *sub_cache;
+    lp_id               line_ids[16];
+    int                 line_len;
     uint64_t            nodes;
     double              start_s;
     int                 aborted;
     TTEntry            *tt;
 } SearchCtx;
+
+/* Wave 2B game-altitude trajectory standing probe:
+ * Uses one batched GIN set-intersection query (LP_SQL_HOLDERS_WITH_STANDINGS[_SCOPED])
+ * with parts=child_ids and required=[pid] to find attested game trajectories [P0..Pn]
+ * containing the consecutive board-state transition pid -> child_ids[i], and aggregates
+ * their game-altitude Glicko-2 standings signed for the side to move (White: +1, Black: -1). */
+static void probe_game_altitude_standings(
+    PGconn *pg, const lp_id *pid, int side, const lp_id *child_ids, int nm,
+    const lp_id *witnesses, int nwitnesses, int scoped,
+    double *ev_out, int64_t *matches_out, double *rating_out, uint8_t *has_out)
+{
+    if (!pg || !pid || !child_ids || nm <= 0) return;
+    if (scoped && (!witnesses || nwitnesses <= 0)) return;
+
+    Args a = { 0 };
+    arg_ids(&a, child_ids, (size_t)nm);
+    arg_ids(&a, pid, 1);
+    arg_bool(&a, 1);           /* per_part = true */
+    arg_i16(&a, -1);           /* floor = -1 */
+    arg_i64(&a, 24);           /* cap = 24 attested game trajectories per candidate move */
+    arg_i16(&a, 1);            /* kinds = 1 (claims: attested trajectories) */
+    arg_null(&a);              /* bits = NULL */
+    arg_i16(&a, 0);            /* endpoint = 0 */
+    if (scoped) arg_ids(&a, witnesses, (size_t)nwitnesses);
+
+    PGresult *q = db_call_try(pg, scoped ? LP_SQL_HOLDERS_WITH_STANDINGS_SCOPED : LP_SQL_HOLDERS_WITH_STANDINGS, &a, NULL, 0);
+    if (!q) { args_free(&a); return; }
+
+    double *wsum = calloc((size_t)nm, sizeof(double));
+    double *rsum = calloc((size_t)nm, sizeof(double));
+    double side_sign = (side == 0) ? 1.0 : -1.0;
+
+    int nr = PQntuples(q);
+    for (int r = 0; r < nr; r++) {
+        if (col_bool(q, r, 6) || PQgetisnull(q, r, 7)) continue;
+        int64_t ord = col_i64(q, r, 0);
+        if (ord < 1 || ord > nm) continue;
+        int idx = (int)(ord - 1);
+
+        /* Confirm consecutive state transition pid -> child_ids[idx] in the game trajectory. */
+        lp_path p = col_path(q, r, 2);
+        if (p.n < 2 || p.n > 1024) continue;
+        lp_vertex *vx = malloc(sizeof(lp_vertex) * p.n);
+        if (!vx) continue;
+        lp_path_decode(p, vx, p.n);
+        int adjacent = 0;
+        for (size_t k = 0; k + 1 < p.n; k++) {
+            if (lp_id_eq(&vx[k].id, pid) && lp_id_eq(&vx[k + 1].id, &child_ids[idx])) {
+                adjacent = 1;
+                break;
+            }
+        }
+        free(vx);
+        if (!adjacent) continue;
+
+        lp_rating rat = col_rating(q, r, 7);
+        int64_t m = PQgetisnull(q, r, 10) ? 1 : col_i64(q, r, 10);
+        if (m <= 0) m = 1;
+        double conf = lp_confidence(&rat, 2.0);
+        if (conf <= 0.0) conf = 0.5;
+        double w = conf * log1p((double)m);
+        wsum[idx] += w;
+        rsum[idx] += w * rat.rating;
+        matches_out[idx] += m;
+        has_out[idx] = 1;
+    }
+
+    for (int i = 0; i < nm; i++) {
+        if (has_out[i] && wsum[i] > 0.0) {
+            double avg_white_rating = rsum[i] / wsum[i];
+            /* Express rating from side-to-move perspective centered at 1500. */
+            double pov_rating = 1500.0 + side_sign * (avg_white_rating - 1500.0);
+            if (rating_out) rating_out[i] = pov_rating;
+            if (ev_out) ev_out[i] = (pov_rating - 1500.0) * 0.14;
+        }
+    }
+
+    free(wsum);
+    free(rsum);
+    PQclear(q);
+    args_free(&a);
+}
+
+/* Multi-ply batched substrate probe for inner search nodes (ply 1..2):
+ * queries game-altitude [P0..Pn] Glicko-2 standings + physicality.path FORWARD_SUFFIX continuations + 4D Fréchet curve
+ * continuity from root, cached by position ID so transpositions never re-hit PostgreSQL. */
+static int probe_substrate_node(SearchCtx *ctx, const Bd *b, const Mv *moves, int nm, int *move_priors){
+    if (!ctx->pg || !ctx->sub_cache || ctx->pol.book_weight <= 0 || nm <= 0) return 0;
+    if (ctx->scoped && (!ctx->witnesses || ctx->nwitnesses <= 0)) return 0;
+    lp_id pid;
+    lp_chess_id_position(b, &pid);
+    uint64_t h = 0;
+    memcpy(&h, pid.b, sizeof h);
+    SubPosCache *slot = &ctx->sub_cache[h & (SUB_CACHE_SIZE - 1)];
+    if (slot->valid && lp_id_eq(&slot->pos_id, &pid)) {
+        if (move_priors && slot->has_best) {
+            for (int i = 0; i < nm; i++) {
+                Bd nb = *b; lp_chess_make(&nb, &moves[i]);
+                lp_id cid; lp_chess_id_position(&nb, &cid);
+                if (lp_id_eq(&cid, &slot->best_child)) { move_priors[i] += 2500; break; }
+            }
+        }
+        return slot->eval_bonus;
+    }
+    if (ctx->db_probes && *ctx->db_probes >= ctx->max_db_probes) return 0;
+
+    lp_id *child_ids = malloc(sizeof(lp_id) * (size_t)nm);
+    for (int i = 0; i < nm; i++) {
+        Bd nb = *b;
+        lp_chess_make(&nb, &moves[i]);
+        lp_chess_id_position(&nb, &child_ids[i]);
+    }
+
+    double *alt_ev = calloc((size_t)nm, sizeof(double));
+    int64_t *matches = calloc((size_t)nm, sizeof(int64_t));
+    uint8_t *has = calloc((size_t)nm, 1);
+    probe_game_altitude_standings(ctx->pg, &pid, b->side, child_ids, nm,
+                                  ctx->witnesses, ctx->nwitnesses, ctx->scoped,
+                                  alt_ev, matches, NULL, has);
+    if (ctx->db_probes) (*ctx->db_probes)++;
+
+    int64_t *traj = calloc((size_t)nm, sizeof(int64_t));
+    if (!ctx->db_probes || *ctx->db_probes < ctx->max_db_probes) {
+        Args a = { 0 };
+        arg_ids(&a, &pid, 1);
+        arg_i64(&a, 128);
+        if (ctx->scoped) arg_ids(&a, ctx->witnesses, (size_t)ctx->nwitnesses);
+        PGresult *q = db_call_try(ctx->pg, ctx->scoped ? LP_SQL_FORWARD_SUFFIX_SCOPED : LP_SQL_FORWARD_SUFFIX, &a, NULL, 0);
+        if (q) {
+            int nr = PQntuples(q);
+            for (int r = 0; r < nr; r++) {
+                const lp_id *nid = col_id(q, r, 2);
+                int64_t times = col_i64(q, r, 3);
+                if (times <= 0) continue;
+                for (int i = 0; i < nm; i++) {
+                    if (lp_id_eq(nid, &child_ids[i])) { traj[i] += times; break; }
+                }
+            }
+            PQclear(q);
+        }
+        args_free(&a);
+        if (ctx->db_probes) (*ctx->db_probes)++;
+    }
+
+    double bw = (double)ctx->pol.book_weight / 100.0;
+    int best_bonus = 0;
+    int best_idx = -1;
+    for (int i = 0; i < nm; i++) {
+        double ev = 0.0;
+        if (has[i] && matches[i] > 0) ev += alt_ev[i];
+        if (traj[i] > 0) ev += log1p((double)traj[i]) * 30.0;
+        int pr = (int)(ev * bw);
+        if (move_priors) move_priors[i] = pr;
+        if (pr > best_bonus) { best_bonus = pr; best_idx = i; }
+    }
+
+    /* Multi-ply unpacked 4D entity.coord Fréchet curve affinity over [P_0 .. P_k, P_{k+1}] */
+    if (best_idx >= 0 && ctx->line_len >= 1 && (!ctx->db_probes || *ctx->db_probes < ctx->max_db_probes)) {
+        int plen = ctx->line_len < 15 ? ctx->line_len : 15;
+        int total_q = plen + nm;
+        lp_id *qids = malloc(sizeof(lp_id) * (size_t)total_q);
+        for (int k = 0; k < plen; k++) qids[k] = ctx->line_ids[k];
+        for (int i = 0; i < nm; i++) qids[plen + i] = child_ids[i];
+        double *coords = calloc((size_t)total_q * 4u, sizeof(double));
+        uint8_t *has_c = calloc((size_t)total_q, 1);
+        coords_of(ctx->pg, qids, total_q, coords, has_c);
+        if (ctx->db_probes) (*ctx->db_probes)++;
+
+        double ref_c[16 * 4];
+        size_t rn = 0;
+        for (int k = 0; k < plen; k++) {
+            if (has_c[k]) { memcpy(ref_c + rn * 4u, coords + (size_t)k * 4u, 32); rn++; }
+        }
+        if (rn >= 1u && has_c[plen + best_idx]) {
+            memcpy(ref_c + rn * 4u, coords + (size_t)(plen + best_idx) * 4u, 32);
+            size_t ref_len = rn + 1u;
+            double cand_c[16 * 4];
+            memcpy(cand_c, ref_c, rn * 32u);
+            for (int i = 0; i < nm; i++) {
+                if (!has_c[plen + i]) continue;
+                memcpy(cand_c + rn * 4u, coords + (size_t)(plen + i) * 4u, 32);
+                double fd = lp_frechet4(cand_c, ref_len, ref_c, ref_len);
+                double d = (isfinite(fd) && fd >= 0.0) ? fd : 10.0;
+                int bonus = (int)((18.0 / (1.0 + d)) * bw);
+                if (move_priors) move_priors[i] += bonus;
+                if (move_priors && move_priors[i] > best_bonus) best_bonus = move_priors[i];
+            }
+        }
+        free(qids); free(coords); free(has_c);
+    }
+
+    slot->pos_id = pid;
+    slot->valid = 1;
+    slot->eval_bonus = best_bonus;
+    slot->has_best = (best_idx >= 0);
+    if (best_idx >= 0) slot->best_child = child_ids[best_idx];
+
+    free(child_ids); free(alt_ev); free(matches); free(has); free(traj);
+    return best_bonus;
+}
 
 static int time_or_node_limit(SearchCtx *ctx){
     if (ctx->aborted) return 1;
@@ -315,11 +537,26 @@ static int pvs(SearchCtx *ctx, const Bd *b, int depth, int alpha, int beta, int 
     Mv moves[LP_CHESS_MOVES];
     int nm = lp_chess_gen(b, moves);
     if (nm <= 0) return evaluate(b, ctx->pol.eval_scale);
-    sort_moves(b, moves, NULL, nm, has_ttm ? &ttm : NULL);
+    int sub_priors[LP_CHESS_MOVES];
+    int *priors_ptr = NULL;
+    int sub_eval_bonus = 0;
+    if (ctx->pg && ply <= 2 && depth >= 2 && ctx->pol.book_weight > 0) {
+        memset(sub_priors, 0, sizeof(int) * (size_t)nm);
+        sub_eval_bonus = probe_substrate_node(ctx, b, moves, nm, sub_priors);
+        priors_ptr = sub_priors;
+    }
+    sort_moves(b, moves, priors_ptr, nm, has_ttm ? &ttm : NULL);
 
     int orig_alpha = alpha;
     int best_score = -SCORE_INF;
     Mv best_mv = moves[0];
+
+    int pushed_line = 0;
+    if (ctx->pg && ply > 0 && ctx->line_len < 15) {
+        lp_chess_id_position(b, &ctx->line_ids[ctx->line_len]);
+        ctx->line_len++;
+        pushed_line = 1;
+    }
 
     for (int i = 0; i < nm; i++) {
         Bd next = *b;
@@ -332,18 +569,20 @@ static int pvs(SearchCtx *ctx, const Bd *b, int depth, int alpha, int beta, int 
             if (!ctx->aborted && score > alpha && score < beta)
                 score = -pvs(ctx, &next, depth - 1, -beta, -alpha, ply + 1);
         }
-        if (ctx->aborted) return 0;
+        if (ctx->aborted) { if (pushed_line) ctx->line_len--; return 0; }
         if (score > best_score) { best_score = score; best_mv = moves[i]; }
         if (score > alpha) alpha = score;
         if (alpha >= beta) break;
     }
+    if (pushed_line) ctx->line_len--;
 
     te->key = key;
     te->depth = (int16_t)depth;
-    te->score = (int16_t)(best_score > 30000 ? 30000 : best_score < -30000 ? -30000 : best_score);
-    te->flag = (best_score <= orig_alpha) ? TT_ALPHA : (best_score >= beta) ? TT_BETA : TT_EXACT;
+    int final_score = best_score + (sub_eval_bonus / 4);
+    te->score = (int16_t)(final_score > 30000 ? 30000 : final_score < -30000 ? -30000 : final_score);
+    te->flag = (final_score <= orig_alpha) ? TT_ALPHA : (final_score >= beta) ? TT_BETA : TT_EXACT;
     te->best = best_mv;
-    return best_score;
+    return final_score;
 }
 
 int lp_chess_search(PGconn *pg, const char *fen, const char *variant,
@@ -355,7 +594,7 @@ int lp_chess_search(PGconn *pg, const char *fen, const char *variant,
 
     LpChessSearchPolicy pol = policy_override ? *policy_override : lp_chess_search_policy();
     if (pol.max_depth <= 0) pol.max_depth = 6;
-    if (pol.eval_scale <= 0.0) pol.eval_scale = 1.0;
+    if (pol.eval_scale < 0.0) pol.eval_scale = 1.0;
 
     const LpChessLaw *law = lp_chess_law_named(variant, variant ? strlen(variant) : 0);
     if (!law) return 2;
@@ -402,16 +641,13 @@ int lp_chess_search(PGconn *pg, const char *fen, const char *variant,
         rm[i] = (RootMove){ .mv = legal[i], .prior = 0, .traj = 0, .stood = 0, .rating = 0.0 };
     }
 
-    /* Up to 3 batched Substrate COUPLE probes at root: trajectory suffixes + standings + 4D Fréchet curves. */
+    /* Up to 3 batched Substrate COUPLE probes at root: trajectory suffixes + game-altitude standings + 4D Fréchet curves. */
     if (pg && pol.book_weight > 0 && !(scoped && (!witnesses || nwitnesses <= 0))) {
         lp_id *child_ids = malloc(sizeof(lp_id) * (size_t)nm);
-        lp_id *cids = malloc(sizeof(lp_id) * (size_t)nm);
         for (int i = 0; i < nm; i++) {
             Bd nb = root;
             lp_chess_make(&nb, &rm[i].mv);
             lp_chess_id_position(&nb, &child_ids[i]);
-            lp_id c2[2] = { out->position_id, child_ids[i] };
-            lp_id_compose(c2, 2, &cids[i]);
         }
 
         /* Probe 1: FORWARD_SUFFIX(_SCOPED) trajectory continuations */
@@ -438,11 +674,14 @@ int lp_chess_search(PGconn *pg, const char *fen, const char *variant,
         args_free(&a);
         out->db_probes++;
 
-        /* Probe 2: standings_of_ids over [P_k, P_{k+1}] transitions */
-        lp_rating *rats = malloc(sizeof(lp_rating) * (size_t)nm);
+        /* Probe 2: Wave 2B game-altitude [P0..Pn] trajectory standings via GIN intersection */
+        double *alt_ev = calloc((size_t)nm, sizeof(double));
+        double *pov_rats = calloc((size_t)nm, sizeof(double));
         int64_t *matches = calloc((size_t)nm, sizeof(int64_t));
         uint8_t *has = calloc((size_t)nm, 1);
-        standings_of_ids(pg, cids, nm, witnesses, nwitnesses, scoped, rats, matches, has);
+        probe_game_altitude_standings(pg, &out->position_id, root.side, child_ids, nm,
+                                      witnesses, nwitnesses, scoped,
+                                      alt_ev, matches, pov_rats, has);
         out->db_probes++;
 
         double bw = (double)pol.book_weight / 100.0;
@@ -452,10 +691,8 @@ int lp_chess_search(PGconn *pg, const char *fen, const char *variant,
             double ev = 0.0;
             if (has[i] && matches[i] > 0) {
                 rm[i].stood = 1;
-                rm[i].rating = rats[i].rating;
-                double conf = lp_confidence(&rats[i], 2.0);
-                if (conf <= 0.0) conf = 0.5;
-                ev += (rats[i].rating - 1500.0) * 0.12 * conf;
+                rm[i].rating = pov_rats[i];
+                ev += alt_ev[i];
             }
             if (rm[i].traj > 0) {
                 ev += log1p((double)rm[i].traj) * 35.0;
@@ -494,13 +731,19 @@ int lp_chess_search(PGconn *pg, const char *fen, const char *variant,
             free(all_ids); free(coords); free(has_c);
         }
 
-        free(child_ids); free(cids); free(rats); free(matches); free(has);
+        free(child_ids); free(alt_ev); free(pov_rats); free(matches); free(has);
     }
 
     SearchCtx ctx = {
-        .pol = pol, .tb = tb, .nodes = 0, .start_s = t0, .aborted = 0,
+        .pol = pol, .tb = tb, .pg = pg,
+        .witnesses = witnesses, .nwitnesses = nwitnesses, .scoped = scoped,
+        .db_probes = &out->db_probes, .max_db_probes = 24u,
+        .sub_cache = pg ? calloc(SUB_CACHE_SIZE, sizeof(SubPosCache)) : NULL,
+        .line_len = 1,
+        .nodes = 0, .start_s = t0, .aborted = 0,
         .tt = calloc(TT_SIZE, sizeof(TTEntry))
     };
+    ctx.line_ids[0] = out->position_id;
 
     RootMove best_root = rm[0];
     int best_score = 0;
@@ -515,14 +758,20 @@ int lp_chess_search(PGconn *pg, const char *fen, const char *variant,
         for (int i = 0; i < nm; i++) {
             Bd next = root;
             lp_chess_make(&next, &rm[i].mv);
-            int sc;
-            if (i == 0) sc = -pvs(&ctx, &next, d - 1, -beta, -alpha, 1);
-            else {
-                sc = -pvs(&ctx, &next, d - 1, -alpha - 1, -alpha, 1);
-                if (!ctx.aborted && sc > alpha && sc < beta) sc = -pvs(&ctx, &next, d - 1, -beta, -alpha, 1);
+            /* Shift PVS window by -prior so fail-hard cutoffs account for the substrate prior exactly. */
+            int pr = rm[i].prior;
+            int adj_alpha = alpha > -SCORE_INF + 5000 ? alpha - pr : -SCORE_INF;
+            int adj_beta  = beta  <  SCORE_INF - 5000 ? beta  - pr :  SCORE_INF;
+            int raw;
+            if (i == 0) {
+                raw = -pvs(&ctx, &next, d - 1, -adj_beta, -adj_alpha, 1);
+            } else {
+                raw = -pvs(&ctx, &next, d - 1, -adj_alpha - 1, -adj_alpha, 1);
+                if (!ctx.aborted && raw > adj_alpha && raw < adj_beta)
+                    raw = -pvs(&ctx, &next, d - 1, -adj_beta, -adj_alpha, 1);
             }
             if (ctx.aborted) break;
-            sc += rm[i].prior;
+            int sc = raw + pr;
             if (sc > cur_best) { cur_best = sc; cur_idx = i; }
             if (sc > alpha) alpha = sc;
         }
@@ -536,6 +785,7 @@ int lp_chess_search(PGconn *pg, const char *fen, const char *variant,
         if (abs(best_score) >= SCORE_MATE - 100) break;
     }
 
+    free(ctx.sub_cache);
     free(ctx.tt);
 
     Bd nb = root; lp_chess_make(&nb, &best_root.mv);

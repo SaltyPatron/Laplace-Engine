@@ -161,6 +161,8 @@ typedef struct {
     uint32_t                      ffn_dim;          /* 0 = default 4 * hidden_dim */
     int32_t                       tied_embeddings;  /* 0 = untied output/lm_head, 1 = tied */
     int32_t                       reserved;
+    const char                   *recipe_json;      /* optional full laplace.recipe JSON */
+    const char                   *recipe_id_prefix; /* optional stored Model_Recipe entity ID prefix */
 } LpEngineMoldRequest;
 
 typedef struct {

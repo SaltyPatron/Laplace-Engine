@@ -151,7 +151,8 @@ static int firmware_parse(const char *path, int op, Firmware *out, char *err, si
             if (v && !strcmp(v, "predicate")) rc = names_chk(fw.refuse_predicate, &fw.nrefuse_predicate, FW_NAMES, fw.path, line, err, err_cap);
             else if (v && !strcmp(v, "witness")) rc = names_chk(fw.refuse_witness, &fw.nrefuse_witness, FW_NAMES, fw.path, line, err, err_cap);
             else rc = fw_fail(err, err_cap, 2, "%s:%d: refuse predicate NAME... | witness NAME...\n", fw.path, line);
-        } else if (!strcmp(tok, "negate")) rc = names_chk(fw.negate, &fw.nnegate, FW_NAMES, fw.path, line, err, err_cap);
+        } else if (!strcmp(tok, "lateral")) rc = names_chk(fw.lateral_relation, &fw.nlateral_relation, FW_NAMES, fw.path, line, err, err_cap);
+        else if (!strcmp(tok, "negate")) rc = names_chk(fw.negate, &fw.nnegate, FW_NAMES, fw.path, line, err, err_cap);
         else if (!strcmp(tok, "negate_relation")) rc = names_chk(fw.negate_relation, &fw.nnegate_relation, FW_NAMES, fw.path, line, err, err_cap);
         else if (!strcmp(tok, "scope_stop")) rc = names_chk(fw.scope_stop, &fw.nscope_stop, FW_NAMES, fw.path, line, err, err_cap);
         else if (!strcmp(tok, "weigh")) {
@@ -310,6 +311,7 @@ int firmware_ids_checked(Firmware *fw, char *err, size_t err_cap){
     for (int i = 0; i < fw->nrefuse_predicate; i++) fw->id.refuse[i] = NAMED(fw->refuse_predicate[i]);
     for (int i = 0; i < fw->nonly_predicate; i++) fw->id.only[i] = NAMED(fw->only_predicate[i]);
     for (int i = 0; i < fw->nrefuse_witness; i++) fw->id.refuse_witness[i] = NAMED(fw->refuse_witness[i]);
+    for (int i = 0; !rc && i < fw->nlateral_relation; i++) rc = firmware_name_chk(c, fw, fw->lateral_relation[i], &fw->id.lateral[i], err, err_cap);
     for (int i = 0; i < fw->nnegate; i++) fw->id.negate[i] = NAMED(fw->negate[i]);
     for (int i = 0; !rc && i < fw->nnegate_relation; i++) rc = firmware_name_chk(c, fw, fw->negate_relation[i], &fw->id.negate_relation[i], err, err_cap);
     for (int i = 0; i < fw->nscope_stop; i++) fw->id.scope_stop[i] = NAMED(fw->scope_stop[i]);

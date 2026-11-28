@@ -16,16 +16,27 @@ thing mainsnak property datavalue/value
 
 empty []
 # Omit internal dump revision counters, redundant numeric IDs, and statement GUIDs (containing '$').
-omit pageid ns lastrevid modified hash numeric-id statements badges entity-type snaktype datatype rank
+omit pageid ns lastrevid modified hash numeric-id statements badges entity-type datatype
 when id matches [$]
 omit id
 always
 content *
 
-value - type
+value - type rank snaktype
 relation "Wikidata statement" mainsnak
 attest record type
+when snaktype is value
+when rank is-not deprecated
 holds record mainsnak
+always
+when rank is deprecated
+relation "deprecated Wikidata statement" mainsnak
+holds record mainsnak
+always
+when snaktype is novalue
+relation "Wikidata novalue statement" mainsnak
+holds record mainsnak
+always
 
 when language matches .
 relation "lexicalization or description" value

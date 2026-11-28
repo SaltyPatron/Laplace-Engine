@@ -10,35 +10,134 @@
 #include <mkl.h>
 #include <mkl_lapacke.h>
 
-/* ---- CPU Mold-a-Model (Sequence 25 / 26):
- * Synthesizes clean Llama-architecture GGUF or SafeTensors checkpoints (laplace-blake3-v1) without gradient descent:
+/* ---- CPU Mold-a-Model (Sequence 25 / Export.md §25.2-25.7):
+ * Synthesizes clean Llama-architecture GGUF or SafeTensors checkpoints (laplace-blake3-v1) without gradient descent,
+ * zero O(n^2) dense n x n matrices, and zero fabricated hash-bit padding:
  *   1. Open Merkle BLAKE3-128 vocabulary (laplace.vocab.blake3_ids + tokenizer.ggml.tokens)
- *   2. Integer-conserved Fisher attribution (SUM(share_bp) == 10000 via Hamilton apportionment, lineage dedup)
- *   3. Full-rank multi-plane spectral embeddings (4D canonical coords + directed PMI SVD + normalized Laplacian
- *      eigenmaps + ordered tier0.bin UTF-8 codepoint moments + Householder QR + Procrustes, strictly rank > 4)
- *   4. Per-layer, per-head deterministic SVD/least-squares attention (Q/K/V/O) + SwiGLU FFN and log-target lm_head. */
+ *   2. Integer-conserved Fisher attribution across ALL planes (SUM(share_bp) == 10000 via Hamilton apportionment)
+ *   3. Full-rank multi-plane embeddings in O(nnz * D):
+ *        - Plane 1: canonical 4D entity.coord anchors on S^3 / 4-ball
+ *        - Plane 2: ordered tier0.bin UTF-8 codepoint 4D curve moments (deterministically separates anagrams)
+ *        - Plane 3: sparse trajectory subspace iteration (physicality.path left/right continuation/co-occurrence)
+ *        - Plane 4: sparse relational & unary eigenmodes (attestation/consensus + unary feature Gram U(U^T Q))
+ *        - Higher orthogonal axes (if any remain): continuous Chebyshev 4D codepoint curve harmonics
+ *   4. Per-layer, per-head operator compilation: each head h fills ONLY its own [h*HD..(h+1)*HD) rows from its
+ *      declared substrate plane (TRAJECTORY, RELATION[type], METRIC, UNARY); each layer FFN compiles from its own
+ *      ffn_plane; lm_head calibrates against exact post-NL residual states in weighted or bounded-set mode. */
 
 typedef struct {
     char  *key;
     double mass;
 } LineageMass;
 
-/* Hamilton (largest-remainder) apportionment guaranteeing exact SUM(share_bp) == 10000. */
+typedef struct { int r, c; double w; } MoldEdge;
+
+typedef struct {
+    LpMoldPlaneKind kind;
+    const char     *tag;
+    MoldEdge       *ed;
+    size_t          ne;
+    double         *row_abs;   /* sum of |w| per row (length n_vocab) */
+    double         *row_pos;   /* sum of max(w, 0) per row (length n_vocab) */
+    size_t          n_features;/* for UNARY: max(col) + 1 */
+} CompactPlane;
+
+static int cmp_mold_edge(const void *a, const void *b){
+    const MoldEdge *x = a, *y = b;
+    if (x->r != y->r) return x->r < y->r ? -1 : 1;
+    return x->c < y->c ? -1 : (x->c > y->c ? 1 : 0);
+}
+
+static CompactPlane compact_plane_from_raw(LpMoldPlaneKind kind, const char *tag,
+                                           const int *rows, const int *cols, const double *weights,
+                                           size_t n_edges, size_t n_vocab, size_t n_features){
+    CompactPlane cp;
+    memset(&cp, 0, sizeof cp);
+    cp.kind = kind;
+    cp.tag = tag ? tag : "trajectory";
+    cp.row_abs = calloc(n_vocab, sizeof(double));
+    cp.row_pos = calloc(n_vocab, sizeof(double));
+    cp.n_features = (kind == LP_MOLD_PLANE_UNARY) ? n_features : n_vocab;
+
+    MoldEdge *ed = n_edges ? malloc(sizeof(MoldEdge) * n_edges) : NULL;
+    size_t ne = 0;
+    size_t max_col = cp.n_features;
+    for (size_t e = 0; e < n_edges; e++) {
+        int r = rows[e], c = cols[e];
+        double w = weights ? weights[e] : 1.0;
+        if (!isfinite(w) || w == 0.0) continue;
+        if (r < 0 || (size_t)r >= n_vocab || c < 0) continue;
+        if (kind != LP_MOLD_PLANE_UNARY && (size_t)c >= n_vocab) continue;
+        if (kind == LP_MOLD_PLANE_UNARY && (size_t)c >= max_col) max_col = (size_t)c + 1u;
+        ed[ne++] = (MoldEdge){ r, c, w };
+    }
+    cp.n_features = max_col;
+    if (ne > 1u) {
+        qsort(ed, ne, sizeof(MoldEdge), cmp_mold_edge);
+        size_t out = 0;
+        for (size_t i = 0; i < ne; i++) {
+            if (out > 0 && ed[out - 1u].r == ed[i].r && ed[out - 1u].c == ed[i].c) {
+                ed[out - 1u].w += ed[i].w;
+            } else {
+                ed[out++] = ed[i];
+            }
+        }
+        ne = out;
+    }
+    for (size_t i = 0; i < ne; i++) {
+        double aw = fabs(ed[i].w);
+        cp.row_abs[ed[i].r] += aw;
+        if (ed[i].w > 0.0) cp.row_pos[ed[i].r] += ed[i].w;
+    }
+    cp.ed = ed;
+    cp.ne = ne;
+    return cp;
+}
+
+static void compact_plane_free(CompactPlane *cp){
+    if (!cp) return;
+    free(cp->ed);
+    free(cp->row_abs);
+    free(cp->row_pos);
+    memset(cp, 0, sizeof *cp);
+}
+
+/* Hamilton (largest-remainder) apportionment across ALL planes guaranteeing exact SUM(share_bp) == 10000. */
 static void compute_fisher_bp(const LpMoldSpec *spec, char ***witnesses_out,
                               int32_t **bp_out, size_t *count_out){
     size_t nl = 0, cap = 8;
     LineageMass *lm = malloc(sizeof *lm * cap);
     lp_strmap *seen = lp_strmap_sized(sizeof(size_t));
 
-    if (spec->n_edges == 0 || !spec->edge_witnesses) {
-        lm[0] = (LineageMass){ strdup(spec->name ? spec->name : "Laplace"), 1.0 };
-        nl = 1;
-    } else {
+    if (spec->n_planes > 0 && spec->planes) {
+        for (size_t p = 0; p < spec->n_planes; p++) {
+            const LpMoldPlane *pl = &spec->planes[p];
+            if (!pl->n_edges || !pl->witnesses) continue;
+            for (size_t i = 0; i < pl->n_edges; i++) {
+                const char *k = (pl->lineages && pl->lineages[i])
+                    ? pl->lineages[i]
+                    : (pl->witnesses[i] ? pl->witnesses[i] : "Laplace");
+                double w = pl->weights ? fabs(pl->weights[i]) : 1.0;
+                if (!(w > 0.0)) continue;
+                bool fresh = false;
+                size_t *slot = lp_strmap_get(seen, k, strlen(k), &fresh);
+                if (fresh) {
+                    if (nl == cap) { cap *= 2u; lm = xrealloc(lm, sizeof *lm * cap); }
+                    *slot = nl;
+                    lm[nl++] = (LineageMass){ strdup(k), w };
+                } else {
+                    lm[*slot].mass += w;
+                }
+            }
+        }
+    }
+    if (nl == 0 && spec->n_edges > 0 && spec->edge_witnesses) {
         for (size_t i = 0; i < spec->n_edges; i++) {
             const char *k = (spec->edge_lineages && spec->edge_lineages[i])
                 ? spec->edge_lineages[i]
                 : (spec->edge_witnesses[i] ? spec->edge_witnesses[i] : "Laplace");
-            double w = spec->weights && spec->weights[i] > 0.0 ? spec->weights[i] : 0.0;
+            double w = spec->weights ? fabs(spec->weights[i]) : 1.0;
+            if (!(w > 0.0)) continue;
             bool fresh = false;
             size_t *slot = lp_strmap_get(seen, k, strlen(k), &fresh);
             if (fresh) {
@@ -49,6 +148,10 @@ static void compute_fisher_bp(const LpMoldSpec *spec, char ***witnesses_out,
                 lm[*slot].mass += w;
             }
         }
+    }
+    if (nl == 0) {
+        lm[0] = (LineageMass){ strdup(spec->name ? spec->name : "Laplace"), 1.0 };
+        nl = 1;
     }
     lp_strmap_free(seen);
 
@@ -86,10 +189,127 @@ static void compute_fisher_bp(const LpMoldSpec *spec, char ***witnesses_out,
     *count_out = nl;
 }
 
-/* Compute dense SVD rank of M (rows x cols, row-major f32) for diagnostic verification. */
+/* Sparse O(nnz * D) operator application: Y_out = O_plane(Y_in). Zero n x n matrix allocation. */
+static void sparse_apply_plane(const CompactPlane *pl, size_t eos_id,
+                               const double *Y_in, double *Y_out, size_t n, size_t D, int transpose){
+    if (!pl || pl->ne == 0) {
+        memcpy(Y_out, Y_in, sizeof(double) * n * D);
+        return;
+    }
+    if (pl->kind == LP_MOLD_PLANE_UNARY) {
+        /* Sparse feature Gram: F = U^T * Y_in (n_feat x D), then Y_out = D_row^-1 * U * F. */
+        size_t nf = pl->n_features ? pl->n_features : 1u;
+        double *F = calloc(nf * D, sizeof(double));
+        double *fdeg = calloc(nf, sizeof(double));
+        for (size_t e = 0; e < pl->ne; e++) {
+            size_t r = (size_t)pl->ed[e].r, f = (size_t)pl->ed[e].c;
+            double w = pl->ed[e].w;
+            if (r >= n || f >= nf) continue;
+            fdeg[f] += fabs(w);
+            const double *in = Y_in + r * D;
+            double *fo = F + f * D;
+            for (size_t d = 0; d < D; d++) fo[d] += w * in[d];
+        }
+        for (size_t f = 0; f < nf; f++) {
+            if (fdeg[f] > 0.0) {
+                double inv = 1.0 / (fdeg[f] + 0.05);
+                double *fo = F + f * D;
+                for (size_t d = 0; d < D; d++) fo[d] *= inv;
+            }
+        }
+        memset(Y_out, 0, sizeof(double) * n * D);
+        for (size_t e = 0; e < pl->ne; e++) {
+            size_t r = (size_t)pl->ed[e].r, f = (size_t)pl->ed[e].c;
+            double w = pl->ed[e].w;
+            if (r >= n || f >= nf) continue;
+            double coeff = w / (pl->row_abs[r] + 0.05);
+            double *out = Y_out + r * D;
+            const double *fo = F + f * D;
+            for (size_t d = 0; d < D; d++) out[d] += coeff * fo[d];
+        }
+        for (size_t r = 0; r < n; r++) {
+            if (pl->row_abs[r] <= 0.0) memcpy(Y_out + r * D, Y_in + r * D, sizeof(double) * D);
+        }
+        free(F);
+        free(fdeg);
+        return;
+    }
+
+    if (transpose) {
+        double *col_abs = calloc(n, sizeof(double));
+        for (size_t e = 0; e < pl->ne; e++) {
+            size_t c = (size_t)pl->ed[e].c;
+            if (c < n) col_abs[c] += fabs(pl->ed[e].w);
+        }
+        memset(Y_out, 0, sizeof(double) * n * D);
+        for (size_t e = 0; e < pl->ne; e++) {
+            size_t r = (size_t)pl->ed[e].r, c = (size_t)pl->ed[e].c;
+            if (r >= n || c >= n) continue;
+            double coeff = pl->ed[e].w / (col_abs[c] + 0.05);
+            double *out = Y_out + c * D;
+            const double *in = Y_in + r * D;
+            for (size_t d = 0; d < D; d++) out[d] += coeff * in[d];
+        }
+        free(col_abs);
+        return;
+    }
+
+    /* Forward sparse propagation supporting both positive (excitatory) and negative (inhibitory) edges. */
+    double *col_mean = calloc(D, sizeof(double));
+    for (size_t i = 0; i < n; i++) {
+        const double *row = Y_in + i * D;
+        for (size_t d = 0; d < D; d++) col_mean[d] += row[d];
+    }
+    double smooth_scale = 0.05 / (double)n;
+    for (size_t d = 0; d < D; d++) col_mean[d] *= smooth_scale;
+
+    for (size_t r = 0; r < n; r++) {
+        double *out = Y_out + r * D;
+        if (pl->row_abs[r] <= 0.0) {
+            if (pl->kind == LP_MOLD_PLANE_TRAJECTORY) {
+                double inv = 1.0 / 1.05;
+                const double *eos_row = Y_in + eos_id * D;
+                for (size_t d = 0; d < D; d++) out[d] = (eos_row[d] + col_mean[d]) * inv;
+            } else {
+                memcpy(out, Y_in + r * D, sizeof(double) * D);
+            }
+        } else {
+            double inv = 1.0 / (pl->row_abs[r] + 0.05);
+            for (size_t d = 0; d < D; d++) out[d] = col_mean[d] * inv;
+        }
+    }
+    for (size_t e = 0; e < pl->ne; e++) {
+        size_t r = (size_t)pl->ed[e].r, c = (size_t)pl->ed[e].c;
+        if (r >= n || c >= n) continue;
+        double coeff = pl->ed[e].w / (pl->row_abs[r] + 0.05);
+        double *out = Y_out + r * D;
+        const double *in = Y_in + c * D;
+        for (size_t d = 0; d < D; d++) out[d] += coeff * in[d];
+    }
+    free(col_mean);
+}
+
+/* Compute dense SVD rank of M (rows x cols, row-major f32) via M^T M (D x D) when rows > cols (O(n * D^2), zero n x n). */
 static size_t measure_matrix_rank(const float *M, size_t rows, size_t cols){
     size_t k = rows < cols ? rows : cols;
     if (!k) return 0;
+    if (rows >= cols) {
+        double *Md = malloc(sizeof(double) * rows * cols);
+        double *G = calloc(cols * cols, sizeof(double));
+        double *s = malloc(sizeof(double) * cols);
+        for (size_t i = 0; i < rows * cols; i++) Md[i] = (double)M[i];
+        cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                    (MKL_INT)cols, (MKL_INT)cols, (MKL_INT)rows,
+                    1.0, Md, (MKL_INT)cols, Md, (MKL_INT)cols, 0.0, G, (MKL_INT)cols);
+        int rc = LAPACKE_dsyevd(LAPACK_ROW_MAJOR, 'N', 'U', (lapack_int)cols, G, (lapack_int)cols, s);
+        size_t rank = 0;
+        if (rc == 0 && s[cols - 1u] > 0.0) {
+            double tol = s[cols - 1u] * 1e-12;
+            for (size_t i = 0; i < cols; i++) if (s[i] > tol) rank++;
+        }
+        free(Md); free(G); free(s);
+        return rank;
+    }
     double *a = malloc(sizeof(double) * rows * cols);
     double *s = malloc(sizeof(double) * k);
     double *u = malloc(sizeof(double) * rows);
@@ -106,156 +326,202 @@ static size_t measure_matrix_rank(const float *M, size_t rows, size_t cols){
     return rank;
 }
 
-/* Full-rank multi-plane embedding: 4D coords + directed PMI SVD + Laplacian eigenmaps + ordered codepoint moments. */
-static void build_spectral_embedding(const LpMoldSpec *spec, const lp_tier0_record *t0,
-                                     size_t n, size_t D, const double *anchors4d,
-                                     const uint8_t *ids16, float *E_out, size_t *rank_out){
+/* Orthonormalize column-major (k x n) rows into row-major (n x k) Q for sparse subspace iteration. */
+static void orthonormalize_rows_inplace(double *Q_kn, size_t k, size_t n){
+    if (lp_gram_schmidt(Q_kn, k, n) != 0) {
+        for (size_t c = 0; c < k; c++) {
+            double ss = 0.0;
+            for (size_t i = 0; i < n; i++) ss += Q_kn[c * n + i] * Q_kn[c * n + i];
+            if (ss > 1e-18) {
+                double inv = 1.0 / sqrt(ss);
+                for (size_t i = 0; i < n; i++) Q_kn[c * n + i] *= inv;
+            }
+        }
+    }
+}
+
+/* Compute exact Chebyshev harmonic T_m(u) on u in [-1, 1] over real 4D S^3 codepoint trajectory (zero hash noise). */
+static double chebyshev_t(size_t m, double u){
+    if (m == 0) return 1.0;
+    if (m == 1) return u;
+    double t0 = 1.0, t1 = u;
+    for (size_t k = 2; k <= m; k++) {
+        double t2 = 2.0 * u * t1 - t0;
+        t0 = t1; t1 = t2;
+    }
+    return t1;
+}
+
+/* Full-rank multi-plane embedding in O(nnz * D): ZERO n x n dense matrices, ZERO fabricated BLAKE3 hash padding. */
+static void build_multiplane_embedding(const LpMoldSpec *spec, const CompactPlane *planes, size_t n_planes,
+                                       const lp_tier0_record *t0, size_t n, size_t D,
+                                       const double *anchors4d, float *E_out, size_t *rank_out){
     size_t target_rank = D - 2u;
     if (target_rank > n) target_rank = n;
     double *vecs = calloc(target_rank * n, sizeof(double));
 
-    /* Plane 1 (axes 0..3): deterministic 4D canonical spatial coordinates */
+    /* Precompute real ordered tier0.bin 4D S^3 codepoint curves for every token (deterministic geometry, separates anagrams). */
+    double **tok_curves = calloc(n, sizeof(double *));
+    size_t *tok_lens = calloc(n, sizeof(size_t));
+    if (t0) {
+        lp_text *cp_tx = lp_text_new(t0);
+        for (size_t i = 0; i < n; i++) {
+            const char *s = (spec->tokens && spec->tokens[i]) ? spec->tokens[i] : "";
+            size_t slen = strlen(s), pos = 0, m = 0, mcap = 16;
+            double *c4 = malloc(sizeof(double) * 4u * mcap);
+            while (pos < slen) {
+                size_t p0 = pos;
+                uint32_t cp = 0;
+                if (!lp_utf8_next((const uint8_t *)s, slen, &pos, &cp)) break;
+                if (m == mcap) { mcap *= 2u; c4 = xrealloc(c4, sizeof(double) * 4u * mcap); }
+                lp_ref cr = lp_text_decompose(cp_tx, (const uint8_t *)(s + p0), pos - p0, NULL, NULL);
+                lp_coord_xyzm(&cr.c, c4 + m * 4u);
+                m++;
+            }
+            if (m == 0) {
+                memcpy(c4, anchors4d + i * 4u, sizeof(double) * 4u);
+                m = 1;
+            }
+            tok_curves[i] = c4;
+            tok_lens[i] = m;
+        }
+        if (cp_tx) lp_text_free(cp_tx);
+    } else {
+        for (size_t i = 0; i < n; i++) {
+            tok_curves[i] = malloc(sizeof(double) * 4u);
+            memcpy(tok_curves[i], anchors4d + i * 4u, sizeof(double) * 4u);
+            tok_lens[i] = 1;
+        }
+    }
+
+    /* Plane 1 (axes 0..3): canonical 4D S^3 / 4-ball entity.coord anchors. */
     for (size_t c = 0; c < 4 && c < target_rank; c++) {
         for (size_t i = 0; i < n; i++) vecs[c * n + i] = anchors4d[i * 4u + c];
     }
     size_t filled = target_rank < 4u ? target_rank : 4u;
 
-    /* Plane 2: asymmetric directed trajectory context SVD (left U + right V singular modes of PMI(P)) */
-    if (filled < target_rank && n <= 1024u && n >= 4u && spec->n_edges > 0) {
-        double *P = calloc(n * n, sizeof(double));
-        double *row_sum = calloc(n, sizeof(double));
-        double *col_p = calloc(n, sizeof(double));
-        for (size_t e = 0; e < spec->n_edges; e++) {
-            int r = spec->rows[e], c = spec->cols[e];
-            double w = spec->weights ? spec->weights[e] : 1.0;
-            if (r >= 0 && c >= 0 && (size_t)r < n && (size_t)c < n && w > 0.0) {
-                P[(size_t)r * n + (size_t)c] += w;
-                row_sum[r] += w;
-            }
-        }
-        for (size_t r = 0; r < n; r++) {
-            double denom = row_sum[r] > 0.0 ? row_sum[r] : (double)n;
-            for (size_t c = 0; c < n; c++) {
-                double p = row_sum[r] > 0.0 ? (P[r * n + c] / denom) : (1.0 / (double)n);
-                P[r * n + c] = p;
-                col_p[c] += p / (double)n;
-            }
-        }
-        for (size_t r = 0; r < n; r++) {
-            for (size_t c = 0; c < n; c++) {
-                P[r * n + c] = log((P[r * n + c] + 1e-4) / (col_p[c] + 1e-4));
-            }
-        }
-        size_t want_pmi = (target_rank - filled) / 2u;
-        if (want_pmi == 0 && (target_rank - filled) > 0) want_pmi = 1u;
-        double *U = malloc(sizeof(double) * n * n);
-        double *S = malloc(sizeof(double) * n);
-        double *Vt = malloc(sizeof(double) * n * n);
-        if (LAPACKE_dgesdd(LAPACK_ROW_MAJOR, 'S', (lapack_int)n, (lapack_int)n,
-                           P, (lapack_int)n, S, U, (lapack_int)n, Vt, (lapack_int)n) == 0) {
-            size_t added = 0;
-            double tol = S[0] * 1e-9;
-            for (size_t k = 0; k < n && added < want_pmi && filled < target_rank && S[k] > tol; k++) {
-                for (size_t i = 0; i < n; i++) vecs[filled * n + i] = U[i * n + k];
-                filled++; added++;
-                if (added < want_pmi && filled < target_rank) {
-                    for (size_t i = 0; i < n; i++) vecs[filled * n + i] = Vt[k * n + i];
-                    filled++; added++;
+    /* Plane 2 (up to 16 axes): ordered tier0.bin 4D codepoint trajectory positional & bigram cross-moments. */
+    size_t curve_budget = target_rank > filled ? (target_rank - filled) : 0;
+    if (curve_budget > 16u) curve_budget = 16u;
+    for (size_t ax = 0; ax < curve_budget && filled < target_rank; ax++) {
+        for (size_t i = 0; i < n; i++) {
+            const double *c4 = tok_curves[i];
+            size_t m = tok_lens[i];
+            double val = 0.0;
+            if (ax < 8u) {
+                size_t r = 1u + (ax / 4u);
+                size_t d = ax % 4u;
+                for (size_t p = 0; p < m; p++) {
+                    double t = (2.0 * (double)p + 1.0) / (2.0 * (double)m);
+                    val += pow(t, (double)r) * c4[p * 4u + d];
                 }
+                val /= (double)m;
+            } else if (m >= 2u) {
+                size_t bi = ax - 8u;
+                size_t r = bi / 4u;
+                size_t d = bi % 4u;
+                for (size_t p = 0; p + 1u < m; p++) {
+                    double t = (2.0 * (double)p + 1.0) / (2.0 * (double)m);
+                    val += (r ? t : 1.0) * c4[p * 4u + d] * c4[(p + 1u) * 4u + ((d + 1u) % 4u)];
+                }
+                val /= (double)(m - 1u);
+            } else {
+                val = c4[ax % 4u] * c4[(ax + 1u) % 4u];
             }
+            vecs[filled * n + i] = val;
         }
-        free(U); free(S); free(Vt);
-        free(P); free(row_sum); free(col_p);
+        filled++;
     }
 
-    /* Plane 3: symmetric relational Laplacian eigenmaps */
-    if (filled < target_rank && n <= 1024u && n >= 4u && spec->n_edges > 0) {
-        double *W = calloc(n * n, sizeof(double));
-        for (size_t e = 0; e < spec->n_edges; e++) {
-            int r = spec->rows[e], c = spec->cols[e];
-            double w = spec->weights ? spec->weights[e] : 1.0;
-            if (r >= 0 && c >= 0 && (size_t)r < n && (size_t)c < n && r != c && w > 0.0) {
-                W[(size_t)r * n + (size_t)c] += w;
-                W[(size_t)c * n + (size_t)r] += w;
+    /* Plane 3 & 4: Sparse Subspace Iteration (O(nnz * k), ZERO n x n matrix) across ALL real substrate planes
+     * (Trajectory left/right continuation + Typed Relations + Unary feature Gram + 4D Metric curves). */
+    size_t active_planes = 0;
+    for (size_t p = 0; p < n_planes; p++) if (planes[p].ne > 0) active_planes++;
+    if (filled < target_rank && active_planes > 0) {
+        size_t rem_axes = target_rank - filled;
+        size_t per_plane = (rem_axes + active_planes - 1u) / active_planes;
+        if (per_plane < 2u) per_plane = 2u;
+
+        double *Q = malloc(sizeof(double) * n * per_plane);
+        double *Z = malloc(sizeof(double) * n * per_plane);
+        double *Qt = malloc(sizeof(double) * per_plane * n);
+
+        for (size_t p = 0; p < n_planes && filled < target_rank; p++) {
+            if (planes[p].ne == 0) continue;
+            size_t want = target_rank - filled;
+            if (want > per_plane) want = per_plane;
+
+            /* Deterministic seed basis from continuous Chebyshev projections of real 4D codepoint trajectories. */
+            for (size_t k = 0; k < want; k++) {
+                size_t deg = 1u + ((k + p * 3u) / 4u);
+                size_t d = (k + p) % 4u;
+                for (size_t i = 0; i < n; i++) {
+                    const double *c4 = tok_curves[i];
+                    size_t m = tok_lens[i];
+                    double acc = 0.0;
+                    for (size_t pos = 0; pos < m; pos++) {
+                        double u = m > 1u ? (2.0 * (double)pos / (double)(m - 1u) - 1.0) : 0.0;
+                        acc += chebyshev_t(deg, u) * c4[pos * 4u + d];
+                    }
+                    Qt[k * n + i] = acc / (double)m;
+                }
             }
-        }
-        for (size_t i = 0; i + 1 < n; i++) {
-            W[i * n + (i + 1)] += 1e-3;
-            W[(i + 1) * n + i] += 1e-3;
-        }
-        size_t want_k = target_rank - filled;
-        if (want_k > n - 2u) want_k = n - 2u;
-        if (want_k >= 1u) {
-            double *Y = malloc(sizeof(double) * n * want_k);
-            double *lam = malloc(sizeof(double) * want_k);
-            if (lp_eigenmap(W, n, want_k, Y, lam) == 0) {
-                for (size_t k = 0; k < want_k && filled < target_rank; k++) {
-                    for (size_t i = 0; i < n; i++) vecs[filled * n + i] = Y[i * want_k + k];
+            orthonormalize_rows_inplace(Qt, want, n);
+            for (size_t i = 0; i < n; i++) for (size_t k = 0; k < want; k++) Q[i * want + k] = Qt[k * n + i];
+
+            /* 3 sparse orthogonal subspace iterations: Z = O(Q) and O^T(O(Q)) for asymmetric trajectory/relation planes. */
+            for (int it = 0; it < 3; it++) {
+                sparse_apply_plane(&planes[p], (size_t)spec->eos_id, Q, Z, n, want, 0);
+                if (planes[p].kind == LP_MOLD_PLANE_TRAJECTORY || planes[p].kind == LP_MOLD_PLANE_RELATION) {
+                    /* Keep left/right asymmetry: alternate forward and transpose-mixed propagation */
+                    if (it == 1) {
+                        double *Zt = malloc(sizeof(double) * n * want);
+                        sparse_apply_plane(&planes[p], (size_t)spec->eos_id, Z, Zt, n, want, 1);
+                        for (size_t idx = 0; idx < n * want; idx++) Z[idx] = 0.7 * Z[idx] + 0.3 * Zt[idx];
+                        free(Zt);
+                    }
+                }
+                for (size_t i = 0; i < n; i++) for (size_t k = 0; k < want; k++) Qt[k * n + i] = Z[i * want + k];
+                orthonormalize_rows_inplace(Qt, want, n);
+                for (size_t i = 0; i < n; i++) for (size_t k = 0; k < want; k++) Q[i * want + k] = Qt[k * n + i];
+            }
+
+            /* Append non-degenerate singular modes to vecs */
+            for (size_t k = 0; k < want && filled < target_rank; k++) {
+                double norm2 = 0.0;
+                for (size_t i = 0; i < n; i++) norm2 += Qt[k * n + i] * Qt[k * n + i];
+                if (norm2 > 1e-12) {
+                    memcpy(vecs + filled * n, Qt + k * n, sizeof(double) * n);
                     filled++;
                 }
             }
-            free(Y); free(lam);
         }
-        free(W);
+        free(Q); free(Z); free(Qt);
     }
 
-    /* Plane 4: ordered tier0.bin UTF-8 codepoint trajectory moments (separates anagrams deterministically) */
-    if (filled < target_rank && t0) {
-        lp_text *cp_tx = lp_text_new(t0);
-        size_t mcap = 16;
-        double *cp_c4 = malloc(sizeof(double) * 4u * mcap);
+    /* Any remaining axes (e.g. very high D on tiny test vocabs): continuous Chebyshev 4D curve harmonics (zero hash bits). */
+    size_t harm_idx = 0;
+    while (filled < target_rank) {
+        size_t deg = 3u + (harm_idx / 4u);
+        size_t d = harm_idx % 4u;
+        size_t d2 = (harm_idx + 1u) % 4u;
         for (size_t i = 0; i < n; i++) {
-            const char *s = (spec->tokens && spec->tokens[i]) ? spec->tokens[i] : "";
-            size_t slen = strlen(s), pos = 0, m = 0;
-            while (pos < slen) {
-                size_t p0 = pos;
-                uint32_t cp = 0;
-                if (!lp_utf8_next((const uint8_t *)s, slen, &pos, &cp)) break;
-                if (m == mcap) { mcap *= 2u; cp_c4 = xrealloc(cp_c4, sizeof(double) * 4u * mcap); }
-                lp_ref cr = lp_text_decompose(cp_tx, (const uint8_t *)(s + p0), pos - p0, NULL, NULL);
-                lp_coord_xyzm(&cr.c, cp_c4 + m * 4u);
-                m++;
+            const double *c4 = tok_curves[i];
+            size_t m = tok_lens[i];
+            double acc = 0.0;
+            for (size_t pos = 0; pos < m; pos++) {
+                double u = m > 1u ? (2.0 * (double)pos / (double)(m - 1u) - 1.0) : 0.0;
+                double w = chebyshev_t(deg, u);
+                acc += w * (c4[pos * 4u + d] + 0.5 * c4[pos * 4u + d2] * (double)(pos + 1u) / (double)m);
             }
-            if (m == 0) {
-                cp_c4[0] = anchors4d[i * 4u + 0]; cp_c4[1] = anchors4d[i * 4u + 1];
-                cp_c4[2] = anchors4d[i * 4u + 2]; cp_c4[3] = anchors4d[i * 4u + 3];
-                m = 1;
-            }
-            for (size_t ax = filled; ax < target_rank; ax++) {
-                size_t rel_ax = ax - filled;
-                double val = 0.0;
-                if (rel_ax < 16u) {
-                    /* First 16 axes: positional power moments (r=1..4) across 4D S^3 codepoint coordinates */
-                    size_t r = 1u + (rel_ax / 4u);
-                    size_t d = rel_ax % 4u;
-                    for (size_t p = 0; p < m; p++) {
-                        double t = (2.0 * (double)p + 1.0) / (2.0 * (double)m);
-                        val += pow(t, (double)r) * cp_c4[p * 4u + d];
-                    }
-                    val /= (double)m;
-                } else if (rel_ax < 28u && m >= 2u) {
-                    /* Next 12 axes: ordered consecutive codepoint bigram cross-moments */
-                    size_t bi = rel_ax - 16u;
-                    size_t r = bi / 4u;
-                    size_t d = bi % 4u;
-                    for (size_t p = 0; p + 1u < m; p++) {
-                        double t = (2.0 * (double)p + 1.0) / (2.0 * (double)m);
-                        val += (r ? pow(t, (double)r) : 1.0) * cp_c4[p * 4u + d] * cp_c4[(p + 1u) * 4u + ((d + 1u) % 4u)];
-                    }
-                    val /= (double)(m - 1u);
-                } else {
-                    /* Higher dimensions: deterministic BLAKE3-128 content hash bit planes (never row index!) */
-                    size_t bit_idx = (rel_ax - 16u) % 128u;
-                    int bit = (ids16[i * 16u + (bit_idx >> 3)] >> (bit_idx & 7u)) & 1;
-                    val = bit ? 1.0 : -1.0;
-                }
-                vecs[ax * n + i] = val;
-            }
+            vecs[filled * n + i] = acc / (double)m;
         }
-        filled = target_rank;
-        free(cp_c4);
-        if (cp_tx) lp_text_free(cp_tx);
+        filled++;
+        harm_idx++;
     }
+
+    for (size_t i = 0; i < n; i++) free(tok_curves[i]);
+    free(tok_curves); free(tok_lens);
 
     /* Householder QR orthonormalization across rows (columns of embedding E) */
     if (lp_gram_schmidt(vecs, target_rank, n) != 0) {
@@ -280,7 +546,7 @@ static void build_spectral_embedding(const LpMoldSpec *spec, const lp_tier0_reco
         free(A4);
     }
 
-    /* Pack (n x D) with RMS normalization slack in dims D-2, D-1 */
+    /* Pack (n x D) with exact RMS normalization slack in dims D-2, D-1 */
     double *ed = calloc(n * D, sizeof(double));
     double max_ss = 0.0;
     for (size_t i = 0; i < n; i++) {
@@ -320,44 +586,105 @@ static void rows_rmsnorm_f32(const float *x, float *y, size_t n, size_t d, doubl
     }
 }
 
-/* Compute least-squares readout head W (V x D) fitting log-transition distribution over X (V x D). */
-static void synthesize_readout(const LpMoldSpec *spec, const float *X, size_t n, size_t D, float *head_out){
-    double *tgt = malloc(sizeof(double) * n * n);
-    double *row_sum = calloc(n, sizeof(double));
-    for (size_t e = 0; e < spec->n_edges; e++) {
-        int r = spec->rows[e], c = spec->cols[e];
-        double w = spec->weights ? spec->weights[e] : 1.0;
-        if (r >= 0 && c >= 0 && (size_t)r < n && (size_t)c < n && w > 0.0) {
-            row_sum[r] += w;
-        }
-    }
-    double floor_log = log(1e-3 / (double)n);
-    for (size_t i = 0; i < n * n; i++) tgt[i] = floor_log;
-    for (size_t i = 0; i < n; i++) {
-        if (row_sum[i] <= 0.0) tgt[i * n + (size_t)spec->eos_id] = 1.0;
-    }
-    for (size_t e = 0; e < spec->n_edges; e++) {
-        int r = spec->rows[e], c = spec->cols[e];
-        double w = spec->weights ? spec->weights[e] : 1.0;
-        if (r >= 0 && c >= 0 && (size_t)r < n && (size_t)c < n && w > 0.0 && row_sum[r] > 0.0) {
-            tgt[(size_t)r * n + (size_t)c] = log(w / row_sum[r] * (double)n) + 1.0;
-        }
-    }
-    free(row_sum);
+/* Compile lm_head (V x D) from the declared lm_head_plane in O(n_active*D^2 + nnz*D) (zero n x n matrix).
+ * Fits ONLY rows that have real substrate evidence (active sources or terminal targets), so unused byte-fallback
+ * slots (<0x00>..<0xFF>) never drown the rank-D readout with spurious EOS votes! */
+static void synthesize_readout(const LpMoldSpec *spec, const CompactPlane *lm_plane,
+                               const float *X, size_t n, size_t D, float *head_out){
+    double delta = (spec->lm_head_max_outside_prob > 0.0 && spec->lm_head_max_outside_prob < 1.0)
+        ? spec->lm_head_max_outside_prob : 1e-3;
+    double floor_log = log(delta / (double)n);
 
-    size_t k = n < D ? n : D;
-    double *A = malloc(sizeof(double) * n * D);
-    double *U = malloc(sizeof(double) * n * k);
+    size_t *row_k = calloc(n, sizeof(size_t));
+    uint8_t *is_target = calloc(n, 1);
+    for (size_t e = 0; e < lm_plane->ne; e++) {
+        size_t r = (size_t)lm_plane->ed[e].r, c = (size_t)lm_plane->ed[e].c;
+        if (r < n && c < n && lm_plane->ed[e].w > 0.0) {
+            row_k[r]++;
+            is_target[c] = 1;
+        }
+    }
+
+    /* Collect active rows: tokens with outgoing edges, plus terminal targets (for clean EOS stall on hypernym roots). */
+    size_t *active = malloc(sizeof(size_t) * n);
+    size_t *row_to_act = malloc(sizeof(size_t) * n);
+    size_t na = 0;
+    for (size_t i = 0; i < n; i++) {
+        row_to_act[i] = (size_t)-1;
+        if (lm_plane->row_pos[i] > 0.0 || is_target[i]) {
+            row_to_act[i] = na;
+            active[na++] = i;
+        }
+    }
+    if (na == 0) {
+        memcpy(head_out, X, sizeof(float) * n * D);
+        free(row_k); free(is_target); free(active); free(row_to_act);
+        return;
+    }
+
+    size_t k = na < D ? na : D;
+    double *A = malloc(sizeof(double) * na * D);
+    double *U = malloc(sizeof(double) * na * k);
     double *S = malloc(sizeof(double) * k);
     double *Vt = malloc(sizeof(double) * k * D);
-    for (size_t i = 0; i < n * D; i++) A[i] = (double)X[i];
+    for (size_t ai = 0; ai < na; ai++) {
+        size_t r = active[ai];
+        for (size_t c = 0; c < D; c++) A[ai * D + c] = (double)X[r * D + c];
+    }
 
-    int rc = LAPACKE_dgesdd(LAPACK_ROW_MAJOR, 'S', (lapack_int)n, (lapack_int)D,
+    int rc = LAPACKE_dgesdd(LAPACK_ROW_MAJOR, 'S', (lapack_int)na, (lapack_int)D,
                             A, (lapack_int)D, S, U, (lapack_int)k, Vt, (lapack_int)D);
     if (rc == 0) {
+        double *u_sum = calloc(k, sizeof(double));
+        for (size_t ai = 0; ai < na; ai++) {
+            size_t r = active[ai];
+            const double *ur = U + ai * k;
+            double row_floor = floor_log;
+            if (spec->lm_head_set_mode && row_k[r] > 0 && row_k[r] < n) {
+                double vk = (double)(n - row_k[r]);
+                row_floor = -log((vk * (1.0 - delta)) / ((double)row_k[r] * delta));
+            }
+            for (size_t z = 0; z < k; z++) u_sum[z] += ur[z] * row_floor;
+        }
         double *UtT = calloc(k * n, sizeof(double));
-        cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, (MKL_INT)k, (MKL_INT)n, (MKL_INT)n,
-                    1.0, U, (MKL_INT)k, tgt, (MKL_INT)n, 0.0, UtT, (MKL_INT)n);
+        for (size_t z = 0; z < k; z++) {
+            double base = u_sum[z];
+            double *row = UtT + z * n;
+            for (size_t j = 0; j < n; j++) row[j] = base;
+        }
+        for (size_t ai = 0; ai < na; ai++) {
+            size_t r = active[ai];
+            if (lm_plane->row_pos[r] <= 0.0) {
+                /* Terminal target node with no outgoing continuation stalls cleanly at EOS. */
+                double target = spec->lm_head_set_mode ? 0.0 : 1.0;
+                double dlt = target - floor_log;
+                const double *ur = U + ai * k;
+                for (size_t z = 0; z < k; z++) UtT[z * n + (size_t)spec->eos_id] += ur[z] * dlt;
+            }
+        }
+        for (size_t e = 0; e < lm_plane->ne; e++) {
+            size_t r = (size_t)lm_plane->ed[e].r, c = (size_t)lm_plane->ed[e].c;
+            if (r >= n || c >= n) continue;
+            size_t ai = row_to_act[r];
+            if (ai == (size_t)-1) continue;
+            double w = lm_plane->ed[e].w;
+            double row_floor = floor_log;
+            if (spec->lm_head_set_mode && row_k[r] > 0 && row_k[r] < n) {
+                double vk = (double)(n - row_k[r]);
+                row_floor = -log((vk * (1.0 - delta)) / ((double)row_k[r] * delta));
+            }
+            double target = row_floor;
+            if (w > 0.0 && lm_plane->row_pos[r] > 0.0) {
+                target = spec->lm_head_set_mode ? 0.0 : (log(w / lm_plane->row_pos[r] * (double)n) + 2.0);
+            } else if (w < 0.0) {
+                target = row_floor - log1p(fabs(w));
+            }
+            double dlt = target - row_floor;
+            if (dlt == 0.0) continue;
+            const double *ur = U + ai * k;
+            for (size_t z = 0; z < k; z++) UtT[z * n + c] += ur[z] * dlt;
+        }
+        free(u_sum);
         double tol = S[0] * 1e-6;
         for (size_t z = 0; z < k; z++) {
             double inv = S[z] > tol ? 1.0 / S[z] : 0.0;
@@ -371,8 +698,8 @@ static void synthesize_readout(const LpMoldSpec *spec, const float *X, size_t n,
     } else {
         memcpy(head_out, X, sizeof(float) * n * D);
     }
+    free(row_k); free(is_target); free(active); free(row_to_act);
     free(A); free(U); free(S); free(Vt);
-    free(tgt);
 }
 
 static int emit_tensor(lp_gguf_writer *gw, lp_st_writer *sw, const char *name,
@@ -403,133 +730,137 @@ static int emit_tensor(lp_gguf_writer *gw, lp_st_writer *sw, const char *name,
     return rc;
 }
 
-/* Compute B_L = X^T * M_eff * X (D x D) and decompose via SVD into U_L * diag(S_L) * Vt_L. */
-static void compile_layer_operators(size_t L, size_t NL, size_t n, size_t D, size_t NH, size_t NKV, size_t HD, size_t FF,
-                                    const double *Xd, const double *M_eff,
-                                    float *wq, float *wk, float *wv, float *wo,
-                                    float *fg, float *fu, float *fd){
-    double *MX = malloc(sizeof(double) * n * D);
-    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                (MKL_INT)n, (MKL_INT)D, (MKL_INT)n,
-                1.0, M_eff, (MKL_INT)n, Xd, (MKL_INT)D, 0.0, MX, (MKL_INT)D);
-
-    /* 1. Bilinear affinity B_L = X^T * MX */
-    double *BL = malloc(sizeof(double) * D * D);
-    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                (MKL_INT)D, (MKL_INT)D, (MKL_INT)n,
-                1.0, Xd, (MKL_INT)D, MX, (MKL_INT)D, 0.0, BL, (MKL_INT)D);
-    for (size_t c = 0; c < D; c++) BL[c * D + c] += 0.05 / (double)(L + 1u);
-
-    /* 2. Value-transport operator T_L = X^T * (M_eff - I) * X */
-    double *TMX = malloc(sizeof(double) * n * D);
-    for (size_t i = 0; i < n * D; i++) TMX[i] = MX[i] - Xd[i];
-    double *TL = malloc(sizeof(double) * D * D);
-    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                (MKL_INT)D, (MKL_INT)D, (MKL_INT)n,
-                1.0, Xd, (MKL_INT)D, TMX, (MKL_INT)D, 0.0, TL, (MKL_INT)D);
-    for (size_t c = 0; c < D; c++) TL[c * D + c] += 1e-4 / (double)(L + 1u);
-    free(TMX);
-
-    /* 3. FFN residual operator R_L = MX^T * MX - X^T * MX + eps*I */
-    double *RL = malloc(sizeof(double) * D * D);
-    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                (MKL_INT)D, (MKL_INT)D, (MKL_INT)n,
-                1.0, MX, (MKL_INT)D, MX, (MKL_INT)D, 0.0, RL, (MKL_INT)D);
-    for (size_t i = 0; i < D * D; i++) RL[i] -= (BL[i] - 0.05 / (double)(L + 1u) * 0.0);
-    for (size_t c = 0; c < D; c++) RL[c * D + c] += 1e-4 / (double)(L + 1u);
-    free(MX);
-
-    double *UL = malloc(sizeof(double) * D * D), *SL = malloc(sizeof(double) * D), *VtL = malloc(sizeof(double) * D * D);
-    double *Ut = malloc(sizeof(double) * D * D), *St = malloc(sizeof(double) * D), *Vtt = malloc(sizeof(double) * D * D);
-    double *Uf = malloc(sizeof(double) * D * D), *Sf = malloc(sizeof(double) * D), *Vtf = malloc(sizeof(double) * D * D);
-
-    int rcB = LAPACKE_dgesdd(LAPACK_ROW_MAJOR, 'A', (lapack_int)D, (lapack_int)D, BL, (lapack_int)D, SL, UL, (lapack_int)D, VtL, (lapack_int)D);
-    int rcT = LAPACKE_dgesdd(LAPACK_ROW_MAJOR, 'A', (lapack_int)D, (lapack_int)D, TL, (lapack_int)D, St, Ut, (lapack_int)D, Vtt, (lapack_int)D);
-    int rcR = LAPACKE_dgesdd(LAPACK_ROW_MAJOR, 'A', (lapack_int)D, (lapack_int)D, RL, (lapack_int)D, Sf, Uf, (lapack_int)D, Vtf, (lapack_int)D);
-
-    double split = pow((double)NL, -0.25);
+/* Compile layer L: EACH head h fills ONLY its own [h*HD, (h+1)*HD) rows from its declared substrate plane!
+ * FFN compiles from this layer's declared ffn_plane! Zero n x n matrices, zero tiling of one matrix across heads. */
+static void compile_layer_per_head(size_t L, size_t NL, size_t n, size_t D, size_t NH, size_t NKV, size_t HD, size_t FF,
+                                   size_t eos_id, const double *Xd,
+                                   const CompactPlane *planes, size_t n_planes,
+                                   const size_t *head_planes, size_t ffn_plane,
+                                   float *wq, float *wk, float *wv, float *wo,
+                                   float *fg, float *fu, float *fd){
     size_t qdim = NH * HD, kdim = NKV * HD;
-    size_t l_off = (L * HD) % D;
+    double split = pow((double)NL, -0.25);
+    double reg = 0.05 / (double)(L + 1u);
 
-    if (rcB == 0) {
-        for (size_t h = 0; h < NH; h++) {
-            for (size_t j = 0; j < HD; j++) {
-                size_t r = h * HD + j;
-                size_t mode = (l_off + r) % D;
-                double sgn = sqrt(SL[mode] > 1e-12 ? SL[mode] : 1e-12) * 0.25 * split;
-                for (size_t c = 0; c < D; c++) wq[r * D + c] = (float)(sgn * UL[c * D + mode]);
+    memset(wq, 0, sizeof(float) * qdim * D);
+    memset(wk, 0, sizeof(float) * kdim * D);
+    memset(wv, 0, sizeof(float) * kdim * D);
+    memset(wo, 0, sizeof(float) * D * qdim);
+
+    double *MX = malloc(sizeof(double) * n * D);
+    double *MX2 = malloc(sizeof(double) * n * D);
+    double *TMX = malloc(sizeof(double) * n * D);
+    double *B = malloc(sizeof(double) * D * D);
+    double *T = malloc(sizeof(double) * D * D);
+    double *UB = malloc(sizeof(double) * D * D), *SB = malloc(sizeof(double) * D), *VtB = malloc(sizeof(double) * D * D);
+    double *UT = malloc(sizeof(double) * D * D), *ST = malloc(sizeof(double) * D), *VtT = malloc(sizeof(double) * D * D);
+
+    double *wk_acc = calloc(kdim * D, sizeof(double));
+    double *wv_acc = calloc(kdim * D, sizeof(double));
+    size_t group = NH / NKV;
+    double inv_g = 1.0 / (double)group;
+
+    /* Track how many heads in this layer share the same plane so distinct heads on the same plane take
+     * disjoint spectral bands [occ*HD..(occ+1)*HD) rather than duplicating modes. */
+    size_t *plane_occ = calloc(n_planes ? n_planes : 1u, sizeof(size_t));
+
+    for (size_t h = 0; h < NH; h++) {
+        size_t pi = head_planes ? (head_planes[h] % n_planes) : (h % n_planes);
+        size_t occ_idx = plane_occ[pi]++;
+        const CompactPlane *pl = &planes[pi];
+
+        /* Apply head h's OWN sparse operator (depth-modulated for multi-layer composition on the same plane). */
+        sparse_apply_plane(pl, eos_id, Xd, MX, n, D, 0);
+        if (L > 0 && pl->kind == LP_MOLD_PLANE_TRAJECTORY) {
+            sparse_apply_plane(pl, eos_id, MX, MX2, n, D, 0);
+            for (size_t i = 0; i < n * D; i++) MX[i] = 0.65 * MX[i] + 0.35 * MX2[i];
+        }
+
+        /* Head h bilinear QK affinity: B_h = X^T * MX */
+        cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                    (MKL_INT)D, (MKL_INT)D, (MKL_INT)n,
+                    1.0, Xd, (MKL_INT)D, MX, (MKL_INT)D, 0.0, B, (MKL_INT)D);
+        for (size_t c = 0; c < D; c++) B[c * D + c] += reg;
+
+        /* Head h value-transport OV operator: T_h = X^T * (MX - X) */
+        for (size_t i = 0; i < n * D; i++) TMX[i] = MX[i] - Xd[i];
+        cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                    (MKL_INT)D, (MKL_INT)D, (MKL_INT)n,
+                    1.0, Xd, (MKL_INT)D, TMX, (MKL_INT)D, 0.0, T, (MKL_INT)D);
+        for (size_t c = 0; c < D; c++) T[c * D + c] += 1e-4 / (double)(L + 1u);
+
+        int rcB = LAPACKE_dgesdd(LAPACK_ROW_MAJOR, 'A', (lapack_int)D, (lapack_int)D, B, (lapack_int)D, SB, UB, (lapack_int)D, VtB, (lapack_int)D);
+        int rcT = LAPACKE_dgesdd(LAPACK_ROW_MAJOR, 'A', (lapack_int)D, (lapack_int)D, T, (lapack_int)D, ST, UT, (lapack_int)D, VtT, (lapack_int)D);
+
+        size_t kv = h / group;
+        size_t mode_base = (occ_idx * HD) % D;
+
+        for (size_t j = 0; j < HD; j++) {
+            size_t qrow = h * HD + j;
+            size_t krow = kv * HD + j;
+            size_t mode = (mode_base + j) % D;
+            if (rcB == 0) {
+                double sgn = sqrt(SB[mode] > 1e-12 ? SB[mode] : 1e-12) * 0.25 * split;
+                for (size_t c = 0; c < D; c++) {
+                    wq[qrow * D + c] = (float)(sgn * UB[c * D + mode]);
+                    wk_acc[krow * D + c] += sgn * VtB[mode * D + c] * inv_g;
+                }
+            }
+            if (rcT == 0) {
+                double sgn = sqrt(ST[mode] > 1e-12 ? ST[mode] : 1e-12) * 0.15 * split;
+                for (size_t c = 0; c < D; c++) {
+                    wv_acc[krow * D + c] += sgn * VtT[mode * D + c] * inv_g;
+                    wo[c * qdim + qrow] = (float)(sgn * UT[c * D + mode]);
+                }
             }
         }
-        size_t group = NH / NKV;
-        for (size_t kv = 0; kv < NKV; kv++) {
-            for (size_t j = 0; j < HD; j++) {
-                size_t r = kv * HD + j;
-                size_t h_rep = kv * group;
-                size_t mode = (l_off + h_rep * HD + j) % D;
-                double sgn = sqrt(SL[mode] > 1e-12 ? SL[mode] : 1e-12) * 0.25 * split;
-                for (size_t c = 0; c < D; c++) wk[r * D + c] = (float)(sgn * VtL[mode * D + c]);
-            }
-        }
-    } else {
-        memset(wq, 0, sizeof(float) * qdim * D);
-        memset(wk, 0, sizeof(float) * kdim * D);
-        for (size_t c = 0; c < qdim && c < D; c++) wq[c * D + ((c + L) % D)] = (float)(0.25 * split);
-        for (size_t c = 0; c < kdim && c < D; c++) wk[c * D + ((c + L) % D)] = (float)(0.25 * split);
+    }
+    for (size_t i = 0; i < kdim * D; i++) {
+        wk[i] = (float)wk_acc[i];
+        wv[i] = (float)wv_acc[i];
     }
 
-    if (rcT == 0) {
-        size_t group = NH / NKV;
-        for (size_t kv = 0; kv < NKV; kv++) {
-            for (size_t j = 0; j < HD; j++) {
-                size_t r = kv * HD + j;
-                size_t mode = (l_off + (kv * group) * HD + j) % D;
-                double sgn = sqrt(St[mode] > 1e-12 ? St[mode] : 1e-12) * 0.15 * split;
-                for (size_t c = 0; c < D; c++) wv[r * D + c] = (float)(sgn * Vtt[mode * D + c]);
-            }
-        }
-        for (size_t h = 0; h < NH; h++) {
-            for (size_t j = 0; j < HD; j++) {
-                size_t col = h * HD + j;
-                size_t mode = (l_off + col) % D;
-                double sgn = sqrt(St[mode] > 1e-12 ? St[mode] : 1e-12) * 0.15 * split;
-                for (size_t c = 0; c < D; c++) wo[c * qdim + col] = (float)(sgn * Ut[c * D + mode]);
-            }
-        }
-    } else {
-        memset(wv, 0, sizeof(float) * kdim * D);
-        memset(wo, 0, sizeof(float) * D * qdim);
-        for (size_t c = 0; c < kdim && c < D; c++) wv[c * D + ((c + L) % D)] = (float)(0.15 * split);
-        for (size_t c = 0; c < qdim && c < D; c++) wo[((c + L) % D) * qdim + c] = (float)(0.15 * split);
+    /* Layer L FFN: compile SwiGLU (gate/up/down) from this layer's declared ffn_plane! */
+    const CompactPlane *fpl = &planes[ffn_plane % n_planes];
+    sparse_apply_plane(fpl, eos_id, Xd, MX, n, D, 0);
+    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                (MKL_INT)D, (MKL_INT)D, (MKL_INT)n,
+                1.0, Xd, (MKL_INT)D, MX, (MKL_INT)D, 0.0, B, (MKL_INT)D);
+    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                (MKL_INT)D, (MKL_INT)D, (MKL_INT)n,
+                1.0, MX, (MKL_INT)D, MX, (MKL_INT)D, 0.0, T, (MKL_INT)D);
+    for (size_t i = 0; i < D * D; i++) T[i] -= B[i];
+    for (size_t c = 0; c < D; c++) {
+        B[c * D + c] += reg;
+        T[c * D + c] += reg + 1e-4 / (double)(L + 1u);
     }
 
-    if (rcR == 0 && rcB == 0) {
+    int rcFB = LAPACKE_dgesdd(LAPACK_ROW_MAJOR, 'A', (lapack_int)D, (lapack_int)D, B, (lapack_int)D, SB, UB, (lapack_int)D, VtB, (lapack_int)D);
+    int rcFR = LAPACKE_dgesdd(LAPACK_ROW_MAJOR, 'A', (lapack_int)D, (lapack_int)D, T, (lapack_int)D, ST, UT, (lapack_int)D, VtT, (lapack_int)D);
+
+    memset(fg, 0, sizeof(float) * FF * D);
+    memset(fu, 0, sizeof(float) * FF * D);
+    memset(fd, 0, sizeof(float) * D * FF);
+    if (rcFR == 0 && rcFB == 0) {
         for (size_t z = 0; z < FF; z++) {
-            size_t mode = (z + L * 3u) % D;
-            double sf = sqrt(Sf[mode] > 1e-12 ? Sf[mode] : 1e-12) * 0.15 * split;
+            size_t mode = z % D;
+            double band_scale = 1.0 / (double)(1u + z / D);
+            double sf = sqrt(ST[mode] > 1e-12 ? ST[mode] : 1e-12) * 0.15 * split * band_scale;
             for (size_t c = 0; c < D; c++) {
-                fu[z * D + c] = (float)(sf * Vtf[mode * D + c]);
-                fd[c * FF + z] = (float)(sf * Uf[c * D + mode]);
-                fg[z * D + c] = (float)(0.5 * UL[c * D + mode]);
+                fu[z * D + c] = (float)(sf * VtT[mode * D + c]);
+                fd[c * FF + z] = (float)(sf * UT[c * D + mode]);
+                fg[z * D + c] = (float)(0.5 * UB[c * D + mode] * band_scale);
             }
             fg[z * D + (D - 1u)] += (float)(0.25 + 0.10 * (double)(L + 1u));
         }
-    } else {
-        memset(fg, 0, sizeof(float) * FF * D);
-        memset(fu, 0, sizeof(float) * FF * D);
-        memset(fd, 0, sizeof(float) * D * FF);
-        for (size_t z = 0; z < FF; z++) {
-            size_t col = (z + L) % (D - 1u > 0 ? D - 1u : 1u);
-            fg[z * D + col] = 0.5f;
-            fg[z * D + (D - 1u)] = (float)(0.25 + 0.10 * (double)(L + 1u));
-            fu[z * D + col] = (float)(0.1 * split);
-            fd[col * FF + z] = (float)(0.1 * split);
-        }
     }
 
-    free(BL); free(TL); free(RL);
-    free(UL); free(SL); free(VtL);
-    free(Ut); free(St); free(Vtt);
-    free(Uf); free(Sf); free(Vtf);
+    free(plane_occ);
+    free(wk_acc); free(wv_acc);
+    free(MX); free(MX2); free(TMX);
+    free(B); free(T);
+    free(UB); free(SB); free(VtB);
+    free(UT); free(ST); free(VtT);
 }
 
 int lp_mold_export(const LpMoldSpec *spec){
@@ -576,6 +907,22 @@ int lp_mold_export(const LpMoldSpec *spec){
     }
     lp_text_free(tx);
 
+    /* Compact all declared substrate planes (or single legacy edge set when n_planes == 0). */
+    size_t n_planes = (spec->n_planes > 0 && spec->planes) ? spec->n_planes : 1u;
+    CompactPlane *cplanes = calloc(n_planes, sizeof(CompactPlane));
+    if (spec->n_planes > 0 && spec->planes) {
+        for (size_t p = 0; p < n_planes; p++) {
+            const LpMoldPlane *pl = &spec->planes[p];
+            cplanes[p] = compact_plane_from_raw(pl->kind, pl->tag, pl->rows, pl->cols, pl->weights,
+                                                pl->n_edges, n, pl->n_features);
+        }
+    } else {
+        cplanes[0] = compact_plane_from_raw(LP_MOLD_PLANE_TRAJECTORY, "trajectory",
+                                            spec->rows, spec->cols, spec->weights,
+                                            spec->n_edges, n, n);
+    }
+    size_t lm_pi = (spec->lm_head_plane < n_planes) ? spec->lm_head_plane : 0u;
+
     char **witnesses = NULL;
     int32_t *share_bp = NULL;
     size_t n_witness = 0;
@@ -583,31 +930,23 @@ int lp_mold_export(const LpMoldSpec *spec){
 
     float *E = calloc(n * D, sizeof(float));
     float *X = calloc(n * D, sizeof(float));
+    float *H_cal = calloc(n * D, sizeof(float));
+    float *H_norm = calloc(n * D, sizeof(float));
     float *head = calloc(n * D, sizeof(float));
     size_t rank = 0;
-    build_spectral_embedding(spec, t0, n, D, anchors, ids16, E, &rank);
+    build_multiplane_embedding(spec, cplanes, n_planes, t0, n, D, anchors, E, &rank);
     rows_rmsnorm_f32(E, X, n, D, eps);
-    synthesize_readout(spec, X, n, D, head);
+    memcpy(H_cal, E, sizeof(float) * n * D);
     free(anchors);
 
     lp_gguf_writer *gw = NULL;
     lp_st_writer *sw = NULL;
     if (spec->format == 0) {
         gw = lp_gguf_writer_create(spec->out_path);
-        if (!gw) {
-            free(ids16); free(E); free(X); free(head);
-            for (size_t i = 0; i < n_witness; i++) free(witnesses[i]);
-            free(witnesses); free(share_bp);
-            return -1;
-        }
+        if (!gw) goto fail_writers;
     } else {
         sw = lp_st_writer_create(spec->out_path);
-        if (!sw) {
-            free(ids16); free(E); free(X); free(head);
-            for (size_t i = 0; i < n_witness; i++) free(witnesses[i]);
-            free(witnesses); free(share_bp);
-            return -1;
-        }
+        if (!sw) goto fail_writers;
     }
 
     const char *mname = (spec->name && *spec->name) ? spec->name : "laplace-molded";
@@ -654,21 +993,29 @@ int lp_mold_export(const LpMoldSpec *spec){
                            || !strcmp(chosen, "<bos>") || !strcmp(chosen, "<eos>")
                            || i == (size_t)spec->bos_id || i == (size_t)spec->eos_id);
             int is_unk = (!strcmp(chosen, "<unk>") || (spec->bos_id != 0 && i == 0u && !is_ctrl));
+            if (!is_unk && !is_ctrl && !is_byte && chosen[0] != '<' && !(clen >= 3 && (uint8_t)chosen[0] == 0xE2 && (uint8_t)chosen[1] == 0x96 && (uint8_t)chosen[2] == 0x81)) {
+                /* Prefix normal word tokens with SentencePiece U+2581 ('▁') so llama.cpp renders clean word spacing. */
+                char *sp = malloc(clen + 4u);
+                sp[0] = (char)0xE2; sp[1] = (char)0x96; sp[2] = (char)0x81;
+                memcpy(sp + 3, chosen, clen + 1u);
+                free(owned_tokens[i]);
+                owned_tokens[i] = sp;
+                chosen = sp;
+                ggml_tokens[i] = chosen;
+            }
             if (!found_unk && !strcmp(chosen, "<unk>")) {
                 unk_id = (uint32_t)i;
                 found_unk = 1;
             }
-            if (is_unk) {
-                tok_types[i] = 2; scores[i] = 0.0f;
-            } else if (is_ctrl) {
-                tok_types[i] = 3; scores[i] = 0.0f;
-            } else if (is_byte) {
-                tok_types[i] = 6; scores[i] = 0.0f;
-            } else {
-                tok_types[i] = 1; scores[i] = -(float)i;
-            }
+            if (is_unk) { tok_types[i] = 2; scores[i] = -1000.0f; }
+            else if (is_ctrl) { tok_types[i] = 3; scores[i] = 0.0f; }
+            else if (is_byte) { tok_types[i] = 6; scores[i] = -100.0f; }
+            else { tok_types[i] = 1; scores[i] = -1.0f - (float)i / (float)(n + 1u); }
         }
         lp_strmap_free(seen_tok);
+
+        const char **ptags = malloc(sizeof(char *) * n_planes);
+        for (size_t p = 0; p < n_planes; p++) ptags[p] = cplanes[p].tag;
 
         rc |= lp_gguf_writer_add_str(gw, "general.architecture", "llama");
         rc |= lp_gguf_writer_add_str(gw, "general.name", mname);
@@ -681,10 +1028,13 @@ int lp_mold_export(const LpMoldSpec *spec){
         rc |= lp_gguf_writer_add_u32(gw, "tokenizer.ggml.bos_token_id", (uint32_t)spec->bos_id);
         rc |= lp_gguf_writer_add_u32(gw, "tokenizer.ggml.eos_token_id", (uint32_t)spec->eos_id);
         rc |= lp_gguf_writer_add_u32(gw, "tokenizer.ggml.padding_token_id", (uint32_t)spec->eos_id);
-        rc |= lp_gguf_writer_add_bool(gw, "tokenizer.ggml.add_space_prefix", 0);
+        rc |= lp_gguf_writer_add_bool(gw, "tokenizer.ggml.add_space_prefix", 1);
         rc |= lp_gguf_writer_add_str(gw, "laplace.tokenizer.scheme", "laplace-blake3-v1");
         rc |= lp_gguf_writer_add_u32(gw, "laplace.vocab.size", (uint32_t)n);
         rc |= lp_gguf_writer_add_u8_array(gw, "laplace.vocab.blake3_ids", ids16, 16u * n);
+        rc |= lp_gguf_writer_add_str_array(gw, "laplace.mold.planes", ptags, n_planes);
+        rc |= lp_gguf_writer_add_str(gw, "laplace.mold.lm_head_plane", cplanes[lm_pi].tag);
+        free(ptags);
         for (size_t i = 0; i < n; i++) free(owned_tokens[i]);
         free(owned_tokens); free(ggml_tokens); free(scores); free(tok_types);
         rc |= lp_gguf_writer_add_u32(gw, "laplace.mold.embedding_rank", (uint32_t)rank);
@@ -716,6 +1066,7 @@ int lp_mold_export(const LpMoldSpec *spec){
         rc |= lp_st_writer_add_meta(sw, "laplace.mold.fisher_total_bp", "10000");
         rc |= lp_st_writer_add_meta(sw, "laplace.mold.raw_weight_bytes_retained", "0");
         rc |= lp_st_writer_add_meta(sw, "laplace.mold.tied_embeddings", spec->tied_embeddings ? "true" : "false");
+        rc |= lp_st_writer_add_meta(sw, "laplace.mold.lm_head_plane", cplanes[lm_pi].tag);
 
         size_t wlen_est = 16;
         for (size_t i = 0; i < n_witness; i++) wlen_est += strlen(witnesses[i]) + 24u;
@@ -735,33 +1086,7 @@ int lp_mold_export(const LpMoldSpec *spec){
     rc |= emit_tensor(gw, sw, gw ? "token_embd.weight" : "model.embed_tokens.weight",
                       emb_dims, 2, E, spec->f16_weights);
 
-    /* Build directed row-normalized transition operator P (n x n) and normalized Xd (n x D) */
-    double *P = calloc(n * n, sizeof(double));
-    double *row_sum = calloc(n, sizeof(double));
-    for (size_t e = 0; e < spec->n_edges; e++) {
-        int r = spec->rows[e], c = spec->cols[e];
-        double w = spec->weights ? spec->weights[e] : 1.0;
-        if (r >= 0 && c >= 0 && (size_t)r < n && (size_t)c < n && w > 0.0) {
-            P[(size_t)r * n + (size_t)c] += w;
-            row_sum[r] += w;
-        }
-    }
-    for (size_t r = 0; r < n; r++) {
-        if (row_sum[r] <= 0.0) P[r * n + (size_t)spec->eos_id] = 1.0;
-        double denom = 0.0;
-        for (size_t c = 0; c < n; c++) { P[r * n + c] += 0.05 / (double)n; denom += P[r * n + c]; }
-        for (size_t c = 0; c < n; c++) P[r * n + c] /= denom;
-    }
-    free(row_sum);
-
     double *Xd = malloc(sizeof(double) * n * D);
-    for (size_t i = 0; i < n * D; i++) Xd[i] = (double)X[i];
-
-    double *ML = malloc(sizeof(double) * n * n);
-    double *Mnext = malloc(sizeof(double) * n * n);
-    double *Meff = malloc(sizeof(double) * n * n);
-    memcpy(ML, P, sizeof(double) * n * n);
-
     float *ones = malloc(sizeof(float) * D);
     for (size_t c = 0; c < D; c++) ones[c] = 1.0f;
 
@@ -773,25 +1098,51 @@ int lp_mold_export(const LpMoldSpec *spec){
     float *fg = calloc(FF * D, sizeof(float));
     float *fu = calloc(FF * D, sizeof(float));
     float *fd = calloc(D * FF, sizeof(float));
+    float *cal_v = malloc(sizeof(float) * n * kdim);
+    float *cal_vfull = malloc(sizeof(float) * n * qdim);
+    float *cal_out = malloc(sizeof(float) * n * D);
+    float *cal_g = malloc(sizeof(float) * n * FF);
+    float *cal_u = malloc(sizeof(float) * n * FF);
 
     for (size_t L = 0; L < NL; L++) {
-        if (L > 0) {
-            cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                        (MKL_INT)n, (MKL_INT)n, (MKL_INT)n,
-                        1.0, ML, (MKL_INT)n, P, (MKL_INT)n, 0.0, Mnext, (MKL_INT)n);
-            for (size_t r = 0; r < n; r++) {
-                double s = 0.0; for (size_t c = 0; c < n; c++) s += Mnext[r * n + c];
-                double inv = s > 0.0 ? 1.0 / s : 0.0;
-                for (size_t c = 0; c < n; c++) ML[r * n + c] = Mnext[r * n + c] * inv;
+        /* Input state entering layer L is exact RMSNorm(H_cal) from prior layer's residual stream. */
+        rows_rmsnorm_f32(H_cal, H_norm, n, D, eps);
+        for (size_t i = 0; i < n * D; i++) Xd[i] = (double)H_norm[i];
+
+        const size_t *hp = (spec->layer_specs && spec->layer_specs[L].head_planes) ? spec->layer_specs[L].head_planes : NULL;
+        size_t fp = spec->layer_specs ? spec->layer_specs[L].ffn_plane : (L + 1u == NL ? lm_pi : (L % n_planes));
+
+        compile_layer_per_head(L, NL, n, D, NH, NKV, HD, FF, (size_t)spec->eos_id,
+                               Xd, cplanes, n_planes, hp, fp,
+                               wq, wk, wv, wo, fg, fu, fd);
+
+        /* Propagate exact Llama residual block on H_cal so next layer & lm_head calibrate to post-layer states. */
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT)n, (MKL_INT)kdim, (MKL_INT)D,
+                    1.0f, H_norm, (MKL_INT)D, wv, (MKL_INT)D, 0.0f, cal_v, (MKL_INT)kdim);
+        size_t gqa_g = NH / NKV;
+        for (size_t i = 0; i < n; i++) {
+            for (size_t h = 0; h < NH; h++) {
+                size_t kv = h / gqa_g;
+                memcpy(cal_vfull + i * qdim + h * HD, cal_v + i * kdim + kv * HD, sizeof(float) * HD);
             }
         }
-        if (L + 1u == NL && NL > 1u) {
-            for (size_t i = 0; i < n * n; i++) Meff[i] = 0.6 * ML[i] + 0.4 * P[i];
-        } else {
-            memcpy(Meff, ML, sizeof(double) * n * n);
-        }
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT)n, (MKL_INT)D, (MKL_INT)qdim,
+                    1.0f, cal_vfull, (MKL_INT)qdim, wo, (MKL_INT)qdim, 0.0f, cal_out, (MKL_INT)D);
+        for (size_t i = 0; i < n * D; i++) H_cal[i] += cal_out[i];
 
-        compile_layer_operators(L, NL, n, D, NH, NKV, HD, FF, Xd, Meff, wq, wk, wv, wo, fg, fu, fd);
+        rows_rmsnorm_f32(H_cal, H_norm, n, D, eps);
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT)n, (MKL_INT)FF, (MKL_INT)D,
+                    1.0f, H_norm, (MKL_INT)D, fg, (MKL_INT)D, 0.0f, cal_g, (MKL_INT)FF);
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT)n, (MKL_INT)FF, (MKL_INT)D,
+                    1.0f, H_norm, (MKL_INT)D, fu, (MKL_INT)D, 0.0f, cal_u, (MKL_INT)FF);
+        for (size_t i = 0; i < n * FF; i++) {
+            double gv = (double)cal_g[i];
+            double silu = gv / (1.0 + exp(-gv));
+            cal_g[i] = (float)(silu * (double)cal_u[i]);
+        }
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, (MKL_INT)n, (MKL_INT)D, (MKL_INT)FF,
+                    1.0f, cal_g, (MKL_INT)FF, fd, (MKL_INT)FF, 0.0f, cal_out, (MKL_INT)D);
+        for (size_t i = 0; i < n * D; i++) H_cal[i] += cal_out[i];
 
         char tname[160];
         uint64_t norm_d[1] = { (uint64_t)D };
@@ -842,6 +1193,10 @@ int lp_mold_export(const LpMoldSpec *spec){
         }
     }
 
+    /* Calibrate readout head against exact post-NL RMSNormed residual states arriving at output.weight. */
+    rows_rmsnorm_f32(H_cal, H_norm, n, D, eps);
+    synthesize_readout(spec, &cplanes[lm_pi], H_norm, n, D, head);
+
     uint64_t out_norm_d[1] = { (uint64_t)D };
     rc |= emit_tensor(gw, sw, gw ? "output_norm.weight" : "model.norm.weight", out_norm_d, 1, ones, 0);
     if (!spec->tied_embeddings) {
@@ -849,15 +1204,75 @@ int lp_mold_export(const LpMoldSpec *spec){
     }
 
     if (gw) { rc |= lp_gguf_writer_finalize(gw); lp_gguf_writer_free(gw); }
-    if (sw) { rc |= lp_st_writer_finalize(sw); lp_st_writer_free(sw); }
+    if (sw) {
+        rc |= lp_st_writer_finalize(sw);
+        lp_st_writer_free(sw);
+        if (rc == 0) {
+            const char *sep = strrchr(spec->out_path, '/');
+            const char *bsep = strrchr(spec->out_path, '\\');
+            if (bsep && (!sep || bsep > sep)) sep = bsep;
+            size_t dlen = sep ? (size_t)(sep - spec->out_path + 1) : 0u;
+            char cfg_path[4096], tok_path[4096];
+            if (dlen + 32u < sizeof cfg_path) {
+                memcpy(cfg_path, spec->out_path, dlen); strcpy(cfg_path + dlen, "config.json");
+                memcpy(tok_path, spec->out_path, dlen); strcpy(tok_path + dlen, "tokenizer.json");
+                FILE *cf = fopen(cfg_path, "wb");
+                if (cf) {
+                    fprintf(cf,
+                            "{\n"
+                            "  \"architectures\": [\"LlamaForCausalLM\"],\n"
+                            "  \"model_type\": \"llama\",\n"
+                            "  \"vocab_size\": %zu,\n"
+                            "  \"hidden_size\": %zu,\n"
+                            "  \"intermediate_size\": %zu,\n"
+                            "  \"num_hidden_layers\": %zu,\n"
+                            "  \"num_attention_heads\": %zu,\n"
+                            "  \"num_key_value_heads\": %zu,\n"
+                            "  \"rms_norm_eps\": %.17g,\n"
+                            "  \"rope_theta\": %.17g,\n"
+                            "  \"bos_token_id\": %u,\n"
+                            "  \"eos_token_id\": %u,\n"
+                            "  \"tie_word_embeddings\": %s,\n"
+                            "  \"laplace_tokenizer_scheme\": \"laplace-blake3-v1\",\n"
+                            "  \"laplace_raw_weight_bytes_retained\": 0\n"
+                            "}\n",
+                            n, D, FF, NL, NH, NKV, eps, rope_base,
+                            spec->bos_id, spec->eos_id,
+                            spec->tied_embeddings ? "true" : "false");
+                    fclose(cf);
+                }
+                FILE *tf = fopen(tok_path, "wb");
+                if (tf) {
+                    fputs("{\"version\":\"1.0\",\"model\":{\"type\":\"WordLevel\",\"vocab\":{", tf);
+                    for (size_t i = 0; i < n; i++) {
+                        if (i > 0) fputc(',', tf);
+                        lp_fput_json(tf, spec->tokens[i] ? spec->tokens[i] : "<unk>");
+                        fprintf(tf, ":%zu", i);
+                    }
+                    fputs("},\"unk_token\":\"<unk>\"}}", tf);
+                    fclose(tf);
+                }
+            }
+        }
+    }
 
-    printf("exported %s (%s): vocab %zu, dim %zu, rank %zu, fisher_bp 10000 (%zu witnesses), raw_weight_bytes_retained = 0\n",
-           spec->out_path, spec->format == 1 ? "safetensors" : "gguf", n, D, rank, n_witness);
+    printf("exported %s (%s): vocab %zu, dim %zu, rank %zu, planes %zu, fisher_bp 10000 (%zu witnesses), raw_weight_bytes_retained = 0\n",
+           spec->out_path, spec->format == 1 ? "safetensors" : "gguf", n, D, rank, n_planes, n_witness);
 
-    free(P); free(Xd); free(ML); free(Mnext); free(Meff);
-    free(ones); free(wq); free(wk); free(wv); free(wo); free(fg); free(fu); free(fd);
-    free(ids16); free(E); free(X); free(head);
+    free(Xd); free(ones); free(wq); free(wk); free(wv); free(wo); free(fg); free(fu); free(fd);
+    free(cal_v); free(cal_vfull); free(cal_out); free(cal_g); free(cal_u);
+    for (size_t p = 0; p < n_planes; p++) compact_plane_free(&cplanes[p]);
+    free(cplanes);
+    free(ids16); free(E); free(X); free(H_cal); free(H_norm); free(head);
     for (size_t i = 0; i < n_witness; i++) free(witnesses[i]);
     free(witnesses); free(share_bp);
     return rc ? 1 : 0;
+
+fail_writers:
+    for (size_t p = 0; p < n_planes; p++) compact_plane_free(&cplanes[p]);
+    free(cplanes);
+    free(ids16); free(E); free(X); free(H_cal); free(H_norm); free(head);
+    for (size_t i = 0; i < n_witness; i++) free(witnesses[i]);
+    free(witnesses); free(share_bp);
+    return -1;
 }
