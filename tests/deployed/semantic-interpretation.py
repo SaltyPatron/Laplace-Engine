@@ -246,6 +246,8 @@ def main():
         for parts in [('duck', 'NOUN'), ('duck', 'VERB'), ('duck', 'laplace-unlisted.987654321')]:
             if not held_by(alignment_trunks, *parts):
                 fail(f'held does not find [{", ".join(parts)}] under the check\'s alignment trunk')
+        if sql("SELECT mask ? laplace_bank_bit('upos', 'NOUN') AND mask ? laplace_bank_bit('upos', 'VERB') FROM entity WHERE id = laplace_text_id('duck')") != 't':
+            fail('entity.mask did not carry both NOUN and VERB bit-flags on duck')
         reference = hop('laplace-unlisted.987654321')
         if 'duck' not in reference or 'identifier vocabulary' in reference:
             fail('hop did not read back the open identifier cleanly without synthetic plumbing', reference)

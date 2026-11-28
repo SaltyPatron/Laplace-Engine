@@ -62,7 +62,7 @@ static inline Ref said_claim(Ref r){ r.said = LP_SAID_CLAIM; return r; }
 static inline Ref said_tuple(Ref r){ r.said = LP_SAID_TUPLE; return r; }
 static inline Ref said_metadata(Ref r){ r.said = LP_SAID_METADATA; return r; }
 static inline Ref said_record(Ref r){ if (r.said != LP_SAID_CLAIM && r.said != LP_SAID_TUPLE) r.said = LP_SAID_RECORD; return r; }
-typedef struct { lp_id id; int64_t m[4]; uint64_t voff; uint32_t nv, len; uint8_t tier, keep, kind, live, spine, pin; } Node;   /* spine: record-block factoring; pin: a reference surviving the current window */
+typedef struct { lp_id id; int64_t m[4]; uint64_t voff, mask; uint32_t nv, len; uint8_t tier, keep, kind, live, spine, pin; } Node;   /* spine: record-block factoring; pin: a reference surviving the current window; mask: typed highway bank flags */
 extern Node *NODE;                                                    /* every node of the table: NODE[0, table_end()), each with live set */
 extern Vtx *VTX;                                                      /* a node's vertices: VTX[voff, voff + nv) */
 uint64_t table_end(void);
@@ -79,6 +79,7 @@ Ref    atom(uint32_t cp);
 Ref    compose(const Ref *ch, uint32_t n, uint8_t tier);             /* one child is that child */
 uint8_t ref_above(const Ref *r, size_t n);                            /* the tier above the highest of them (255 stays 255) */
 Node  *table_find(const lp_id *id);                                   /* NULL for atoms and unknown IDs */
+void   table_mark_bank(const lp_id *id, const lp_bank *bank, uint32_t slot);   /* atomically record a typed highway bank flag/slot on a node */
 Ref    ref_of_id(const lp_id *id, int *ok);                         /* node, Tier-0 or Highway geometry; ok = 0 when absent */
 size_t table_parts(const lp_id *id, lp_id *out, size_t cap);         /* a composition's constituents in order, its runs written out; 0 when it is not in the table */
 void   table_size(uint64_t bytes);                                    /* while the table is empty: room for what a batch of this many bytes makes */

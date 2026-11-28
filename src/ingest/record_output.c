@@ -85,15 +85,16 @@ void record_emit_event(RecordWorker *k, const lp_id *c, float score){
     if (k->qualified) { x.has_qualifier = 1; x.qualifier = k->qualifier.id; } record_event_push(k, &x);
 }
 
-static void emit_claim(RecordWorker *k, Ref *part, int n, int repeated_observation){
+static Ref emit_claim(RecordWorker *k, Ref *part, int n, int repeated_observation){
     for (int i = 0; i < n; i++) if (part[i].said != LP_SAID_TUPLE) part[i].said = 0;      /* a tuple held by a claim stays a tuple: M says so, the ID is the same */
     Ref c = said_claim(compose(part, (uint32_t)n, ref_above(part, (size_t)n)));
-    if (said_already(k, &c.id, repeated_observation)) return;
+    if (said_already(k, &c.id, repeated_observation)) return c;
     record_emit_event(k, &c.id, k->score);
     record_refs_push(&k->grp, &c);
+    return c;
 }
-void record_emit_claim(RecordWorker *k, Ref *part, int n){ emit_claim(k,part,n,1); }
-void record_emit_claim_once(RecordWorker *k, Ref *part, int n){ emit_claim(k,part,n,0); }
+Ref record_emit_claim(RecordWorker *k, Ref *part, int n){ return emit_claim(k,part,n,1); }
+Ref record_emit_claim_once(RecordWorker *k, Ref *part, int n){ return emit_claim(k,part,n,0); }
 
 void record_group_claims(RecordWorker *k, uint64_t e0, const Ref *about){
     (void)about; uint32_t at = 0;

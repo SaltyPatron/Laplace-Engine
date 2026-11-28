@@ -314,7 +314,7 @@ Ref compose(const Ref *ch, uint32_t n, uint8_t tier){
         if (!w) {
             if (!__atomic_compare_exchange_n(&slot[k], &w, tag | BUSY, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) continue;  /* another thread took it: look again */
             Node *x = node_new(c); int own; uint64_t vo = vtx_room(c, n, &own); Vtx *vt = &VTX[vo]; uint32_t nv = 0;
-            x->id = r.id; memcpy(x->m, r.c.m, 32); x->tier = tier; x->len = n; x->voff = vo; x->keep = 0; x->kind = 0; x->spine = x->pin = 0;
+            x->id = r.id; memcpy(x->m, r.c.m, 32); x->tier = tier; x->len = n; x->voff = vo; x->mask = 0; x->keep = 0; x->kind = 0; x->spine = x->pin = 0;
             for (uint32_t i = 0; i < n; i++) {                                          /* runs of the same child said the same way; what each is within this path, above the run */
                 uint64_t above = m_above(&ch[i]);
                 if (nv && !memcmp(&vt[nv - 1].id, &ch[i].id, 16) && (vt[nv - 1].m & ~((1ull << LP_M_RUN_BITS) - 1)) == above && vt[nv - 1].spare == ch[i].spare
@@ -350,6 +350,22 @@ Node *table_find(const lp_id *id){
 }
 void table_pin(const lp_id *id){
     Node *node = table_find(id); if (node) __atomic_store_n(&node->pin, 1, __ATOMIC_RELEASE);
+}
+void table_mark_bank(const lp_id *id, const lp_bank *bank, uint32_t slot){
+    if (!id || !bank || !bank->list || slot >= bank->list->count) return;
+    Node *node = table_find(id); if (!node) return;
+    uint64_t field = lp_mask_field(bank); if (!field) return;
+    uint64_t encoded = bank->flags ? (slot < bank->width ? (UINT64_C(1) << (bank->offset + slot)) : 0)
+                                   : ((uint64_t)(slot + 1) <= (field >> bank->offset) ? ((uint64_t)(slot + 1) << bank->offset) : 0);
+    if (!encoded) return;
+    if (bank->flags) { __atomic_fetch_or(&node->mask, encoded, __ATOMIC_RELAXED); return; }
+    uint64_t cur = __atomic_load_n(&node->mask, __ATOMIC_RELAXED);
+    for (;;) {
+        uint64_t have = cur & field;
+        if (have == encoded) return;
+        uint64_t next = have ? (cur & ~field) : (cur | encoded);
+        if (__atomic_compare_exchange_n(&node->mask, &cur, next, 1, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) return;
+    }
 }
 size_t table_parts(const lp_id *id, lp_id *out, size_t cap){
     Node *x = table_find(id); if (!x) return 0; size_t n = 0;

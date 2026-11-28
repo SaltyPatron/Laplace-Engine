@@ -21,6 +21,16 @@
 #include <regex.h>
 #include <tree_sitter/api.h>
 
+static void mark_typed_claim(const Dis *m, const lp_id *subject, const lp_id *claim, const lp_id *val){
+    if (!HW || !val) return;
+    const lp_bank *bank = (m && m->arg[0]) ? lp_highway_bank(HW, m->arg) : NULL;
+    if (!bank) return;
+    int64_t slot = lp_highway_slot(HW, bank->list, val);
+    if (slot < 0) return;
+    if (bank->flags && subject) table_mark_bank(subject, bank, (uint32_t)slot);
+    if (claim) table_mark_bank(claim, bank, (uint32_t)slot);
+}
+
 static void said_as(RecordWorker *k, const Dis *m, Ref S, Ref v){
     if (m->what != 1 && !memcmp(&v.id, &S.id, 16)) {
         /* A word can spell its own known category (UD's word "flat" and
@@ -28,13 +38,17 @@ static void said_as(RecordWorker *k, const Dis *m, Ref S, Ref v){
          * fabricate [flat, flat], which canonically denotes a repeated run.
          * An untyped or unknown self-value still lacks a readable claim. */
         const lp_list *list = HW && m->arg[0] ? lp_highway_list(HW, m->arg) : NULL;
-        if (list && lp_highway_slot(HW, list, &v.id) >= 0) record_statement_count(k, m);
+        if (list && lp_highway_slot(HW, list, &v.id) >= 0) {
+            record_statement_count(k, m);
+            mark_typed_claim(m, &S.id, NULL, &v.id);
+        }
         else record_obligation_note(k, 'o', &record_diagnostic_labels[DIAG_SELF_VALUE], (const uint8_t *)m->name, m->name_length, NULL, 0);
         return;
     }
     record_statement_count(k, m);
     if (m->what == 1) { Ref p[3] = { S, string_ref((const uint8_t *)m->text, m->text_length), v }; record_emit_claim(k, p, 3); return; }     /* relation "TEXT": [thing, TEXT, value] */
-    record_note_road_value(k, m, &v); Ref p[2] = { S, v }; record_emit_claim(k, p, 2); }
+    record_note_road_value(k, m, &v); Ref p[2] = { S, v }; Ref c = record_emit_claim(k, p, 2);
+    mark_typed_claim(m, &S.id, &c.id, &v.id); }
 
 /* Qualifiers are content in a judgment record. The corpus remains its witness. */
 static int qualifier_of(RecordWorker *k, const SemanticRecord *t, int32_t c){
@@ -241,25 +255,34 @@ static void unit_range(RecordWorker *k, const SemanticRecord *t, uint32_t g0, ui
             else { if (has < 0) has = record_subject(k, t, (int32_t)g, &S); if (!has) break; subject=S; }
             int was = k->qualified; Ref wv = k->qualifier; int32_t who[RECORD_REFERENCE_CAPACITY]; int nw = qualifiers(s, t, (int32_t)g, s->rel[a].with, who);
             for (int wi = 0; wi < (nw ? nw : 1); wi++) { if (nw && !qualifier_of(k, t, who[wi])) continue;
-            Ref rel, o;
+            Ref rel, o; const lp_bank *rel_bank = NULL; int64_t rel_slot = -1;
             if (record_selector_code(s->rel[a].rel)->special == SELECT_FILE) { if (!wi) record_obligation_note(k, 'o', &record_diagnostic_labels[DIAG_RELATE], (const uint8_t *)"{file}", 6, NULL, 0); break; }     /* a file's name is never a relation */
             else { int32_t rc = record_select_first(t, (int32_t)g, s->rel[a].rel); if (rc < 0 || !record_value(k, t, rc, &rel, 0)) break;
                 const Dis *m = record_value_meaning(s, &t->n[rc]); if (!m) { if (!wi) record_obligation_node(k, &record_diagnostic_labels[DIAG_RELATE], &t->n[rc]); break; }     /* a layer's name, a field's: no relation; one of the source's own inventory, which value names */
                 if (m->what==1) rel=string_ref((const uint8_t *)m->text,m->text_length);
-                else record_note_road_value(k, m, &rel);
+                else {
+                    record_note_road_value(k, m, &rel);
+                    if (HW) {
+                        const lp_bank *b = m->arg[0] ? lp_highway_bank(HW, m->arg) : lp_highway_bank(HW, "deprel");
+                        if (b && !strcmp(b->carrier, "occurrence")) {
+                            int64_t sl = lp_highway_slot(HW, b->list, &rel.id);
+                            if (sl >= 0) { rel_bank = b; rel_slot = sl; }
+                        }
+                    }
+                }
                 record_statement_count(k, m); }
             if (record_selector_code(s->rel[a].to)->special == SELECT_SELF) {
-                if (record_value(k,t,(int32_t)g,&o,0)) { Ref p[]={subject,rel,o}; record_emit_claim(k,p,3); }
+                if (record_value(k,t,(int32_t)g,&o,0)) { Ref p[]={subject,rel,o}; Ref cm = record_emit_claim(k,p,3); if (rel_bank) table_mark_bank(&cm.id, rel_bank, (uint32_t)rel_slot); }
             }
             else if (record_selector_code(s->rel[a].to)->special == SELECT_UNNAMED) {                              /* to each of the parts the file gives no name */
-                for (int32_t c = record_field_first(x); c >= 0; c = record_field_next(&t->n[c])) { const SemanticValue *y = &t->n[c]; if (y->kind != S_TEXT || y->nlen || record_value_empty(s, y)) continue; o = record_text(y->val, y->vlen); Ref p[3] = { subject, rel, o }; record_emit_claim(k, p, 3); } }
+                for (int32_t c = record_field_first(x); c >= 0; c = record_field_next(&t->n[c])) { const SemanticValue *y = &t->n[c]; if (y->kind != S_TEXT || y->nlen || record_value_empty(s, y)) continue; o = record_text(y->val, y->vlen); Ref p[3] = { subject, rel, o }; Ref cm = record_emit_claim(k, p, 3); if (rel_bank) table_mark_bank(&cm.id, rel_bank, (uint32_t)rel_slot); } }
             else if (record_field_child(t, (int32_t)g, s->rel[a].to, record_field_child(t, (int32_t)g, s->rel[a].to, -1)) >= 0) {   /* several parts of that name: the relation to each */
-                for (int32_t oc = record_field_child(t, (int32_t)g, s->rel[a].to, -1); oc >= 0; oc = record_field_child(t, (int32_t)g, s->rel[a].to, oc)) if (record_value(k, t, oc, &o, 0)) { Ref p[3] = { subject, rel, o }; record_emit_claim(k, p, 3); } }
+                for (int32_t oc = record_field_child(t, (int32_t)g, s->rel[a].to, -1); oc >= 0; oc = record_field_child(t, (int32_t)g, s->rel[a].to, oc)) if (record_value(k, t, oc, &o, 0)) { Ref p[3] = { subject, rel, o }; Ref cm = record_emit_claim(k, p, 3); if (rel_bank) table_mark_bank(&cm.id, rel_bank, (uint32_t)rel_slot); } }
             else { int32_t oc = record_select_first(t, (int32_t)g, s->rel[a].to);
                 if (oc >= 0 && t->n[oc].kind == S_GROUP && record_field_first(&t->n[oc]) >= 0 && record_field_next(&t->n[record_field_first(&t->n[oc])]) >= 0) {      /* several: the relation to each */
-                    for (int32_t q = record_field_first(&t->n[oc]); q >= 0; q = record_field_next(&t->n[q])) if (record_value(k, t, q, &o, 0)) { Ref p[3] = { subject, rel, o }; record_emit_claim(k, p, 3); } }
-                else if (oc >= 0 && record_value(k, t, oc, &o, 0)) { Ref p[3] = { subject, rel, o }; record_emit_claim(k, p, 3); }
-                else if (s->rel[a].alone && oc >= 0) { Ref p[2] = { subject, rel }; record_emit_claim(k, p, 2); } }      /* to what names nothing (a treebank's root): the relation alone, where the recipe says so; otherwise no claim */
+                    for (int32_t q = record_field_first(&t->n[oc]); q >= 0; q = record_field_next(&t->n[q])) if (record_value(k, t, q, &o, 0)) { Ref p[3] = { subject, rel, o }; Ref cm = record_emit_claim(k, p, 3); if (rel_bank) table_mark_bank(&cm.id, rel_bank, (uint32_t)rel_slot); } }
+                else if (oc >= 0 && record_value(k, t, oc, &o, 0)) { Ref p[3] = { subject, rel, o }; Ref cm = record_emit_claim(k, p, 3); if (rel_bank) table_mark_bank(&cm.id, rel_bank, (uint32_t)rel_slot); }
+                else if (s->rel[a].alone && oc >= 0) { Ref p[2] = { subject, rel }; Ref cm = record_emit_claim(k, p, 2); if (rel_bank) table_mark_bank(&cm.id, rel_bank, (uint32_t)rel_slot); } }      /* to what names nothing (a treebank's root): the relation alone, where the recipe says so; otherwise no claim */
             }
             k->qualified = was; k->qualifier = wv; }
         if (s->ngames) { uint32_t games = games_of(s, t, (int32_t)g);                 /* a count the source states of what it attests: the run its claims are said, never a part of them */

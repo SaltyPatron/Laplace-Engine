@@ -87,7 +87,7 @@ static void prune(File *files,int nfiles,LoadStats *st){
     for(unsigned tier=0;tier<=UINT8_MAX;tier++)free(frontier[tier].item);
 }
 
-typedef struct { Node *node; uint64_t hilbert; lp_mask lexical; uint32_t wave; uint16_t lane; uint8_t annotations; } Row;
+typedef struct { Node *node; uint64_t hilbert; lp_mask lexical, pmask; uint32_t wave; uint16_t lane; uint8_t annotations; } Row;
 /* A dependency edge is about the newly admitted in-memory DAG, not domain tier.
  * Recorded descendants and perf-cache leaves need no publication dependency.
  * Repeated path vertices are visited as stored; their runs are never expanded. */
@@ -110,22 +110,26 @@ static int path_annotations(const Node *node){
     for(uint32_t i=0;i<node->nv;i++)if(VTX[node->voff+i].spare)return 1;
     return 0;
 }
-/* A tuple containing an explicit frozen lexical class carries that class.
- * This caches its own constituents, not a claim's inferred subject standing.
- * Conflicting classes have no single enum summary; retain the full path. */
-static lp_mask tuple_mask(const Node *node){
-    lp_mask mask=0,ambiguous=0;
-    if (!HW || !(node->kind&(1u<<LP_KIND_TUPLE))) return 0;
-    for (uint32_t i=0;i<node->nv;i++) {
-        int32_t slot; const lp_bank *bank=lp_highway_bank_of(HW,&VTX[node->voff+i].id,&slot);
-        if (!bank || strcmp(bank->carrier,"entity") || slot<0) continue;
-        lp_mask field=lp_mask_field(bank);
-        if (ambiguous&field) continue;
-        if (!lp_mask_add_id(HW,&mask,&VTX[node->voff+i].id)) {
-            mask&=~field; ambiguous|=field;
-        }
+/* Typed highway bank flags stamped on a node by say.c from explicit recipe
+ * value/relate declarations. Never sniff arbitrary tuple children (which
+ * falsely stamped wnframe on bare digits and upos=X on the letter X). */
+static lp_mask carrier_field_mask(const char *carrier){
+    if (!HW) return 0;
+    lp_mask out = 0;
+    for (size_t i = 0; i < HW->nbanks; i++)
+        if (!strcmp(HW->bank[i].carrier, carrier)) out |= lp_mask_field(&HW->bank[i]);
+    return out;
+}
+static lp_mask entity_bank_mask(const Node *node){
+    return node->mask & carrier_field_mask("entity");
+}
+static lp_mask phys_bank_mask(const Node *node){
+    lp_mask out = (lp_mask)node->kind | (node->mask & carrier_field_mask("occurrence"));
+    if (HW && (node->kind & (1u << LP_KIND_CLAIM))) {
+        const lp_bank *upos = lp_highway_bank(HW, "upos");
+        if (upos && upos->flags) out |= node->mask & lp_mask_field(upos);
     }
-    return mask;
+    return out;
 }
 static int hilbert_order(const void *a,const void *b){
     const Row *x=a,*y=b;
@@ -245,7 +249,7 @@ static void copy_rows(PGconn *pg,int lane,const Row *rows,size_t lo,size_t hi){
         lp_copy_row(&copy,5);lp_copy_id(&copy,&x->id);lp_copy_i16(&copy,x->tier);
         if(present && !rows[i].annotations)lp_copy_null(&copy);
         else{size_t size=encode_node_path(x,&path);lp_copy_field(&copy,path.bytes,(uint32_t)size);}
-        lp_copy_i64(&copy,(int64_t)x->kind);lp_copy_field(&copy,&present,1);
+        lp_copy_i64(&copy,(int64_t)rows[i].pmask);lp_copy_field(&copy,&present,1);
     }
     copy_close(&copy);lp_buf_free(&copy.buf);
     free(path.ids);free(path.runs);free(path.spare);free(path.bytes);
@@ -312,16 +316,16 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     double begin=now();prune(files,nfiles,st);st->t_dedup+=now()-begin;begin=now();
     lp_vec(Row) selected={0};
     TABLE_EACH(x)if(x->keep==1 || x->keep==2){
-        lp_mask lexical=tuple_mask(x);uint8_t annotations=x->keep==2?path_annotations(x):0;
+        lp_mask lexical=entity_bank_mask(x),pmask=phys_bank_mask(x);uint8_t annotations=x->keep==2?path_annotations(x):0;
         if(x->keep==2){
-            if(!x->kind && !lexical && !annotations)continue;
+            if(!pmask && !lexical && !annotations)continue;
             const Published *seen=lp_idmap_lookup(writer.known,&x->id);
             if(!annotations && seen && seen->metadata && seen->tier<=x->tier
-                && (seen->kind & x->kind)==x->kind && (!lexical || seen->lexical==lexical))continue;
+                && (seen->pmask & pmask)==pmask && (seen->lexical & lexical)==lexical)continue;
         }
         uint64_t hilbert=0;
         if(x->keep==1){lp_coord c;memcpy(c.m,x->m,sizeof c.m);hilbert=lp_hilbert4(&c);}
-        lp_push(&selected,((Row){.node=x,.hilbert=hilbert,.lexical=lexical,.annotations=annotations}));
+        lp_push(&selected,((Row){.node=x,.hilbert=hilbert,.lexical=lexical,.pmask=pmask,.annotations=annotations}));
     }
     size_t count=selected.n;Row *rows=selected.v;
     double persistence_begin=begin;
@@ -420,14 +424,16 @@ int load(const char *conninfo,int npg,File *files,int nfiles,LoadStats *st){
     for(size_t i=0;i<count;i++){
         const Row *row=rows+i;Published *seen=lp_idmap_get(writer.known,&row->node->id,NULL);
         if(!seen->metadata || row->node->tier<seen->tier)seen->tier=row->node->tier;
-        if(row->lexical)seen->lexical=row->lexical;
+        if(row->lexical)seen->lexical|=row->lexical;
+        if(row->pmask)seen->pmask|=row->pmask;
         seen->kind|=row->node->kind;seen->metadata=1;
     }
     TABLE_EACH(x)if(x->keep==1 || x->keep==2){
         Published *seen=lp_idmap_get(writer.known,&x->id,NULL);
         if(!seen->metadata || x->tier<seen->tier)seen->tier=x->tier;
-        lp_mask lexical=tuple_mask(x);
-        if(lexical)seen->lexical=lexical;
+        lp_mask lexical=entity_bank_mask(x),pmask=phys_bank_mask(x);
+        if(lexical)seen->lexical|=lexical;
+        if(pmask)seen->pmask|=pmask;
         seen->kind|=x->kind;seen->metadata=1;
     }
     lp_vec_free(&selected);
@@ -617,11 +623,11 @@ int lp_stage_publish_fast(PGconn *pg,Fold *f,const LoadWitness *roots,size_t nro
     prune(files,nfiles,st);
     lp_vec(Row) selected={0};
     TABLE_EACH(x)if(x->keep==1 || x->keep==2){
-        lp_mask lexical=tuple_mask(x);uint8_t annotations=x->keep==2?path_annotations(x):0;
-        if(x->keep==2 && !x->kind && !lexical && !annotations)continue;
+        lp_mask lexical=entity_bank_mask(x),pmask=phys_bank_mask(x);uint8_t annotations=x->keep==2?path_annotations(x):0;
+        if(x->keep==2 && !pmask && !lexical && !annotations)continue;
         uint64_t hilbert=0;
         if(x->keep==1){lp_coord c;memcpy(c.m,x->m,sizeof c.m);hilbert=lp_hilbert4(&c);}
-        lp_push(&selected,((Row){.node=x,.hilbert=hilbert,.lexical=lexical,.annotations=annotations}));
+        lp_push(&selected,((Row){.node=x,.hilbert=hilbert,.lexical=lexical,.pmask=pmask,.annotations=annotations}));
     }
     size_t count=selected.n;Row *rows=selected.v;
     if(count){
