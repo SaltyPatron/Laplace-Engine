@@ -496,7 +496,9 @@ int scope_extent(const GMap *grammar, TSNode start, TSRange *range){
     TSTreeCursor *cursor = lp_tls_cursor(ts_node_parent(start)); if (!cursor) return 0;
     int depth = 0, valid = 0;
     if (ts_tree_cursor_goto_first_child_for_byte(cursor, range->start_byte) >= 0) do {
-        TSNode node = ts_tree_cursor_current_node(cursor); role = scope_role(grammar, node);
+        TSNode node = ts_tree_cursor_current_node(cursor);
+        if (ts_node_has_error(node) || ts_node_is_missing(node)) break;
+        role = scope_role(grammar, node);
         if (role && role <= 8) depth++;
         else if (role >= 9 && role <= 16 && !--depth) {
             range->end_byte = ts_node_end_byte(node); range->end_point = ts_node_end_point(node); valid = 1; break;

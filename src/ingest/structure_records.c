@@ -651,7 +651,8 @@ static int scope_stream_bridge(SRecords *records, TSNode start_node, TSNode *out
                 TSNode first = ts_node_named_child(broot, 0);
                 TSRange found;
                 if (!ts_node_has_error(first) && ts_node_start_byte(first) == start_byte &&
-                    scope_extent(grammar, first, &found) && found.end_byte <= records->limit) {
+                    scope_extent(grammar, first, &found) && found.end_byte <= records->limit &&
+                    (!allow_partial || found.end_byte < end_byte)) {
                     records->bridges[records->bridge_count++] = bridge;
                     *out_node = first; *out_range = found;
                     return 1;

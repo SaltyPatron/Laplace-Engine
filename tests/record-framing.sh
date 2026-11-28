@@ -42,4 +42,22 @@ for change in 's/last-cp="000F"/last-cp="000F/' 's#</blocks>#</wrong>#' 's#</ucd
     exit 1
   fi
 done
-echo 'record-framing: window-independent claims and strict malformed-input rejection passed'
+# Parallel XML scope bridging (>256 KB single-root document whose closing tag
+# straddles the 262144-byte partial bridge span, e.g. FrameNet lu10032.xml).
+big=$scratch/lu_bridge_boundary.xml
+{
+  printf '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+  printf '<?xml-stylesheet type="text/xsl" href="lexUnit.xsl"?>\n'
+  printf '<lexUnit POS="V" name="rehearse.v" ID="10032" frame="Practice" frameID="962">\n'
+  printf '  <definition>practise for performance</definition>\n'
+  printf '  <lexeme POS="V" name="rehearse"/>\n'
+  # Pad to ~262256 bytes so start_byte + 262144 lands inside the closing </lexUnit> tag.
+  pad=$(printf '%*s' 120 '' | tr ' ' 'x')
+  for ((i=0; i<1930; i++)); do
+    printf '  <!-- %04d %s -->\n' "$i" "$pad"
+  done
+  printf '</lexUnit>'
+} > "$big"
+"$L" ingest --no-load -j 4 -s framenet "$big" > "$scratch/big.log" 2>&1
+grep -q 'mismatched 0' "$scratch/big.log"
+echo 'record-framing: window-independent claims, bridge-boundary XML and strict malformed-input rejection passed'
