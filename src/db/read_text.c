@@ -125,13 +125,14 @@ char *reader_text(Reader *r,const lp_id *id,size_t limit){
 /* What a record says, its claims and the voices that say them, is no part of its content: left out, as lp_realize
  * leaves them out of its text. */
 size_t reader_parts(Reader *r,const lp_id *id,lp_id *out,size_t cap){
-    if(!cap || lp_tier0_codepoint(T0,id)>=0)return 0;
+    if((!out && cap) || lp_tier0_codepoint(T0,id)>=0)return 0;
     reader_want(r,id);Ent *x=ent(r,id,0);if(x && !x->state)fetch(r);x=ent(r,id,0);if(!x || x->state!=1)return 0;
     size_t n=0;
-    for(size_t i=0;i<x->nv && n<cap;i++){
+    for(size_t i=0;i<x->nv && (!out || n<cap);i++){
         lp_realize_child *child=r->children.v+x->first+i;
         if(child->said==LP_SAID_CLAIM || child->said==LP_SAID_VOICE)continue;
         size_t amount=child->run;
+        if(!out){n+=amount;continue;}
         if(amount>cap-n)amount=cap-n;
         for(size_t j=0;j<amount;j++)out[n++]=child->id;
     }
